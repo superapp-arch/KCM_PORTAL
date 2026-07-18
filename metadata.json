@@ -1,0 +1,6 @@
+{
+  "name": "KCM Logistics",
+  "description": "An enterprise-grade, role-based logistics dashboard for managing vehicle fleets, fuel, billing, petty cash, maintenance, accounts, HR, and administration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
