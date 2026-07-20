@@ -251,7 +251,11 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
     XLSX.writeFile(workbook, "KCM_Fleet_Master_Database.xlsx");
   };
 
-  const canEdit = true;
+  // Role-based access control for delete operations
+  const canDelete = userRole === 'super_admin' || userRole === 'vehicle_manager';
+
+  // Role-based access control for edit operations (same as delete)
+  const canEdit = userRole === 'super_admin' || userRole === 'vehicle_manager';
 
   // Helper to match input criteria perfectly
   const normalize = (val: string | undefined) => String(val || '').toLowerCase().trim();
@@ -636,33 +640,33 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                         <td className="px-4 py-3.5 text-right whitespace-nowrap">
                           <div className="flex items-center justify-end space-x-2">
                             {canEdit && (
-                              <>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    startEdit(v);
-                                  }}
-                                  className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded transition-all cursor-pointer"
-                                  title="Edit Fleet Data"
-                                >
-                                  <Edit2 className="w-4 h-4" />
-                                </button>
-                                <button
-                                  onClick={async (e) => {
-                                    e.stopPropagation();
-                                    if (confirm(`Are you sure you want to delete vehicle ${v['Reg. No.']}? This action is irreversible.`)) {
-                                      setIsUpdating(true);
-                                      await onDeleteVehicle(v.id || v['Reg. No.'] || '');
-                                      setIsUpdating(false);
-                                      triggerNotif(`Vehicle ${v['Reg. No.']} successfully removed from master database.`, 'success');
-                                    }
-                                  }}
-                                  className="p-1 text-slate-400 hover:text-pink-600 hover:bg-slate-100 rounded transition-all cursor-pointer"
-                                  title="Delete Vehicle Asset"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  startEdit(v);
+                                }}
+                                className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded transition-all cursor-pointer"
+                                title="Edit Fleet Data"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                            )}
+                            {canDelete && (
+                              <button
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (confirm(`Are you sure you want to delete vehicle ${v['Reg. No.']}? This action is irreversible.`)) {
+                                    setIsUpdating(true);
+                                    await onDeleteVehicle(v.id || v['Reg. No.'] || '');
+                                    setIsUpdating(false);
+                                    triggerNotif(`Vehicle ${v['Reg. No.']} successfully removed from master database.`, 'success');
+                                  }
+                                }}
+                                className="p-1 text-slate-400 hover:text-pink-600 hover:bg-slate-100 rounded transition-all cursor-pointer"
+                                title="Delete Vehicle Asset"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             )}
                             <button
                               className="p-1 text-slate-400 hover:text-slate-600 rounded"
@@ -1020,18 +1024,20 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                 </button>
 
                                                 {/* Delete */}
-                                                <button
-                                                  onClick={async () => {
-                                                    if (confirm(`Remove "${doc.name}" from fleet records?`)) {
-                                                      const updatedDocs = v.documents!.filter(d => d.id !== doc.id);
-                                                      await onUpdateVehicle({ ...v, documents: updatedDocs });
-                                                    }
-                                                  }}
-                                                  className="p-1.5 bg-white border border-pink-200 text-pink-600 hover:bg-pink-50 rounded-lg transition-colors cursor-pointer"
-                                                  title="Delete Asset File"
-                                                >
-                                                  <Trash2 className="w-3.5 h-3.5" />
-                                                </button>
+                                                {canDelete && (
+                                                  <button
+                                                    onClick={async () => {
+                                                      if (confirm(`Remove "${doc.name}" from fleet records?`)) {
+                                                        const updatedDocs = v.documents!.filter(d => d.id !== doc.id);
+                                                        await onUpdateVehicle({ ...v, documents: updatedDocs });
+                                                      }
+                                                    }}
+                                                    className="p-1.5 bg-white border border-pink-200 text-pink-600 hover:bg-pink-50 rounded-lg transition-colors cursor-pointer"
+                                                    title="Delete Asset File"
+                                                  >
+                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                  </button>
+                                                )}
                                               </div>
                                             </div>
                                           ))}
