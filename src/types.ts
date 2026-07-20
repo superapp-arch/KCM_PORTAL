@@ -187,7 +187,7 @@ export interface DashboardNotification {
   id: string;
   title: string;
   message: string;
-  type: 'security' | 'insurance' | 'general';
+  type: 'security' | 'insurance' | 'permit' | 'general';
   timestamp: string;
   read: boolean;
   vehicleRegNo?: string;

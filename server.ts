@@ -70,6 +70,34 @@ import {
   deleteMileageReport
 } from './src/db/service.ts';
 
+// Parses "DD.MM.YYYY" or "YYYY-MM-DD" expiry strings used across fleet records.
+function parseFlexibleDate(raw?: string): Date | null {
+  if (!raw) return null;
+  if (raw.includes('.')) {
+    const parts = raw.split('.');
+    if (parts.length === 3) return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+    return null;
+  }
+  if (raw.includes('-')) return new Date(raw);
+  return null;
+}
+
+// Compliance fields checked for upcoming expiry, each with its own alert window
+// (days remaining until expiry) and notification id prefix.
+const COMPLIANCE_CHECKS: Array<{
+  key: string;
+  mixedCaseKey: string;
+  label: string;
+  idPrefix: string;
+  minDays: number;
+  maxDays: number;
+  type: 'insurance' | 'permit';
+}> = [
+  { key: 'insurance', mixedCaseKey: 'Insurance', label: 'Insurance', idPrefix: 'ins', minDays: 10, maxDays: 15, type: 'insurance' },
+  { key: 'statePermit', mixedCaseKey: 'State permit', label: 'State Permit', idPrefix: 'permit-state', minDays: 0, maxDays: 10, type: 'permit' },
+  { key: 'allIndiaPermit', mixedCaseKey: 'All India Permit', label: 'National (All India) Permit', idPrefix: 'permit-national', minDays: 0, maxDays: 15, type: 'permit' },
+];
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -97,6 +125,66 @@ async function startServer() {
     } catch (error) {
       console.error('Unable to retrieve users from DB, using seeded fallback users.', error);
       return DEFAULT_USERS;
+    }
+  }
+
+  // Checks a saved vehicle's insurance/permit expiry dates against their alert
+  // windows, persists a compliance notification, and emails the Super Admin(s)
+  // and the Vehicle Data Manager (Chandana) the first time each alert fires.
+  async function checkAndNotifyComplianceAlerts(vehicle: Vehicle) {
+    const regNo = vehicle['Reg. No.'] || vehicle.regNo || vehicle.id || 'unknown';
+    const today = new Date('2026-07-07');
+    const existingNotifs = await getNotifications();
+
+    for (const check of COMPLIANCE_CHECKS) {
+      const raw = (vehicle as any)[check.key] || (vehicle as any)[check.mixedCaseKey];
+      const expDate = parseFlexibleDate(raw);
+      if (!expDate || isNaN(expDate.getTime())) continue;
+
+      const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays < check.minDays || diffDays > check.maxDays) continue;
+
+      const notifId = `${check.idPrefix}-${regNo}`;
+      const alreadyNotified = existingNotifs.some((n: any) => n.id === notifId);
+
+      await saveNotification({
+        id: notifId,
+        title: `${check.label} Expiry Alert`,
+        message: `Vehicle ${regNo} ${check.label.toLowerCase()} expires on ${raw} (${diffDays} day${diffDays === 1 ? '' : 's'} left). Super Admin & Vehicle Data Manager notified.`,
+        type: check.type,
+        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        read: false,
+        vehicleRegNo: regNo
+      });
+
+      if (!alreadyNotified) {
+        try {
+          const usersList = await getUsersWithFallback();
+          const recipients = usersList
+            .filter((u: any) => u.department === 'super_admin' || u.username === 'chandana')
+            .map((u: any) => u.email)
+            .filter(Boolean) as string[];
+
+          if (recipients.length > 0) {
+            await resend.emails.send({
+              from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
+              to: recipients,
+              subject: `${check.label} Expiry Alert - Vehicle ${regNo}`,
+              html: `
+                <div style="font-family:Arial,sans-serif;line-height:1.5;">
+                  <p>Vehicle <strong>${regNo}</strong> ${check.label.toLowerCase()} expires on <strong>${raw}</strong> (${diffDays} day${diffDays === 1 ? '' : 's'} left).</p>
+                  <p>Please arrange renewal at the earliest to avoid compliance violations.</p>
+                </div>
+              `,
+            });
+            console.log(`[COMPLIANCE ALERT] Sent ${check.label} expiry email for ${regNo} to ${recipients.join(', ')}`);
+          } else {
+            console.warn(`[COMPLIANCE ALERT] No Super Admin / Vehicle Data Manager email found to notify for ${notifId}`);
+          }
+        } catch (emailError) {
+          console.error(`Failed to send ${check.label} expiry alert email:`, emailError);
+        }
+      }
     }
   }
 
@@ -394,27 +482,8 @@ async function startServer() {
 
       const result = await saveVehicle(finalVehicle);
 
-      // Refresh notifications for insurance check
-      const today = new Date('2026-07-07');
-      
-      if (updatedVehicle.insurance) {
-        const expDate = new Date(updatedVehicle.insurance);
-        const diffTime = expDate.getTime() - today.getTime();
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        
-        if (diffDays >= 10 && diffDays <= 15) {
-          const regNo = updatedVehicle['Reg. No.'] || updatedVehicle.regNo || updatedVehicle.id || 'unknown';
-          await saveNotification({
-            id: 'ins-' + regNo,
-            title: 'Insurance Expiry Alert',
-            message: `Vehicle ${regNo} insurance expires on ${updatedVehicle.insurance} (${diffDays} days left). Super Admin email alert drafted.`,
-            type: 'insurance',
-            timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-            read: false,
-            vehicleRegNo: regNo
-          });
-        }
-      }
+      // Refresh compliance notifications and notify Super Admin + Vehicle Data Manager
+      await checkAndNotifyComplianceAlerts(finalVehicle);
 
       res.json({ success: true, vehicles: result });
     } catch (err: any) {
@@ -436,36 +505,30 @@ async function startServer() {
   async function calculateDynamicAlerts() {
     const alerts: any[] = [];
     const today = new Date('2026-07-07');
-    
+
     const fleetVehicles = await getVehicles();
     fleetVehicles.forEach((v: any) => {
-      const insDate = v.insurance || v['Insurance'];
-      if (insDate) {
-        let expDate: Date | null = null;
-        if (typeof insDate === 'string' && insDate.includes('.')) {
-          const parts = insDate.split('.');
-          expDate = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-        } else if (typeof insDate === 'string' && insDate.includes('-')) {
-          expDate = new Date(insDate);
-        }
-        
-        if (expDate && !isNaN(expDate.getTime())) {
-          const diffTime = expDate.getTime() - today.getTime();
-          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-          if (diffDays >= 10 && diffDays <= 15) {
-            alerts.push({
-              id: 'ins-' + (v['Reg. No.'] || v.regNo || v.id),
-              title: 'Insurance Expiry Alert',
-              message: `Vehicle ${v['Reg. No.'] || v.regNo || v.id} (${v.type || v.Type || 'Tata Ace'}) insurance is expiring on ${insDate} (in ${diffDays} days). Email alert drafted for Super Admin.`,
-              type: 'insurance',
-              timestamp: '2026-07-07 00:00:00',
-              status: 'Active',
-              read: false,
-              vehicleRegNo: v['Reg. No.'] || v.regNo || v.id
-            });
-          }
-        }
-      }
+      const regNo = v['Reg. No.'] || v.regNo || v.id;
+
+      COMPLIANCE_CHECKS.forEach(check => {
+        const raw = v[check.key] || v[check.mixedCaseKey];
+        const expDate = parseFlexibleDate(raw);
+        if (!expDate || isNaN(expDate.getTime())) return;
+
+        const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        if (diffDays < check.minDays || diffDays > check.maxDays) return;
+
+        alerts.push({
+          id: `${check.idPrefix}-${regNo}`,
+          title: `${check.label} Expiry Alert`,
+          message: `Vehicle ${regNo} (${v.type || v.Type || 'Tata Ace'}) ${check.label.toLowerCase()} is expiring on ${raw} (in ${diffDays} day${diffDays === 1 ? '' : 's'}). Super Admin & Vehicle Data Manager notified.`,
+          type: check.type,
+          timestamp: '2026-07-07 00:00:00',
+          status: 'Active',
+          read: false,
+          vehicleRegNo: regNo
+        });
+      });
     });
     return alerts;
   }

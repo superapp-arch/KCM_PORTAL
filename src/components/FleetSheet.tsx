@@ -54,6 +54,23 @@ const VEHICLE_OWNERSHIPS = [
   'KCM SUPPLY', 'KCM INSTA'
 ];
 
+// Parses "DD.MM.YYYY" or "YYYY-MM-DD" expiry strings and flags whether the
+// date falls within the given alert window (days remaining until expiry).
+const getExpiryAlertStatus = (dateStr?: string, minDays = 10, maxDays = 15): { isAlert: boolean; diffDays: number | null } => {
+  if (!dateStr) return { isAlert: false, diffDays: null };
+  let dateObj: Date | null = null;
+  const parts = dateStr.split('.');
+  if (parts.length === 3) {
+    dateObj = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+  } else if (dateStr.includes('-')) {
+    dateObj = new Date(dateStr);
+  }
+  if (!dateObj || isNaN(dateObj.getTime())) return { isAlert: false, diffDays: null };
+  const today = new Date('2026-07-07');
+  const diffDays = Math.ceil((dateObj.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  return { isAlert: diffDays >= minDays && diffDays <= maxDays, diffDays };
+};
+
 export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDeleteVehicle }: FleetSheetProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedType, setSelectedType] = useState<string>('all');
@@ -583,22 +600,15 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                   const fcDate = v.FC || v.fc;
                   const siNo = itemsPerPage === 'ALL' ? (i + 1) : ((currentPage - 1) * parseInt(itemsPerPage, 10) + i + 1);
 
-                  // Calculate insurance alert color
-                  let isNearExpiry = false;
-                  if (insExp) {
-                    const parts = insExp.split('.');
-                    let dateObj: Date | null = null;
-                    if (parts.length === 3) {
-                      dateObj = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-                    } else if (insExp.includes('-')) {
-                      dateObj = new Date(insExp);
-                    }
-                    if (dateObj && !isNaN(dateObj.getTime())) {
-                      const today = new Date('2026-07-07');
-                      const diff = Math.ceil((dateObj.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-                      isNearExpiry = diff >= 10 && diff <= 15;
-                    }
-                  }
+                  // Calculate compliance expiry alerts
+                  const insuranceAlert = getExpiryAlertStatus(insExp, 10, 15);
+                  const isNearExpiry = insuranceAlert.isAlert;
+
+                  const statePermitRaw = v['State permit'] || v.statePermit;
+                  const statePermitAlert = getExpiryAlertStatus(statePermitRaw, 0, 10);
+
+                  const nationalPermitRaw = v['All India Permit'] || v.allIndiaPermit;
+                  const nationalPermitAlert = getExpiryAlertStatus(nationalPermitRaw, 0, 15);
 
                   return (
                     <React.Fragment key={reg + '-' + siNo}>
@@ -737,11 +747,23 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
 
                                   <span className="col-span-2 border-t my-1 border-gray-100"></span>
 
-                                  <dt className="text-gray-500 font-medium">All India Permit</dt>
-                                  <dd className="font-mono text-xs">{v['All India Permit'] || '-'}</dd>
+                                  <dt className="text-gray-500 font-medium">National Permit Exp</dt>
+                                  <dd className="font-mono text-xs">
+                                    {nationalPermitAlert.isAlert ? (
+                                      <span className="inline-flex items-center gap-1 text-red-600 font-bold">
+                                        <AlertTriangle className="w-2.5 h-2.5" /> {nationalPermitRaw} ({nationalPermitAlert.diffDays}d left)
+                                      </span>
+                                    ) : (nationalPermitRaw || '-')}
+                                  </dd>
 
-                                  <dt className="text-gray-500 font-medium">State Permit</dt>
-                                  <dd className="font-mono text-xs">{v['State permit'] || v.statePermit || '-'}</dd>
+                                  <dt className="text-gray-500 font-medium">State Permit Exp</dt>
+                                  <dd className="font-mono text-xs">
+                                    {statePermitAlert.isAlert ? (
+                                      <span className="inline-flex items-center gap-1 text-red-600 font-bold">
+                                        <AlertTriangle className="w-2.5 h-2.5" /> {statePermitRaw} ({statePermitAlert.diffDays}d left)
+                                      </span>
+                                    ) : (statePermitRaw || '-')}
+                                  </dd>
                                 </dl>
                               </div>
 
@@ -764,6 +786,9 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                   <dt className="text-slate-400">IDV Value</dt>
                                   <dd className="font-mono text-slate-800">₹{v['Vehicle IDV Amount'] || v.vehicleIdvAmount || '-'}</dd>
 
+                                  <dt className="text-slate-400">Remarks</dt>
+                                  <dd className="font-mono text-slate-800 break-words">{v['Remarks'] || v.remarks || '-'}</dd>
+
                                   <span className="col-span-2 border-t my-1 border-gray-100"></span>
 
                                   <dt className="text-slate-400">Driver Name</dt>
@@ -783,6 +808,9 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
 
                                       <dt className="text-slate-400">Claim Code</dt>
                                       <dd className="font-mono text-slate-800">{v['Claim Number'] || v.claimNumber || '-'}</dd>
+
+                                      <dt className="text-slate-400">Police Station</dt>
+                                      <dd className="font-mono text-slate-800 break-words">{v['Police Station Address'] || v.policeStationAddress || '-'}</dd>
                                     </>
                                   )}
                                 </dl>
@@ -1436,20 +1464,18 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
 
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
-                        All India National Permit Details
+                        National (All India) Permit Expiry Date <span className="normal-case font-normal text-slate-400">(Triggers renewal alert)</span>
                       </label>
-                      <input
-                        type="text"
+                      <DateInput
                         value={editForm['All India Permit'] || editForm.allIndiaPermit || ''}
                         onChange={(e) => setEditForm({ ...editForm, 'All India Permit': e.target.value, allIndiaPermit: e.target.value })}
-                        className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800"
-                        placeholder="Permit No or valid status"
+                        className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono"
                       />
                     </div>
 
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
-                        State Road Permit Expiry Date
+                        State Road Permit Expiry Date <span className="normal-case font-normal text-slate-400">(Alerts within last 10 days)</span>
                       </label>
                       <DateInput
                         value={editForm['State permit'] || editForm.statePermit || ''}
@@ -1524,6 +1550,18 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                         onChange={(e) => setEditForm({ ...editForm, 'Vehicle IDV Amount': e.target.value, vehicleIdvAmount: e.target.value })}
                         className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono"
                         placeholder="e.g. 1250000"
+                      />
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
+                        Remarks
+                      </label>
+                      <textarea
+                        value={editForm['Remarks'] || editForm.remarks || ''}
+                        onChange={(e) => setEditForm({ ...editForm, 'Remarks': e.target.value, remarks: e.target.value })}
+                        className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 h-16 focus:ring-1 focus:ring-teal-500"
+                        placeholder="Any additional notes on the insurance portfolio..."
                       />
                     </div>
                   </div>
@@ -1623,6 +1661,19 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                           placeholder="0186/2024"
                         />
                       </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
+                        Police Station Address
+                      </label>
+                      <input
+                        type="text"
+                        value={editForm['Police Station Address'] || editForm.policeStationAddress || ''}
+                        onChange={(e) => setEditForm({ ...editForm, 'Police Station Address': e.target.value, policeStationAddress: e.target.value })}
+                        className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800"
+                        placeholder="e.g. Walayar Police Station, Palakkad, Kerala"
+                      />
                     </div>
 
                     <div>
