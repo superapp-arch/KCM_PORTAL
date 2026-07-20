@@ -20,6 +20,8 @@ const PRESET_CREDS = [
   { id: 'accounts1', label: 'Accounts & Finance (Lokesh P.)', role: 'accounts_finance', email: 'lokesh.patel@kcmlogistics.in', pass: 'acct123' },
   { id: 'hr1', label: 'HR Director (Kavitha N.)', role: 'hr', email: 'kavitha.nair@kcmlogistics.in', pass: 'hr123' },
   { id: 'admin1', label: 'Administration Desk (Rajesh N.)', role: 'administration', email: 'rajesh.nair@kcmlogistics.in', pass: 'admin123' },
+  { id: 'super3', label: 'Super admin amrutha', role: 'super_admin', email: 'amruthareddy.9353@gmail.com', pass: 'Amrutha@KCM' },
+  
 ];
 
 export default function Login({ onLoginSuccess }: LoginProps) {
