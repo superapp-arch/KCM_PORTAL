@@ -42,11 +42,11 @@ interface FleetSheetProps {
 }
 
 const VEHICLE_TYPES = [
-  'tata ace', '207', '407', '14f', '20ft', 'tata intra', 'bolero', '22ft', '17ft', 'CNG'
+  'Tata Ace', '207', '407', '14 FT', '17 FT','20 FT', '32 FT'
 ];
 
 const VEHICLE_CATEGORIES = [
-  'dry', 'hybrid', 'walkes', 'reefer'
+  'Dry', 'Hybrid', 'Walkes', 'Reefer'
 ];
 
 const VEHICLE_OWNERSHIPS = [
@@ -254,16 +254,16 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
   const canEdit = true;
 
   // Helper to match input criteria perfectly
-  const normalize = (val: string) => String(val || '').toLowerCase().trim();
+  const normalize = (val: string | undefined) => String(val || '').toLowerCase().trim();
 
-  const normalizeCategory = (cat: string) => {
+  const normalizeCategory = (cat: string | undefined) => {
     const c = String(cat || '').toLowerCase().trim();
     if (c === 'normal' || c === 'dry') return 'dry';
     if (c === 'walkee') return 'walkes';
     return c;
   };
 
-  const normalizeOwnership = (own: string) => {
+  const normalizeOwnership = (own: string | undefined) => {
     const o = String(own || '').toUpperCase().trim();
     if (o.includes('KCM SUPPLY')) return 'KCM SUPPLY';
     if (o.includes('KCM INSTA')) return 'KCM INSTA';
@@ -570,7 +570,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                 </tr>
               ) : (
                 paginatedVehicles.map((v, i) => {
-                  const reg = v['Reg. No.'] || v.regNo;
+                  const reg = String(v['Reg. No.'] || v.regNo || '');
                   const typeLabel = v.Type || v.type;
                   const catLabel = normalizeCategory(v.Category || v.category);
                   const ownLabel = normalizeOwnership(v.Ownership || v.ownership);
