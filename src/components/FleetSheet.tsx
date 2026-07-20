@@ -657,7 +657,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                   e.stopPropagation();
                                   if (confirm(`Are you sure you want to delete vehicle ${v['Reg. No.']}? This action is irreversible.`)) {
                                     setIsUpdating(true);
-                                    await onDeleteVehicle(v.id || v['Reg. No.'] || '');
+                                    await onDeleteVehicle(v['Reg. No.']);
                                     setIsUpdating(false);
                                     triggerNotif(`Vehicle ${v['Reg. No.']} successfully removed from master database.`, 'success');
                                   }
