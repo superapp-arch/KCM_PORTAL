@@ -26,9 +26,12 @@ import {
   Trash2,
   Paperclip,
   RefreshCw,
-  X
+  X,
+  Mail,
+  Phone
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
+import DateInput from './DateInput';
 
 interface PettyCashProps {
   vouchers: PettyCashVoucher[];
@@ -632,12 +635,12 @@ export default function PettyCash({
   };
 
   // Share text builder
-  const handleShareLedger = () => {
+  const buildShareSummaryText = () => {
     const totalRec = filteredVouchers.reduce((s, v) => s + (v.amountReceived || 0), 0);
     const totalPaid = filteredVouchers.reduce((s, v) => s + (v.cashPaid || 0), 0);
     const totalBal = totalRec - totalPaid;
 
-    const summaryText = `*KCM LOGISTICS - PETTY CASH VOUCHERS REPORT*
+    return `*KCM LOGISTICS - PETTY CASH VOUCHERS REPORT*
 Date Filter: Year ${filterYear} / Month ${filterMonth === 'All' ? 'All Months' : MONTHS.find(m=>m.value===filterMonth)?.label}
 Total Records Checked: ${filteredVouchers.length}
 ----------------------------------------
@@ -645,10 +648,36 @@ Total Records Checked: ${filteredVouchers.length}
 - Total Cash Paid: ₹${totalPaid.toLocaleString('en-IN')}
 - Current Net Balance: ₹${totalBal.toLocaleString('en-IN')}
 ----------------------------------------
-Top Expenditures logged on remote server.
-Shared securely on ${new Date().toLocaleDateString('en-IN')}`;
+Shared on ${new Date().toLocaleDateString('en-IN')}`;
+  };
 
-    navigator.clipboard.writeText(summaryText).then(() => {
+  // Primary share entry point: uses the native OS share sheet when available,
+  // otherwise falls back to the WhatsApp/Email/Copy modal.
+  const handleShareLedger = async () => {
+    const summaryText = buildShareSummaryText();
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share({ title: 'KCM Petty Cash Report', text: summaryText });
+        triggerNotif('Report shared successfully!', 'success');
+        return;
+      } catch (err) {
+        if ((err as Error)?.name === 'AbortError') return;
+      }
+    }
+    setShowShareModal(true);
+  };
+
+  const handleShareWhatsApp = () => {
+    window.open(`https://wa.me/?text=${encodeURIComponent(buildShareSummaryText())}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleShareEmail = () => {
+    const subject = 'KCM Petty Cash Report';
+    window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(buildShareSummaryText())}`;
+  };
+
+  const handleCopySummary = () => {
+    navigator.clipboard.writeText(buildShareSummaryText()).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       triggerNotif('Summary report text copied to clipboard!', 'success');
@@ -852,8 +881,7 @@ Shared securely on ${new Date().toLocaleDateString('en-IN')}`;
                   <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400 pointer-events-none">
                     <Calendar className="w-3.5 h-3.5" />
                   </span>
-                  <input
-                    type="date"
+                  <DateInput
                     required
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
@@ -1183,7 +1211,7 @@ Shared securely on ${new Date().toLocaleDateString('en-IN')}`;
                   type="button"
                   onClick={handleShareLedger}
                   className="bg-teal-600 hover:bg-teal-700 text-white font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 shadow-2xs cursor-pointer transition-all"
-                  title="Copy a beautiful summary text to clipboard for WhatsApp/Slack"
+                  title="Share ledger summary via WhatsApp, Email, or copy to clipboard"
                 >
                   <Share2 className="w-3.5 h-3.5" />
                   Share Report
@@ -1608,26 +1636,32 @@ Shared securely on ${new Date().toLocaleDateString('en-IN')}`;
               <h3 className="text-sm font-bold text-slate-900 uppercase">Share Petty Cash Report</h3>
               <button onClick={() => setShowShareModal(false)} className="text-slate-400 hover:text-slate-600 font-bold text-base cursor-pointer">×</button>
             </div>
-            <p className="text-slate-600">Your browser blocked direct clipboard writes. You can copy the ledger summary text below manually to share with teammates:</p>
+            <p className="text-slate-600">Choose how you'd like to share this ledger summary:</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => { handleShareWhatsApp(); setShowShareModal(false); }}
+                className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg py-2 font-semibold cursor-pointer"
+              >
+                <Phone className="w-3.5 h-3.5" /> WhatsApp
+              </button>
+              <button
+                onClick={() => { handleShareEmail(); setShowShareModal(false); }}
+                className="flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 font-semibold cursor-pointer"
+              >
+                <Mail className="w-3.5 h-3.5" /> Email
+              </button>
+            </div>
             <textarea
               readOnly
               onClick={(e) => (e.target as HTMLTextAreaElement).select()}
               className="w-full h-40 bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-[10px] text-slate-700 focus:outline-none"
-              value={`KCM LOGISTICS - PETTY CASH VOUCHERS REPORT
-Date Filter: Year ${filterYear} / Month ${filterMonth}
-Total Records: ${filteredVouchers.length}
-Total Received: ₹${filteredVouchers.reduce((s,v)=>s+(v.amountReceived || 0), 0).toLocaleString('en-IN')}
-Total Expenses: ₹${filteredVouchers.reduce((s,v)=>s+(v.cashPaid || 0), 0).toLocaleString('en-IN')}
-Remaining Balance: ₹${filteredVouchers.reduce((s,v)=>s+(v.balance || 0), 0).toLocaleString('en-IN')}`}
+              value={buildShareSummaryText()}
             />
             <button
-              onClick={() => {
-                navigator.clipboard.writeText(`KCM LOGISTICS - PETTY CASH VOUCHERS REPORT...`);
-                setShowShareModal(false);
-              }}
+              onClick={() => { handleCopySummary(); setShowShareModal(false); }}
               className="w-full bg-teal-600 hover:bg-teal-700 text-white rounded-lg py-2 font-semibold cursor-pointer text-center"
             >
-              Okay, Copy & Dismiss
+              Copy to Clipboard
             </button>
           </div>
         </div>

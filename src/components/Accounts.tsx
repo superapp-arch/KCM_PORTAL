@@ -17,6 +17,7 @@ import {
   Printer 
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import DateInput from './DateInput';
 import DocumentAttachment from './DocumentAttachment';
 
 interface AccountsProps {
@@ -280,8 +281,7 @@ export default function Accounts({ entries, onAddEntry, onUpdateEntry, onDeleteE
 
             <div>
               <label className="block font-semibold text-slate-600 mb-1">Ledger Timestamp Date</label>
-              <input
-                type="date"
+              <DateInput
                 required
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
@@ -498,8 +498,7 @@ export default function Accounts({ entries, onAddEntry, onUpdateEntry, onDeleteE
 
                   <div>
                     <label className="block font-semibold text-slate-600 mb-1">Date *</label>
-                    <input
-                      type="date"
+                    <DateInput
                       required
                       value={editDate}
                       onChange={(e) => setEditDate(e.target.value)}

@@ -20,6 +20,7 @@ import {
   FileSpreadsheet
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
+import DateInput from './DateInput';
 
 interface WarehouseDetailsProps {
   user: User;
@@ -511,8 +512,7 @@ export default function WarehouseDetails({
                 <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Date *</label>
                 <div className="relative">
                   <Calendar className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-400" />
-                  <input
-                    type="date"
+                  <DateInput
                     required
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
@@ -964,8 +964,7 @@ export default function WarehouseDetails({
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-1.5">
               <div className="space-y-1">
                 <label className="block text-[9px] font-black uppercase text-purple-800 tracking-wide">Start Date</label>
-                <input
-                  type="date"
+                <DateInput
                   value={filterStartDate}
                   onChange={(e) => setFilterStartDate(e.target.value)}
                   className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 focus:outline-none"
@@ -974,8 +973,7 @@ export default function WarehouseDetails({
 
               <div className="space-y-1">
                 <label className="block text-[9px] font-black uppercase text-purple-800 tracking-wide">End Date</label>
-                <input
-                  type="date"
+                <DateInput
                   value={filterEndDate}
                   onChange={(e) => setFilterEndDate(e.target.value)}
                   className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 focus:outline-none"
@@ -1155,8 +1153,7 @@ export default function WarehouseDetails({
                 {/* Dates & WH */}
                 <div>
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Date *</label>
-                  <input
-                    type="date"
+                  <DateInput
                     required
                     value={editDate}
                     onChange={(e) => setEditDate(e.target.value)}

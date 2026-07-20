@@ -33,6 +33,7 @@ import {
   HelpCircle,
   Phone
 } from 'lucide-react';
+import DateInput from './DateInput';
 
 interface FleetSheetProps {
   vehicles: Vehicle[];
@@ -1064,46 +1065,75 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                       </button>
                                     </div>
 
-                                    {sharingSuccess ? (
+                                    {sharingSuccess && (
                                       <p className="text-[11px] text-emerald-300 font-semibold">{sharingSuccess}</p>
-                                    ) : (
-                                      <div className="space-y-2">
-                                        <div className="flex flex-col sm:flex-row gap-2">
-                                          <input
-                                            type="email"
-                                            value={sharingEmail}
-                                            onChange={(e) => setSharingEmail(e.target.value)}
-                                            placeholder="Enter recipient's email address"
-                                            className="flex-1 bg-white/10 border border-white/20 rounded-lg p-2 text-xs focus:outline-none"
-                                          />
-                                          <button
-                                            onClick={() => {
-                                              if (!sharingEmail) return;
-                                              setSharingSuccess(`Document secure repository link successfully dispatched to ${sharingEmail} via KCM mail servers!`);
-                                              setSharingEmail('');
-                                            }}
-                                            className="bg-pink-500 hover:bg-pink-600 text-white font-bold px-4 py-2 rounded-lg text-xs"
-                                          >
-                                            Send Email
-                                          </button>
-                                        </div>
-
-                                        <div className="flex items-center justify-between pt-1">
-                                          <span className="text-[10px] text-purple-300">Generate copy link for WhatsApp:</span>
-                                          <button
-                                            onClick={() => {
-                                              const msg = `KCM Logistics Document link: ${sharingDoc.docName} for vehicle registration ${v['Reg. No.'] || v.regNo}. Please check compliance logbook.`;
-                                              const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
-                                              navigator.clipboard.writeText(url);
-                                              setSharingSuccess("WhatsApp secure share link generated and copied to clipboard!");
-                                            }}
-                                            className="text-[11px] text-pink-300 hover:text-pink-100 flex items-center gap-1 font-bold"
-                                          >
-                                            <Phone className="w-3 h-3 text-emerald-400" /> Generate WhatsApp link
-                                          </button>
-                                        </div>
-                                      </div>
                                     )}
+                                    <div className="space-y-2">
+                                      {typeof navigator !== 'undefined' && !!navigator.share && (
+                                        <button
+                                          onClick={async () => {
+                                            const sharedDocObj = v.documents?.find(d => d.id === sharingDoc.docId);
+                                            if (!sharedDocObj?.fileData) return;
+                                            try {
+                                              const res = await fetch(sharedDocObj.fileData);
+                                              const blob = await res.blob();
+                                              const file = new File([blob], sharedDocObj.fileName, { type: blob.type || 'application/octet-stream' });
+                                              const shareData: ShareData = {
+                                                title: sharedDocObj.name,
+                                                text: `KCM Logistics Document: ${sharedDocObj.name} for vehicle ${v['Reg. No.'] || v.regNo}`,
+                                              };
+                                              if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                                                shareData.files = [file];
+                                              }
+                                              await navigator.share(shareData);
+                                              setSharingSuccess('Document shared successfully!');
+                                            } catch (err) {
+                                              if ((err as Error)?.name !== 'AbortError') {
+                                                setSharingSuccess('Unable to open the share dialog on this device.');
+                                              }
+                                            }
+                                          }}
+                                          className="w-full bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center justify-center gap-2"
+                                        >
+                                          <ExternalLink className="w-3.5 h-3.5" /> Share Document (WhatsApp, Email, Drive...)
+                                        </button>
+                                      )}
+
+                                      <div className="flex flex-col sm:flex-row gap-2">
+                                        <input
+                                          type="email"
+                                          value={sharingEmail}
+                                          onChange={(e) => setSharingEmail(e.target.value)}
+                                          placeholder="Enter recipient's email address"
+                                          className="flex-1 bg-white/10 border border-white/20 rounded-lg p-2 text-xs focus:outline-none"
+                                        />
+                                        <button
+                                          onClick={() => {
+                                            const subject = `KCM Logistics Document: ${sharingDoc.docName}`;
+                                            const body = `Please find the document "${sharingDoc.docName}" for vehicle ${v['Reg. No.'] || v.regNo}.\n\nNote: Download the file from the KCM Fleet Sheet document registry and attach it if it isn't already attached.`;
+                                            window.location.href = `mailto:${encodeURIComponent(sharingEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                                            setSharingSuccess(`Email client opened${sharingEmail ? ` for ${sharingEmail}` : ''}. Please review and send.`);
+                                          }}
+                                          className="bg-pink-500 hover:bg-pink-600 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-1.5 justify-center"
+                                        >
+                                          <Mail className="w-3.5 h-3.5" /> Send Email
+                                        </button>
+                                      </div>
+
+                                      <div className="flex items-center justify-between pt-1">
+                                        <span className="text-[10px] text-purple-300">Share via WhatsApp:</span>
+                                        <button
+                                          onClick={() => {
+                                            const msg = `KCM Logistics Document: ${sharingDoc.docName} for vehicle registration ${v['Reg. No.'] || v.regNo}. Please check compliance logbook.`;
+                                            window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+                                            setSharingSuccess('WhatsApp opened in a new tab.');
+                                          }}
+                                          className="text-[11px] text-pink-300 hover:text-pink-100 flex items-center gap-1 font-bold"
+                                        >
+                                          <Phone className="w-3 h-3 text-emerald-400" /> Open WhatsApp
+                                        </button>
+                                      </div>
+                                    </div>
                                   </div>
                                 )}
 
@@ -1300,8 +1330,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                       <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
                         Registration Date
                       </label>
-                      <input
-                        type="date"
+                      <DateInput
                         value={editForm['Reg Date'] || editForm.regDate || ''}
                         onChange={(e) => setEditForm({ ...editForm, 'Reg Date': e.target.value, regDate: e.target.value })}
                         className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 focus:ring-1 focus:ring-teal-500 font-mono"
@@ -1374,8 +1403,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                       <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
                         FC Expiry Date (Fitness Certificate)
                       </label>
-                      <input
-                        type="date"
+                      <DateInput
                         value={editForm.FC || editForm.fc || ''}
                         onChange={(e) => setEditForm({ ...editForm, FC: e.target.value, fc: e.target.value })}
                         className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono"
@@ -1399,8 +1427,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                       <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
                         Emission Test Expiry Date
                       </label>
-                      <input
-                        type="date"
+                      <DateInput
                         value={editForm['Emission Test'] || editForm.emissionTest || ''}
                         onChange={(e) => setEditForm({ ...editForm, 'Emission Test': e.target.value, emissionTest: e.target.value })}
                         className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono"
@@ -1424,8 +1451,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                       <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
                         State Road Permit Expiry Date
                       </label>
-                      <input
-                        type="date"
+                      <DateInput
                         value={editForm['State permit'] || editForm.statePermit || ''}
                         onChange={(e) => setEditForm({ ...editForm, 'State permit': e.target.value, statePermit: e.target.value })}
                         className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono"
@@ -1441,8 +1467,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                       <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
                         Insurance Expiry Date * (Triggers Super Admin Alerts)
                       </label>
-                      <input
-                        type="date"
+                      <DateInput
                         required
                         value={editForm.Insurance || editForm.insurance || ''}
                         onChange={(e) => setEditForm({ ...editForm, Insurance: e.target.value, insurance: e.target.value })}
@@ -1512,8 +1537,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                         <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
                           Accident Incident Date
                         </label>
-                        <input
-                          type="date"
+                        <DateInput
                           value={editForm['Accident Date'] || editForm.accidentDate || ''}
                           onChange={(e) => setEditForm({ ...editForm, 'Accident Date': e.target.value, accidentDate: e.target.value })}
                           className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono"

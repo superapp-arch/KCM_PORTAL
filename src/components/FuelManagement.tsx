@@ -16,6 +16,7 @@ import {
   Printer 
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
+import DateInput from './DateInput';
 
 interface FuelManagementProps {
   logs: FuelLog[];
@@ -305,8 +306,7 @@ export default function FuelManagement({ logs, onAddLog, onUpdateLog, onDeleteLo
 
             <div>
               <label className="block font-semibold text-slate-600 mb-1">Date of Refuel</label>
-              <input
-                type="date"
+              <DateInput
                 required
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
@@ -523,8 +523,7 @@ export default function FuelManagement({ logs, onAddLog, onUpdateLog, onDeleteLo
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1">Date of Refuel *</label>
-                      <input
-                        type="date"
+                      <DateInput
                         required
                         value={editDate}
                         onChange={(e) => setEditDate(e.target.value)}

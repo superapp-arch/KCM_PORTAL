@@ -16,6 +16,7 @@ import {
   Printer 
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
+import DateInput from './DateInput';
 
 interface MaintenanceProps {
   records: MaintenanceRecord[];
@@ -278,8 +279,7 @@ export default function Maintenance({ records, onAddRecord, onUpdateRecord, onDe
 
             <div>
               <label className="block font-semibold text-slate-600 mb-1">Date of Work Order</label>
-              <input
-                type="date"
+              <DateInput
                 required
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
@@ -490,8 +490,7 @@ export default function Maintenance({ records, onAddRecord, onUpdateRecord, onDe
 
                   <div>
                     <label className="block font-semibold text-slate-600 mb-1">Date of Service *</label>
-                    <input
-                      type="date"
+                    <DateInput
                       required
                       value={editDate}
                       onChange={(e) => setEditDate(e.target.value)}

@@ -6,6 +6,7 @@ import {
   AlertCircle, ChevronRight, Coins, RefreshCw, Landmark, Paperclip, X, Upload, Download
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
+import DateInput from './DateInput';
 
 interface HRProps {
   user: UserType;
@@ -643,8 +644,7 @@ export default function HR({
                     </div>
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1">License Expiry Date *</label>
-                      <input
-                        type="date"
+                      <DateInput
                         required={role === 'Driver'}
                         value={licenseExpiry}
                         onChange={(e) => setLicenseExpiry(e.target.value)}
@@ -697,8 +697,7 @@ export default function HR({
                   {/* Attendance Date Selector */}
                   <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1">
                     <span className="font-bold text-slate-500 text-[10px] uppercase font-mono">Date:</span>
-                    <input
-                      type="date"
+                    <DateInput
                       value={attendanceDate}
                       onChange={(e) => setAttendanceDate(e.target.value)}
                       className="bg-transparent font-mono font-bold text-slate-800 focus:outline-none cursor-pointer"
@@ -1318,8 +1317,7 @@ export default function HR({
                       </div>
                       <div>
                         <label className="block font-semibold text-slate-600 mb-1">License Expiry Date *</label>
-                        <input
-                          type="date"
+                        <DateInput
                           required={editEmpRole === 'Driver'}
                           value={editEmpLicenseExpiry}
                           onChange={(e) => setEditEmpLicenseExpiry(e.target.value)}

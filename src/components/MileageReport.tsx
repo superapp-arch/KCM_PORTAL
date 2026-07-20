@@ -24,6 +24,7 @@ import {
   Trash2,
   Edit2
 } from 'lucide-react';
+import DateInput from './DateInput';
 
 interface MileageReportModuleProps {
   user: User;
@@ -688,8 +689,7 @@ export default function MileageReportModule({
                       <Calendar className="w-3.5 h-3.5 text-pink-600" />
                       Reporting Date *
                     </label>
-                    <input
-                      type="date"
+                    <DateInput
                       required
                       value={date}
                       onChange={(e) => setDate(e.target.value)}

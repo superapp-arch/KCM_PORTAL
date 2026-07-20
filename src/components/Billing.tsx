@@ -16,6 +16,7 @@ import {
   Printer 
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
+import DateInput from './DateInput';
 
 interface BillingProps {
   invoices: BillingInvoice[];
@@ -270,8 +271,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
 
             <div>
               <label className="block font-semibold text-slate-600 mb-1">Invoice Issue Date</label>
-              <input
-                type="date"
+              <DateInput
                 required
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
@@ -485,8 +485,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
 
                   <div>
                     <label className="block font-semibold text-slate-600 mb-1">Invoice Date *</label>
-                    <input
-                      type="date"
+                    <DateInput
                       required
                       value={editDate}
                       onChange={(e) => setEditDate(e.target.value)}
