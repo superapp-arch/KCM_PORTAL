@@ -89,9 +89,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
   const [uploadCategory, setUploadCategory] = useState<string>('RC');
   const [uploadName, setUploadName] = useState<string>('');
   
-  const [sharingDoc, setSharingDoc] = useState<{ vehicleId: string; docId: string; docName: string } | null>(null);
-  const [sharingEmail, setSharingEmail] = useState('');
-  const [sharingSuccess, setSharingSuccess] = useState<string | null>(null);
+  const [sharingDoc, setSharingDoc] = useState<{ vehicleId: string; docId: string } | null>(null);
 
   const [editingDoc, setEditingDoc] = useState<{ vehicleId: string; docId: string; newName: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1038,19 +1036,76 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                   <Printer className="w-3.5 h-3.5" />
                                                 </button>
 
-                                                {/* Edit Metadata */}
-                                                {/* Share options */}
-                                                <button
-                                                  onClick={() => {
-                                                    setSharingDoc({ vehicleId: v.id || '', docId: doc.id, docName: doc.name });
-                                                    setSharingEmail('');
-                                                    setSharingSuccess(null);
-                                                  }}
-                                                  className="p-1.5 bg-white border border-purple-100 text-purple-700 hover:bg-pink-50 rounded-lg transition-colors cursor-pointer"
-                                                  title="Share Document"
-                                                >
-                                                  <Share2 className="w-3.5 h-3.5" />
-                                                </button>
+                                                {/* Share options - clicking Share opens WhatsApp/Email/Other directly, no intermediate step */}
+                                                <div className="relative">
+                                                  <button
+                                                    onClick={() =>
+                                                      setSharingDoc(
+                                                        sharingDoc?.docId === doc.id ? null : { vehicleId: v.id || '', docId: doc.id }
+                                                      )
+                                                    }
+                                                    className="p-1.5 bg-white border border-purple-100 text-purple-700 hover:bg-pink-50 rounded-lg transition-colors cursor-pointer"
+                                                    title="Share Document"
+                                                  >
+                                                    <Share2 className="w-3.5 h-3.5" />
+                                                  </button>
+
+                                                  {sharingDoc?.docId === doc.id && (
+                                                    <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-purple-100 rounded-lg shadow-lg p-1.5 flex flex-col gap-1 w-36">
+                                                      <button
+                                                        onClick={() => {
+                                                          const msg = `KCM Logistics Document: ${doc.name} for vehicle registration ${v['Reg. No.'] || v.regNo}. Please check compliance logbook.`;
+                                                          window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+                                                          setSharingDoc(null);
+                                                          triggerNotif('WhatsApp opened in a new tab.', 'success');
+                                                        }}
+                                                        className="flex items-center gap-2 px-2 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded-md text-left cursor-pointer"
+                                                      >
+                                                        <Phone className="w-3.5 h-3.5" /> WhatsApp
+                                                      </button>
+                                                      <button
+                                                        onClick={() => {
+                                                          const subject = `KCM Logistics Document: ${doc.name}`;
+                                                          const body = `Please find the document "${doc.name}" for vehicle ${v['Reg. No.'] || v.regNo}.\n\nNote: Download the file from the KCM Fleet Sheet document registry and attach it if it isn't already attached.`;
+                                                          window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                                                          setSharingDoc(null);
+                                                          triggerNotif('Email client opened. Please review and send.', 'success');
+                                                        }}
+                                                        className="flex items-center gap-2 px-2 py-1.5 text-xs font-semibold text-pink-700 hover:bg-pink-50 rounded-md text-left cursor-pointer"
+                                                      >
+                                                        <Mail className="w-3.5 h-3.5" /> Email
+                                                      </button>
+                                                      {typeof navigator !== 'undefined' && !!navigator.share && (
+                                                        <button
+                                                          onClick={async () => {
+                                                            setSharingDoc(null);
+                                                            if (!doc.fileData) return;
+                                                            try {
+                                                              const res = await fetch(doc.fileData);
+                                                              const blob = await res.blob();
+                                                              const file = new File([blob], doc.fileName, { type: blob.type || 'application/octet-stream' });
+                                                              const shareData: ShareData = {
+                                                                title: doc.name,
+                                                                text: `KCM Logistics Document: ${doc.name} for vehicle ${v['Reg. No.'] || v.regNo}`,
+                                                              };
+                                                              if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                                                                shareData.files = [file];
+                                                              }
+                                                              await navigator.share(shareData);
+                                                            } catch (err) {
+                                                              if ((err as Error)?.name !== 'AbortError') {
+                                                                triggerNotif('Unable to open the share dialog on this device.', 'error');
+                                                              }
+                                                            }
+                                                          }}
+                                                          className="flex items-center gap-2 px-2 py-1.5 text-xs font-semibold text-purple-700 hover:bg-purple-50 rounded-md text-left cursor-pointer"
+                                                        >
+                                                          <ExternalLink className="w-3.5 h-3.5" /> Other
+                                                        </button>
+                                                      )}
+                                                    </div>
+                                                  )}
+                                                </div>
 
                                                 {/* Delete */}
                                                 {canDelete && (
@@ -1074,94 +1129,6 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                       )}
                                     </div>
                                     
-                                  </div>
-                                )}
-
-                                {/* Interactive Sharing Dialog overlay in expanded panel */}
-                                {sharingDoc && (
-                                  <div className="mt-4 p-4 rounded-xl bg-purple-900 text-white border border-pink-400/20 space-y-3">
-                                    <div className="flex items-center justify-between">
-                                      <span className="text-xs font-bold flex items-center gap-1">
-                                        <Share2 className="w-4 h-4 text-pink-400" />
-                                        Share Document: "{sharingDoc.docName}"
-                                      </span>
-                                      <button
-                                        onClick={() => setSharingDoc(null)}
-                                        className="text-pink-300 hover:text-white font-bold text-xs"
-                                      >
-                                        Close
-                                      </button>
-                                    </div>
-
-                                    {sharingSuccess && (
-                                      <p className="text-[11px] text-emerald-300 font-semibold">{sharingSuccess}</p>
-                                    )}
-                                    <div className="space-y-2">
-                                      {typeof navigator !== 'undefined' && !!navigator.share && (
-                                        <button
-                                          onClick={async () => {
-                                            const sharedDocObj = v.documents?.find(d => d.id === sharingDoc.docId);
-                                            if (!sharedDocObj?.fileData) return;
-                                            try {
-                                              const res = await fetch(sharedDocObj.fileData);
-                                              const blob = await res.blob();
-                                              const file = new File([blob], sharedDocObj.fileName, { type: blob.type || 'application/octet-stream' });
-                                              const shareData: ShareData = {
-                                                title: sharedDocObj.name,
-                                                text: `KCM Logistics Document: ${sharedDocObj.name} for vehicle ${v['Reg. No.'] || v.regNo}`,
-                                              };
-                                              if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                                                shareData.files = [file];
-                                              }
-                                              await navigator.share(shareData);
-                                              setSharingSuccess('Document shared successfully!');
-                                            } catch (err) {
-                                              if ((err as Error)?.name !== 'AbortError') {
-                                                setSharingSuccess('Unable to open the share dialog on this device.');
-                                              }
-                                            }
-                                          }}
-                                          className="w-full bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center justify-center gap-2"
-                                        >
-                                          <ExternalLink className="w-3.5 h-3.5" /> Share Document (WhatsApp, Email, Drive...)
-                                        </button>
-                                      )}
-
-                                      <div className="flex flex-col sm:flex-row gap-2">
-                                        <input
-                                          type="email"
-                                          value={sharingEmail}
-                                          onChange={(e) => setSharingEmail(e.target.value)}
-                                          placeholder="Enter recipient's email address"
-                                          className="flex-1 bg-white/10 border border-white/20 rounded-lg p-2 text-xs focus:outline-none"
-                                        />
-                                        <button
-                                          onClick={() => {
-                                            const subject = `KCM Logistics Document: ${sharingDoc.docName}`;
-                                            const body = `Please find the document "${sharingDoc.docName}" for vehicle ${v['Reg. No.'] || v.regNo}.\n\nNote: Download the file from the KCM Fleet Sheet document registry and attach it if it isn't already attached.`;
-                                            window.location.href = `mailto:${encodeURIComponent(sharingEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-                                            setSharingSuccess(`Email client opened${sharingEmail ? ` for ${sharingEmail}` : ''}. Please review and send.`);
-                                          }}
-                                          className="bg-pink-500 hover:bg-pink-600 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-1.5 justify-center"
-                                        >
-                                          <Mail className="w-3.5 h-3.5" /> Send Email
-                                        </button>
-                                      </div>
-
-                                      <div className="flex items-center justify-between pt-1">
-                                        <span className="text-[10px] text-purple-300">Share via WhatsApp:</span>
-                                        <button
-                                          onClick={() => {
-                                            const msg = `KCM Logistics Document: ${sharingDoc.docName} for vehicle registration ${v['Reg. No.'] || v.regNo}. Please check compliance logbook.`;
-                                            window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
-                                            setSharingSuccess('WhatsApp opened in a new tab.');
-                                          }}
-                                          className="text-[11px] text-pink-300 hover:text-pink-100 flex items-center gap-1 font-bold"
-                                        >
-                                          <Phone className="w-3 h-3 text-emerald-400" /> Open WhatsApp
-                                        </button>
-                                      </div>
-                                    </div>
                                   </div>
                                 )}
 

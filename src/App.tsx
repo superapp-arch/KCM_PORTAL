@@ -477,14 +477,6 @@ export default function App() {
     }
   };
 
-  const handleTriggerEmailSim = async () => {
-    try {
-      await fetch('/api/trigger-email-simulation', { method: 'POST' });
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
   const handleAddWarehouseEntry = async (entry: Omit<WarehouseEntry, 'id'>) => {
     try {
       const res = await fetch('/api/warehouse', {
@@ -657,7 +649,6 @@ export default function App() {
         onUpdateEmployee={handleUpdateEmployee}
         onDeleteEmployee={handleDeleteEmployee}
         onResolveNotification={handleResolveNotification}
-        onTriggerEmailSim={handleTriggerEmailSim}
         onAddDriverSalary={handleAddDriverSalary}
         onUpdateDriverSalary={handleUpdateDriverSalary}
         onDeleteDriverSalary={handleDeleteDriverSalary}

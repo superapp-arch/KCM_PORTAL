@@ -24,6 +24,8 @@ import Accounts from './Accounts';
 import HR from './HR';
 import WarehouseDetails from './WarehouseDetails';
 import MileageReportModule from './MileageReport';
+import kcmLogo from '../assets/images/logo.png';
+import Watermark from './Watermark';
 import companyTruck from '../assets/images/kcm_vehicle_cutout.png';
 import {
   LogOut, ShieldAlert, FileSpreadsheet, Fuel, FileText, Landmark,
@@ -86,7 +88,6 @@ interface AdministrationProps {
   onUpdateEmployee: (id: string, emp: Partial<HREmployee>) => Promise<void>;
   onDeleteEmployee: (id: string) => Promise<void>;
   onResolveNotification: (notifId: string) => Promise<void>;
-  onTriggerEmailSim: () => Promise<void>;
   onAddDriverSalary: (record: Omit<DriverSalary, 'id' | 'createdAt' | 'createdBy'>) => Promise<void>;
   onUpdateDriverSalary: (id: string, record: Partial<DriverSalary>) => Promise<void>;
   onDeleteDriverSalary: (id: string) => Promise<void>;
@@ -135,7 +136,6 @@ export default function Administration({
   onUpdateEmployee,
   onDeleteEmployee,
   onResolveNotification,
-  onTriggerEmailSim,
   onAddDriverSalary,
   onUpdateDriverSalary,
   onDeleteDriverSalary,
@@ -168,10 +168,6 @@ export default function Administration({
   const [activeTab, setActiveTab] = useState<string>(getInitialTab());
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [time, setTime] = useState(formatISTClock(new Date()));
-
-  // Email Notification State
-  const [emailLogs, setEmailLogs] = useState<string[]>([]);
-  const [isSimulatingEmail, setIsSimulatingEmail] = useState(false);
 
   // Password editing state
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -244,21 +240,6 @@ export default function Administration({
     }
   };
 
-  const handleSendExpiryEmails = async () => {
-    setIsSimulatingEmail(true);
-    try {
-      await onTriggerEmailSim();
-      setEmailLogs(prev => [
-        `[${new Date().toLocaleTimeString()}] Dispatched fleet insurance pre-expiry alerts to Super Admin inbox and corporate logistics team successfully.`,
-        ...prev
-      ]);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsSimulatingEmail(false);
-    }
-  };
-
   const handlePasswordChangeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPassword || newPassword.length < 5) {
@@ -313,8 +294,10 @@ export default function Administration({
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans text-slate-900 overflow-hidden" id="admin-main-stage">
-      
+    <>
+      <Watermark src={kcmLogo} />
+      <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans text-slate-900 overflow-hidden relative z-10" id="admin-main-stage">
+
       {/* Vibrant Pink & Purple Bento Sidebar */}
       <aside className="w-full md:w-64 bg-gradient-to-b from-purple-950 via-indigo-950 to-pink-950 text-slate-100 flex flex-col border-r border-pink-900/30 shrink-0" id="admin-sidebar">
         
@@ -347,9 +330,9 @@ export default function Administration({
                 <ShieldAlert className="w-4 h-4 shrink-0 text-pink-400" />
                 Super Admin Terminal
               </span>
-              {notifications.length > 0 && (
+              {notifications.filter(n => !n.read).length > 0 && (
                 <span className="bg-pink-600 text-white font-black text-[9px] px-2 py-0.5 rounded-full animate-bounce">
-                  {notifications.length}
+                  {notifications.filter(n => !n.read).length}
                 </span>
               )}
             </button>
@@ -732,29 +715,6 @@ export default function Administration({
           {/* Super Admin Tab Overview */}
           {activeTab === 'admin-overview' && user.department === 'super_admin' && (
             <div className="space-y-6" id="super-admin-desk-board">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-pink-100">
-                <div>
-                  <h1 className="text-xl font-black text-slate-900 flex items-center gap-2 tracking-tight">
-                    <ShieldAlert className="text-pink-600 w-5.5 h-5.5" />
-                    <span className="text-transparent bg-clip-text bg-gradient-to-r from-pink-600 to-purple-800">
-                      Super Admin Compliance Control Center
-                    </span>
-                  </h1>
-                  <p className="text-xs text-slate-500 mt-1 font-semibold">
-                    Global oversight portal: real-time abnormal logins tracking, document access management, and automated email broadcast controls.
-                  </p>
-                </div>
-
-                <button
-                  onClick={handleSendExpiryEmails}
-                  disabled={isSimulatingEmail}
-                  className="bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-xs text-white font-bold py-2.5 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-md shadow-pink-500/10"
-                >
-                  <Mail className="w-3.5 h-3.5" />
-                  {isSimulatingEmail ? 'Broadcasting SMTP...' : 'Broadcast Expiry Alerts'}
-                </button>
-              </div>
-
               {/* Corporate Fleet Showcase Banner */}
               <div className="bg-gradient-to-r from-slate-900 to-slate-950 rounded-2xl border border-slate-800 p-6 flex flex-col md:flex-row items-center gap-6 shadow-xl relative overflow-hidden">
                 <div className="absolute inset-0 bg-radial-[circle_at_center,rgba(16,185,129,0.08)_0%,transparent_75%] pointer-events-none" />
@@ -798,6 +758,20 @@ export default function Administration({
 
                 const inactiveVehiclesForDay = allVehicleRegs.filter(reg => !activeVehiclesForDay.includes(reg));
 
+                const normalizeVehicleCategory = (cat?: string) => {
+                  const c = String(cat || '').toLowerCase().trim();
+                  if (c === 'normal' || c === 'dry') return 'dry';
+                  if (c === 'walkee') return 'walkes';
+                  return c;
+                };
+                const categoryCounts: Record<string, number> = { dry: 0, hybrid: 0, walkes: 0, reefer: 0 };
+                (vehicles || []).forEach(v => {
+                  const cat = normalizeVehicleCategory(v.Category || v.category);
+                  if (cat in categoryCounts) categoryCounts[cat]++;
+                });
+
+                const unresolvedNotifications = notifications.filter(n => !n.read);
+
                 return (
                   <div className="space-y-4">
                     {/* Subsystem KPIs */}
@@ -806,7 +780,7 @@ export default function Administration({
                         <p className="font-bold text-purple-400 uppercase tracking-wider text-[10px]">Fleet Size</p>
                         <h3 className="text-xl font-black text-slate-800 mt-1">{vehicles.length} Vehicles</h3>
                       </div>
-                      
+
                       <div className="bg-white p-4 rounded-xl border border-pink-100 shadow-sm">
                         <p className="font-bold text-purple-400 uppercase tracking-wider text-[10px]">Active Vehicles</p>
                         <h3 className="text-xl font-black text-emerald-600 mt-1">{activeVehiclesForDay.length} Running</h3>
@@ -828,7 +802,27 @@ export default function Administration({
 
                       <div className="bg-white p-4 rounded-xl border border-pink-100 shadow-sm bg-pink-50/10">
                         <p className="font-bold text-pink-500 uppercase tracking-wider text-[10px]">Unresolved Alerts</p>
-                        <h3 className="text-xl font-black text-pink-700 mt-1">{notifications.filter(n => !n.read).length} Unresolved</h3>
+                        <h3 className="text-xl font-black text-pink-700 mt-1">{unresolvedNotifications.length} Unresolved</h3>
+                      </div>
+
+                      <div className="bg-amber-50 p-4 rounded-xl border border-amber-200 shadow-sm">
+                        <p className="font-bold text-amber-700 uppercase tracking-wider text-[10px]">Dry</p>
+                        <h3 className="text-xl font-black text-amber-800 mt-1">{categoryCounts.dry} Vehicles</h3>
+                      </div>
+
+                      <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 shadow-sm">
+                        <p className="font-bold text-emerald-700 uppercase tracking-wider text-[10px]">Hybrid</p>
+                        <h3 className="text-xl font-black text-emerald-800 mt-1">{categoryCounts.hybrid} Vehicles</h3>
+                      </div>
+
+                      <div className="bg-fuchsia-50 p-4 rounded-xl border border-fuchsia-200 shadow-sm">
+                        <p className="font-bold text-fuchsia-700 uppercase tracking-wider text-[10px]">Walkes</p>
+                        <h3 className="text-xl font-black text-fuchsia-800 mt-1">{categoryCounts.walkes} Vehicles</h3>
+                      </div>
+
+                      <div className="bg-cyan-50 p-4 rounded-xl border border-cyan-200 shadow-sm">
+                        <p className="font-bold text-cyan-700 uppercase tracking-wider text-[10px]">Reefer</p>
+                        <h3 className="text-xl font-black text-cyan-800 mt-1">{categoryCounts.reefer} Vehicles</h3>
                       </div>
                     </div>
                   </div>
@@ -836,8 +830,8 @@ export default function Administration({
               })()}
 
               {/* Active Compliance Warnings & Security Alerts */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                
+              <div className="grid grid-cols-1 gap-6">
+
                 {/* Real-time Notifications: Abnormal Logins & Insurance */}
                 <div className="bg-white rounded-2xl shadow-sm border border-pink-100 p-5 space-y-4">
                   <h2 className="text-xs font-black text-purple-900 uppercase tracking-wider flex items-center gap-2">
@@ -846,12 +840,12 @@ export default function Administration({
                   </h2>
 
                   <div className="space-y-3 max-h-[400px] overflow-y-auto pr-1">
-                    {notifications.length === 0 ? (
+                    {notifications.filter(n => !n.read).length === 0 ? (
                       <div className="text-center py-10 text-slate-400 font-mono text-xs">
                         ✅ NO PENDING SECURITY OR COMPLIANCE VIOLATIONS DISCOVERED.
                       </div>
                     ) : (
-                      notifications.map((notif) => (
+                      notifications.filter(n => !n.read).map((notif) => (
                         <div
                           key={notif.id}
                           className={`p-3.5 rounded-xl border text-xs flex flex-col sm:flex-row sm:items-start justify-between gap-3 transition-all hover:bg-slate-50/50 ${
@@ -870,42 +864,12 @@ export default function Administration({
                             <p className="text-[10px] text-slate-400 font-mono font-medium">{notif.timestamp}</p>
                           </div>
 
-                          {!notif.read ? (
-                            <button
-                              onClick={() => onResolveNotification(notif.id)}
-                              className="bg-slate-950 hover:bg-slate-800 text-white font-extrabold px-3 py-1.5 rounded-lg text-[9px] uppercase cursor-pointer transition-colors shrink-0"
-                            >
-                              Resolve
-                            </button>
-                          ) : (
-                            <span className="text-[10px] text-pink-600 font-bold flex items-center gap-1 shrink-0">
-                              <CheckCircle className="w-3.5 h-3.5" /> Resolved
-                            </span>
-                          )}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-
-                {/* Simulated Email Logbook Terminal */}
-                <div className="bg-white rounded-2xl shadow-sm border border-pink-100 p-5 flex flex-col">
-                  <h2 className="text-xs font-black text-purple-900 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                    <Mail className="w-4 h-4 text-pink-600" />
-                    Automated Pre-Expiry Email SMTP Logs
-                  </h2>
-                  <p className="text-xs text-slate-500 mb-4 font-medium leading-relaxed">
-                    KCM Logistics automatically fires real-time security alerts to corporate administrators when abnormal activities occur, and flags vehicle documents prior to expiry.
-                  </p>
-
-                  <div className="flex-1 bg-purple-950 text-pink-200 p-4 rounded-xl font-mono text-[10.5px] space-y-2 h-[300px] overflow-y-auto border border-pink-500/10 shadow-inner">
-                    <div className="text-pink-400/50">[SMTP SYSTEM] Connection established over TLS. Mail servers listening on port 587.</div>
-                    {emailLogs.length === 0 ? (
-                      <div className="text-purple-300/40 italic">[Waiting for real-time broadcast simulation triggers...]</div>
-                    ) : (
-                      emailLogs.map((log, idx) => (
-                        <div key={idx} className="border-l-2 border-pink-400 pl-2 text-pink-100">
-                          {log}
+                          <button
+                            onClick={() => onResolveNotification(notif.id)}
+                            className="bg-slate-950 hover:bg-slate-800 text-white font-extrabold px-3 py-1.5 rounded-lg text-[9px] uppercase cursor-pointer transition-colors shrink-0"
+                          >
+                            Resolve
+                          </button>
                         </div>
                       ))
                     )}
@@ -1013,5 +977,6 @@ export default function Administration({
         </div>
       </main>
     </div>
+    </>
   );
 }
