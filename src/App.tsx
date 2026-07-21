@@ -22,6 +22,7 @@ import {
 export default function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Departmental Data Lists
@@ -39,37 +40,27 @@ export default function App() {
   const [mileageReports, setMileageReports] = useState<MileageReport[]>([]);
 
   // 1. Initial Session Handshake
+  // Restores strictly from THIS browser's own stored token - never from a
+  // shared/global server session - so one employee logging in on their
+  // machine can never surface on another employee's device.
   useEffect(() => {
     const initSession = async () => {
       try {
-        const res = await fetch('/api/session');
-        if (res.ok) {
-          const sessionUser = await res.json();
-          if (sessionUser && sessionUser.username) {
-            setUser(sessionUser);
-            await fetchAllData();
-          } else {
-            // Check localStorage fallback for persistence
-            const saved = localStorage.getItem('kcm_session_user');
-            if (saved) {
-              const parsed = JSON.parse(saved);
-              // Re-authenticate silently
-              const loginRes = await fetch('/api/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  username: parsed.username,
-                  password: 'kcm123', // Demo fallback master override password
-                  otp: '000000'       // Default bypass OTP code
-                })
-              });
-              if (loginRes.ok) {
-                const loginData = await loginRes.json();
-                if (loginData.success) {
-                  setUser(loginData.user);
-                  await fetchAllData();
-                }
-              }
+        const savedToken = localStorage.getItem('kcm_session_token');
+        if (savedToken) {
+          const res = await fetch('/api/session', {
+            headers: { Authorization: `Bearer ${savedToken}` }
+          });
+          if (res.ok) {
+            const sessionUser = await res.json();
+            if (sessionUser && sessionUser.username) {
+              setUser(sessionUser);
+              setToken(savedToken);
+              await fetchAllData();
+            } else {
+              // Token is stale/unknown to the server (e.g. server restarted) - clear it
+              localStorage.removeItem('kcm_session_user');
+              localStorage.removeItem('kcm_session_token');
             }
           }
         }
@@ -593,14 +584,17 @@ export default function App() {
     }
   };
 
-  const handleLoginSuccess = async (loggedInUser: User) => {
+  const handleLoginSuccess = async (loggedInUser: User, sessionToken?: string) => {
     setUser(loggedInUser);
+    if (sessionToken) setToken(sessionToken);
     await fetchAllData();
   };
 
   const handleLogout = () => {
     setUser(null);
+    setToken(null);
     localStorage.removeItem('kcm_session_user');
+    localStorage.removeItem('kcm_session_token');
   };
 
   // 3. Render State Selector
@@ -627,6 +621,7 @@ export default function App() {
     <>
       <Administration
         user={user}
+        token={token}
         onLogout={handleLogout}
         vehicles={vehicles}
         fuelLogs={fuelLogs}

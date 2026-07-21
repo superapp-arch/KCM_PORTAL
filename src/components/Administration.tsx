@@ -35,6 +35,7 @@ import {
 
 interface AdministrationProps {
   user: UserType;
+  token: string | null;
   onLogout: () => void;
   vehicles: Vehicle[];
   fuelLogs: FuelLog[];
@@ -84,6 +85,7 @@ interface AdministrationProps {
 
 export default function Administration({
   user,
+  token,
   onLogout,
   vehicles,
   fuelLogs,
@@ -211,7 +213,10 @@ export default function Administration({
   const handleLogoutClick = async () => {
     setIsLoggingOut(true);
     try {
-      const res = await fetch('/api/logout', { method: 'POST' });
+      const res = await fetch('/api/logout', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined
+      });
       if (res.ok) {
         onLogout();
       }
@@ -250,7 +255,10 @@ export default function Administration({
     try {
       const res = await fetch('/api/change-password', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({ oldPassword, newPassword }),
       });
       const data = await res.json();

@@ -31,7 +31,7 @@ export default function Maintenance({ records, onAddRecord, onUpdateRecord, onDe
 
   // New Maintenance State
   const [regNo, setRegNo] = useState('');
-  const [date, setDate] = useState('2026-07-07');
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [serviceType, setServiceType] = useState<MaintenanceRecord['serviceType']>('Scheduled Servicing');
   const [description, setDescription] = useState('');
   const [cost, setCost] = useState('');

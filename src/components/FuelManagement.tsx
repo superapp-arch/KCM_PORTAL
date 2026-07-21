@@ -31,7 +31,7 @@ export default function FuelManagement({ logs, onAddLog, onUpdateLog, onDeleteLo
 
   // New Fuel Entry State
   const [regNo, setRegNo] = useState('');
-  const [date, setDate] = useState('2026-07-07');
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [quantity, setQuantity] = useState('');
   const [rate, setRate] = useState('94.50');
   const [odometer, setOdometer] = useState('');

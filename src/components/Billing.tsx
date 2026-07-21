@@ -31,7 +31,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
 
   // New Invoice State
   const [invoiceNo, setInvoiceNo] = useState('');
-  const [date, setDate] = useState('2026-07-07');
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [customerName, setCustomerName] = useState('');
   const [amount, setAmount] = useState('');
   const [status, setStatus] = useState<'Paid' | 'Pending' | 'Overdue'>('Pending');

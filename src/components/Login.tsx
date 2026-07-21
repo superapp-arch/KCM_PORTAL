@@ -7,7 +7,7 @@ import AnimatedLorry from './AnimatedLorry';
 import companyTruck from '../assets/images/kcm_clean_truck_1784109835356.jpg';
 
 interface LoginProps {
-  onLoginSuccess: (user: UserType) => void;
+  onLoginSuccess: (user: UserType, token?: string) => void;
 }
 
 const PRESET_CREDS = [
@@ -213,10 +213,12 @@ export default function Login({ onLoginSuccess }: LoginProps) {
       if (res.ok && data.success) {
         if (rememberMe) {
           localStorage.setItem('kcm_session_user', JSON.stringify(data.user));
+          if (data.token) localStorage.setItem('kcm_session_token', data.token);
         } else {
           localStorage.removeItem('kcm_session_user');
+          localStorage.removeItem('kcm_session_token');
         }
-        onLoginSuccess(data.user);
+        onLoginSuccess(data.user, data.token);
       } else {
         const errMsg = data.error || (authMode === 'signin' ? 'Incorrect Email ID, Password, or OTP.' : 'Incorrect Email ID or Password.');
         setError(errMsg);

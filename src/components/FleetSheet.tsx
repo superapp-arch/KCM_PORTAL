@@ -56,7 +56,7 @@ const VEHICLE_OWNERSHIPS = [
 
 // Parses "DD.MM.YYYY" or "YYYY-MM-DD" expiry strings and flags whether the
 // date falls within the given alert window (days remaining until expiry).
-const getExpiryAlertStatus = (dateStr?: string, minDays = 10, maxDays = 15): { isAlert: boolean; diffDays: number | null } => {
+const getExpiryAlertStatus = (dateStr?: string, minDays = 0, maxDays = 10): { isAlert: boolean; diffDays: number | null } => {
   if (!dateStr) return { isAlert: false, diffDays: null };
   let dateObj: Date | null = null;
   const parts = dateStr.split('.');
@@ -66,7 +66,7 @@ const getExpiryAlertStatus = (dateStr?: string, minDays = 10, maxDays = 15): { i
     dateObj = new Date(dateStr);
   }
   if (!dateObj || isNaN(dateObj.getTime())) return { isAlert: false, diffDays: null };
-  const today = new Date('2026-07-07');
+  const today = new Date();
   const diffDays = Math.ceil((dateObj.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
   return { isAlert: diffDays >= minDays && diffDays <= maxDays, diffDays };
 };
@@ -600,15 +600,15 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                   const fcDate = v.FC || v.fc;
                   const siNo = itemsPerPage === 'ALL' ? (i + 1) : ((currentPage - 1) * parseInt(itemsPerPage, 10) + i + 1);
 
-                  // Calculate compliance expiry alerts
-                  const insuranceAlert = getExpiryAlertStatus(insExp, 10, 15);
+                  // Calculate compliance expiry alerts (10-day window, future expiries only)
+                  const insuranceAlert = getExpiryAlertStatus(insExp, 0, 10);
                   const isNearExpiry = insuranceAlert.isAlert;
 
                   const statePermitRaw = v['State permit'] || v.statePermit;
                   const statePermitAlert = getExpiryAlertStatus(statePermitRaw, 0, 10);
 
                   const nationalPermitRaw = v['All India Permit'] || v.allIndiaPermit;
-                  const nationalPermitAlert = getExpiryAlertStatus(nationalPermitRaw, 0, 15);
+                  const nationalPermitAlert = getExpiryAlertStatus(nationalPermitRaw, 0, 10);
 
                   return (
                     <React.Fragment key={reg + '-' + siNo}>

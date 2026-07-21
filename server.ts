@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import { Resend } from "resend";
 import dotenv from "dotenv";
+import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
@@ -93,9 +94,9 @@ const COMPLIANCE_CHECKS: Array<{
   maxDays: number;
   type: 'insurance' | 'permit';
 }> = [
-  { key: 'insurance', mixedCaseKey: 'Insurance', label: 'Insurance', idPrefix: 'ins', minDays: 10, maxDays: 15, type: 'insurance' },
+  { key: 'insurance', mixedCaseKey: 'Insurance', label: 'Insurance', idPrefix: 'ins', minDays: 0, maxDays: 10, type: 'insurance' },
   { key: 'statePermit', mixedCaseKey: 'State permit', label: 'State Permit', idPrefix: 'permit-state', minDays: 0, maxDays: 10, type: 'permit' },
-  { key: 'allIndiaPermit', mixedCaseKey: 'All India Permit', label: 'National (All India) Permit', idPrefix: 'permit-national', minDays: 0, maxDays: 15, type: 'permit' },
+  { key: 'allIndiaPermit', mixedCaseKey: 'All India Permit', label: 'National (All India) Permit', idPrefix: 'permit-national', minDays: 0, maxDays: 10, type: 'permit' },
 ];
 
 async function startServer() {
@@ -108,8 +109,17 @@ async function startServer() {
   // Initialize and Seed Cloud SQL Database
   await seedDatabase();
 
-  // Session storage in-memory for this simple demo context
-  let currentSessionUser: User | null = null;
+  // Per-client session storage: each logged-in browser/device holds its own
+  // token, mapped to its own user. A single shared variable here previously
+  // meant the LAST person to log in anywhere overwrote every other open
+  // session - fixed by keying sessions off a token issued at login.
+  const sessionsByToken = new Map<string, User>();
+
+  function getSessionUser(req: express.Request): User | undefined {
+    const authHeader = String(req.headers.authorization || '');
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    return token ? sessionsByToken.get(token) : undefined;
+  }
 
   // Active OTPs in-memory storage
   const ACTIVE_OTPS: Record<string, string> = {};
@@ -134,7 +144,8 @@ async function startServer() {
   // maybeSendDailyComplianceDigest below.
   async function checkAndNotifyComplianceAlerts(vehicle: Vehicle) {
     const regNo = vehicle['Reg. No.'] || vehicle.regNo || vehicle.id || 'unknown';
-    const today = new Date('2026-07-07');
+    const today = new Date();
+    const existingNotifs = await getNotifications();
 
     for (const check of COMPLIANCE_CHECKS) {
       const raw = (vehicle as any)[check.key] || (vehicle as any)[check.mixedCaseKey];
@@ -144,8 +155,12 @@ async function startServer() {
       const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
       if (diffDays < check.minDays || diffDays > check.maxDays) continue;
 
+      const notifId = `${check.idPrefix}-${regNo}`;
+      const existing = existingNotifs.find((n: any) => n.id === notifId);
+      if (existing && (existing.read || (existing as any).status === 'Resolved')) continue; // stays resolved until it re-enters a fresh alert window
+
       await saveNotification({
-        id: `${check.idPrefix}-${regNo}`,
+        id: notifId,
         title: `${check.label} Expiry Alert`,
         message: `Vehicle ${regNo} ${check.label.toLowerCase()} expires on ${raw} (${diffDays} day${diffDays === 1 ? '' : 's'} left). Included in the next daily digest to Super Admin & Vehicle Data Manager.`,
         type: check.type,
@@ -175,6 +190,8 @@ async function startServer() {
       const alerts = await calculateDynamicAlerts();
       if (alerts.length === 0) return;
 
+      const sortedAlerts = [...alerts].sort((a: any, b: any) => a.diffDays - b.diffDays);
+
       const usersList = await getUsersWithFallback();
       const recipients = usersList
         .filter((u: any) => u.department === 'super_admin' || u.username === 'chandana')
@@ -183,7 +200,7 @@ async function startServer() {
 
       if (recipients.length === 0) return;
 
-      const rows = alerts.map((a: any) => `
+      const rows = sortedAlerts.map((a: any) => `
         <tr>
           <td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;">${a.vehicleRegNo}</td>
           <td style="padding:6px 10px;border:1px solid #e2e8f0;">${a.checkLabel}</td>
@@ -236,9 +253,9 @@ async function startServer() {
     res.json({ status: 'ok', time: new Date() });
   });
 
-  // Current session endpoint
+  // Current session endpoint - resolves strictly from this client's own token
   app.get('/api/session', (req, res) => {
-    res.json(currentSessionUser);
+    res.json(getSessionUser(req) || null);
   });
 
   // Request Login OTP
@@ -319,9 +336,10 @@ async function startServer() {
               departmentLabel: matchedUser.departmentLabel,
               email: matchedUser.email || undefined
             };
-            currentSessionUser = userSession;
+            const token = randomUUID();
+            sessionsByToken.set(token, userSession);
             await maybeSendDailyComplianceDigest(matchedUser);
-            return res.json({ success: true, user: userSession });
+            return res.json({ success: true, user: userSession, token });
           }
 
           const expectedOtp = ACTIVE_OTPS[matchedUser.email?.toLowerCase() || ''];
@@ -334,14 +352,15 @@ async function startServer() {
               departmentLabel: matchedUser.departmentLabel,
               email: matchedUser.email || undefined
             };
-            currentSessionUser = userSession;
+            const token = randomUUID();
+            sessionsByToken.set(token, userSession);
 
             if (matchedUser.email) {
               delete ACTIVE_OTPS[matchedUser.email.toLowerCase()];
             }
 
             await maybeSendDailyComplianceDigest(matchedUser);
-            return res.json({ success: true, user: userSession });
+            return res.json({ success: true, user: userSession, token });
           } else {
             const abnormal: AbnormalLogin = {
               id: String(Date.now()),
@@ -471,7 +490,8 @@ async function startServer() {
   // Change Password for currently logged in session user
   app.post('/api/change-password', async (req, res) => {
     try {
-      if (!currentSessionUser) {
+      const sessionUser = getSessionUser(req);
+      if (!sessionUser) {
         return res.status(401).json({ success: false, error: 'Unauthorized. No active session.' });
       }
       const { oldPassword, newPassword } = req.body;
@@ -480,7 +500,7 @@ async function startServer() {
       }
 
       const usersList = await getUsersWithFallback();
-      const userObj = usersList.find((u: any) => u.username === currentSessionUser!.username);
+      const userObj = usersList.find((u: any) => u.username === sessionUser.username);
       if (userObj) {
         if (oldPassword && userObj.pass !== oldPassword && oldPassword !== 'kcm123') {
           return res.status(400).json({ success: false, error: 'Incorrect current password.' });
@@ -496,9 +516,11 @@ async function startServer() {
     }
   });
 
-  // Logout endpoint
+  // Logout endpoint - invalidates only this client's own token
   app.post('/api/logout', (req, res) => {
-    currentSessionUser = null;
+    const authHeader = String(req.headers.authorization || '');
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (token) sessionsByToken.delete(token);
     res.json({ success: true });
   });
 
@@ -546,16 +568,25 @@ async function startServer() {
     }
   });
 
-  // Helper function to dynamically calculate alerts on startup/query
+  // Helper function to dynamically calculate alerts on startup/query.
+  // Excludes any alert already marked resolved so that resolving it truly
+  // stops it from reappearing on the dashboard or in the next daily digest.
   async function calculateDynamicAlerts() {
     const alerts: any[] = [];
-    const today = new Date('2026-07-07');
+    const today = new Date();
 
-    const fleetVehicles = await getVehicles();
+    const [fleetVehicles, existingNotifs] = await Promise.all([getVehicles(), getNotifications()]);
+    const resolvedIds = new Set(
+      existingNotifs.filter((n: any) => n.read || n.status === 'Resolved').map((n: any) => n.id)
+    );
+
     fleetVehicles.forEach((v: any) => {
       const regNo = v['Reg. No.'] || v.regNo || v.id;
 
       COMPLIANCE_CHECKS.forEach(check => {
+        const alertId = `${check.idPrefix}-${regNo}`;
+        if (resolvedIds.has(alertId)) return;
+
         const raw = v[check.key] || v[check.mixedCaseKey];
         const expDate = parseFlexibleDate(raw);
         if (!expDate || isNaN(expDate.getTime())) return;
@@ -564,11 +595,11 @@ async function startServer() {
         if (diffDays < check.minDays || diffDays > check.maxDays) return;
 
         alerts.push({
-          id: `${check.idPrefix}-${regNo}`,
+          id: alertId,
           title: `${check.label} Expiry Alert`,
           message: `Vehicle ${regNo} (${v.type || v.Type || 'Tata Ace'}) ${check.label.toLowerCase()} is expiring on ${raw} (in ${diffDays} day${diffDays === 1 ? '' : 's'}). Included in the daily digest to Super Admin & Vehicle Data Manager.`,
           type: check.type,
-          timestamp: '2026-07-07 00:00:00',
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
           status: 'Active',
           read: false,
           vehicleRegNo: regNo,

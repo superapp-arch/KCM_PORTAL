@@ -32,7 +32,7 @@ export default function Accounts({ entries, onAddEntry, onUpdateEntry, onDeleteE
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // New Entry State
-  const [date, setDate] = useState('2026-07-07');
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [type, setType] = useState<'Income' | 'Expense'>('Income');
   const [category, setCategory] = useState('Freight Revenue');
   const [amount, setAmount] = useState('');
