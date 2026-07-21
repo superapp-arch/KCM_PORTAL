@@ -88,6 +88,7 @@ interface AdministrationProps {
   onUpdateEmployee: (id: string, emp: Partial<HREmployee>) => Promise<void>;
   onDeleteEmployee: (id: string) => Promise<void>;
   onResolveNotification: (notifId: string) => Promise<void>;
+  onSendComplianceDigestNow: () => Promise<{ success: boolean; sent?: boolean; message?: string; error?: string }>;
   onAddDriverSalary: (record: Omit<DriverSalary, 'id' | 'createdAt' | 'createdBy'>) => Promise<void>;
   onUpdateDriverSalary: (id: string, record: Partial<DriverSalary>) => Promise<void>;
   onDeleteDriverSalary: (id: string) => Promise<void>;
@@ -136,6 +137,7 @@ export default function Administration({
   onUpdateEmployee,
   onDeleteEmployee,
   onResolveNotification,
+  onSendComplianceDigestNow,
   onAddDriverSalary,
   onUpdateDriverSalary,
   onDeleteDriverSalary,
@@ -168,6 +170,8 @@ export default function Administration({
   const [activeTab, setActiveTab] = useState<string>(getInitialTab());
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [time, setTime] = useState(formatISTClock(new Date()));
+  const [isSendingDigest, setIsSendingDigest] = useState(false);
+  const [sendDigestMessage, setSendDigestMessage] = useState<{ text: string; error: boolean } | null>(null);
 
   // Password editing state
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -834,10 +838,36 @@ export default function Administration({
 
                 {/* Real-time Notifications: Abnormal Logins & Insurance */}
                 <div className="bg-white rounded-2xl shadow-sm border border-pink-100 p-5 space-y-4">
-                  <h2 className="text-xs font-black text-purple-900 uppercase tracking-wider flex items-center gap-2">
-                    <Bell className="w-4 h-4 text-pink-600 animate-bounce" />
-                    Live Security & Compliance Notifications
-                  </h2>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <h2 className="text-xs font-black text-purple-900 uppercase tracking-wider flex items-center gap-2">
+                      <Bell className="w-4 h-4 text-pink-600 animate-bounce" />
+                      Live Security & Compliance Notifications
+                    </h2>
+
+                    <button
+                      onClick={async () => {
+                        setIsSendingDigest(true);
+                        setSendDigestMessage(null);
+                        const result = await onSendComplianceDigestNow();
+                        setSendDigestMessage({
+                          text: result.message || result.error || 'Something went wrong.',
+                          error: !result.success
+                        });
+                        setIsSendingDigest(false);
+                      }}
+                      disabled={isSendingDigest}
+                      className="bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-[11px] text-white font-bold py-2 px-3.5 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-md shadow-pink-500/10 disabled:opacity-60 disabled:cursor-not-allowed shrink-0"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      {isSendingDigest ? 'Sending...' : 'Send Alerts Now'}
+                    </button>
+                  </div>
+
+                  {sendDigestMessage && (
+                    <p className={`text-[11px] font-semibold ${sendDigestMessage.error ? 'text-rose-600' : 'text-emerald-600'}`}>
+                      {sendDigestMessage.text}
+                    </p>
+                  )}
 
                   <div className="space-y-3 max-h-[400px] overflow-y-auto pr-1">
                     {notifications.filter(n => !n.read).length === 0 ? (

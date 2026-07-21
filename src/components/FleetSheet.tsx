@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx';
 import { motion } from 'motion/react';
 import { Vehicle, VehicleDocument } from '../types';
@@ -89,7 +90,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
   const [uploadCategory, setUploadCategory] = useState<string>('RC');
   const [uploadName, setUploadName] = useState<string>('');
   
-  const [sharingDoc, setSharingDoc] = useState<{ vehicleId: string; docId: string } | null>(null);
+  const [sharingDoc, setSharingDoc] = useState<{ vehicleId: string; docId: string; top: number; right: number } | null>(null);
 
   const [editingDoc, setEditingDoc] = useState<{ vehicleId: string; docId: string; newName: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1036,22 +1037,34 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                   <Printer className="w-3.5 h-3.5" />
                                                 </button>
 
-                                                {/* Share options - clicking Share opens WhatsApp/Email/Other directly, no intermediate step */}
-                                                <div className="relative">
-                                                  <button
-                                                    onClick={() =>
-                                                      setSharingDoc(
-                                                        sharingDoc?.docId === doc.id ? null : { vehicleId: v.id || '', docId: doc.id }
-                                                      )
+                                                {/* Share options - clicking Share opens WhatsApp/Email/Other directly.
+                                                    Rendered via portal at a fixed screen position so the small scrollable
+                                                    document list above can't clip/hide the menu. */}
+                                                <button
+                                                  onClick={(e) => {
+                                                    if (sharingDoc?.docId === doc.id) {
+                                                      setSharingDoc(null);
+                                                      return;
                                                     }
-                                                    className="p-1.5 bg-white border border-purple-100 text-purple-700 hover:bg-pink-50 rounded-lg transition-colors cursor-pointer"
-                                                    title="Share Document"
-                                                  >
-                                                    <Share2 className="w-3.5 h-3.5" />
-                                                  </button>
+                                                    const rect = e.currentTarget.getBoundingClientRect();
+                                                    setSharingDoc({ vehicleId: v.id || '', docId: doc.id, top: rect.bottom + 4, right: window.innerWidth - rect.right });
+                                                  }}
+                                                  className="p-1.5 bg-white border border-purple-100 text-purple-700 hover:bg-pink-50 rounded-lg transition-colors cursor-pointer"
+                                                  title="Share Document"
+                                                >
+                                                  <Share2 className="w-3.5 h-3.5" />
+                                                </button>
 
-                                                  {sharingDoc?.docId === doc.id && (
-                                                    <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-purple-100 rounded-lg shadow-lg p-1.5 flex flex-col gap-1 w-36">
+                                                {sharingDoc?.docId === doc.id && createPortal(
+                                                  <>
+                                                    <div
+                                                      className="fixed inset-0 z-[99]"
+                                                      onClick={() => setSharingDoc(null)}
+                                                    />
+                                                    <div
+                                                      style={{ position: 'fixed', top: sharingDoc.top, right: sharingDoc.right }}
+                                                      className="z-[100] bg-white border border-purple-100 rounded-lg shadow-xl p-1.5 flex flex-col gap-1 w-36"
+                                                    >
                                                       <button
                                                         onClick={() => {
                                                           const msg = `KCM Logistics Document: ${doc.name} for vehicle registration ${v['Reg. No.'] || v.regNo}. Please check compliance logbook.`;
@@ -1104,8 +1117,9 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                         </button>
                                                       )}
                                                     </div>
-                                                  )}
-                                                </div>
+                                                  </>,
+                                                  document.body
+                                                )}
 
                                                 {/* Delete */}
                                                 {canDelete && (

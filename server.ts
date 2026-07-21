@@ -165,78 +165,85 @@ async function startServer() {
     }
   }
 
-  // Sends ONE consolidated digest email per calendar day - listing every
-  // vehicle currently inside a compliance alert window (vehicle no + expiry
-  // date) - to the Super Admin(s) and the Vehicle Data Manager (Chandana).
-  // Triggered the first time either of them logs in that day; a persisted
-  // marker notification prevents sending more than once per day.
+  // Builds and sends the compliance digest email right now - listing every
+  // vehicle currently inside an insurance/permit alert window (vehicle no +
+  // expiry date, sorted soonest-first) - to the Super Admin(s) and the
+  // Vehicle Data Manager (Chandana). Used both by the automatic once/day
+  // login trigger and the manual "Send Alerts Now" button; the manual path
+  // always sends regardless of whether today's automatic digest already went out.
+  async function buildAndSendComplianceDigest(): Promise<{ sent: boolean; count: number; recipients: string[] }> {
+    const alerts = await calculateDynamicAlerts();
+    if (alerts.length === 0) return { sent: false, count: 0, recipients: [] };
+
+    const sortedAlerts = [...alerts].sort((a: any, b: any) => a.diffDays - b.diffDays);
+
+    const usersList = await getUsersWithFallback();
+    const recipients = usersList
+      .filter((u: any) => u.department === 'super_admin' || u.username === 'chandana')
+      .map((u: any) => u.email)
+      .filter(Boolean) as string[];
+
+    if (recipients.length === 0) return { sent: false, count: 0, recipients: [] };
+
+    const todayKey = istDateKey();
+    const rows = sortedAlerts.map((a: any) => `
+      <tr>
+        <td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;">${a.vehicleRegNo}</td>
+        <td style="padding:6px 10px;border:1px solid #e2e8f0;">${a.checkLabel}</td>
+        <td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;">${a.expiryDate}</td>
+        <td style="padding:6px 10px;border:1px solid #e2e8f0;text-align:center;">${a.diffDays}</td>
+      </tr>
+    `).join('');
+
+    await resend.emails.send({
+      from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
+      to: recipients,
+      subject: `KCM Fleet Compliance Digest - ${alerts.length} Upcoming Expir${alerts.length === 1 ? 'y' : 'ies'} (${todayKey})`,
+      html: `
+        <div style="font-family:Arial,sans-serif;line-height:1.5;">
+          <p>Hello,</p>
+          <p>Here is the current summary of vehicles with insurance or permits nearing expiry:</p>
+          <table style="border-collapse:collapse;font-size:13px;">
+            <thead>
+              <tr>
+                <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Vehicle No</th>
+                <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Expiry Type</th>
+                <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Expiry Date</th>
+                <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Days Left</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <p style="margin-top:14px;">Please arrange renewals at the earliest to avoid compliance violations.</p>
+        </div>
+      `,
+    });
+
+    await saveNotification({
+      id: `digest-sent-${todayKey}`,
+      title: 'Daily Compliance Digest Sent',
+      message: `Compliance digest emailed to ${recipients.join(', ')} covering ${alerts.length} upcoming expir${alerts.length === 1 ? 'y' : 'ies'}.`,
+      type: 'general',
+      timestamp: istTimestamp(),
+      read: true
+    });
+
+    console.log(`[COMPLIANCE DIGEST] Sent digest to ${recipients.join(', ')} (${alerts.length} items)`);
+    return { sent: true, count: alerts.length, recipients };
+  }
+
+  // Automatic once-per-calendar-day trigger, fired from login. A persisted
+  // marker notification prevents sending more than once per day this way.
   async function maybeSendDailyComplianceDigest(loggingInUser: any) {
     const isTargetRecipient = loggingInUser?.department === 'super_admin' || loggingInUser?.username === 'chandana';
     if (!isTargetRecipient) return;
 
-    const todayKey = istDateKey();
-    const digestId = `digest-sent-${todayKey}`;
+    const digestId = `digest-sent-${istDateKey()}`;
 
     try {
       const existingNotifs = await getNotifications();
       if (existingNotifs.some((n: any) => n.id === digestId)) return;
-
-      const alerts = await calculateDynamicAlerts();
-      if (alerts.length === 0) return;
-
-      const sortedAlerts = [...alerts].sort((a: any, b: any) => a.diffDays - b.diffDays);
-
-      const usersList = await getUsersWithFallback();
-      const recipients = usersList
-        .filter((u: any) => u.department === 'super_admin' || u.username === 'chandana')
-        .map((u: any) => u.email)
-        .filter(Boolean) as string[];
-
-      if (recipients.length === 0) return;
-
-      const rows = sortedAlerts.map((a: any) => `
-        <tr>
-          <td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;">${a.vehicleRegNo}</td>
-          <td style="padding:6px 10px;border:1px solid #e2e8f0;">${a.checkLabel}</td>
-          <td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;">${a.expiryDate}</td>
-          <td style="padding:6px 10px;border:1px solid #e2e8f0;text-align:center;">${a.diffDays}</td>
-        </tr>
-      `).join('');
-
-      await resend.emails.send({
-        from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
-        to: recipients,
-        subject: `KCM Fleet Compliance Digest - ${alerts.length} Upcoming Expir${alerts.length === 1 ? 'y' : 'ies'} (${todayKey})`,
-        html: `
-          <div style="font-family:Arial,sans-serif;line-height:1.5;">
-            <p>Good morning,</p>
-            <p>Here is today's summary of vehicles with insurance or permits nearing expiry:</p>
-            <table style="border-collapse:collapse;font-size:13px;">
-              <thead>
-                <tr>
-                  <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Vehicle No</th>
-                  <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Expiry Type</th>
-                  <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Expiry Date</th>
-                  <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Days Left</th>
-                </tr>
-              </thead>
-              <tbody>${rows}</tbody>
-            </table>
-            <p style="margin-top:14px;">Please arrange renewals at the earliest to avoid compliance violations.</p>
-          </div>
-        `,
-      });
-
-      await saveNotification({
-        id: digestId,
-        title: 'Daily Compliance Digest Sent',
-        message: `Daily compliance digest emailed to ${recipients.join(', ')} covering ${alerts.length} upcoming expir${alerts.length === 1 ? 'y' : 'ies'}.`,
-        type: 'general',
-        timestamp: istTimestamp(),
-        read: true
-      });
-
-      console.log(`[COMPLIANCE DIGEST] Sent daily digest to ${recipients.join(', ')} (${alerts.length} items)`);
+      await buildAndSendComplianceDigest();
     } catch (error) {
       console.error('Failed to send daily compliance digest:', error);
     }
@@ -579,6 +586,34 @@ async function startServer() {
     });
     return alerts;
   }
+
+  // Manually trigger the compliance digest email immediately (Super Admin only),
+  // bypassing the once-per-day automatic gate.
+  app.post('/api/compliance-digest/send-now', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser || sessionUser.department !== 'super_admin') {
+        return res.status(403).json({ success: false, error: 'Only Super Admin can send the compliance digest.' });
+      }
+
+      const result = await buildAndSendComplianceDigest();
+      if (!result.sent) {
+        return res.json({
+          success: true,
+          sent: false,
+          message: 'No vehicles are currently within their insurance/permit alert window - nothing to send.'
+        });
+      }
+
+      res.json({
+        success: true,
+        sent: true,
+        message: `Compliance digest sent to ${result.recipients.join(', ')} covering ${result.count} item${result.count === 1 ? '' : 's'}.`
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
 
   // Fetch alerts for Super Admin
   app.get('/api/alerts', async (req, res) => {

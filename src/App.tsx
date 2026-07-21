@@ -477,6 +477,23 @@ export default function App() {
     }
   };
 
+  const handleSendComplianceDigestNow = async (): Promise<{ success: boolean; sent?: boolean; message?: string; error?: string }> => {
+    try {
+      const res = await fetch('/api/compliance-digest/send-now', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        await fetchAllData();
+      }
+      return data;
+    } catch (err) {
+      console.error(err);
+      return { success: false, error: 'Failed to reach the server.' };
+    }
+  };
+
   const handleAddWarehouseEntry = async (entry: Omit<WarehouseEntry, 'id'>) => {
     try {
       const res = await fetch('/api/warehouse', {
@@ -649,6 +666,7 @@ export default function App() {
         onUpdateEmployee={handleUpdateEmployee}
         onDeleteEmployee={handleDeleteEmployee}
         onResolveNotification={handleResolveNotification}
+        onSendComplianceDigestNow={handleSendComplianceDigestNow}
         onAddDriverSalary={handleAddDriverSalary}
         onUpdateDriverSalary={handleUpdateDriverSalary}
         onDeleteDriverSalary={handleDeleteDriverSalary}
