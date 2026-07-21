@@ -33,6 +33,24 @@ import {
   Truck
 } from 'lucide-react';
 
+// Displays the live header clock in Indian Standard Time regardless of the
+// device/browser's own timezone, so the portal reads consistently for an
+// India-based team.
+const formatISTClock = (date: Date): string => {
+  const formatted = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(date);
+  return `${formatted} IST`;
+};
+
 interface AdministrationProps {
   user: UserType;
   token: string | null;
@@ -150,7 +168,7 @@ export default function Administration({
 
   const [activeTab, setActiveTab] = useState<string>(getInitialTab());
   const [isLoggingOut, setIsLoggingOut] = useState(false);
-  const [time, setTime] = useState(new Date().toUTCString());
+  const [time, setTime] = useState(formatISTClock(new Date()));
 
   // Email Notification State
   const [emailLogs, setEmailLogs] = useState<string[]>([]);
@@ -205,7 +223,7 @@ export default function Administration({
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setTime(new Date().toUTCString());
+      setTime(formatISTClock(new Date()));
     }, 1000);
     return () => clearInterval(timer);
   }, []);

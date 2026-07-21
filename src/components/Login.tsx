@@ -10,20 +10,6 @@ interface LoginProps {
   onLoginSuccess: (user: UserType, token?: string) => void;
 }
 
-const PRESET_CREDS = [
-  { id: 'super2', label: 'Super Admin Principal', role: 'super_admin', email: 'superapp@kcmlogistics.in', pass: 'super123' },
-  { id: 'vdm1', label: 'Vehicle Manager (Ravi K.)', role: 'vehicle_manager', email: 'ravi.kumar@kcmlogistics.in', pass: 'vdm123' },
-  { id: 'fuel1', label: 'Fuel Manager (Anil S.)', role: 'fuel_management', email: 'anil.singh@kcmlogistics.in', pass: 'fuel123' },
-  { id: 'billing1', label: 'Billing Officer (Meena I.)', role: 'billing', email: 'meena.iyer@kcmlogistics.in', pass: 'bill123' },
-  { id: 'petty1', label: 'Petty Cash Desk (Amit V.)', role: 'petty_cash', email: 'amit.verma@kcmlogistics.in', pass: 'petty123' },
-  { id: 'maint1', label: 'Maintenance Garage (Baldev S.)', role: 'maintenance', email: 'baldev.singh@kcmlogistics.in', pass: 'maint123' },
-  { id: 'accounts1', label: 'Accounts & Finance (Lokesh P.)', role: 'accounts_finance', email: 'lokesh.patel@kcmlogistics.in', pass: 'acct123' },
-  { id: 'hr1', label: 'HR Director (Kavitha N.)', role: 'hr', email: 'kavitha.nair@kcmlogistics.in', pass: 'hr123' },
-  { id: 'admin1', label: 'Administration Desk (Rajesh N.)', role: 'administration', email: 'rajesh.nair@kcmlogistics.in', pass: 'admin123' },
-  { id: 'super3', label: 'Super admin amrutha', role: 'super_admin', email: 'amruthareddy.9353@gmail.com', pass: 'Amrutha@KCM' },
-  
-];
-
 export default function Login({ onLoginSuccess }: LoginProps) {
   const [emailInput, setEmailInput] = useState('');
   const [password, setPassword] = useState('');
@@ -43,36 +29,6 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   const [forgotOtp, setForgotOtp] = useState('');
   const [forgotNewPassword, setForgotNewPassword] = useState('');
   const [forgotOtpSent, setForgotOtpSent] = useState(false);
-
-  // Auto-fill preset helper
-  const handleSelectPreset = async (preset: typeof PRESET_CREDS[0]) => {
-    setError(null);
-    setSuccess(null);
-    setEmailInput(preset.email);
-    setPassword(preset.pass);
-    setIsForgotPassword(false);
-    setAuthMode('signin');
-
-    setIsLoading(true);
-    try {
-      const res = await fetch('/api/request-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: preset.email }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setOtpSentMsg(true);
-        setSuccess(`A secure OTP has been sent to ${preset.email}. Please check your email.`);
-      } else {
-        setError(data.error || 'Failed to request security OTP.');
-      }
-    } catch (err) {
-      setError('Connection to security server failed.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   // Request standard OTP
   const handleRequestOtp = async () => {

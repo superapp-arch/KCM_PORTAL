@@ -2,13 +2,16 @@ import express from "express";
 import path from "path";
 import { Resend } from "resend";
 import dotenv from "dotenv";
-import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 import { createServer as createViteServer } from 'vite';
+import { verifyPassword } from './src/auth/password.ts';
+import { createSession, getSessionUser, destroySession, extractBearerToken } from './src/auth/session.ts';
+import { issueOtp, verifyOtp } from './src/auth/otp.ts';
+import { istTimestamp, istDateKey } from './src/auth/time.ts';
 import {
   User,
   Vehicle,
@@ -30,6 +33,7 @@ import {
   DEFAULT_USERS,
   getUsers,
   updateUserPassword,
+  migratePlaintextPasswords,
   getVehicles,
   saveVehicle,
   deleteVehicle,
@@ -106,23 +110,13 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-  // Initialize and Seed Cloud SQL Database
+  // Initialize and seed the database, then upgrade any legacy plain-text
+  // passwords left over from before hashing was introduced.
   await seedDatabase();
+  await migratePlaintextPasswords();
 
-  // Per-client session storage: each logged-in browser/device holds its own
-  // token, mapped to its own user. A single shared variable here previously
-  // meant the LAST person to log in anywhere overwrote every other open
-  // session - fixed by keying sessions off a token issued at login.
-  const sessionsByToken = new Map<string, User>();
-
-  function getSessionUser(req: express.Request): User | undefined {
-    const authHeader = String(req.headers.authorization || '');
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-    return token ? sessionsByToken.get(token) : undefined;
-  }
-
-  // Active OTPs in-memory storage
-  const ACTIVE_OTPS: Record<string, string> = {};
+  // Sessions, OTPs, and password hashing/verification are handled by the
+  // dedicated modules under src/auth - see session.ts, otp.ts, password.ts.
 
   async function getUsersWithFallback() {
     try {
@@ -164,7 +158,7 @@ async function startServer() {
         title: `${check.label} Expiry Alert`,
         message: `Vehicle ${regNo} ${check.label.toLowerCase()} expires on ${raw} (${diffDays} day${diffDays === 1 ? '' : 's'} left). Included in the next daily digest to Super Admin & Vehicle Data Manager.`,
         type: check.type,
-        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        timestamp: istTimestamp(),
         read: false,
         vehicleRegNo: regNo
       });
@@ -180,7 +174,7 @@ async function startServer() {
     const isTargetRecipient = loggingInUser?.department === 'super_admin' || loggingInUser?.username === 'chandana';
     if (!isTargetRecipient) return;
 
-    const todayKey = new Date().toISOString().slice(0, 10);
+    const todayKey = istDateKey();
     const digestId = `digest-sent-${todayKey}`;
 
     try {
@@ -238,7 +232,7 @@ async function startServer() {
         title: 'Daily Compliance Digest Sent',
         message: `Daily compliance digest emailed to ${recipients.join(', ')} covering ${alerts.length} upcoming expir${alerts.length === 1 ? 'y' : 'ies'}.`,
         type: 'general',
-        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        timestamp: istTimestamp(),
         read: true
       });
 
@@ -255,7 +249,7 @@ async function startServer() {
 
   // Current session endpoint - resolves strictly from this client's own token
   app.get('/api/session', (req, res) => {
-    res.json(getSessionUser(req) || null);
+    res.json(getSessionUser(extractBearerToken(req.headers.authorization)) || null);
   });
 
   // Request Login OTP
@@ -274,9 +268,7 @@ async function startServer() {
         return res.status(404).json({ success: false, error: 'Account with this email address not found.' });
       }
 
-      // Generate random 6-digit OTP
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      ACTIVE_OTPS[cleanEmail] = code;
+      const code = issueOtp(cleanEmail);
 
       try {
         await resend.emails.send({
@@ -287,7 +279,7 @@ async function startServer() {
             <div style="font-family:Arial,sans-serif;line-height:1.5;">
               <p>Hello ${matchedUser.name || 'User'},</p>
               <p>Your login OTP is <strong>${code}</strong>.</p>
-              <p>Enter this code in the app to complete sign in. The code is valid for a short time.</p>
+              <p>Enter this code in the app to complete sign in. This code expires in 5 minutes.</p>
               <p>If you did not request this, please ignore this message.</p>
             </div>
           `,
@@ -311,105 +303,82 @@ async function startServer() {
   app.post('/api/login', async (req, res) => {
     try {
       const { username, password, otp } = req.body;
-      
+
       const cleanLoginId = String(username || '').trim().toLowerCase();
       const cleanPass = String(password || '').trim();
       const cleanOtp = String(otp || '').trim();
 
       const usersList = await getUsersWithFallback();
 
-      const matchedUser = usersList.find((u: any) => 
-        u.username.toLowerCase() === cleanLoginId || 
+      const matchedUser = usersList.find((u: any) =>
+        u.username.toLowerCase() === cleanLoginId ||
         (u.email && u.email.toLowerCase() === cleanLoginId)
       );
 
-      if (matchedUser) {
-        if (matchedUser.pass === cleanPass || cleanPass === 'kcm123') {
-          const otpProvided = otp !== undefined && String(otp).trim() !== '';
-          
-          if (!otpProvided) {
-            // Daily login with password only
-            const userSession: User = {
-              username: matchedUser.username,
-              name: matchedUser.name,
-              department: matchedUser.department as any,
-              departmentLabel: matchedUser.departmentLabel,
-              email: matchedUser.email || undefined
-            };
-            const token = randomUUID();
-            sessionsByToken.set(token, userSession);
-            await maybeSendDailyComplianceDigest(matchedUser);
-            return res.json({ success: true, user: userSession, token });
-          }
+      const recordFailedAttempt = async (reason: string, title: string) => {
+        const abnormal: AbnormalLogin = {
+          id: String(Date.now()),
+          timestamp: istTimestamp(),
+          username: matchedUser?.username || cleanLoginId,
+          ipAddress: req.ip || '127.0.0.1',
+          reason,
+          resolved: false
+        };
+        await saveAbnormalLogin(abnormal);
 
-          const expectedOtp = ACTIVE_OTPS[matchedUser.email?.toLowerCase() || ''];
-          
-          if (cleanOtp === expectedOtp || cleanOtp === '123456' || (cleanOtp.length === 6 && !expectedOtp)) {
-            const userSession: User = {
-              username: matchedUser.username,
-              name: matchedUser.name,
-              department: matchedUser.department as any,
-              departmentLabel: matchedUser.departmentLabel,
-              email: matchedUser.email || undefined
-            };
-            const token = randomUUID();
-            sessionsByToken.set(token, userSession);
+        const secNotif: DashboardNotification = {
+          id: String(Date.now() + 1),
+          title,
+          message: `${title} for "${cleanLoginId}": ${reason}`,
+          type: 'security',
+          timestamp: abnormal.timestamp,
+          read: false
+        };
+        await saveNotification(secNotif);
+      };
 
-            if (matchedUser.email) {
-              delete ACTIVE_OTPS[matchedUser.email.toLowerCase()];
-            }
-
-            await maybeSendDailyComplianceDigest(matchedUser);
-            return res.json({ success: true, user: userSession, token });
-          } else {
-            const abnormal: AbnormalLogin = {
-              id: String(Date.now()),
-              timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-              username: matchedUser.username,
-              ipAddress: req.ip || '127.0.0.1',
-              reason: `Invalid OTP input attempt: "${cleanOtp}"`,
-              resolved: false
-            };
-            await saveAbnormalLogin(abnormal);
-            
-            const secNotif: DashboardNotification = {
-              id: String(Date.now() + 1),
-              title: 'Abnormal Login - Bad OTP',
-              message: `Suspicious login attempt to ${matchedUser.username} failed due to incorrect OTP verification.`,
-              type: 'security',
-              timestamp: abnormal.timestamp,
-              read: false
-            };
-            await saveNotification(secNotif);
-
-            return res.status(401).json({ success: false, error: 'Invalid 6-digit OTP security code.' });
-          }
-        } else {
-          const abnormal: AbnormalLogin = {
-            id: String(Date.now()),
-            timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-            username: matchedUser.username,
-            ipAddress: req.ip || '127.0.0.1',
-            reason: `Invalid password attempt for account "${cleanLoginId}"`,
-            resolved: false
-          };
-          await saveAbnormalLogin(abnormal);
-
-          const secNotif: DashboardNotification = {
-            id: String(Date.now() + 1),
-            title: 'Abnormal Login - Bad Credentials',
-            message: `Unauthorized attempt to login to "${cleanLoginId}" with incorrect security credentials.`,
-            type: 'security',
-            timestamp: abnormal.timestamp,
-            read: false
-          };
-          await saveNotification(secNotif);
-
-          return res.status(401).json({ success: false, error: 'Incorrect password.' });
-        }
-      } else {
+      if (!matchedUser) {
         return res.status(401).json({ success: false, error: 'Account with this email or username not found.' });
       }
+
+      const passwordOk = await verifyPassword(cleanPass, matchedUser.pass);
+      if (!passwordOk) {
+        await recordFailedAttempt(`Invalid password attempt for account "${cleanLoginId}"`, 'Abnormal Login - Bad Credentials');
+        return res.status(401).json({ success: false, error: 'Incorrect password.' });
+      }
+
+      const otpProvided = otp !== undefined && String(otp).trim() !== '';
+
+      if (!otpProvided) {
+        // Daily login with password only
+        const userSession: User = {
+          username: matchedUser.username,
+          name: matchedUser.name,
+          department: matchedUser.department as any,
+          departmentLabel: matchedUser.departmentLabel,
+          email: matchedUser.email || undefined
+        };
+        const token = createSession(userSession);
+        await maybeSendDailyComplianceDigest(matchedUser);
+        return res.json({ success: true, user: userSession, token });
+      }
+
+      const otpResult = verifyOtp(matchedUser.email || '', cleanOtp);
+      if (!otpResult.valid) {
+        await recordFailedAttempt(`Invalid OTP input attempt: "${cleanOtp}" (${otpResult.reason})`, 'Abnormal Login - Bad OTP');
+        return res.status(401).json({ success: false, error: otpResult.reason || 'Invalid 6-digit OTP security code.' });
+      }
+
+      const userSession: User = {
+        username: matchedUser.username,
+        name: matchedUser.name,
+        department: matchedUser.department as any,
+        departmentLabel: matchedUser.departmentLabel,
+        email: matchedUser.email || undefined
+      };
+      const token = createSession(userSession);
+      await maybeSendDailyComplianceDigest(matchedUser);
+      return res.json({ success: true, user: userSession, token });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -431,8 +400,7 @@ async function startServer() {
         return res.status(404).json({ success: false, error: 'No account found with this email address.' });
       }
 
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      ACTIVE_OTPS[cleanEmail] = code;
+      const code = issueOtp(cleanEmail);
 
       try {
         await resend.emails.send({
@@ -443,7 +411,7 @@ async function startServer() {
             <div style="font-family:Arial,sans-serif;line-height:1.5;">
               <p>Hello ${matchedUser.name || 'User'},</p>
               <p>Your password reset OTP is <strong>${code}</strong>.</p>
-              <p>Enter this code in the app to reset your password.</p>
+              <p>Enter this code in the app to reset your password. This code expires in 5 minutes.</p>
               <p>If you did not request this, please ignore this message.</p>
             </div>
           `,
@@ -474,13 +442,12 @@ async function startServer() {
       const cleanOtp = String(otp).trim();
       const cleanPass = String(newPassword).trim();
 
-      const expectedOtp = ACTIVE_OTPS[cleanEmail];
-      if (cleanOtp !== expectedOtp && cleanOtp !== '123456') {
-        return res.status(401).json({ success: false, error: 'Invalid or expired OTP code.' });
+      const otpResult = verifyOtp(cleanEmail, cleanOtp);
+      if (!otpResult.valid) {
+        return res.status(401).json({ success: false, error: otpResult.reason || 'Invalid or expired OTP code.' });
       }
 
       await updateUserPassword(cleanEmail, cleanPass);
-      delete ACTIVE_OTPS[cleanEmail];
       return res.json({ success: true, message: 'Password has been reset successfully. You can now login.' });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -490,7 +457,7 @@ async function startServer() {
   // Change Password for currently logged in session user
   app.post('/api/change-password', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(req);
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
       if (!sessionUser) {
         return res.status(401).json({ success: false, error: 'Unauthorized. No active session.' });
       }
@@ -502,8 +469,11 @@ async function startServer() {
       const usersList = await getUsersWithFallback();
       const userObj = usersList.find((u: any) => u.username === sessionUser.username);
       if (userObj) {
-        if (oldPassword && userObj.pass !== oldPassword && oldPassword !== 'kcm123') {
-          return res.status(400).json({ success: false, error: 'Incorrect current password.' });
+        if (oldPassword) {
+          const oldPassOk = await verifyPassword(oldPassword, userObj.pass);
+          if (!oldPassOk) {
+            return res.status(400).json({ success: false, error: 'Incorrect current password.' });
+          }
         }
 
         await updateUserPassword(userObj.email || '', newPassword);
@@ -518,9 +488,7 @@ async function startServer() {
 
   // Logout endpoint - invalidates only this client's own token
   app.post('/api/logout', (req, res) => {
-    const authHeader = String(req.headers.authorization || '');
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-    if (token) sessionsByToken.delete(token);
+    destroySession(extractBearerToken(req.headers.authorization));
     res.json({ success: true });
   });
 
@@ -599,7 +567,7 @@ async function startServer() {
           title: `${check.label} Expiry Alert`,
           message: `Vehicle ${regNo} (${v.type || v.Type || 'Tata Ace'}) ${check.label.toLowerCase()} is expiring on ${raw} (in ${diffDays} day${diffDays === 1 ? '' : 's'}). Included in the daily digest to Super Admin & Vehicle Data Manager.`,
           type: check.type,
-          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+          timestamp: istTimestamp(),
           status: 'Active',
           read: false,
           vehicleRegNo: regNo,
@@ -759,7 +727,7 @@ async function startServer() {
 
       const auditLog = {
         id: String(Date.now() + 1),
-        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        timestamp: istTimestamp(),
         username: newRecord.createdBy || 'Unknown',
         action: 'CREATE' as const,
         driverId: newRecord.driverId,
@@ -787,7 +755,7 @@ async function startServer() {
 
         const auditLog = {
           id: String(Date.now()),
-          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+          timestamp: istTimestamp(),
           username: updatedRecord.updatedBy || 'Unknown',
           action: 'UPDATE' as const,
           driverId: updatedRecord.driverId,
@@ -817,7 +785,7 @@ async function startServer() {
 
         const auditLog = {
           id: String(Date.now()),
-          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+          timestamp: istTimestamp(),
           username: (deletedBy as string) || 'Unknown',
           action: 'DELETE' as const,
           driverId: record.driverId,
@@ -852,7 +820,7 @@ async function startServer() {
       const { username, reason } = req.body;
       const log: AbnormalLogin = {
         id: String(Date.now()),
-        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        timestamp: istTimestamp(),
         username: String(username || 'Anonymous'),
         ipAddress: req.ip || '127.0.0.1',
         reason: String(reason || 'Suspicious login telemetry flagged'),

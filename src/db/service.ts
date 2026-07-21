@@ -16,6 +16,7 @@ import {
   mileageReports
 } from './schema.ts';
 import { eq, ne } from 'drizzle-orm';
+import { hashPassword, isHashed } from '../auth/password.ts';
 import {
   User,
   Vehicle,
@@ -378,11 +379,34 @@ export async function updateUserPassword(email: string, newPass: string) {
     const matched = await db.select().from(users);
     const user = matched.find(u => u.email?.toLowerCase() === cleanEmail);
     if (!user) throw new Error("User not found");
-    await db.update(users).set({ pass: newPass }).where(eq(users.id, user.id));
+    const hashed = await hashPassword(newPass);
+    await db.update(users).set({ pass: hashed }).where(eq(users.id, user.id));
     return true;
   } catch (error) {
     console.error("Database action failed in updateUserPassword:", error);
     throw new Error("Failed to update user password.", { cause: error });
+  }
+}
+
+// One-time (idempotent) upgrade path: hashes any user row whose password is
+// still stored in plain text. Safe to call on every startup - already-hashed
+// rows are skipped.
+export async function migratePlaintextPasswords() {
+  try {
+    const allUsers = await db.select().from(users);
+    let migrated = 0;
+    for (const u of allUsers) {
+      if (u.pass && !isHashed(u.pass)) {
+        const hashed = await hashPassword(u.pass);
+        await db.update(users).set({ pass: hashed }).where(eq(users.id, u.id));
+        migrated++;
+      }
+    }
+    if (migrated > 0) {
+      console.log(`[AUTH] Migrated ${migrated} legacy plain-text password(s) to bcrypt hashes.`);
+    }
+  } catch (error) {
+    console.error("Password migration failed:", error);
   }
 }
 
