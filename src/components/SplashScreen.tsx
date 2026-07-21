@@ -20,13 +20,13 @@ export default function SplashScreen({ onFinish }: SplashScreenProps) {
       <div />
 
       {/* Core Container */}
-      <div className="relative flex flex-col items-center max-w-lg w-full px-6 text-center select-none z-10">
+      <div className="relative flex flex-col items-center max-w-lg w-full px-6 text-center select-none z-10 overflow-hidden">
         <div className="w-full flex flex-col items-center">
-          {/* Black-background Company Truck Image Card */}
+          {/* Black-background Company Truck Image Card - drives in from the left */}
           <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 1.0, ease: "easeOut" }}
+            initial={{ x: '-130vw', opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            transition={{ duration: 1.4, ease: [0.16, 1, 0.3, 1] }}
             className="relative w-80 h-48 bg-black rounded-2xl overflow-hidden border border-slate-900 shadow-2xl mb-6 group flex items-center justify-center"
           >
             <img
