@@ -277,7 +277,7 @@ export default function Administration({
     if (user.department === 'super_admin') return true;
     if (tabName === 'warehouse') return true; // Accessible to all roles for operational logging
     if (tabName === 'mileage') return true; // Accessible to all roles for operational logging
-    if (tabName === 'fleet' && user.department === 'vehicle_manager') return true;
+    if (tabName === 'fleet' && (user.department === 'vehicle_manager' || user.email === 'bhagya@kcmlogistics.in')) return true;
     if (tabName === 'fuel' && (user.department === 'fuel_management' || user.email === 'vinod@kcmlogistics.in' || user.email === 'ramesh@kcmlogistics.in')) return true;
     if (tabName === 'billing' && (user.department === 'billing' || user.email === 'bhagya@kcmlogistics.in')) return true;
     if (tabName === 'pettycash' && user.department === 'petty_cash') return true;

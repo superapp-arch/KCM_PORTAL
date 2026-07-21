@@ -129,12 +129,12 @@ async function startServer() {
   }
 
   // Checks a saved vehicle's insurance/permit expiry dates against their alert
-  // windows, persists a compliance notification, and emails the Super Admin(s)
-  // and the Vehicle Data Manager (Chandana) the first time each alert fires.
+  // windows and persists a compliance notification (shown on the Super Admin
+  // dashboard bell). Actual emailing is batched once/day - see
+  // maybeSendDailyComplianceDigest below.
   async function checkAndNotifyComplianceAlerts(vehicle: Vehicle) {
     const regNo = vehicle['Reg. No.'] || vehicle.regNo || vehicle.id || 'unknown';
     const today = new Date('2026-07-07');
-    const existingNotifs = await getNotifications();
 
     for (const check of COMPLIANCE_CHECKS) {
       const raw = (vehicle as any)[check.key] || (vehicle as any)[check.mixedCaseKey];
@@ -144,47 +144,90 @@ async function startServer() {
       const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
       if (diffDays < check.minDays || diffDays > check.maxDays) continue;
 
-      const notifId = `${check.idPrefix}-${regNo}`;
-      const alreadyNotified = existingNotifs.some((n: any) => n.id === notifId);
-
       await saveNotification({
-        id: notifId,
+        id: `${check.idPrefix}-${regNo}`,
         title: `${check.label} Expiry Alert`,
-        message: `Vehicle ${regNo} ${check.label.toLowerCase()} expires on ${raw} (${diffDays} day${diffDays === 1 ? '' : 's'} left). Super Admin & Vehicle Data Manager notified.`,
+        message: `Vehicle ${regNo} ${check.label.toLowerCase()} expires on ${raw} (${diffDays} day${diffDays === 1 ? '' : 's'} left). Included in the next daily digest to Super Admin & Vehicle Data Manager.`,
         type: check.type,
         timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
         read: false,
         vehicleRegNo: regNo
       });
+    }
+  }
 
-      if (!alreadyNotified) {
-        try {
-          const usersList = await getUsersWithFallback();
-          const recipients = usersList
-            .filter((u: any) => u.department === 'super_admin' || u.username === 'chandana')
-            .map((u: any) => u.email)
-            .filter(Boolean) as string[];
+  // Sends ONE consolidated digest email per calendar day - listing every
+  // vehicle currently inside a compliance alert window (vehicle no + expiry
+  // date) - to the Super Admin(s) and the Vehicle Data Manager (Chandana).
+  // Triggered the first time either of them logs in that day; a persisted
+  // marker notification prevents sending more than once per day.
+  async function maybeSendDailyComplianceDigest(loggingInUser: any) {
+    const isTargetRecipient = loggingInUser?.department === 'super_admin' || loggingInUser?.username === 'chandana';
+    if (!isTargetRecipient) return;
 
-          if (recipients.length > 0) {
-            await resend.emails.send({
-              from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
-              to: recipients,
-              subject: `${check.label} Expiry Alert - Vehicle ${regNo}`,
-              html: `
-                <div style="font-family:Arial,sans-serif;line-height:1.5;">
-                  <p>Vehicle <strong>${regNo}</strong> ${check.label.toLowerCase()} expires on <strong>${raw}</strong> (${diffDays} day${diffDays === 1 ? '' : 's'} left).</p>
-                  <p>Please arrange renewal at the earliest to avoid compliance violations.</p>
-                </div>
-              `,
-            });
-            console.log(`[COMPLIANCE ALERT] Sent ${check.label} expiry email for ${regNo} to ${recipients.join(', ')}`);
-          } else {
-            console.warn(`[COMPLIANCE ALERT] No Super Admin / Vehicle Data Manager email found to notify for ${notifId}`);
-          }
-        } catch (emailError) {
-          console.error(`Failed to send ${check.label} expiry alert email:`, emailError);
-        }
-      }
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const digestId = `digest-sent-${todayKey}`;
+
+    try {
+      const existingNotifs = await getNotifications();
+      if (existingNotifs.some((n: any) => n.id === digestId)) return;
+
+      const alerts = await calculateDynamicAlerts();
+      if (alerts.length === 0) return;
+
+      const usersList = await getUsersWithFallback();
+      const recipients = usersList
+        .filter((u: any) => u.department === 'super_admin' || u.username === 'chandana')
+        .map((u: any) => u.email)
+        .filter(Boolean) as string[];
+
+      if (recipients.length === 0) return;
+
+      const rows = alerts.map((a: any) => `
+        <tr>
+          <td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;">${a.vehicleRegNo}</td>
+          <td style="padding:6px 10px;border:1px solid #e2e8f0;">${a.checkLabel}</td>
+          <td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;">${a.expiryDate}</td>
+          <td style="padding:6px 10px;border:1px solid #e2e8f0;text-align:center;">${a.diffDays}</td>
+        </tr>
+      `).join('');
+
+      await resend.emails.send({
+        from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
+        to: recipients,
+        subject: `KCM Fleet Compliance Digest - ${alerts.length} Upcoming Expir${alerts.length === 1 ? 'y' : 'ies'} (${todayKey})`,
+        html: `
+          <div style="font-family:Arial,sans-serif;line-height:1.5;">
+            <p>Good morning,</p>
+            <p>Here is today's summary of vehicles with insurance or permits nearing expiry:</p>
+            <table style="border-collapse:collapse;font-size:13px;">
+              <thead>
+                <tr>
+                  <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Vehicle No</th>
+                  <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Expiry Type</th>
+                  <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Expiry Date</th>
+                  <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Days Left</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+            <p style="margin-top:14px;">Please arrange renewals at the earliest to avoid compliance violations.</p>
+          </div>
+        `,
+      });
+
+      await saveNotification({
+        id: digestId,
+        title: 'Daily Compliance Digest Sent',
+        message: `Daily compliance digest emailed to ${recipients.join(', ')} covering ${alerts.length} upcoming expir${alerts.length === 1 ? 'y' : 'ies'}.`,
+        type: 'general',
+        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        read: true
+      });
+
+      console.log(`[COMPLIANCE DIGEST] Sent daily digest to ${recipients.join(', ')} (${alerts.length} items)`);
+    } catch (error) {
+      console.error('Failed to send daily compliance digest:', error);
     }
   }
 
@@ -277,6 +320,7 @@ async function startServer() {
               email: matchedUser.email || undefined
             };
             currentSessionUser = userSession;
+            await maybeSendDailyComplianceDigest(matchedUser);
             return res.json({ success: true, user: userSession });
           }
 
@@ -291,11 +335,12 @@ async function startServer() {
               email: matchedUser.email || undefined
             };
             currentSessionUser = userSession;
-            
+
             if (matchedUser.email) {
               delete ACTIVE_OTPS[matchedUser.email.toLowerCase()];
             }
 
+            await maybeSendDailyComplianceDigest(matchedUser);
             return res.json({ success: true, user: userSession });
           } else {
             const abnormal: AbnormalLogin = {
@@ -521,12 +566,15 @@ async function startServer() {
         alerts.push({
           id: `${check.idPrefix}-${regNo}`,
           title: `${check.label} Expiry Alert`,
-          message: `Vehicle ${regNo} (${v.type || v.Type || 'Tata Ace'}) ${check.label.toLowerCase()} is expiring on ${raw} (in ${diffDays} day${diffDays === 1 ? '' : 's'}). Super Admin & Vehicle Data Manager notified.`,
+          message: `Vehicle ${regNo} (${v.type || v.Type || 'Tata Ace'}) ${check.label.toLowerCase()} is expiring on ${raw} (in ${diffDays} day${diffDays === 1 ? '' : 's'}). Included in the daily digest to Super Admin & Vehicle Data Manager.`,
           type: check.type,
           timestamp: '2026-07-07 00:00:00',
           status: 'Active',
           read: false,
-          vehicleRegNo: regNo
+          vehicleRegNo: regNo,
+          checkLabel: check.label,
+          expiryDate: raw,
+          diffDays
         });
       });
     });
