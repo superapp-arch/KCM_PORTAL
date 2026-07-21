@@ -24,8 +24,7 @@ import Accounts from './Accounts';
 import HR from './HR';
 import WarehouseDetails from './WarehouseDetails';
 import MileageReportModule from './MileageReport';
-import kcmLogo from '../assets/images/logo.jpg';
-import companyTruck from '../assets/images/kcm_clean_truck_1784109835356.jpg';
+import companyTruck from '../assets/images/kcm_vehicle_cutout.png';
 import {
   LogOut, ShieldAlert, FileSpreadsheet, Fuel, FileText, Landmark,
   Settings, DollarSign, Contact, Bell, Mail, RefreshCw, CheckCircle, Clock,
@@ -569,7 +568,7 @@ export default function Administration({
 
         {/* Scrollable Workspace Panel */}
         <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
-          
+
           {/* Change Password Modal Overlay */}
           {isChangingPassword && (
             <div className="fixed inset-0 bg-purple-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">

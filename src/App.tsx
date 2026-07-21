@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import SplashScreen from './components/SplashScreen';
 import Login from './components/Login';
 import Administration from './components/Administration';
-import kcmLogo from './assets/images/logo.jpg';
+import kcmLogo from './assets/images/logo.png';
 import {
   User,
   Vehicle,

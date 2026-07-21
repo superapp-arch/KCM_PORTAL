@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { Lock, Mail, KeyRound, ShieldAlert, CheckCircle2, ArrowRight, HelpCircle, Eye, EyeOff, RefreshCw, Undo2 } from 'lucide-react';
 import { User as UserType } from '../types';
-import kcmLogo from '../assets/images/logo.jpg';
+import kcmLogo from '../assets/images/logo.png';
 import AnimatedLorry from './AnimatedLorry';
-import companyTruck from '../assets/images/kcm_clean_truck_1784109835356.jpg';
+import companyTruck from '../assets/images/kcm_vehicle_cutout.png';
+import Watermark from './Watermark';
 
 interface LoginProps {
   onLoginSuccess: (user: UserType, token?: string) => void;
@@ -204,6 +205,8 @@ export default function Login({ onLoginSuccess }: LoginProps) {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-pink-50 via-purple-50 to-indigo-50 text-slate-800 flex flex-col justify-center items-center py-12 px-4 sm:px-6 lg:px-8 font-sans relative overflow-hidden">
+      <Watermark src={kcmLogo} />
+
       {/* Dynamic, vibrant colorful pink and purple background gradients */}
       <div className="absolute top-0 left-0 right-0 h-64 bg-gradient-to-r from-pink-500 via-fuchsia-600 to-purple-700 transform -skew-y-3 z-0 shadow-lg" />
       <div className="absolute top-10 right-10 w-96 h-96 bg-pink-400/20 rounded-full filter blur-3xl animate-pulse" />
@@ -220,18 +223,6 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               referrerPolicy="no-referrer"
               className="w-full h-full object-contain"
             />
-            {/* Seamless, borderless text printed directly on the truck cargo container */}
-            <div 
-              className="absolute top-[35%] left-[22.5%] w-[31.5%] h-[21%] bg-white flex flex-col items-center justify-center select-none"
-              style={{ transform: 'rotate(-0.5deg)' }}
-            >
-              <span className="text-[14px] font-extrabold text-emerald-600 tracking-tight leading-none">
-                KCM
-              </span>
-              <span className="text-[5px] font-extrabold text-emerald-600 tracking-widest uppercase leading-none mt-0.5">
-                LOGISTICS
-              </span>
-            </div>
           </div>
 
           <h2 className="text-2xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-emerald-600 via-amber-500 to-red-600 uppercase">KCM LOGISTICS</h2>

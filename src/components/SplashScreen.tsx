@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { motion } from 'motion/react';
-import companyTruck from '../assets/images/kcm_clean_truck_1784109835356.jpg';
+import companyTruck from '../assets/images/kcm_vehicle_cutout.png';
 
 interface SplashScreenProps {
   onFinish: () => void;
@@ -35,18 +35,6 @@ export default function SplashScreen({ onFinish }: SplashScreenProps) {
               referrerPolicy="no-referrer"
               className="w-full h-full object-contain"
             />
-            {/* Seamless, borderless text printed directly on the truck cargo container */}
-            <div 
-              className="absolute top-[35%] left-[22.5%] w-[31.5%] h-[21%] bg-white flex flex-col items-center justify-center select-none"
-              style={{ transform: 'rotate(-0.5deg)' }}
-            >
-              <span className="text-[14px] font-extrabold text-emerald-600 tracking-tight leading-none">
-                KCM
-              </span>
-              <span className="text-[5px] font-extrabold text-emerald-600 tracking-widest uppercase leading-none mt-0.5">
-                LOGISTICS
-              </span>
-            </div>
           </motion.div>
 
           <motion.div
