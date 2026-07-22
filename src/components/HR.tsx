@@ -26,7 +26,7 @@ export default function HR({ employees, onAddEmployee, onUpdateEmployee, onDelet
         ] as const).map(([key, label, Icon]) => (
           <button key={key} onClick={() => setModuleTab(key)}
             className={`px-3.5 py-1.5 rounded-md transition-all cursor-pointer flex items-center gap-1.5 ${
-              moduleTab === key ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              moduleTab === key ? 'bg-gradient-to-r from-pink-600 to-purple-700 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
             }`}>
             <Icon className="w-3.5 h-3.5" /> {label}
           </button>

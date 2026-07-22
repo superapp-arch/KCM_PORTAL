@@ -125,7 +125,7 @@ export default function AttendanceReportDownload({ employees }: AttendanceReport
 
   return (
     <div className="relative">
-      <button onClick={() => setOpen(!open)} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg font-semibold cursor-pointer flex items-center gap-1.5 text-xs">
+      <button onClick={() => setOpen(!open)} className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-lg font-semibold cursor-pointer flex items-center gap-1.5 text-xs">
         <Download className="w-3.5 h-3.5" /> Reports
       </button>
       {open && (
@@ -139,10 +139,10 @@ export default function AttendanceReportDownload({ employees }: AttendanceReport
             <select value={empId} onChange={e => setEmpId(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2 py-1.5">
               {employees.map(e => <option key={e.id} value={e.id}>{e.id} - {e.name}</option>)}
             </select>
-            <button onClick={downloadStaffReport} disabled={isDownloading} className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-1.5 rounded-lg uppercase text-[10px] cursor-pointer disabled:opacity-50">
+            <button onClick={downloadStaffReport} disabled={isDownloading} className="w-full bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white font-bold py-1.5 rounded-lg uppercase text-[10px] cursor-pointer disabled:opacity-50">
               Download This Staff's Report
             </button>
-            <button onClick={downloadAllStaffReport} disabled={isDownloading} className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-1.5 rounded-lg uppercase text-[10px] cursor-pointer disabled:opacity-50">
+            <button onClick={downloadAllStaffReport} disabled={isDownloading} className="w-full bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 font-bold py-1.5 rounded-lg uppercase text-[10px] cursor-pointer disabled:opacity-50">
               Download All-Staff Report
             </button>
           </div>

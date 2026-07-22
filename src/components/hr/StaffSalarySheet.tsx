@@ -77,7 +77,7 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
           </h1>
           <p className="text-xs text-slate-500 font-mono mt-1">Master staff record, CTC, hikes &amp; bank details</p>
         </div>
-        <button onClick={() => setModalEmployee(null)} className="bg-slate-900 hover:bg-slate-800 text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer">
+        <button onClick={() => setModalEmployee(null)} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all">
           <Plus className="w-3.5 h-3.5" /> Add Staff
         </button>
       </div>
@@ -100,7 +100,7 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
         <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
           {(['Active', 'Inactive', 'All'] as const).map(s => (
             <button key={s} onClick={() => setStatusFilter(s)}
-              className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${statusFilter === s ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-200'}`}>
+              className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${statusFilter === s ? 'bg-gradient-to-r from-pink-600 to-purple-700 text-white' : 'text-slate-600 hover:bg-slate-200'}`}>
               {s}
             </button>
           ))}
@@ -110,7 +110,7 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider">
+            <thead className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 text-purple-100 uppercase text-[10px] tracking-wider">
               <tr>
                 <th className="px-3 py-2.5">Emp ID</th>
                 <th className="px-3 py-2.5">Name</th>
