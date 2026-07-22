@@ -96,12 +96,20 @@ const COMPLIANCE_CHECKS: Array<{
   idPrefix: string;
   minDays: number;
   maxDays: number;
-  type: 'insurance' | 'permit';
+  type: 'insurance' | 'permit' | 'fc' | 'tax';
 }> = [
-  { key: 'insurance', mixedCaseKey: 'Insurance', label: 'Insurance', idPrefix: 'ins', minDays: 0, maxDays: 10, type: 'insurance' },
-  { key: 'statePermit', mixedCaseKey: 'State permit', label: 'State Permit', idPrefix: 'permit-state', minDays: 0, maxDays: 10, type: 'permit' },
-  { key: 'allIndiaPermit', mixedCaseKey: 'All India Permit', label: 'National (All India) Permit', idPrefix: 'permit-national', minDays: 0, maxDays: 10, type: 'permit' },
+  { key: 'insurance', mixedCaseKey: 'Insurance', label: 'Insurance', idPrefix: 'ins', minDays: 0, maxDays: 15, type: 'insurance' },
+  { key: 'statePermit', mixedCaseKey: 'State permit', label: 'State Permit', idPrefix: 'permit-state', minDays: 0, maxDays: 15, type: 'permit' },
+  { key: 'allIndiaPermit', mixedCaseKey: 'All India Permit', label: 'National (All India) Permit', idPrefix: 'permit-national', minDays: 0, maxDays: 15, type: 'permit' },
+  { key: 'fc', mixedCaseKey: 'FC', label: 'FC (Fitness Certificate)', idPrefix: 'fc', minDays: 0, maxDays: 15, type: 'fc' },
+  { key: 'tax', mixedCaseKey: 'Tax', label: 'Tax', idPrefix: 'tax', minDays: 0, maxDays: 15, type: 'tax' },
 ];
+
+// The email digest only fires when a document is exactly this many days from
+// expiry (checked once/day - see runScheduledComplianceDigest), instead of
+// nagging every day inside a wide window. Kept in ascending order so digest
+// rows sort soonest-first.
+const ALERT_MILESTONE_DAYS = [3, 7, 15];
 
 async function startServer() {
   const app = express();
@@ -132,10 +140,10 @@ async function startServer() {
     }
   }
 
-  // Checks a saved vehicle's insurance/permit expiry dates against their alert
-  // windows and persists a compliance notification (shown on the Super Admin
-  // dashboard bell). Actual emailing is batched once/day - see
-  // maybeSendDailyComplianceDigest below.
+  // Checks a saved vehicle's insurance/permit/FC/tax expiry dates against their
+  // alert windows and persists a compliance notification (shown on the Super
+  // Admin dashboard bell). Actual emailing runs on its own daily schedule - see
+  // runScheduledComplianceDigest below.
   async function checkAndNotifyComplianceAlerts(vehicle: Vehicle) {
     const regNo = vehicle['Reg. No.'] || vehicle.regNo || vehicle.id || 'unknown';
     const today = new Date();
@@ -156,7 +164,7 @@ async function startServer() {
       await saveNotification({
         id: notifId,
         title: `${check.label} Expiry Alert`,
-        message: `Vehicle ${regNo} ${check.label.toLowerCase()} expires on ${raw} (${diffDays} day${diffDays === 1 ? '' : 's'} left). Included in the next daily digest to Super Admin & Vehicle Data Manager.`,
+        message: `Vehicle ${regNo} ${check.label.toLowerCase()} expires on ${raw} (${diffDays} day${diffDays === 1 ? '' : 's'} left). Emailed to Super Admin & Vehicle Data Manager at the 15/7/3-day mark.`,
         type: check.type,
         timestamp: istTimestamp(),
         read: false,
@@ -165,17 +173,49 @@ async function startServer() {
     }
   }
 
-  // Builds and sends the compliance digest email right now - listing every
-  // vehicle currently inside an insurance/permit alert window (vehicle no +
-  // expiry date, sorted soonest-first) - to the Super Admin(s) and the
-  // Vehicle Data Manager (Chandana). Used both by the automatic once/day
-  // login trigger and the manual "Send Alerts Now" button; the manual path
-  // always sends regardless of whether today's automatic digest already went out.
-  async function buildAndSendComplianceDigest(): Promise<{ sent: boolean; count: number; recipients: string[] }> {
-    const alerts = await calculateDynamicAlerts();
-    if (alerts.length === 0) return { sent: false, count: 0, recipients: [] };
+  // Compliance items that are exactly 3, 7, or 15 days from expiry today -
+  // these are the only ones the email digest sends (see ALERT_MILESTONE_DAYS),
+  // so the same vehicle only triggers an email on those three specific days
+  // rather than every day it happens to sit inside a wide alert window.
+  async function calculateMilestoneAlerts() {
+    const alerts: any[] = [];
+    const today = new Date();
+    const fleetVehicles = await getVehicles();
 
-    const sortedAlerts = [...alerts].sort((a: any, b: any) => a.diffDays - b.diffDays);
+    fleetVehicles.forEach((v: any) => {
+      const regNo = v['Reg. No.'] || v.regNo || v.id;
+
+      COMPLIANCE_CHECKS.forEach(check => {
+        const raw = v[check.key] || v[check.mixedCaseKey];
+        const expDate = parseFlexibleDate(raw);
+        if (!expDate || isNaN(expDate.getTime())) return;
+
+        const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        if (!ALERT_MILESTONE_DAYS.includes(diffDays)) return;
+
+        alerts.push({
+          vehicleRegNo: regNo,
+          checkLabel: check.label,
+          expiryDate: raw,
+          diffDays
+        });
+      });
+    });
+
+    // Ascending by days left, so 3-day items lead the email, then 7-day, then 15-day.
+    return alerts.sort((a, b) => a.diffDays - b.diffDays);
+  }
+
+  // Builds and sends the compliance digest email right now - listing every
+  // vehicle whose insurance/permit/FC/tax expiry falls exactly on the 3, 7,
+  // or 15 day milestone today (see calculateMilestoneAlerts), sorted
+  // soonest-first - to the Super Admin(s) and the Vehicle Data Manager
+  // (Chandana). Used both by the automatic daily schedule and the manual
+  // "Send Alerts Now" button; the manual path always sends regardless of
+  // whether today's automatic digest already went out.
+  async function buildAndSendComplianceDigest(): Promise<{ sent: boolean; count: number; recipients: string[] }> {
+    const sortedAlerts = await calculateMilestoneAlerts();
+    if (sortedAlerts.length === 0) return { sent: false, count: 0, recipients: [] };
 
     const usersList = await getUsersWithFallback();
     const recipients = usersList
@@ -198,11 +238,11 @@ async function startServer() {
     await resend.emails.send({
       from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
       to: recipients,
-      subject: `KCM Fleet Compliance Digest - ${alerts.length} Upcoming Expir${alerts.length === 1 ? 'y' : 'ies'} (${todayKey})`,
+      subject: `KCM Fleet Compliance Digest - ${sortedAlerts.length} Expir${sortedAlerts.length === 1 ? 'y' : 'ies'} at 3/7/15-Day Mark (${todayKey})`,
       html: `
         <div style="font-family:Arial,sans-serif;line-height:1.5;">
           <p>Hello,</p>
-          <p>Here is the current summary of vehicles with insurance or permits nearing expiry:</p>
+          <p>The following documents are expiring in exactly 3, 7, or 15 days (soonest first):</p>
           <table style="border-collapse:collapse;font-size:13px;">
             <thead>
               <tr>
@@ -222,22 +262,19 @@ async function startServer() {
     await saveNotification({
       id: `digest-sent-${todayKey}`,
       title: 'Daily Compliance Digest Sent',
-      message: `Compliance digest emailed to ${recipients.join(', ')} covering ${alerts.length} upcoming expir${alerts.length === 1 ? 'y' : 'ies'}.`,
+      message: `Compliance digest emailed to ${recipients.join(', ')} covering ${sortedAlerts.length} expir${sortedAlerts.length === 1 ? 'y' : 'ies'} at the 3/7/15-day mark.`,
       type: 'general',
       timestamp: istTimestamp(),
       read: true
     });
 
-    console.log(`[COMPLIANCE DIGEST] Sent digest to ${recipients.join(', ')} (${alerts.length} items)`);
-    return { sent: true, count: alerts.length, recipients };
+    console.log(`[COMPLIANCE DIGEST] Sent digest to ${recipients.join(', ')} (${sortedAlerts.length} items)`);
+    return { sent: true, count: sortedAlerts.length, recipients };
   }
 
-  // Automatic once-per-calendar-day trigger, fired from login. A persisted
-  // marker notification prevents sending more than once per day this way.
-  async function maybeSendDailyComplianceDigest(loggingInUser: any) {
-    const isTargetRecipient = loggingInUser?.department === 'super_admin' || loggingInUser?.username === 'chandana';
-    if (!isTargetRecipient) return;
-
+  // Automatic once-per-calendar-day trigger, decoupled from any login event.
+  // A persisted marker notification prevents sending more than once per day.
+  async function runScheduledComplianceDigest() {
     const digestId = `digest-sent-${istDateKey()}`;
 
     try {
@@ -245,7 +282,7 @@ async function startServer() {
       if (existingNotifs.some((n: any) => n.id === digestId)) return;
       await buildAndSendComplianceDigest();
     } catch (error) {
-      console.error('Failed to send daily compliance digest:', error);
+      console.error('Failed to send scheduled compliance digest:', error);
     }
   }
 
@@ -366,7 +403,6 @@ async function startServer() {
           email: matchedUser.email || undefined
         };
         const token = createSession(userSession);
-        await maybeSendDailyComplianceDigest(matchedUser);
         return res.json({ success: true, user: userSession, token });
       }
 
@@ -384,7 +420,6 @@ async function startServer() {
         email: matchedUser.email || undefined
       };
       const token = createSession(userSession);
-      await maybeSendDailyComplianceDigest(matchedUser);
       return res.json({ success: true, user: userSession, token });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -572,7 +607,7 @@ async function startServer() {
         alerts.push({
           id: alertId,
           title: `${check.label} Expiry Alert`,
-          message: `Vehicle ${regNo} (${v.type || v.Type || 'Tata Ace'}) ${check.label.toLowerCase()} is expiring on ${raw} (in ${diffDays} day${diffDays === 1 ? '' : 's'}). Included in the daily digest to Super Admin & Vehicle Data Manager.`,
+          message: `Vehicle ${regNo} (${v.type || v.Type || 'Tata Ace'}) ${check.label.toLowerCase()} is expiring on ${raw} (in ${diffDays} day${diffDays === 1 ? '' : 's'}). Emailed to Super Admin & Vehicle Data Manager at the 15/7/3-day mark.`,
           type: check.type,
           timestamp: istTimestamp(),
           status: 'Active',
@@ -601,7 +636,7 @@ async function startServer() {
         return res.json({
           success: true,
           sent: false,
-          message: 'No vehicles are currently within their insurance/permit alert window - nothing to send.'
+          message: 'No vehicles are currently at the 3/7/15-day expiry mark for insurance, permits, FC, or tax - nothing to send.'
         });
       }
 
@@ -982,6 +1017,12 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
   });
+
+  // Real daily schedule for the compliance digest, independent of any user
+  // logging in. Checks hourly; the digest-sent-<date> marker notification
+  // (written inside buildAndSendComplianceDigest) keeps it to once/day.
+  runScheduledComplianceDigest();
+  setInterval(runScheduledComplianceDigest, 60 * 60 * 1000);
 }
 
 startServer();

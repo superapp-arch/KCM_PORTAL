@@ -776,6 +776,12 @@ export default function Administration({
 
                 const unresolvedNotifications = notifications.filter(n => !n.read);
 
+                // Employee-toggled Active/Inactive status from the Fleet & Vehicles module
+                // (separate from the mileage-based "ran today" concept above). Missing/undefined
+                // status is treated as Active, so all vehicles show Active by default.
+                const statusActiveVehicles = (vehicles || []).filter(v => v.active !== false);
+                const statusInactiveVehicles = (vehicles || []).filter(v => v.active === false);
+
                 return (
                   <div className="space-y-4">
                     {/* Subsystem KPIs */}
@@ -783,6 +789,17 @@ export default function Administration({
                       <div className="bg-white p-4 rounded-xl border border-pink-100 shadow-sm">
                         <p className="font-bold text-purple-400 uppercase tracking-wider text-[10px]">Fleet Size</p>
                         <h3 className="text-xl font-black text-slate-800 mt-1">{vehicles.length} Vehicles</h3>
+                      </div>
+
+                      <div className="bg-white p-4 rounded-xl border border-pink-100 shadow-sm">
+                        <p className="font-bold text-purple-400 uppercase tracking-wider text-[10px]">Fleet Status</p>
+                        <h3 className="text-xl font-black text-emerald-600 mt-1">
+                          {statusActiveVehicles.length} Active
+                          {statusInactiveVehicles.length > 0 && (
+                            <span className="text-rose-600"> / {statusInactiveVehicles.length} Inactive</span>
+                          )}
+                        </h3>
+                        <p className="text-[9px] text-slate-400 mt-1">as marked in Fleet & Vehicles</p>
                       </div>
 
                       <div className="bg-white p-4 rounded-xl border border-pink-100 shadow-sm">

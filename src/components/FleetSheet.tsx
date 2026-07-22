@@ -27,12 +27,10 @@ import {
   Printer,
   Trash2,
   Lock,
-  Mail,
   ExternalLink,
   CheckCircle,
   AlertCircle,
-  HelpCircle,
-  Phone
+  HelpCircle
 } from 'lucide-react';
 import DateInput from './DateInput';
 
@@ -577,6 +575,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                 <th className="px-4 py-4 text-purple-100">Type</th>
                 <th className="px-4 py-4 text-purple-100">Category</th>
                 <th className="px-4 py-4 text-purple-100">Ownership</th>
+                <th className="px-4 py-4 text-center text-purple-100">Status</th>
                 <th className="px-4 py-4 text-purple-100">Insurance Exp</th>
                 <th className="px-4 py-4 text-purple-100">FC Expiry</th>
                 <th className="px-4 py-4 text-right text-purple-100">Actions</th>
@@ -585,7 +584,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
               {filteredVehicles.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-12 text-slate-400 font-mono">
+                  <td colSpan={9} className="text-center py-12 text-slate-400 font-mono">
                     NO FLEET RECORDS FOUND MATCHING THE SELECTED PARAMETERS.
                   </td>
                 </tr>
@@ -608,6 +607,9 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
 
                   const nationalPermitRaw = v['All India Permit'] || v.allIndiaPermit;
                   const nationalPermitAlert = getExpiryAlertStatus(nationalPermitRaw, 0, 10);
+
+                  // Undefined/missing status is treated as active (default state for existing records)
+                  const isActive = v.active !== false;
 
                   return (
                     <React.Fragment key={reg + '-' + siNo}>
@@ -636,6 +638,27 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                           </span>
                         </td>
                         <td className="px-4 py-3.5 capitalize max-w-[150px] truncate">{ownLabel}</td>
+                        <td className="px-4 py-3.5 text-center">
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (!canEdit) return;
+                              await onUpdateVehicle({ ...v, active: !isActive });
+                              triggerNotif(`Vehicle ${reg} marked ${!isActive ? 'Active' : 'Inactive'}.`, 'success');
+                            }}
+                            disabled={!canEdit}
+                            title={canEdit ? 'Click to toggle Active/Inactive status' : 'Vehicle status'}
+                            className={`px-2.5 py-1 rounded-md text-[10px] font-extrabold uppercase border shadow-sm transition-colors ${
+                              canEdit ? 'cursor-pointer hover:opacity-80' : 'cursor-default'
+                            } ${
+                              isActive
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                : 'bg-slate-200 text-slate-600 border-slate-300'
+                            }`}
+                          >
+                            {isActive ? 'Active' : 'Inactive'}
+                          </button>
+                        </td>
                         <td className="px-4 py-3.5 font-mono">
                           {isNearExpiry ? (
                             <span className="bg-red-50 text-red-700 border border-red-200 px-2 py-0.5 rounded font-bold flex items-center gap-1 w-fit animate-pulse">
@@ -695,7 +718,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                       {/* Row Expansion */}
                       {expandedRegNo === reg && (
                         <tr>
-                          <td colSpan={8} className="bg-slate-50/50 p-6 border-t border-slate-100">
+                          <td colSpan={9} className="bg-slate-50/50 p-6 border-t border-slate-100">
                             <motion.div
                               initial={{ opacity: 0, y: -10 }}
                               animate={{ opacity: 1, y: 0 }}
@@ -1037,7 +1060,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                   <Printer className="w-3.5 h-3.5" />
                                                 </button>
 
-                                                {/* Share options - clicking Share opens WhatsApp/Email/Other directly.
+                                                {/* Share options - clicking Share opens the Options menu.
                                                     Rendered via portal at a fixed screen position so the small scrollable
                                                     document list above can't clip/hide the menu. */}
                                                 <button
@@ -1066,33 +1089,11 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                       className="z-[100] bg-white border border-purple-100 rounded-lg shadow-xl p-1.5 flex flex-col gap-1 w-36"
                                                     >
                                                       <button
-                                                        onClick={() => {
-                                                          const msg = `KCM Logistics Document: ${doc.name} for vehicle registration ${v['Reg. No.'] || v.regNo}. Please check compliance logbook.`;
-                                                          window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+                                                        onClick={async () => {
                                                           setSharingDoc(null);
-                                                          triggerNotif('WhatsApp opened in a new tab.', 'success');
-                                                        }}
-                                                        className="flex items-center gap-2 px-2 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded-md text-left cursor-pointer"
-                                                      >
-                                                        <Phone className="w-3.5 h-3.5" /> WhatsApp
-                                                      </button>
-                                                      <button
-                                                        onClick={() => {
-                                                          const subject = `KCM Logistics Document: ${doc.name}`;
-                                                          const body = `Please find the document "${doc.name}" for vehicle ${v['Reg. No.'] || v.regNo}.\n\nNote: Download the file from the KCM Fleet Sheet document registry and attach it if it isn't already attached.`;
-                                                          window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-                                                          setSharingDoc(null);
-                                                          triggerNotif('Email client opened. Please review and send.', 'success');
-                                                        }}
-                                                        className="flex items-center gap-2 px-2 py-1.5 text-xs font-semibold text-pink-700 hover:bg-pink-50 rounded-md text-left cursor-pointer"
-                                                      >
-                                                        <Mail className="w-3.5 h-3.5" /> Email
-                                                      </button>
-                                                      {typeof navigator !== 'undefined' && !!navigator.share && (
-                                                        <button
-                                                          onClick={async () => {
-                                                            setSharingDoc(null);
-                                                            if (!doc.fileData) return;
+                                                          if (!doc.fileData) return;
+                                                          const canNativeShare = typeof navigator !== 'undefined' && !!navigator.share;
+                                                          if (canNativeShare) {
                                                             try {
                                                               const res = await fetch(doc.fileData);
                                                               const blob = await res.blob();
@@ -1105,17 +1106,24 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                                 shareData.files = [file];
                                                               }
                                                               await navigator.share(shareData);
+                                                              return;
                                                             } catch (err) {
-                                                              if ((err as Error)?.name !== 'AbortError') {
-                                                                triggerNotif('Unable to open the share dialog on this device.', 'error');
-                                                              }
+                                                              if ((err as Error)?.name === 'AbortError') return;
+                                                              // Fall through to the download fallback below.
                                                             }
-                                                          }}
-                                                          className="flex items-center gap-2 px-2 py-1.5 text-xs font-semibold text-purple-700 hover:bg-purple-50 rounded-md text-left cursor-pointer"
-                                                        >
-                                                          <ExternalLink className="w-3.5 h-3.5" /> Other
-                                                        </button>
-                                                      )}
+                                                          }
+                                                          const link = document.createElement('a');
+                                                          link.href = doc.fileData;
+                                                          link.download = doc.fileName;
+                                                          document.body.appendChild(link);
+                                                          link.click();
+                                                          document.body.removeChild(link);
+                                                          triggerNotif('Share isn\'t supported on this device - file downloaded instead so it can be shared manually.', 'success');
+                                                        }}
+                                                        className="flex items-center gap-2 px-2 py-1.5 text-xs font-semibold text-purple-700 hover:bg-purple-50 rounded-md text-left cursor-pointer"
+                                                      >
+                                                        <ExternalLink className="w-3.5 h-3.5" /> Options
+                                                      </button>
                                                     </div>
                                                   </>,
                                                   document.body

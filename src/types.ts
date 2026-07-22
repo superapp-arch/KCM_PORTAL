@@ -30,6 +30,7 @@ export interface VehicleDocument {
 export interface Vehicle {
   id?: string;
   regNo?: string;
+  active?: boolean; // Employee-toggled status; undefined/missing is treated as active
   type?: string;
   category?: string;
   ownership?: string;
@@ -187,7 +188,7 @@ export interface DashboardNotification {
   id: string;
   title: string;
   message: string;
-  type: 'security' | 'insurance' | 'permit' | 'general';
+  type: 'security' | 'insurance' | 'permit' | 'fc' | 'tax' | 'general';
   timestamp: string;
   read: boolean;
   vehicleRegNo?: string;
