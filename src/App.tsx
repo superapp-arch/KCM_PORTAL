@@ -11,10 +11,8 @@ import {
   PettyCashVoucher,
   MaintenanceRecord,
   AccountsEntry,
-  HREmployee,
+  StaffEmployee,
   DashboardNotification,
-  DriverSalary,
-  DriverSalaryAuditLog,
   WarehouseEntry,
   MileageReport
 } from './types';
@@ -32,10 +30,8 @@ export default function App() {
   const [vouchers, setVouchers] = useState<PettyCashVoucher[]>([]);
   const [records, setRecords] = useState<MaintenanceRecord[]>([]);
   const [entries, setEntries] = useState<AccountsEntry[]>([]);
-  const [employees, setEmployees] = useState<HREmployee[]>([]);
+  const [employees, setEmployees] = useState<StaffEmployee[]>([]);
   const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
-  const [driverSalaries, setDriverSalaries] = useState<DriverSalary[]>([]);
-  const [driverSalaryAuditLogs, setDriverSalaryAuditLogs] = useState<DriverSalaryAuditLog[]>([]);
   const [warehouseEntries, setWarehouseEntries] = useState<WarehouseEntry[]>([]);
   const [mileageReports, setMileageReports] = useState<MileageReport[]>([]);
 
@@ -86,8 +82,6 @@ export default function App() {
         acctRes,
         hrRes,
         notifRes,
-        drvSalRes,
-        drvAuditRes,
         warehouseRes,
         mileageRes
       ] = await Promise.all([
@@ -97,10 +91,8 @@ export default function App() {
         fetch('/api/petty-cash'),
         fetch('/api/maintenance'),
         fetch('/api/accounts'),
-        fetch('/api/hr'),
+        fetch('/api/staff/employees'),
         fetch('/api/notifications'),
-        fetch('/api/driver-salaries'),
-        fetch('/api/driver-salaries/audit'),
         fetch('/api/warehouse'),
         fetch('/api/mileage')
       ]);
@@ -113,8 +105,6 @@ export default function App() {
       if (acctRes.ok) setEntries(await acctRes.json());
       if (hrRes.ok) setEmployees(await hrRes.json());
       if (notifRes.ok) setNotifications(await notifRes.json());
-      if (drvSalRes.ok) setDriverSalaries(await drvSalRes.json());
-      if (drvAuditRes.ok) setDriverSalaryAuditLogs(await drvAuditRes.json());
       if (warehouseRes.ok) setWarehouseEntries(await warehouseRes.json());
       if (mileageRes.ok) setMileageReports(await mileageRes.json());
     } catch (err) {
@@ -241,9 +231,9 @@ export default function App() {
     }
   };
 
-  const handleUpdateEmployee = async (id: string, emp: Partial<HREmployee>) => {
+  const handleUpdateEmployee = async (id: string, emp: Partial<StaffEmployee>) => {
     try {
-      const res = await fetch(`/api/hr/${id}`, {
+      const res = await fetch(`/api/staff/employees/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(emp)
@@ -258,7 +248,7 @@ export default function App() {
 
   const handleDeleteEmployee = async (id: string) => {
     try {
-      const res = await fetch(`/api/hr/${id}`, {
+      const res = await fetch(`/api/staff/employees/${id}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -269,9 +259,9 @@ export default function App() {
     }
   };
 
-  const handleAddEmployee = async (emp: Omit<HREmployee, 'id'>) => {
+  const handleAddEmployee = async (emp: Omit<StaffEmployee, 'id'> & { id: string }) => {
     try {
-      const res = await fetch('/api/hr', {
+      const res = await fetch('/api/staff/employees', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(emp)
@@ -406,59 +396,6 @@ export default function App() {
       }
     } catch (err) {
       console.error('Error deleting accounts entry:', err);
-    }
-  };
-
-  const handleAddDriverSalary = async (record: Omit<DriverSalary, 'id' | 'createdAt' | 'createdBy'>) => {
-    try {
-      const payload = {
-        ...record,
-        createdBy: user?.username || 'Unknown',
-        createdAt: new Date().toISOString().replace('T', ' ').substring(0, 19)
-      };
-      const res = await fetch('/api/driver-salaries', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error adding driver salary record:', err);
-    }
-  };
-
-  const handleUpdateDriverSalary = async (id: string, record: Partial<DriverSalary>) => {
-    try {
-      const payload = {
-        ...record,
-        updatedBy: user?.username || 'Unknown',
-        updatedAt: new Date().toISOString().replace('T', ' ').substring(0, 19)
-      };
-      const res = await fetch(`/api/driver-salaries/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error updating driver salary record:', err);
-    }
-  };
-
-  const handleDeleteDriverSalary = async (id: string) => {
-    try {
-      const res = await fetch(`/api/driver-salaries/${id}?deletedBy=${encodeURIComponent(user?.username || 'Unknown')}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting driver salary record:', err);
     }
   };
 
@@ -640,8 +577,6 @@ export default function App() {
         entries={entries}
         employees={employees}
         notifications={notifications}
-        driverSalaries={driverSalaries}
-        driverSalaryAuditLogs={driverSalaryAuditLogs}
         warehouseEntries={warehouseEntries}
         mileageReports={mileageReports}
         onUpdateVehicle={handleUpdateVehicle}
@@ -667,9 +602,6 @@ export default function App() {
         onDeleteEmployee={handleDeleteEmployee}
         onResolveNotification={handleResolveNotification}
         onSendComplianceDigestNow={handleSendComplianceDigestNow}
-        onAddDriverSalary={handleAddDriverSalary}
-        onUpdateDriverSalary={handleUpdateDriverSalary}
-        onDeleteDriverSalary={handleDeleteDriverSalary}
         onAddWarehouseEntry={handleAddWarehouseEntry}
         onUpdateWarehouseEntry={handleUpdateWarehouseEntry}
         onDeleteWarehouseEntry={handleDeleteWarehouseEntry}

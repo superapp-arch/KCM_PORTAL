@@ -162,17 +162,106 @@ export interface AccountsEntry {
   documents?: VehicleDocument[];
 }
 
-export interface HREmployee {
-  id: string;
+export interface StaffEmployee {
+  id: string; // emp_id, e.g. KCM15001
   name: string;
-  role: 'Driver' | 'Vehicle Manager' | 'Billing Clerk' | 'Finance Officer' | 'Admin Support';
-  licenseNo?: string;
-  licenseExpiry?: string;
-  salary: number;
-  attendanceStatus: 'Present' | 'On Leave' | 'Absent';
-  status: 'Active' | 'Inactive';
+  email?: string; // used for salary slip delivery
+  dateOfJoining?: string;
+  designation?: string;
+  location?: string;
+  status: 'Active' | 'Inactive' | 'On Leave';
+  department?: string;
+  reportingManager?: string; // another StaffEmployee id
+  bankAccountNumber?: string;
+  ifscCode?: string;
   documents?: VehicleDocument[];
-  dailyAttendance?: Record<string, 'Present' | 'Absent' | 'On Leave'>;
+}
+
+export interface StaffSalaryStructure {
+  id: string;
+  empId: string;
+  ctc2025?: number;
+  annualSalary?: number;
+  basicSalary: number;
+  hra?: number;
+  dearnessAllowance?: number;
+  specialAllowance?: number;
+  otherAdditions?: number;
+  salaryHike1May2025?: number;
+  salaryHike1Apr2026?: number;
+  effectiveFrom: string;
+}
+
+export interface StaffSalaryDeduction {
+  id: string;
+  empId: string;
+  month: string; // YYYY-MM
+  pfContribution?: number;
+  esiContribution?: number;
+  incomeTax?: number;
+  otherDeductions?: number;
+}
+
+export interface StaffSalaryHistory {
+  id: string;
+  empId: string;
+  month: string; // YYYY-MM
+  processedDate: string;
+  grossSalary: number;
+  deductionsTotal: number;
+  netSalary: number;
+  status: 'Draft' | 'Processed' | 'Paid';
+  paymentMode?: 'NEFT' | 'Cheque' | 'Cash';
+  paymentRef?: string;
+  paidOn?: string;
+}
+
+export type AttendanceStatusCode = 'P' | 'E' | 'A' | 'L' | 'LOP' | 'W/O';
+
+export interface StaffAttendance {
+  id: string;
+  empId: string;
+  date: string; // YYYY-MM-DD
+  status: AttendanceStatusCode;
+  remarks?: string;
+  checkIn?: string;
+  checkOut?: string;
+  recordedBy: string;
+  recordedDate: string;
+}
+
+export interface StaffLeaveBalance {
+  id: string;
+  empId: string;
+  year: string;
+  casualGranted: number;
+  casualUsed: number;
+  sickGranted: number;
+  sickUsed: number;
+  earnedGranted: number;
+  earnedUsed: number;
+  lopTaken: number;
+}
+
+export interface StaffHoliday {
+  id: string;
+  date: string;
+  name: string;
+  type: 'public' | 'regional' | 'company';
+}
+
+export interface StaffSettings {
+  id: string; // singleton, always 'default'
+  workingDaysPerWeek: number;
+  salaryProcessingDate: number; // day of month
+  attendanceCutoffDate: number; // day of month
+  leavePolicy: {
+    casualAnnual: number;
+    sickAnnual: number;
+    earnedAnnual: number;
+    carryForwardEnabled: boolean;
+    carryForwardMaxDays?: number;
+  };
 }
 
 export interface AbnormalLogin {
@@ -192,31 +281,6 @@ export interface DashboardNotification {
   timestamp: string;
   read: boolean;
   vehicleRegNo?: string;
-}
-
-export interface DriverSalary {
-  id: string;
-  driverId: string;
-  driverName: string;
-  accountNumber: string;
-  ifscCode: string;
-  netSalary: number;
-  remarks?: string;
-  createdBy: string;
-  createdAt: string;
-  updatedBy?: string;
-  updatedAt?: string;
-  documents?: VehicleDocument[];
-}
-
-export interface DriverSalaryAuditLog {
-  id: string;
-  timestamp: string;
-  username: string;
-  action: 'CREATE' | 'UPDATE' | 'DELETE';
-  driverId: string;
-  driverName: string;
-  details: string;
 }
 
 export interface WarehouseEntry {

@@ -8,10 +8,8 @@ import {
   PettyCashVoucher,
   MaintenanceRecord,
   AccountsEntry,
-  HREmployee,
+  StaffEmployee,
   DashboardNotification,
-  DriverSalary,
-  DriverSalaryAuditLog,
   WarehouseEntry,
   MileageReport
 } from '../types';
@@ -62,10 +60,8 @@ interface AdministrationProps {
   vouchers: PettyCashVoucher[];
   records: MaintenanceRecord[];
   entries: AccountsEntry[];
-  employees: HREmployee[];
+  employees: StaffEmployee[];
   notifications: DashboardNotification[];
-  driverSalaries: DriverSalary[];
-  driverSalaryAuditLogs: DriverSalaryAuditLog[];
   warehouseEntries: WarehouseEntry[];
   onUpdateVehicle: (vehicle: Vehicle) => Promise<void>;
   onDeleteVehicle: (id: string) => Promise<void>;
@@ -84,14 +80,11 @@ interface AdministrationProps {
   onAddAccountsEntry: (entry: Omit<AccountsEntry, 'id'>) => Promise<void>;
   onUpdateAccountsEntry: (id: string, entry: Partial<AccountsEntry>) => Promise<void>;
   onDeleteAccountsEntry: (id: string) => Promise<void>;
-  onAddEmployee: (emp: Omit<HREmployee, 'id'>) => Promise<void>;
-  onUpdateEmployee: (id: string, emp: Partial<HREmployee>) => Promise<void>;
+  onAddEmployee: (emp: Omit<StaffEmployee, 'id'> & { id: string }) => Promise<void>;
+  onUpdateEmployee: (id: string, emp: Partial<StaffEmployee>) => Promise<void>;
   onDeleteEmployee: (id: string) => Promise<void>;
   onResolveNotification: (notifId: string) => Promise<void>;
   onSendComplianceDigestNow: () => Promise<{ success: boolean; sent?: boolean; message?: string; error?: string }>;
-  onAddDriverSalary: (record: Omit<DriverSalary, 'id' | 'createdAt' | 'createdBy'>) => Promise<void>;
-  onUpdateDriverSalary: (id: string, record: Partial<DriverSalary>) => Promise<void>;
-  onDeleteDriverSalary: (id: string) => Promise<void>;
   onAddWarehouseEntry: (entry: Omit<WarehouseEntry, 'id'>) => Promise<void>;
   onUpdateWarehouseEntry: (id: string, entry: Partial<WarehouseEntry>) => Promise<void>;
   onDeleteWarehouseEntry: (id: string) => Promise<void>;
@@ -114,8 +107,6 @@ export default function Administration({
   entries,
   employees,
   notifications,
-  driverSalaries,
-  driverSalaryAuditLogs,
   onUpdateVehicle,
   onDeleteVehicle,
   onAddFuelLog,
@@ -138,9 +129,6 @@ export default function Administration({
   onDeleteEmployee,
   onResolveNotification,
   onSendComplianceDigestNow,
-  onAddDriverSalary,
-  onUpdateDriverSalary,
-  onDeleteDriverSalary,
   warehouseEntries,
   onAddWarehouseEntry,
   onUpdateWarehouseEntry,
@@ -991,11 +979,6 @@ export default function Administration({
               onAddEmployee={onAddEmployee}
               onUpdateEmployee={onUpdateEmployee}
               onDeleteEmployee={onDeleteEmployee}
-              driverSalaries={driverSalaries}
-              driverSalaryAuditLogs={driverSalaryAuditLogs}
-              onAddDriverSalary={onAddDriverSalary}
-              onUpdateDriverSalary={onUpdateDriverSalary}
-              onDeleteDriverSalary={onDeleteDriverSalary}
             />
           )}
 

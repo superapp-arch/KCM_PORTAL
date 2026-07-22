@@ -20,11 +20,16 @@ import {
   PettyCashVoucher,
   MaintenanceRecord,
   AccountsEntry,
-  HREmployee,
+  StaffEmployee,
+  StaffSalaryStructure,
+  StaffSalaryDeduction,
+  StaffSalaryHistory,
+  StaffAttendance,
+  StaffLeaveBalance,
+  StaffHoliday,
+  StaffSettings,
   AbnormalLogin,
   DashboardNotification,
-  DriverSalary,
-  DriverSalaryAuditLog,
   WarehouseEntry,
   MileageReport
 } from './src/types.ts';
@@ -52,20 +57,33 @@ import {
   getAccountsEntries,
   saveAccountsEntry,
   deleteAccountsEntry,
-  getHREmployees,
-  saveHREmployee,
-  deleteHREmployee,
+  getStaffEmployees,
+  saveStaffEmployee,
+  deleteStaffEmployee,
+  getStaffSalaryStructures,
+  saveStaffSalaryStructure,
+  deleteStaffSalaryStructure,
+  getStaffSalaryDeductions,
+  saveStaffSalaryDeduction,
+  deleteStaffSalaryDeduction,
+  getStaffSalaryHistory,
+  saveStaffSalaryHistoryRecord,
+  getStaffAttendance,
+  saveStaffAttendanceRecord,
+  deleteStaffAttendanceRecord,
+  getStaffLeaveBalances,
+  saveStaffLeaveBalance,
+  getStaffHolidays,
+  saveStaffHoliday,
+  deleteStaffHoliday,
+  getStaffSettings,
+  saveStaffSettings,
   getAbnormalLogins,
   saveAbnormalLogin,
   resolveAllAbnormalLogins,
   getNotifications,
   saveNotification,
   resolveNotification,
-  getDriverSalaries,
-  saveDriverSalary,
-  deleteDriverSalary,
-  getDriverSalaryAuditLogs,
-  saveDriverSalaryAuditLog,
   getWarehouseEntries,
   saveWarehouseEntry,
   deleteWarehouseEntry,
@@ -74,6 +92,7 @@ import {
   saveMileageReport,
   deleteMileageReport
 } from './src/db/service.ts';
+import { generateSalarySlipPdf } from './src/pdf/salarySlip.ts';
 
 // Parses "DD.MM.YYYY" or "YYYY-MM-DD" expiry strings used across fleet records.
 function parseFlexibleDate(raw?: string): Date | null {
@@ -110,6 +129,166 @@ const COMPLIANCE_CHECKS: Array<{
 // nagging every day inside a wide window. Kept in ascending order so digest
 // rows sort soonest-first.
 const ALERT_MILESTONE_DAYS = [3, 7, 15];
+
+// --- Staff Salary & Attendance calculation helpers ---
+
+function daysInMonth(month: string): number {
+  const [y, m] = month.split('-').map(Number);
+  return new Date(y, m, 0).getDate();
+}
+
+// Attendance only stores a generic 'L' (leave) status plus a free-text remarks
+// field (e.g. "Medical Leave", "Casual Leave") - this infers which leave-balance
+// counter a given day's leave should count against, defaulting to casual.
+function inferLeaveType(remarks?: string): 'casual' | 'sick' | 'earned' {
+  const r = (remarks || '').toLowerCase();
+  if (r.includes('sick') || r.includes('medical')) return 'sick';
+  if (r.includes('earned') || r.includes('privilege')) return 'earned';
+  return 'casual';
+}
+
+// Keeps StaffLeaveBalance in sync whenever an attendance day's status changes
+// to/from 'L' or 'LOP' - since attendance rows are upserted by a deterministic
+// (empId+date) id, this compares old vs new status so re-marking the same day
+// never double-counts.
+async function adjustLeaveBalanceForAttendanceChange(
+  empId: string,
+  date: string,
+  oldStatus: string | undefined,
+  oldRemarks: string | undefined,
+  newStatus: string,
+  newRemarks: string | undefined
+) {
+  if (oldStatus === newStatus && oldStatus !== 'L') return; // no leave-affecting change
+  if (oldStatus === 'L' && newStatus === 'L' && inferLeaveType(oldRemarks) === inferLeaveType(newRemarks)) return;
+
+  const year = date.slice(0, 4);
+  const balances = await getStaffLeaveBalances();
+  const existing = balances.find(b => b.empId === empId && b.year === year);
+  const balance = existing || {
+    id: `${empId}-${year}`, empId, year,
+    casualGranted: 0, casualUsed: 0, sickGranted: 0, sickUsed: 0, earnedGranted: 0, earnedUsed: 0, lopTaken: 0
+  };
+
+  const dec = (type: string) => {
+    if (type === 'casual') balance.casualUsed = Math.max(0, balance.casualUsed - 1);
+    if (type === 'sick') balance.sickUsed = Math.max(0, balance.sickUsed - 1);
+    if (type === 'earned') balance.earnedUsed = Math.max(0, balance.earnedUsed - 1);
+  };
+  const inc = (type: string) => {
+    if (type === 'casual') balance.casualUsed += 1;
+    if (type === 'sick') balance.sickUsed += 1;
+    if (type === 'earned') balance.earnedUsed += 1;
+  };
+
+  if (oldStatus === 'L') dec(inferLeaveType(oldRemarks));
+  if (oldStatus === 'LOP') balance.lopTaken = Math.max(0, balance.lopTaken - 1);
+  if (newStatus === 'L') inc(inferLeaveType(newRemarks));
+  if (newStatus === 'LOP') balance.lopTaken += 1;
+
+  await saveStaffLeaveBalance(balance);
+}
+
+// Upserts one attendance day using a deterministic id (empId-date), so marking
+// the same day twice updates it in place instead of creating a duplicate row,
+// then syncs the leave balance for that change.
+async function upsertAttendanceEntry(entry: {
+  empId: string; date: string; status: string; remarks?: string;
+  checkIn?: string; checkOut?: string; recordedBy: string;
+}) {
+  const id = `${entry.empId}-${entry.date}`;
+  const existingRows = await getStaffAttendance();
+  const existing = existingRows.find(r => r.id === id);
+
+  const record: StaffAttendance = {
+    id,
+    empId: entry.empId,
+    date: entry.date,
+    status: entry.status as StaffAttendance['status'],
+    remarks: entry.remarks,
+    checkIn: entry.checkIn,
+    checkOut: entry.checkOut,
+    recordedBy: entry.recordedBy,
+    recordedDate: istTimestamp()
+  };
+  await saveStaffAttendanceRecord(record);
+  await adjustLeaveBalanceForAttendanceChange(entry.empId, entry.date, existing?.status, existing?.remarks, entry.status, entry.remarks);
+  return record;
+}
+
+async function computeMonthlyAttendanceSummary(empId: string, month: string) {
+  const rows = (await getStaffAttendance()).filter(a => a.empId === empId && a.date.startsWith(month));
+  const totalDays = daysInMonth(month);
+  const counts: Record<string, number> = { P: 0, E: 0, A: 0, L: 0, LOP: 0, 'W/O': 0 };
+  rows.forEach(r => { counts[r.status] = (counts[r.status] || 0) + 1; });
+  const paidDays = counts['P'] + counts['E'] + counts['L'] + counts['W/O'];
+  const attendancePercentage = totalDays > 0 ? Math.round((paidDays / totalDays) * 1000) / 10 : 0;
+  return {
+    empId, month, totalDays,
+    presentDays: counts['P'], absentDays: counts['A'], leaveDays: counts['L'],
+    lopDays: counts['LOP'], exemptionDays: counts['E'], weeklyOffDays: counts['W/O'],
+    attendancePercentage, rows
+  };
+}
+
+// Computes a salary slip for one employee/month: gross = structure components +
+// any applicable hike, prorated by paid attendance days (or by days-since-joining
+// for a new joiner), minus that month's deductions. See the HR rebuild plan for
+// the calculation rule this implements.
+async function computeSalarySlip(empId: string, month: string) {
+  const [employees, structures, deductions, attendanceRows, history] = await Promise.all([
+    getStaffEmployees(), getStaffSalaryStructures(), getStaffSalaryDeductions(), getStaffAttendance(), getStaffSalaryHistory()
+  ]);
+
+  const employee = employees.find(e => e.id === empId);
+  if (!employee) throw new Error(`Employee ${empId} not found`);
+
+  const empStructures = structures
+    .filter(s => s.empId === empId && s.effectiveFrom <= `${month}-31`)
+    .sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom));
+  const structure = empStructures[0];
+  if (!structure) throw new Error(`No salary structure found for employee ${empId}`);
+
+  const deduction = deductions.find(d => d.empId === empId && d.month === month);
+  const totalDaysInMonth = daysInMonth(month);
+
+  let hikeAmount = 0;
+  if (structure.salaryHike1May2025 && month >= '2025-05') hikeAmount += structure.salaryHike1May2025;
+  if (structure.salaryHike1Apr2026 && month >= '2026-04') hikeAmount += structure.salaryHike1Apr2026;
+
+  const baseGross = (structure.basicSalary || 0) + (structure.hra || 0) + (structure.dearnessAllowance || 0) +
+    (structure.specialAllowance || 0) + (structure.otherAdditions || 0) + hikeAmount;
+
+  const empAttendance = attendanceRows.filter(a => a.empId === empId && a.date.startsWith(month));
+  const paidDays = empAttendance.filter(a => ['P', 'E', 'L', 'W/O'].includes(a.status)).length;
+
+  let proratedGross = baseGross;
+  const doj = employee.dateOfJoining;
+  if (doj && doj.startsWith(month)) {
+    const joinDay = Number(doj.split('-')[2]);
+    const remainingDays = totalDaysInMonth - joinDay + 1;
+    proratedGross = baseGross * (remainingDays / totalDaysInMonth);
+  } else if (empAttendance.length > 0) {
+    proratedGross = baseGross * (paidDays / empAttendance.length);
+  }
+
+  const deductionsTotal = (deduction?.pfContribution || 0) + (deduction?.esiContribution || 0) +
+    (deduction?.incomeTax || 0) + (deduction?.otherDeductions || 0);
+  const grossSalary = Math.round(proratedGross);
+  const netSalary = Math.max(0, Math.round(proratedGross - deductionsTotal));
+
+  const year = month.slice(0, 4);
+  const ytdPriorHistory = history.filter(h => h.empId === empId && h.month.startsWith(year) && h.month < month);
+  const ytdGross = ytdPriorHistory.reduce((s, h) => s + h.grossSalary, 0) + grossSalary;
+  const ytdNet = ytdPriorHistory.reduce((s, h) => s + h.netSalary, 0) + netSalary;
+
+  return {
+    employee, structure, deduction, month,
+    grossSalary, deductionsTotal, netSalary,
+    paidDays, totalDaysInMonth, hikeAmount,
+    ytdGross, ytdNet
+  };
+}
 
 async function startServer() {
   const app = express();
@@ -768,109 +947,388 @@ async function startServer() {
     try { res.json({ success: true, data: await deleteAccountsEntry(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get('/api/hr', async (req, res) => {
-    try { res.json(await getHREmployees()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  // ===== STAFF EMPLOYEES =====
+  app.get('/api/staff/employees', async (req, res) => {
+    try { res.json(await getStaffEmployees()); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
-  app.post('/api/hr', async (req, res) => {
-    try { res.json({ success: true, data: await saveHREmployee(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  app.post('/api/staff/employees', async (req, res) => {
+    try { res.json({ success: true, data: await saveStaffEmployee(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
-  app.put('/api/hr/:id', async (req, res) => {
-    try { res.json({ success: true, data: await saveHREmployee({ ...req.body, id: req.params.id }) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  app.put('/api/staff/employees/:id', async (req, res) => {
+    try { res.json({ success: true, data: await saveStaffEmployee({ ...req.body, id: req.params.id }) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
-  app.delete('/api/hr/:id', async (req, res) => {
-    try { res.json({ success: true, data: await deleteHREmployee(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
-  });
-
-  app.get('/api/driver-salaries', async (req, res) => {
-    try { res.json(await getDriverSalaries()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  app.delete('/api/staff/employees/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteStaffEmployee(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get('/api/driver-salaries/audit', async (req, res) => {
-    try { res.json(await getDriverSalaryAuditLogs()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  // ===== STAFF SALARY STRUCTURE =====
+  app.get('/api/staff/salary-structure', async (req, res) => {
+    try { res.json(await getStaffSalaryStructures()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/staff/salary-structure', async (req, res) => {
+    try { res.json({ success: true, data: await saveStaffSalaryStructure(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/staff/salary-structure/:id', async (req, res) => {
+    try { res.json({ success: true, data: await saveStaffSalaryStructure({ ...req.body, id: req.params.id }) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/staff/salary-structure/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteStaffSalaryStructure(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post('/api/driver-salaries', async (req, res) => {
+  // ===== STAFF SALARY DEDUCTIONS =====
+  app.get('/api/staff/salary-deductions', async (req, res) => {
+    try { res.json(await getStaffSalaryDeductions()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/staff/salary-deductions', async (req, res) => {
+    try { res.json({ success: true, data: await saveStaffSalaryDeduction(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/staff/salary-deductions/:id', async (req, res) => {
+    try { res.json({ success: true, data: await saveStaffSalaryDeduction({ ...req.body, id: req.params.id }) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/staff/salary-deductions/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteStaffSalaryDeduction(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ===== STAFF SALARY PROCESSING =====
+  app.get('/api/staff/salary-history', async (req, res) => {
+    try { res.json(await getStaffSalaryHistory()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/staff/salary/process', async (req, res) => {
     try {
-      const newRecord = req.body;
-      const recordWithId = { id: String(Date.now()), ...newRecord };
-      const savedSalaries = await saveDriverSalary(recordWithId);
+      const { empIds, month } = req.body as { empIds: string[]; month: string };
+      if (!Array.isArray(empIds) || !month) {
+        return res.status(400).json({ success: false, error: 'empIds (array) and month (YYYY-MM) are required.' });
+      }
 
-      const auditLog = {
-        id: String(Date.now() + 1),
-        timestamp: istTimestamp(),
-        username: newRecord.createdBy || 'Unknown',
-        action: 'CREATE' as const,
-        driverId: newRecord.driverId,
-        driverName: newRecord.driverName,
-        details: `Added new driver salary record: Net Salary ₹${newRecord.netSalary.toLocaleString('en-IN')}, Bank A/C ${newRecord.accountNumber}, IFSC ${newRecord.ifscCode}`
+      const existingHistory = await getStaffSalaryHistory();
+      const results = [];
+      for (const empId of empIds) {
+        try {
+          const slip = await computeSalarySlip(empId, month);
+          const existing = existingHistory.find(h => h.empId === empId && h.month === month);
+          const record: StaffSalaryHistory = {
+            id: existing?.id || `${empId}-${month}`,
+            empId,
+            month,
+            processedDate: istTimestamp(),
+            grossSalary: slip.grossSalary,
+            deductionsTotal: slip.deductionsTotal,
+            netSalary: slip.netSalary,
+            status: 'Draft'
+          };
+          await saveStaffSalaryHistoryRecord(record);
+          results.push(record);
+        } catch (perEmpError: any) {
+          results.push({ empId, error: perEmpError.message });
+        }
+      }
+      res.json({ success: true, data: results });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.put('/api/staff/salary/:historyId/status', async (req, res) => {
+    try {
+      const { historyId } = req.params;
+      const { status, paymentMode, paymentRef, paidOn } = req.body;
+      const history = await getStaffSalaryHistory();
+      const existing = history.find(h => h.id === historyId);
+      if (!existing) return res.status(404).json({ success: false, error: 'Salary history record not found.' });
+
+      const updated: StaffSalaryHistory = { ...existing, status, paymentMode, paymentRef, paidOn };
+      await saveStaffSalaryHistoryRecord(updated);
+      res.json({ success: true, data: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ===== STAFF SALARY SLIP =====
+  app.get('/api/staff/salary/slip/:empId/:month', async (req, res) => {
+    try {
+      const { empId, month } = req.params;
+      const slip = await computeSalarySlip(empId, month);
+      res.json({ success: true, data: slip });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/staff/salary/slip-pdf/:empId/:month', async (req, res) => {
+    try {
+      const { empId, month } = req.params;
+      const slip = await computeSalarySlip(empId, month);
+      const pdfBuffer = generateSalarySlipPdf(slip);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="salary-slip-${empId}-${month}.pdf"`);
+      res.send(pdfBuffer);
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/staff/salary/slip/email', async (req, res) => {
+    try {
+      const { empId, month } = req.body;
+      const slip = await computeSalarySlip(empId, month);
+      if (!slip.employee.email) {
+        return res.status(400).json({ success: false, error: 'This employee has no email address on file.' });
+      }
+
+      const pdfBuffer = generateSalarySlipPdf(slip);
+      await resend.emails.send({
+        from: process.env.EMAIL_FROM || 'payroll@kcmlogistics.in',
+        to: slip.employee.email,
+        subject: `KCM Logistics Salary Slip - ${month}`,
+        html: `
+          <div style="font-family:Arial,sans-serif;line-height:1.5;">
+            <p>Hello ${slip.employee.name},</p>
+            <p>Please find attached your salary slip for ${month}.</p>
+            <p>Net Pay: <strong>Rs. ${slip.netSalary.toLocaleString('en-IN')}</strong></p>
+          </div>
+        `,
+        attachments: [{
+          filename: `salary-slip-${empId}-${month}.pdf`,
+          content: pdfBuffer.toString('base64')
+        }]
+      });
+
+      res.json({ success: true, message: `Salary slip emailed to ${slip.employee.email}.` });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ===== STAFF SALARY REPORTS & ANALYTICS =====
+  app.get('/api/staff/salary/register', async (req, res) => {
+    try {
+      const { month } = req.query as { month: string };
+      if (!month) return res.status(400).json({ success: false, error: 'month query param (YYYY-MM) is required.' });
+
+      const employees = await getStaffEmployees();
+      const register = [];
+      for (const emp of employees) {
+        try {
+          const slip = await computeSalarySlip(emp.id, month);
+          register.push({
+            empId: emp.id, name: emp.name, department: emp.department, designation: emp.designation,
+            grossSalary: slip.grossSalary, deductionsTotal: slip.deductionsTotal, netSalary: slip.netSalary
+          });
+        } catch { /* employee has no salary structure yet - skip from register */ }
+      }
+      res.json({ success: true, data: register });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/staff/salary/deductions-report', async (req, res) => {
+    try {
+      const { month } = req.query as { month: string };
+      if (!month) return res.status(400).json({ success: false, error: 'month query param (YYYY-MM) is required.' });
+
+      const [employees, deductions] = await Promise.all([getStaffEmployees(), getStaffSalaryDeductions()]);
+      const report = deductions.filter(d => d.month === month).map(d => {
+        const emp = employees.find(e => e.id === d.empId);
+        const total = (d.pfContribution || 0) + (d.esiContribution || 0) + (d.incomeTax || 0) + (d.otherDeductions || 0);
+        return { empId: d.empId, name: emp?.name || d.empId, ...d, total };
+      });
+      res.json({ success: true, data: report });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/staff/salary/analytics', async (req, res) => {
+    try {
+      const [employees, history] = await Promise.all([getStaffEmployees(), getStaffSalaryHistory()]);
+
+      const deptCost: Record<string, number> = {};
+      const yearCost: Record<string, number> = {};
+      history.forEach(h => {
+        const emp = employees.find(e => e.id === h.empId);
+        const dept = emp?.department || 'Unassigned';
+        deptCost[dept] = (deptCost[dept] || 0) + h.netSalary;
+        const year = h.month.slice(0, 4);
+        yearCost[year] = (yearCost[year] || 0) + h.netSalary;
+      });
+
+      const latestMonth = history.reduce((max, h) => (h.month > max ? h.month : max), '');
+      const latestMonthRecords = history.filter(h => h.month === latestMonth)
+        .map(h => ({ empId: h.empId, name: employees.find(e => e.id === h.empId)?.name || h.empId, netSalary: h.netSalary }))
+        .sort((a, b) => b.netSalary - a.netSalary);
+
+      res.json({
+        success: true,
+        data: {
+          departmentCost: Object.entries(deptCost).map(([department, total]) => ({ department, total })),
+          yearOverYear: Object.entries(yearCost).map(([year, total]) => ({ year, total })).sort((a, b) => a.year.localeCompare(b.year)),
+          highestEarners: latestMonthRecords.slice(0, 5),
+          lowestEarners: [...latestMonthRecords].reverse().slice(0, 5),
+          latestMonth
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ===== STAFF ATTENDANCE =====
+  app.get('/api/staff/attendance', async (req, res) => {
+    try { res.json(await getStaffAttendance()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/staff/attendance/mark', async (req, res) => {
+    try {
+      const { empId, date, status, remarks, checkIn, checkOut, recordedBy } = req.body;
+      const record = await upsertAttendanceEntry({ empId, date, status, remarks, checkIn, checkOut, recordedBy: recordedBy || 'system' });
+      res.json({ success: true, data: record });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/staff/attendance/bulk', async (req, res) => {
+    try {
+      const entries = req.body as Array<{ empId: string; date: string; status: string; remarks?: string; recordedBy?: string }>;
+      if (!Array.isArray(entries)) return res.status(400).json({ success: false, error: 'Request body must be an array of attendance entries.' });
+
+      const results = [];
+      for (const entry of entries) {
+        const record = await upsertAttendanceEntry({ ...entry, recordedBy: entry.recordedBy || 'system' });
+        results.push(record);
+      }
+      res.json({ success: true, data: results });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete('/api/staff/attendance/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteStaffAttendanceRecord(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/staff/attendance/monthly/:empId/:month', async (req, res) => {
+    try {
+      const { empId, month } = req.params;
+      res.json({ success: true, data: await computeMonthlyAttendanceSummary(empId, month) });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/staff/attendance/summary', async (req, res) => {
+    try {
+      const { month, department } = req.query as { month: string; department?: string };
+      if (!month) return res.status(400).json({ success: false, error: 'month query param (YYYY-MM) is required.' });
+
+      const employees = (await getStaffEmployees()).filter(e => !department || e.department === department);
+      const summaries = await Promise.all(employees.map(async e => ({
+        empId: e.id, name: e.name, department: e.department,
+        ...(await computeMonthlyAttendanceSummary(e.id, month))
+      })));
+      res.json({ success: true, data: summaries });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/staff/attendance/report', async (req, res) => {
+    try {
+      const { month, status } = req.query as { month: string; status?: string };
+      if (!month) return res.status(400).json({ success: false, error: 'month query param (YYYY-MM) is required.' });
+
+      const [employees, attendanceRows] = await Promise.all([getStaffEmployees(), getStaffAttendance()]);
+      const rows = attendanceRows
+        .filter(a => a.date.startsWith(month) && (!status || a.status === status))
+        .map(a => ({ ...a, name: employees.find(e => e.id === a.empId)?.name || a.empId }));
+      res.json({ success: true, data: rows });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/staff/attendance/analytics', async (req, res) => {
+    try {
+      const [employees, attendanceRows] = await Promise.all([getStaffEmployees(), getStaffAttendance()]);
+
+      const monthsPresent = Array.from(new Set(attendanceRows.map(a => a.date.slice(0, 7)))).sort();
+      const trend = [];
+      for (const month of monthsPresent) {
+        const monthRows = attendanceRows.filter(a => a.date.startsWith(month));
+        const paid = monthRows.filter(r => ['P', 'E', 'L', 'W/O'].includes(r.status)).length;
+        trend.push({ month, attendancePercentage: monthRows.length > 0 ? Math.round((paid / monthRows.length) * 1000) / 10 : 0 });
+      }
+
+      const latestMonth = monthsPresent[monthsPresent.length - 1] || '';
+      const absenteeism = employees.map(e => {
+        const rows = attendanceRows.filter(a => a.empId === e.id && a.date.startsWith(latestMonth));
+        const absentCount = rows.filter(r => r.status === 'A' || r.status === 'LOP').length;
+        return { empId: e.id, name: e.name, absentCount };
+      }).sort((a, b) => b.absentCount - a.absentCount).slice(0, 10);
+
+      res.json({ success: true, data: { trend, absenteeism, latestMonth } });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ===== STAFF LEAVE BALANCE =====
+  app.get('/api/staff/leave-balance/:empId/:year', async (req, res) => {
+    try {
+      const { empId, year } = req.params;
+      const balances = await getStaffLeaveBalances();
+      const balance = balances.find(b => b.empId === empId && b.year === year) || {
+        id: `${empId}-${year}`, empId, year,
+        casualGranted: 0, casualUsed: 0, sickGranted: 0, sickUsed: 0, earnedGranted: 0, earnedUsed: 0, lopTaken: 0
       };
-      const savedAudits = await saveDriverSalaryAuditLog(auditLog);
-
-      res.json({ success: true, data: savedSalaries, audit: savedAudits });
+      res.json({ success: true, data: balance });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  app.put('/api/driver-salaries/:id', async (req, res) => {
+  app.put('/api/staff/leave-balance/:empId/:year', async (req, res) => {
     try {
-      const { id } = req.params;
-      const updatedRecord = req.body;
-      const salaries = await getDriverSalaries();
-      const oldRecord = salaries.find((v: any) => v.id === id);
-
-      if (oldRecord) {
-        const completeRecord = { ...oldRecord, ...updatedRecord, id };
-        const savedSalaries = await saveDriverSalary(completeRecord);
-
-        const auditLog = {
-          id: String(Date.now()),
-          timestamp: istTimestamp(),
-          username: updatedRecord.updatedBy || 'Unknown',
-          action: 'UPDATE' as const,
-          driverId: updatedRecord.driverId,
-          driverName: updatedRecord.driverName,
-          details: `Updated driver salary record. Old Salary ₹${oldRecord.netSalary.toLocaleString('en-IN')} -> New Salary ₹${updatedRecord.netSalary.toLocaleString('en-IN')}`
-        };
-        const savedAudits = await saveDriverSalaryAuditLog(auditLog);
-
-        res.json({ success: true, data: savedSalaries, audit: savedAudits });
-      } else {
-        res.status(404).json({ error: 'Record not found' });
-      }
+      const { empId, year } = req.params;
+      const updated: StaffLeaveBalance = { ...req.body, id: `${empId}-${year}`, empId, year };
+      await saveStaffLeaveBalance(updated);
+      res.json({ success: true, data: updated });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  app.delete('/api/driver-salaries/:id', async (req, res) => {
+  // ===== STAFF HOLIDAYS =====
+  app.get('/api/staff/holidays', async (req, res) => {
+    try { res.json(await getStaffHolidays()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/staff/holidays', async (req, res) => {
+    try { res.json({ success: true, data: await saveStaffHoliday(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/staff/holidays/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteStaffHoliday(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ===== STAFF SETTINGS (singleton) =====
+  app.get('/api/staff/settings', async (req, res) => {
     try {
-      const { id } = req.params;
-      const { deletedBy } = req.query;
-      const salaries = await getDriverSalaries();
-      const record = salaries.find((v: any) => v.id === id);
-
-      if (record) {
-        const savedSalaries = await deleteDriverSalary(id);
-
-        const auditLog = {
-          id: String(Date.now()),
-          timestamp: istTimestamp(),
-          username: (deletedBy as string) || 'Unknown',
-          action: 'DELETE' as const,
-          driverId: record.driverId,
-          driverName: record.driverName,
-          details: `Deleted driver salary record (Net Salary ₹${record.netSalary.toLocaleString('en-IN')}, Bank A/C ${record.accountNumber})`
-        };
-        const savedAudits = await saveDriverSalaryAuditLog(auditLog);
-
-        res.json({ success: true, data: savedSalaries, audit: savedAudits });
-      } else {
-        res.status(404).json({ error: 'Record not found' });
-      }
+      const settings = await getStaffSettings();
+      res.json({
+        success: true,
+        data: settings || {
+          id: 'default', workingDaysPerWeek: 6, salaryProcessingDate: 1, attendanceCutoffDate: 25,
+          leavePolicy: { casualAnnual: 12, sickAnnual: 6, earnedAnnual: 12, carryForwardEnabled: false }
+        }
+      });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ success: false, error: err.message });
     }
+  });
+  app.put('/api/staff/settings', async (req, res) => {
+    try { res.json({ success: true, data: await saveStaffSettings(req.body) }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); }
   });
 
   app.get('/api/abnormal-logins', async (req, res) => {

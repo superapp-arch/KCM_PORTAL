@@ -7,11 +7,16 @@ import {
   pettyCashVouchers,
   maintenanceRecords,
   accountsEntries,
-  hrEmployees,
+  staffEmployees,
+  staffSalaryStructures,
+  staffSalaryDeductions,
+  staffSalaryHistory,
+  staffAttendance,
+  staffLeaveBalances,
+  staffHolidays,
+  staffSettings,
   abnormalLogins,
   notifications,
-  driverSalaries,
-  driverSalaryAuditLogs,
   warehouseEntries,
   mileageReports
 } from './schema.ts';
@@ -25,11 +30,16 @@ import {
   PettyCashVoucher,
   MaintenanceRecord,
   AccountsEntry,
-  HREmployee,
+  StaffEmployee,
+  StaffSalaryStructure,
+  StaffSalaryDeduction,
+  StaffSalaryHistory,
+  StaffAttendance,
+  StaffLeaveBalance,
+  StaffHoliday,
+  StaffSettings,
   AbnormalLogin,
   DashboardNotification,
-  DriverSalary,
-  DriverSalaryAuditLog,
   WarehouseEntry,
   MileageReport
 } from '../types.ts';
@@ -210,27 +220,8 @@ const initialAccountsEntries = [
   { id: '2', date: '2026-07-01', type: 'Expense', category: 'Driver Allowance', amount: 5000, reference: 'PC-9912' }
 ];
 
-const initialHREmployees = [
-  { id: '1', name: 'Shivakumar S', role: 'Driver', licenseNo: 'TN6820150004851', licenseExpiry: '2028-11-20', salary: 22000, attendanceStatus: 'Present', status: 'Active' },
-  { id: '2', name: 'Naveena Kumara', role: 'Driver', licenseNo: 'KA5020080002613', licenseExpiry: '2030-05-12', salary: 24000, attendanceStatus: 'Present', status: 'Active' }
-];
-
 const initialNotifications = [
   { id: '1', title: 'Insurance Expiry Impending', message: 'Vehicle KA53D9515 insurance is expiring on 2026-07-18 (in 11 days). Please renew immediately.', type: 'insurance', timestamp: '2026-07-07 00:00:00', read: false, vehicleRegNo: 'KA53D9515' }
-];
-
-const initialDriverSalaries = [
-  {
-    id: '1',
-    driverId: 'DRV-101',
-    driverName: 'Shivakumar S',
-    accountNumber: '918273645012',
-    ifscCode: 'SBIN0001234',
-    netSalary: 22000,
-    remarks: 'Base commercial heavy route driver',
-    createdBy: 'bhagya',
-    createdAt: '2026-07-01 10:00:00'
-  }
 ];
 
 const initialWarehouseEntries: WarehouseEntry[] = [
@@ -328,24 +319,10 @@ export async function seedDatabase() {
       }
     }
 
-    const existingHr = await db.select().from(hrEmployees);
-    if (existingHr.length === 0) {
-      for (const h of initialHREmployees) {
-        await db.insert(hrEmployees).values({ id: h.id, data: JSON.stringify(h) });
-      }
-    }
-
     const existingNotifs = await db.select().from(notifications);
     if (existingNotifs.length === 0) {
       for (const n of initialNotifications) {
         await db.insert(notifications).values({ id: n.id, data: JSON.stringify(n) });
-      }
-    }
-
-    const existingSalaries = await db.select().from(driverSalaries);
-    if (existingSalaries.length === 0) {
-      for (const s of initialDriverSalaries) {
-        await db.insert(driverSalaries).values({ id: s.id, data: JSON.stringify(s) });
       }
     }
 
@@ -650,43 +627,293 @@ export async function deleteAccountsEntry(id: string) {
   }
 }
 
-// --- HR EMPLOYEE OPERATIONS ---
-export async function getHREmployees(): Promise<HREmployee[]> {
+// --- STAFF EMPLOYEE OPERATIONS ---
+export async function getStaffEmployees(): Promise<StaffEmployee[]> {
   try {
-    const rows = await db.select().from(hrEmployees);
+    const rows = await db.select().from(staffEmployees);
     return rows.map(r => JSON.parse(r.data));
   } catch (error) {
-    console.error("Database query failed in getHREmployees:", error);
-    throw new Error("Failed to retrieve HR employees.", { cause: error });
+    console.error("Database query failed in getStaffEmployees:", error);
+    throw new Error("Failed to retrieve staff employees.", { cause: error });
   }
 }
 
-export async function saveHREmployee(employee: HREmployee) {
+export async function saveStaffEmployee(employee: StaffEmployee) {
   try {
     const id = employee.id || String(Date.now());
     const completeEmployee = { ...employee, id };
     const dataString = JSON.stringify(completeEmployee);
 
-    const existing = await db.select().from(hrEmployees).where(eq(hrEmployees.id, id));
+    const existing = await db.select().from(staffEmployees).where(eq(staffEmployees.id, id));
     if (existing.length > 0) {
-      await db.update(hrEmployees).set({ data: dataString }).where(eq(hrEmployees.id, id));
+      await db.update(staffEmployees).set({ data: dataString }).where(eq(staffEmployees.id, id));
     } else {
-      await db.insert(hrEmployees).values({ id, data: dataString });
+      await db.insert(staffEmployees).values({ id, data: dataString });
     }
-    return await getHREmployees();
+    return await getStaffEmployees();
   } catch (error) {
-    console.error("Database action failed in saveHREmployee:", error);
-    throw new Error("Failed to save HR employee.", { cause: error });
+    console.error("Database action failed in saveStaffEmployee:", error);
+    throw new Error("Failed to save staff employee.", { cause: error });
   }
 }
 
-export async function deleteHREmployee(id: string) {
+export async function deleteStaffEmployee(id: string) {
   try {
-    await db.delete(hrEmployees).where(eq(hrEmployees.id, id));
-    return await getHREmployees();
+    await db.delete(staffEmployees).where(eq(staffEmployees.id, id));
+    return await getStaffEmployees();
   } catch (error) {
-    console.error("Database action failed in deleteHREmployee:", error);
-    throw new Error("Failed to delete HR employee.", { cause: error });
+    console.error("Database action failed in deleteStaffEmployee:", error);
+    throw new Error("Failed to delete staff employee.", { cause: error });
+  }
+}
+
+// --- STAFF SALARY STRUCTURE OPERATIONS ---
+export async function getStaffSalaryStructures(): Promise<StaffSalaryStructure[]> {
+  try {
+    const rows = await db.select().from(staffSalaryStructures);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getStaffSalaryStructures:", error);
+    throw new Error("Failed to retrieve staff salary structures.", { cause: error });
+  }
+}
+
+export async function saveStaffSalaryStructure(structure: StaffSalaryStructure) {
+  try {
+    const id = structure.id || String(Date.now());
+    const complete = { ...structure, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(staffSalaryStructures).where(eq(staffSalaryStructures.id, id));
+    if (existing.length > 0) {
+      await db.update(staffSalaryStructures).set({ empId: complete.empId, data: dataString }).where(eq(staffSalaryStructures.id, id));
+    } else {
+      await db.insert(staffSalaryStructures).values({ id, empId: complete.empId, data: dataString });
+    }
+    return await getStaffSalaryStructures();
+  } catch (error) {
+    console.error("Database action failed in saveStaffSalaryStructure:", error);
+    throw new Error("Failed to save staff salary structure.", { cause: error });
+  }
+}
+
+export async function deleteStaffSalaryStructure(id: string) {
+  try {
+    await db.delete(staffSalaryStructures).where(eq(staffSalaryStructures.id, id));
+    return await getStaffSalaryStructures();
+  } catch (error) {
+    console.error("Database action failed in deleteStaffSalaryStructure:", error);
+    throw new Error("Failed to delete staff salary structure.", { cause: error });
+  }
+}
+
+// --- STAFF SALARY DEDUCTION OPERATIONS ---
+export async function getStaffSalaryDeductions(): Promise<StaffSalaryDeduction[]> {
+  try {
+    const rows = await db.select().from(staffSalaryDeductions);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getStaffSalaryDeductions:", error);
+    throw new Error("Failed to retrieve staff salary deductions.", { cause: error });
+  }
+}
+
+export async function saveStaffSalaryDeduction(deduction: StaffSalaryDeduction) {
+  try {
+    const id = deduction.id || String(Date.now());
+    const complete = { ...deduction, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(staffSalaryDeductions).where(eq(staffSalaryDeductions.id, id));
+    if (existing.length > 0) {
+      await db.update(staffSalaryDeductions).set({ empId: complete.empId, data: dataString }).where(eq(staffSalaryDeductions.id, id));
+    } else {
+      await db.insert(staffSalaryDeductions).values({ id, empId: complete.empId, data: dataString });
+    }
+    return await getStaffSalaryDeductions();
+  } catch (error) {
+    console.error("Database action failed in saveStaffSalaryDeduction:", error);
+    throw new Error("Failed to save staff salary deduction.", { cause: error });
+  }
+}
+
+export async function deleteStaffSalaryDeduction(id: string) {
+  try {
+    await db.delete(staffSalaryDeductions).where(eq(staffSalaryDeductions.id, id));
+    return await getStaffSalaryDeductions();
+  } catch (error) {
+    console.error("Database action failed in deleteStaffSalaryDeduction:", error);
+    throw new Error("Failed to delete staff salary deduction.", { cause: error });
+  }
+}
+
+// --- STAFF SALARY HISTORY OPERATIONS ---
+export async function getStaffSalaryHistory(): Promise<StaffSalaryHistory[]> {
+  try {
+    const rows = await db.select().from(staffSalaryHistory);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getStaffSalaryHistory:", error);
+    throw new Error("Failed to retrieve staff salary history.", { cause: error });
+  }
+}
+
+export async function saveStaffSalaryHistoryRecord(record: StaffSalaryHistory) {
+  try {
+    const id = record.id || String(Date.now());
+    const complete = { ...record, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(staffSalaryHistory).where(eq(staffSalaryHistory.id, id));
+    if (existing.length > 0) {
+      await db.update(staffSalaryHistory).set({ empId: complete.empId, data: dataString }).where(eq(staffSalaryHistory.id, id));
+    } else {
+      await db.insert(staffSalaryHistory).values({ id, empId: complete.empId, data: dataString });
+    }
+    return await getStaffSalaryHistory();
+  } catch (error) {
+    console.error("Database action failed in saveStaffSalaryHistoryRecord:", error);
+    throw new Error("Failed to save staff salary history record.", { cause: error });
+  }
+}
+
+// --- STAFF ATTENDANCE OPERATIONS ---
+export async function getStaffAttendance(): Promise<StaffAttendance[]> {
+  try {
+    const rows = await db.select().from(staffAttendance);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getStaffAttendance:", error);
+    throw new Error("Failed to retrieve staff attendance.", { cause: error });
+  }
+}
+
+export async function saveStaffAttendanceRecord(record: StaffAttendance) {
+  try {
+    const id = record.id || String(Date.now());
+    const complete = { ...record, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(staffAttendance).where(eq(staffAttendance.id, id));
+    if (existing.length > 0) {
+      await db.update(staffAttendance).set({ empId: complete.empId, data: dataString }).where(eq(staffAttendance.id, id));
+    } else {
+      await db.insert(staffAttendance).values({ id, empId: complete.empId, data: dataString });
+    }
+    return await getStaffAttendance();
+  } catch (error) {
+    console.error("Database action failed in saveStaffAttendanceRecord:", error);
+    throw new Error("Failed to save staff attendance record.", { cause: error });
+  }
+}
+
+export async function deleteStaffAttendanceRecord(id: string) {
+  try {
+    await db.delete(staffAttendance).where(eq(staffAttendance.id, id));
+    return await getStaffAttendance();
+  } catch (error) {
+    console.error("Database action failed in deleteStaffAttendanceRecord:", error);
+    throw new Error("Failed to delete staff attendance record.", { cause: error });
+  }
+}
+
+// --- STAFF LEAVE BALANCE OPERATIONS ---
+export async function getStaffLeaveBalances(): Promise<StaffLeaveBalance[]> {
+  try {
+    const rows = await db.select().from(staffLeaveBalances);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getStaffLeaveBalances:", error);
+    throw new Error("Failed to retrieve staff leave balances.", { cause: error });
+  }
+}
+
+export async function saveStaffLeaveBalance(balance: StaffLeaveBalance) {
+  try {
+    const id = balance.id || String(Date.now());
+    const complete = { ...balance, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(staffLeaveBalances).where(eq(staffLeaveBalances.id, id));
+    if (existing.length > 0) {
+      await db.update(staffLeaveBalances).set({ empId: complete.empId, data: dataString }).where(eq(staffLeaveBalances.id, id));
+    } else {
+      await db.insert(staffLeaveBalances).values({ id, empId: complete.empId, data: dataString });
+    }
+    return await getStaffLeaveBalances();
+  } catch (error) {
+    console.error("Database action failed in saveStaffLeaveBalance:", error);
+    throw new Error("Failed to save staff leave balance.", { cause: error });
+  }
+}
+
+// --- STAFF HOLIDAY OPERATIONS ---
+export async function getStaffHolidays(): Promise<StaffHoliday[]> {
+  try {
+    const rows = await db.select().from(staffHolidays);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getStaffHolidays:", error);
+    throw new Error("Failed to retrieve staff holidays.", { cause: error });
+  }
+}
+
+export async function saveStaffHoliday(holiday: StaffHoliday) {
+  try {
+    const id = holiday.id || String(Date.now());
+    const complete = { ...holiday, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(staffHolidays).where(eq(staffHolidays.id, id));
+    if (existing.length > 0) {
+      await db.update(staffHolidays).set({ data: dataString }).where(eq(staffHolidays.id, id));
+    } else {
+      await db.insert(staffHolidays).values({ id, data: dataString });
+    }
+    return await getStaffHolidays();
+  } catch (error) {
+    console.error("Database action failed in saveStaffHoliday:", error);
+    throw new Error("Failed to save staff holiday.", { cause: error });
+  }
+}
+
+export async function deleteStaffHoliday(id: string) {
+  try {
+    await db.delete(staffHolidays).where(eq(staffHolidays.id, id));
+    return await getStaffHolidays();
+  } catch (error) {
+    console.error("Database action failed in deleteStaffHoliday:", error);
+    throw new Error("Failed to delete staff holiday.", { cause: error });
+  }
+}
+
+// --- STAFF SETTINGS OPERATIONS (singleton row, id = 'default') ---
+export async function getStaffSettings(): Promise<StaffSettings | null> {
+  try {
+    const rows = await db.select().from(staffSettings).where(eq(staffSettings.id, 'default'));
+    if (rows.length === 0) return null;
+    return JSON.parse(rows[0].data);
+  } catch (error) {
+    console.error("Database query failed in getStaffSettings:", error);
+    throw new Error("Failed to retrieve staff settings.", { cause: error });
+  }
+}
+
+export async function saveStaffSettings(settings: StaffSettings) {
+  try {
+    const complete = { ...settings, id: 'default' };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(staffSettings).where(eq(staffSettings.id, 'default'));
+    if (existing.length > 0) {
+      await db.update(staffSettings).set({ data: dataString }).where(eq(staffSettings.id, 'default'));
+    } else {
+      await db.insert(staffSettings).values({ id: 'default', data: dataString });
+    }
+    return await getStaffSettings();
+  } catch (error) {
+    console.error("Database action failed in saveStaffSettings:", error);
+    throw new Error("Failed to save staff settings.", { cause: error });
   }
 }
 
@@ -784,70 +1011,6 @@ export async function resolveNotification(id: string) {
   } catch (error) {
     console.error("Database action failed in resolveNotification:", error);
     throw new Error("Failed to resolve notification.", { cause: error });
-  }
-}
-
-// --- DRIVER SALARY OPERATIONS ---
-export async function getDriverSalaries(): Promise<DriverSalary[]> {
-  try {
-    const rows = await db.select().from(driverSalaries);
-    return rows.map(r => JSON.parse(r.data));
-  } catch (error) {
-    console.error("Database query failed in getDriverSalaries:", error);
-    throw new Error("Failed to retrieve driver salaries.", { cause: error });
-  }
-}
-
-export async function saveDriverSalary(salary: DriverSalary) {
-  try {
-    const id = salary.id || String(Date.now());
-    const completeSalary = { ...salary, id };
-    const dataString = JSON.stringify(completeSalary);
-
-    const existing = await db.select().from(driverSalaries).where(eq(driverSalaries.id, id));
-    if (existing.length > 0) {
-      await db.update(driverSalaries).set({ data: dataString }).where(eq(driverSalaries.id, id));
-    } else {
-      await db.insert(driverSalaries).values({ id, data: dataString });
-    }
-    return await getDriverSalaries();
-  } catch (error) {
-    console.error("Database action failed in saveDriverSalary:", error);
-    throw new Error("Failed to save driver salary.", { cause: error });
-  }
-}
-
-export async function deleteDriverSalary(id: string) {
-  try {
-    await db.delete(driverSalaries).where(eq(driverSalaries.id, id));
-    return await getDriverSalaries();
-  } catch (error) {
-    console.error("Database action failed in deleteDriverSalary:", error);
-    throw new Error("Failed to delete driver salary.", { cause: error });
-  }
-}
-
-// --- DRIVER SALARY AUDIT LOG OPERATIONS ---
-export async function getDriverSalaryAuditLogs(): Promise<DriverSalaryAuditLog[]> {
-  try {
-    const rows = await db.select().from(driverSalaryAuditLogs);
-    return rows.map(r => JSON.parse(r.data));
-  } catch (error) {
-    console.error("Database query failed in getDriverSalaryAuditLogs:", error);
-    throw new Error("Failed to retrieve driver salary audit logs.", { cause: error });
-  }
-}
-
-export async function saveDriverSalaryAuditLog(log: DriverSalaryAuditLog) {
-  try {
-    const id = log.id || String(Date.now());
-    const completeLog = { ...log, id };
-    const dataString = JSON.stringify(completeLog);
-    await db.insert(driverSalaryAuditLogs).values({ id, data: dataString });
-    return await getDriverSalaryAuditLogs();
-  } catch (error) {
-    console.error("Database action failed in saveDriverSalaryAuditLog:", error);
-    throw new Error("Failed to save driver salary audit log.", { cause: error });
   }
 }
 
