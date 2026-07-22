@@ -162,61 +162,59 @@ export interface AccountsEntry {
   documents?: VehicleDocument[];
 }
 
+export type StaffOrgUnit = 'KCM_SUPPLY' | 'KCM_INSTA';
+
 export interface StaffEmployee {
-  id: string; // emp_id, e.g. KCM15001
+  id: string; // EmpId, e.g. KCM15001 or KCMI30001
   name: string;
-  email?: string; // used for salary slip delivery
-  dateOfJoining?: string;
   designation?: string;
-  location?: string;
-  status: 'Active' | 'Inactive' | 'On Leave';
-  department?: string;
-  reportingManager?: string; // another StaffEmployee id
-  bankAccountNumber?: string;
-  ifscCode?: string;
+  dateOfJoining?: string;
+  dateOfLeaving?: string; // setting this prompts the UI to also set status to Inactive
+  location?: string; // defaults to "Bangalore" in the UI
+  status: 'Active' | 'Inactive';
+  orgUnit: StaffOrgUnit; // server-derived from EmpId prefix (^KCMI\d+ -> Insta, else Supply); read-only in the UI
+  remarks?: string;
   documents?: VehicleDocument[];
 }
 
-export interface StaffSalaryStructure {
+export interface StaffSalaryDetail {
   id: string;
   empId: string;
-  ctc2025?: number;
-  annualSalary?: number;
-  basicSalary: number;
-  hra?: number;
-  dearnessAllowance?: number;
-  specialAllowance?: number;
-  otherAdditions?: number;
-  salaryHike1May2025?: number;
-  salaryHike1Apr2026?: number;
-  effectiveFrom: string;
+  ctc25?: number;
+  annualCtc25?: number;
+  fuelOtherAddition?: number;
+  remarks?: string;
 }
 
-export interface StaffSalaryDeduction {
+// Salary hikes modeled as rows (not columns) so a new hike cycle is just a new
+// row instead of a schema change - StaffSalaryDetail.EffectiveSalary is CTC25
+// plus every hike whose effectiveDate has passed, computed on read.
+export interface StaffSalaryHike {
   id: string;
   empId: string;
-  month: string; // YYYY-MM
-  pfContribution?: number;
-  esiContribution?: number;
-  incomeTax?: number;
-  otherDeductions?: number;
+  effectiveDate: string; // YYYY-MM-DD
+  amount: number;
 }
 
-export interface StaffSalaryHistory {
+export interface StaffBankDetail {
   id: string;
   empId: string;
-  month: string; // YYYY-MM
-  processedDate: string;
-  grossSalary: number;
-  deductionsTotal: number;
-  netSalary: number;
-  status: 'Draft' | 'Processed' | 'Paid';
-  paymentMode?: 'NEFT' | 'Cheque' | 'Cash';
-  paymentRef?: string;
-  paidOn?: string;
+  accountNumber?: string; // masked to last 4 digits in the UI by default
+  ifscCode?: string;
+  bankName?: string;
+  amount?: number;
 }
 
-export type AttendanceStatusCode = 'P' | 'E' | 'A' | 'L' | 'LOP' | 'W/O';
+export type AttendanceStatusCode =
+  | 'Present'
+  | 'AbsentNoInfo'
+  | 'AbsentLOP'
+  | 'PaidLeave'
+  | 'LeaveWithPermission'
+  | 'HalfDay'
+  | 'MedicalLeave'
+  | 'Holiday'
+  | 'WeekOff';
 
 export interface StaffAttendance {
   id: string;
@@ -224,44 +222,12 @@ export interface StaffAttendance {
   date: string; // YYYY-MM-DD
   status: AttendanceStatusCode;
   remarks?: string;
-  checkIn?: string;
-  checkOut?: string;
-  recordedBy: string;
-  recordedDate: string;
-}
-
-export interface StaffLeaveBalance {
-  id: string;
-  empId: string;
-  year: string;
-  casualGranted: number;
-  casualUsed: number;
-  sickGranted: number;
-  sickUsed: number;
-  earnedGranted: number;
-  earnedUsed: number;
-  lopTaken: number;
 }
 
 export interface StaffHoliday {
   id: string;
   date: string;
   name: string;
-  type: 'public' | 'regional' | 'company';
-}
-
-export interface StaffSettings {
-  id: string; // singleton, always 'default'
-  workingDaysPerWeek: number;
-  salaryProcessingDate: number; // day of month
-  attendanceCutoffDate: number; // day of month
-  leavePolicy: {
-    casualAnnual: number;
-    sickAnnual: number;
-    earnedAnnual: number;
-    carryForwardEnabled: boolean;
-    carryForwardMaxDays?: number;
-  };
 }
 
 export interface AbnormalLogin {

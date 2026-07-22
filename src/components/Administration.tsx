@@ -170,43 +170,8 @@ export default function Administration({
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
   const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
 
-  // Active/Inactive vehicles states for Super Admin Control Center
-  const [selectedDay, setSelectedDay] = useState<string>('');
-  const [showInactiveModal, setShowInactiveModal] = useState(false);
-
-  useEffect(() => {
-    if (mileageReports && mileageReports.length > 0 && !selectedDay) {
-      const sortedDates = [...mileageReports]
-        .map(r => r.date)
-        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
-      if (sortedDates.length > 0) {
-        setSelectedDay(sortedDates[0]);
-      }
-    } else if (!selectedDay) {
-      setSelectedDay(new Date().toISOString().split('T')[0]);
-    }
-  }, [mileageReports]);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Only trigger if we are on the super admin tab and not typing in an input/textarea
-      if (activeTab === 'admin-overview' && user.department === 'super_admin') {
-        const activeEl = document.activeElement;
-        if (activeEl && (
-          activeEl.tagName === 'INPUT' || 
-          activeEl.tagName === 'TEXTAREA' || 
-          activeEl.getAttribute('contenteditable') === 'true'
-        )) {
-          return;
-        }
-        if (e.key === 'h' || e.key === 'H') {
-          setShowInactiveModal(prev => !prev);
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTab, user.department]);
+  // Employee-toggled fleet status modal (Fleet Status box "Inactive" count)
+  const [showInactiveFleetModal, setShowInactiveFleetModal] = useState(false);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -620,13 +585,13 @@ export default function Administration({
             </div>
           )}
 
-          {/* Inactive Vehicles List Modal */}
-          {showInactiveModal && (
+          {/* Inactive Vehicles List Modal (employee-toggled status from Fleet & Vehicles) */}
+          {showInactiveFleetModal && (
             <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
               <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="bg-white rounded-2xl shadow-2xl border border-pink-100 max-w-md w-full p-6 relative overflow-hidden"
+                className="bg-white rounded-2xl shadow-2xl border border-pink-100 max-w-lg w-full p-6 relative overflow-hidden"
               >
                 <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-pink-500 to-purple-600" />
                 <div className="flex justify-between items-start mb-4">
@@ -636,53 +601,39 @@ export default function Administration({
                       Inactive Vehicles
                     </h3>
                     <p className="text-xs text-slate-500 font-semibold mt-1">
-                      Showing vehicles that did not log mileage on {selectedDay || 'selected day'}.
+                      Vehicles marked Inactive in the Fleet &amp; Vehicles module.
                     </p>
                   </div>
                   <button
-                    onClick={() => setShowInactiveModal(false)}
+                    onClick={() => setShowInactiveFleetModal(false)}
                     className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 cursor-pointer"
                   >
                     <X className="w-5 h-5" />
                   </button>
                 </div>
 
-                <div className="max-h-[300px] overflow-y-auto pr-1 space-y-2">
+                <div className="max-h-[350px] overflow-y-auto pr-1 space-y-2">
                   {(() => {
-                    const activeVehiclesForDay = Array.from(
-                      new Set(
-                        (mileageReports || [])
-                          .filter(r => r.date === selectedDay)
-                          .map(r => r.vehicleNo.trim().toUpperCase())
-                      )
-                    ).filter(Boolean);
+                    const inactiveVehicles = (vehicles || []).filter(v => v.active === false);
 
-                    const allVehicleRegs = Array.from(
-                      new Set([
-                        ...(vehicles || []).map(v => (v.regNo || v["Reg. No."] || '').trim().toUpperCase()),
-                        ...(mileageReports || []).map(r => r.vehicleNo.trim().toUpperCase())
-                      ])
-                    ).filter(Boolean);
-
-                    const inactiveVehiclesForDay = allVehicleRegs.filter(reg => !activeVehiclesForDay.includes(reg));
-
-                    if (inactiveVehiclesForDay.length === 0) {
+                    if (inactiveVehicles.length === 0) {
                       return (
                         <p className="text-xs text-center py-10 text-slate-400 font-mono">
-                          🎉 ALL REGISTERED VEHICLES ARE ACTIVE ON THIS DAY!
+                          🎉 ALL REGISTERED VEHICLES ARE ACTIVE!
                         </p>
                       );
                     }
 
                     return (
-                      <div className="grid grid-cols-2 gap-2">
-                        {inactiveVehiclesForDay.map((reg, idx) => {
-                          const vehicleDetails = vehicles.find(v => (v.regNo || v["Reg. No."] || '').trim().toUpperCase() === reg);
-                          const model = vehicleDetails ? (vehicleDetails.model || vehicleDetails["Model"] || 'Logistics Fleet') : 'Ad-hoc vehicle';
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {inactiveVehicles.map((v, idx) => {
+                          const reg = v.regNo || v["Reg. No."] || 'Unknown';
+                          const model = v.model || v["Model"] || '-';
+                          const type = v.type || v.Type || '-';
                           return (
                             <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex flex-col justify-between hover:bg-slate-100 transition-colors">
                               <span className="font-mono font-black text-slate-950 text-xs tracking-wider">{reg}</span>
-                              <span className="text-[9px] text-slate-400 font-bold uppercase truncate">{model}</span>
+                              <span className="text-[9px] text-slate-400 font-bold uppercase truncate">{model} &middot; {type}</span>
                             </div>
                           );
                         })}
@@ -694,7 +645,7 @@ export default function Administration({
                 <div className="flex items-center justify-end pt-4 border-t border-slate-100 mt-4">
                   <button
                     type="button"
-                    onClick={() => setShowInactiveModal(false)}
+                    onClick={() => setShowInactiveFleetModal(false)}
                     className="bg-slate-900 hover:bg-slate-800 text-white font-extrabold px-4 py-2 rounded-xl text-xs uppercase cursor-pointer"
                   >
                     Close
@@ -733,23 +684,6 @@ export default function Administration({
 
               {/* Dynamic Operational Day Selector & Subsystem KPIs */}
               {(() => {
-                const activeVehiclesForDay = Array.from(
-                  new Set(
-                    (mileageReports || [])
-                      .filter(r => r.date === selectedDay)
-                      .map(r => r.vehicleNo.trim().toUpperCase())
-                  )
-                ).filter(Boolean);
-
-                const allVehicleRegs = Array.from(
-                  new Set([
-                    ...(vehicles || []).map(v => (v.regNo || v["Reg. No."] || '').trim().toUpperCase()),
-                    ...(mileageReports || []).map(r => r.vehicleNo.trim().toUpperCase())
-                  ])
-                ).filter(Boolean);
-
-                const inactiveVehiclesForDay = allVehicleRegs.filter(reg => !activeVehiclesForDay.includes(reg));
-
                 const normalizeVehicleCategory = (cat?: string) => {
                   const c = String(cat || '').toLowerCase().trim();
                   if (c === 'normal' || c === 'dry') return 'dry';
@@ -784,29 +718,14 @@ export default function Administration({
                         <h3 className="text-xl font-black text-emerald-600 mt-1">
                           {statusActiveVehicles.length} Active
                           {statusInactiveVehicles.length > 0 && (
-                            <span className="text-rose-600"> / {statusInactiveVehicles.length} Inactive</span>
+                            <span
+                              onClick={() => setShowInactiveFleetModal(true)}
+                              className="text-rose-600 cursor-pointer hover:underline"
+                              title="Click to view inactive vehicle details"
+                            > / {statusInactiveVehicles.length} Inactive</span>
                           )}
                         </h3>
                         <p className="text-[9px] text-slate-400 mt-1">as marked in Fleet & Vehicles</p>
-                      </div>
-
-                      <div className="bg-white p-4 rounded-xl border border-pink-100 shadow-sm">
-                        <p className="font-bold text-purple-400 uppercase tracking-wider text-[10px]">Active Vehicles</p>
-                        <h3 className="text-xl font-black text-emerald-600 mt-1">{activeVehiclesForDay.length} Running</h3>
-                        <p className="text-[9px] text-slate-400 mt-1">on {selectedDay || 'selected day'}</p>
-                      </div>
-
-                      <div
-                        onClick={() => setShowInactiveModal(true)}
-                        className="bg-white p-4 rounded-xl border border-pink-100 shadow-sm hover:border-pink-300 hover:shadow-md transition-all cursor-pointer relative group"
-                        title="Click to view list of inactive vehicles (or press 'H')"
-                      >
-                        <p className="font-bold text-purple-400 uppercase tracking-wider text-[10px]">Inactive Vehicles</p>
-                        <h3 className="text-xl font-black text-rose-600 mt-1">{inactiveVehiclesForDay.length} Vehicles</h3>
-                        <p className="text-[9px] text-slate-400 mt-1 flex items-center justify-between">
-                          <span>Click or Press <strong>'H'</strong> to view</span>
-                          <span className="bg-rose-50 text-rose-600 px-1 py-0.2 rounded text-[8px] font-black group-hover:scale-105 transition-transform">H</span>
-                        </p>
                       </div>
 
                       <div className="bg-white p-4 rounded-xl border border-pink-100 shadow-sm bg-pink-50/10">

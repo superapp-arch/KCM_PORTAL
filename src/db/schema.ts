@@ -54,25 +54,25 @@ export const staffEmployees = pgTable('staff_employees', {
   data: text('data').notNull(), // JSON string representing the full StaffEmployee object
 });
 
-// Staff salary structure table
-export const staffSalaryStructures = pgTable('staff_salary_structures', {
+// Staff salary detail table (CTC + fuel/other addition)
+export const staffSalaryDetails = pgTable('staff_salary_details', {
   id: text('id').primaryKey(),
   empId: text('emp_id'),
-  data: text('data').notNull(), // JSON string representing the full StaffSalaryStructure object
+  data: text('data').notNull(), // JSON string representing the full StaffSalaryDetail object
 });
 
-// Staff salary deductions table
-export const staffSalaryDeductions = pgTable('staff_salary_deductions', {
+// Staff salary hikes table (one row per hike cycle, rather than a new column per cycle)
+export const staffSalaryHikes = pgTable('staff_salary_hikes', {
   id: text('id').primaryKey(),
   empId: text('emp_id'),
-  data: text('data').notNull(), // JSON string representing the full StaffSalaryDeduction object
+  data: text('data').notNull(), // JSON string representing the full StaffSalaryHike object
 });
 
-// Staff salary history table (processed/paid salary runs)
-export const staffSalaryHistory = pgTable('staff_salary_history', {
+// Staff bank detail table
+export const staffBankDetails = pgTable('staff_bank_details', {
   id: text('id').primaryKey(),
   empId: text('emp_id'),
-  data: text('data').notNull(), // JSON string representing the full StaffSalaryHistory object
+  data: text('data').notNull(), // JSON string representing the full StaffBankDetail object
 });
 
 // Staff attendance table
@@ -82,23 +82,10 @@ export const staffAttendance = pgTable('staff_attendance', {
   data: text('data').notNull(), // JSON string representing the full StaffAttendance object
 });
 
-// Staff leave balances table
-export const staffLeaveBalances = pgTable('staff_leave_balances', {
-  id: text('id').primaryKey(),
-  empId: text('emp_id'),
-  data: text('data').notNull(), // JSON string representing the full StaffLeaveBalance object
-});
-
 // Staff holiday calendar table
 export const staffHolidays = pgTable('staff_holidays', {
   id: text('id').primaryKey(),
   data: text('data').notNull(), // JSON string representing the full StaffHoliday object
-});
-
-// Staff module settings table (singleton row, id = 'default')
-export const staffSettings = pgTable('staff_settings', {
-  id: text('id').primaryKey(),
-  data: text('data').notNull(), // JSON string representing the full StaffSettings object
 });
 
 // Abnormal logins audit log table

@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
 import { StaffEmployee, User as UserType } from '../types';
-import { Users, CalendarDays, Coins } from 'lucide-react';
-import StaffEmployees from './hr/StaffEmployees';
-import StaffAttendance from './hr/StaffAttendance';
-import StaffSalary from './hr/StaffSalary';
+import { Coins, CalendarDays } from 'lucide-react';
+import StaffSalarySheet from './hr/StaffSalarySheet';
+import StaffAttendanceSheet from './hr/StaffAttendanceSheet';
 
 interface HRProps {
   user: UserType;
@@ -13,18 +12,17 @@ interface HRProps {
   onDeleteEmployee: (id: string) => Promise<void>;
 }
 
-type ModuleTab = 'employees' | 'attendance' | 'salary';
+type ModuleTab = 'salary' | 'attendance';
 
-export default function HR({ user, employees, onAddEmployee, onUpdateEmployee, onDeleteEmployee }: HRProps) {
-  const [moduleTab, setModuleTab] = useState<ModuleTab>('employees');
+export default function HR({ employees, onAddEmployee, onUpdateEmployee, onDeleteEmployee }: HRProps) {
+  const [moduleTab, setModuleTab] = useState<ModuleTab>('salary');
 
   return (
     <div className="space-y-6" id="hr-view-wrapper">
       <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-lg border border-slate-200 text-xs font-semibold w-fit">
         {([
-          ['employees', 'Employees', Users],
-          ['attendance', 'Attendance', CalendarDays],
-          ['salary', 'Salary', Coins],
+          ['salary', 'Staff Salary', Coins],
+          ['attendance', 'Staff Attendance', CalendarDays],
         ] as const).map(([key, label, Icon]) => (
           <button key={key} onClick={() => setModuleTab(key)}
             className={`px-3.5 py-1.5 rounded-md transition-all cursor-pointer flex items-center gap-1.5 ${
@@ -35,11 +33,10 @@ export default function HR({ user, employees, onAddEmployee, onUpdateEmployee, o
         ))}
       </div>
 
-      {moduleTab === 'employees' && (
-        <StaffEmployees user={user} employees={employees} onAddEmployee={onAddEmployee} onUpdateEmployee={onUpdateEmployee} onDeleteEmployee={onDeleteEmployee} />
+      {moduleTab === 'salary' && (
+        <StaffSalarySheet employees={employees} onAddEmployee={onAddEmployee} onUpdateEmployee={onUpdateEmployee} onDeleteEmployee={onDeleteEmployee} />
       )}
-      {moduleTab === 'attendance' && <StaffAttendance user={user} employees={employees} />}
-      {moduleTab === 'salary' && <StaffSalary user={user} employees={employees} />}
+      {moduleTab === 'attendance' && <StaffAttendanceSheet employees={employees} />}
     </div>
   );
 }
