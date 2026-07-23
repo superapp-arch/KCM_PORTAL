@@ -32,47 +32,53 @@ export default function DocumentAttachment({
   const [isDragging, setIsDragging] = useState(false);
   const [isReading, setIsReading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const processFiles = (files: FileList) => {
+  
+  const processFiles = async (files: FileList) => {
     setIsReading(true);
-    const promises = Array.from(files).map((file) => {
-      return new Promise<VehicleDocument>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const base64 = reader.result as string;
-          const docType: 'pdf' | 'image' | 'other' = file.type.includes('pdf')
-            ? 'pdf'
-            : file.type.includes('image')
-            ? 'image'
-            : 'other';
-          
-          resolve({
-            id: Math.random().toString(36).substring(2, 11),
-            name: file.name.substring(0, file.name.lastIndexOf('.')) || file.name,
-            type: docType,
-            fileName: file.name,
-            fileSize: (file.size / 1024).toFixed(1) + ' KB',
-            uploadDate: new Date().toISOString().substring(0, 10),
-            fileData: base64
-          });
-        };
-        reader.onerror = (err) => reject(err);
-        reader.readAsDataURL(file);
-      });
-    });
 
-    Promise.all(promises)
-      .then((newDocs) => {
-        onChange([...documents, ...newDocs]);
-      })
-      .catch((err) => {
-        console.error("Error reading file:", err);
-      })
-      .finally(() => {
-        setIsReading(false);
+    try {
+      const formData = new FormData();
+
+      Array.from(files).forEach((file) => {
+        formData.append("documents", file);
       });
+
+      const response = await fetch("/api/upload/vehicle", {
+        method: "POST",
+        body: formData,
+      });
+
+      const result = await response.json();
+
+      if (!result.success) {
+        throw new Error(result.message);
+      }
+
+      const uploadedDocs: VehicleDocument[] = result.documents.map((doc: any) => ({
+        id: crypto.randomUUID(),
+        name: doc.originalName.split(".")[0],
+        type: doc.originalName.toLowerCase().endsWith(".pdf")
+          ? "pdf"
+          : "other",
+        fileName: doc.originalName,
+        fileSize: (doc.size / 1024).toFixed(1) + " KB",
+        uploadDate: new Date().toISOString().substring(0, 10),
+
+        // IMPORTANT
+        fileData: doc.url,
+      }));
+
+      onChange([...documents, ...uploadedDocs]);
+    } catch (err) {
+      console.error(err);
+      alert("Upload failed");
+    } finally {
+      setIsReading(false);
+    }
   };
+  
 
+    
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       processFiles(e.target.files);
