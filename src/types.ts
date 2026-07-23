@@ -24,7 +24,7 @@ export interface VehicleDocument {
   fileName: string;
   fileSize: string;
   uploadDate: string;
-  fileData?: string; // base64 payload or preview placeholder
+  filePath?: string; 
 }
 
 export interface Vehicle {
