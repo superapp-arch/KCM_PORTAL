@@ -2,7 +2,7 @@ import express from "express";
 import path from "path";
 import { Resend } from "resend";
 import dotenv from "dotenv";
-
+import upload from "./src/upload/upload";
 dotenv.config();
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -196,9 +196,9 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.urlencoded({ limit: '50mb', extended: true }));
-
+  app.use(express.json({ limit: '100mb' }));
+  app.use(express.urlencoded({ limit: '100mb', extended: true }));
+  app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
   // Initialize and seed the database, then upgrade any legacy plain-text
   // passwords left over from before hashing was introduced.
   await seedDatabase();
@@ -614,7 +614,69 @@ async function startServer() {
     destroySession(extractBearerToken(req.headers.authorization));
     res.json({ success: true });
   });
+  app.post(
+  "/api/upload",
+  upload.single("file"),
+  (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "No file uploaded",
+        });
+      }
 
+      const module = req.body.module;
+      const vehicle = req.body.vehicle;
+
+      const relativePath =
+        `uploads/${module}/${vehicle}/${req.file.filename}`;
+
+      res.json({
+        success: true,
+
+        file: {
+          fileName: req.file.originalname,
+          filePath: relativePath,
+          fileSize: req.file.size,
+          mimeType: req.file.mimetype,
+        },
+      });
+    } catch (err) {
+      console.error(err);
+
+      res.status(500).json({
+        success: false,
+      });
+    }
+  }
+);
+app.post("/api/upload/vehicle", upload.single("file"), (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({
+                success: false,
+                message: "No file uploaded"
+            });
+        }
+
+        return res.json({
+            success: true,
+            filename: req.file.filename,
+            path: req.file.path.replace(/\\/g, "/"),
+            originalName: req.file.originalname,
+            size: req.file.size
+        });
+
+    } catch (err) {
+        console.error(err);
+
+        return res.status(500).json({
+            success: false,
+            message: "Upload failed"
+        });
+    }
+});
   // Get Fleet Sheet
   app.get('/api/fleet', async (req, res) => {
     try {
