@@ -10,6 +10,9 @@ import {
   staffEmployees,
   staffSalaryDetails,
   staffSalaryHikes,
+  staffAdvanceDeductions,
+  staffProvidentFund,
+  staffAttendanceAdjustments,
   staffBankDetails,
   staffAttendance,
   staffHolidays,
@@ -31,6 +34,9 @@ import {
   StaffEmployee,
   StaffSalaryDetail,
   StaffSalaryHike,
+  StaffAdvanceDeduction,
+  StaffProvidentFund,
+  StaffAttendanceAdjustment,
   StaffBankDetail,
   StaffAttendance,
   StaffHoliday,
@@ -736,6 +742,100 @@ export async function deleteStaffSalaryHike(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteStaffSalaryHike:", error);
     throw new Error("Failed to delete staff salary hike.", { cause: error });
+  }
+}
+
+// --- STAFF ADVANCE DEDUCTION OPERATIONS (rows-based deduction history) ---
+export async function getStaffAdvanceDeductions(): Promise<StaffAdvanceDeduction[]> {
+  try {
+    const rows = await db.select().from(staffAdvanceDeductions);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getStaffAdvanceDeductions:", error);
+    throw new Error("Failed to retrieve staff advance deductions.", { cause: error });
+  }
+}
+
+export async function saveStaffAdvanceDeduction(deduction: StaffAdvanceDeduction) {
+  try {
+    const id = deduction.id || String(Date.now());
+    const complete = { ...deduction, id };
+    const dataString = JSON.stringify(complete);
+    await db.insert(staffAdvanceDeductions).values({ id, empId: complete.empId, data: dataString });
+    return await getStaffAdvanceDeductions();
+  } catch (error) {
+    console.error("Database action failed in saveStaffAdvanceDeduction:", error);
+    throw new Error("Failed to save staff advance deduction.", { cause: error });
+  }
+}
+
+export async function deleteStaffAdvanceDeduction(id: string) {
+  try {
+    await db.delete(staffAdvanceDeductions).where(eq(staffAdvanceDeductions.id, id));
+    return await getStaffAdvanceDeductions();
+  } catch (error) {
+    console.error("Database action failed in deleteStaffAdvanceDeduction:", error);
+    throw new Error("Failed to delete staff advance deduction.", { cause: error });
+  }
+}
+
+// --- STAFF PROVIDENT FUND OPERATIONS (monthly payroll breakdown) ---
+export async function getStaffProvidentFundRecords(): Promise<StaffProvidentFund[]> {
+  try {
+    const rows = await db.select().from(staffProvidentFund);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getStaffProvidentFundRecords:", error);
+    throw new Error("Failed to retrieve staff provident fund records.", { cause: error });
+  }
+}
+
+export async function saveStaffProvidentFundRecord(record: StaffProvidentFund) {
+  try {
+    const id = record.id || `${record.empId}-${record.month}`;
+    const complete = { ...record, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(staffProvidentFund).where(eq(staffProvidentFund.id, id));
+    if (existing.length > 0) {
+      await db.update(staffProvidentFund).set({ empId: complete.empId, data: dataString }).where(eq(staffProvidentFund.id, id));
+    } else {
+      await db.insert(staffProvidentFund).values({ id, empId: complete.empId, data: dataString });
+    }
+    return await getStaffProvidentFundRecords();
+  } catch (error) {
+    console.error("Database action failed in saveStaffProvidentFundRecord:", error);
+    throw new Error("Failed to save staff provident fund record.", { cause: error });
+  }
+}
+
+// --- STAFF ATTENDANCE ADJUSTMENT OPERATIONS (manual LOP override) ---
+export async function getStaffAttendanceAdjustments(): Promise<StaffAttendanceAdjustment[]> {
+  try {
+    const rows = await db.select().from(staffAttendanceAdjustments);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getStaffAttendanceAdjustments:", error);
+    throw new Error("Failed to retrieve staff attendance adjustments.", { cause: error });
+  }
+}
+
+export async function saveStaffAttendanceAdjustment(adjustment: StaffAttendanceAdjustment) {
+  try {
+    const id = adjustment.id || `${adjustment.empId}-${adjustment.month}`;
+    const complete = { ...adjustment, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(staffAttendanceAdjustments).where(eq(staffAttendanceAdjustments.id, id));
+    if (existing.length > 0) {
+      await db.update(staffAttendanceAdjustments).set({ empId: complete.empId, data: dataString }).where(eq(staffAttendanceAdjustments.id, id));
+    } else {
+      await db.insert(staffAttendanceAdjustments).values({ id, empId: complete.empId, data: dataString });
+    }
+    return await getStaffAttendanceAdjustments();
+  } catch (error) {
+    console.error("Database action failed in saveStaffAttendanceAdjustment:", error);
+    throw new Error("Failed to save staff attendance adjustment.", { cause: error });
   }
 }
 

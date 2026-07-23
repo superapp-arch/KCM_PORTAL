@@ -23,6 +23,9 @@ import {
   StaffEmployee,
   StaffSalaryDetail,
   StaffSalaryHike,
+  StaffAdvanceDeduction,
+  StaffProvidentFund,
+  StaffAttendanceAdjustment,
   StaffBankDetail,
   StaffAttendance,
   StaffHoliday,
@@ -63,6 +66,13 @@ import {
   getStaffSalaryHikes,
   saveStaffSalaryHike,
   deleteStaffSalaryHike,
+  getStaffAdvanceDeductions,
+  saveStaffAdvanceDeduction,
+  deleteStaffAdvanceDeduction,
+  getStaffProvidentFundRecords,
+  saveStaffProvidentFundRecord,
+  getStaffAttendanceAdjustments,
+  saveStaffAttendanceAdjustment,
   getStaffBankDetails,
   saveStaffBankDetail,
   getStaffAttendance,
@@ -150,8 +160,13 @@ async function upsertAttendanceEntry(entry: { empId: string; date: string; statu
 
 const PAID_STATUSES = ['Present', 'PaidLeave', 'LeaveWithPermission', 'HalfDay', 'MedicalLeave', 'Holiday', 'WeekOff'];
 
+// LOP days default to the count of 'AbsentLOP'-marked attendance rows, but HR
+// can manually override this per employee/month (see StaffAttendanceAdjustment)
+// - e.g. to waive or adjust a LOP count - and that override wins everywhere
+// LOP is shown or used (summary modal, Provident Fund tab).
 async function computeMonthlyAttendanceSummary(empId: string, month: string) {
-  const rows = (await getStaffAttendance()).filter(a => a.empId === empId && a.date.startsWith(month));
+  const [attendanceRows, adjustments] = await Promise.all([getStaffAttendance(), getStaffAttendanceAdjustments()]);
+  const rows = attendanceRows.filter(a => a.empId === empId && a.date.startsWith(month));
   const totalDays = daysInMonth(month);
   const counts: Record<string, number> = {
     Present: 0, AbsentNoInfo: 0, AbsentLOP: 0, PaidLeave: 0, LeaveWithPermission: 0,
@@ -159,7 +174,10 @@ async function computeMonthlyAttendanceSummary(empId: string, month: string) {
   };
   rows.forEach(r => { counts[r.status] = (counts[r.status] || 0) + 1; });
 
-  const totalAbsent = counts.AbsentNoInfo + counts.AbsentLOP;
+  const override = adjustments.find(a => a.empId === empId && a.month === month)?.lopDaysOverride;
+  const lopDays = override != null ? override : counts.AbsentLOP;
+
+  const totalAbsent = counts.AbsentNoInfo + lopDays;
   const paidDays = rows.filter(r => PAID_STATUSES.includes(r.status)).length;
   const workingDays = totalDays - counts.Holiday - counts.WeekOff;
   const attendancePercentage = totalDays > 0 ? Math.round((paidDays / totalDays) * 1000) / 10 : 0;
@@ -168,7 +186,7 @@ async function computeMonthlyAttendanceSummary(empId: string, month: string) {
     empId, month, totalDays, workingDays,
     presentDays: counts.Present, totalAbsent, halfDays: counts.HalfDay,
     paidLeaveDays: counts.PaidLeave, leaveWithPermissionDays: counts.LeaveWithPermission,
-    medicalLeaveDays: counts.MedicalLeave, lopDays: counts.AbsentLOP,
+    medicalLeaveDays: counts.MedicalLeave, lopDays, lopIsOverridden: override != null,
     holidayDays: counts.Holiday, weekOffDays: counts.WeekOff,
     attendancePercentage, rows
   };
@@ -845,16 +863,23 @@ async function startServer() {
     try { res.json({ success: true, data: await deleteStaffEmployee(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  // ===== STAFF SALARY DETAIL (CTC / fuel-other-addition) =====
+  // ===== STAFF SALARY DETAIL (CTC / advance) =====
   app.get('/api/staff/salary-detail', async (req, res) => {
     try {
-      const [details, hikes] = await Promise.all([getStaffSalaryDetails(), getStaffSalaryHikes()]);
+      const [details, hikes, deductions] = await Promise.all([
+        getStaffSalaryDetails(), getStaffSalaryHikes(), getStaffAdvanceDeductions()
+      ]);
       const today = new Date().toISOString().slice(0, 10);
-      const withEffectiveSalary = details.map(d => ({
-        ...d,
-        effectiveSalary: computeEffectiveSalary(d.ctc25, hikes.filter(h => h.empId === d.empId), today)
-      }));
-      res.json(withEffectiveSalary);
+      const enriched = details.map(d => {
+        const empDeductions = deductions.filter(x => x.empId === d.empId);
+        const deductedTotal = empDeductions.reduce((s, x) => s + (x.amount || 0), 0);
+        return {
+          ...d,
+          effectiveSalary: computeEffectiveSalary(d.ctc25, hikes.filter(h => h.empId === d.empId), today),
+          advanceBalance: Math.max(0, (d.advanceAmount || 0) - deductedTotal)
+        };
+      });
+      res.json(enriched);
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/staff/salary-detail', async (req, res) => {
@@ -873,6 +898,61 @@ async function startServer() {
   });
   app.delete('/api/staff/salary-hikes/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteStaffSalaryHike(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ===== STAFF ADVANCE DEDUCTIONS (rows-based deduction history against StaffSalaryDetail.advanceAmount) =====
+  app.get('/api/staff/advance-deductions', async (req, res) => {
+    try { res.json(await getStaffAdvanceDeductions()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/staff/advance-deductions', async (req, res) => {
+    try { res.json({ success: true, data: await saveStaffAdvanceDeduction(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/staff/advance-deductions/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteStaffAdvanceDeduction(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ===== STAFF PROVIDENT FUND (monthly payroll breakdown; totalDays/workingDays/lopDays read live from attendance) =====
+  app.get('/api/staff/provident-fund', async (req, res) => {
+    try {
+      const records = await getStaffProvidentFundRecords();
+      const enriched = await Promise.all(records.map(async r => {
+        const attendance = await computeMonthlyAttendanceSummary(r.empId, r.month);
+        const totalEarnings = (r.basic || 0) + (r.hra || 0) + (r.conveyance || 0) + (r.medicalAllowance || 0) +
+          (r.lta || 0) + (r.foodAllowance || 0) + (r.cca || 0) + (r.fuelAllowance || 0) + (r.otherAllowances || 0) + (r.extraDaysAmount || 0);
+        const totalDeductions = (r.professionalTax || 0) + (r.epf || 0) + (r.esi || 0) + (r.lopAmount || 0) +
+          (r.fullAndFinal || 0) + (r.otherDeductions || 0) + (r.advances || 0) + (r.incomeTax || 0);
+        const grossSalary = totalEarnings;
+        const netSalary = Math.round(grossSalary - totalDeductions);
+        return {
+          ...r,
+          totalDays: attendance.totalDays, workingDays: attendance.workingDays, lopDays: attendance.lopDays,
+          totalEarnings, totalDeductions, grossSalary, netSalary
+        };
+      }));
+      res.json(enriched);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/staff/provident-fund', async (req, res) => {
+    try { res.json({ success: true, data: await saveStaffProvidentFundRecord(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ===== STAFF ATTENDANCE ADJUSTMENTS (manual LOP override) =====
+  app.get('/api/staff/attendance-adjustment/:empId/:month', async (req, res) => {
+    try {
+      const { empId, month } = req.params;
+      const all = await getStaffAttendanceAdjustments();
+      const existing = all.find(a => a.empId === empId && a.month === month);
+      res.json({ success: true, data: existing || { id: `${empId}-${month}`, empId, month } });
+    } catch (err: any) { res.status(500).json({ success: false, error: err.message }); }
+  });
+  app.put('/api/staff/attendance-adjustment/:empId/:month', async (req, res) => {
+    try {
+      const { empId, month } = req.params;
+      const { lopDaysOverride } = req.body;
+      const updated: StaffAttendanceAdjustment = { id: `${empId}-${month}`, empId, month, lopDaysOverride };
+      await saveStaffAttendanceAdjustment(updated);
+      res.json({ success: true, data: updated });
+    } catch (err: any) { res.status(500).json({ success: false, error: err.message }); }
   });
 
   // ===== STAFF BANK DETAIL =====

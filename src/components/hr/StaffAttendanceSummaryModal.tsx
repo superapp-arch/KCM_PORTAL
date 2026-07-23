@@ -11,7 +11,7 @@ interface StaffAttendanceSummaryModalProps {
 interface MonthlySummary {
   totalDays: number; workingDays: number; presentDays: number; totalAbsent: number;
   halfDays: number; paidLeaveDays: number; leaveWithPermissionDays: number;
-  medicalLeaveDays: number; lopDays: number; holidayDays: number; weekOffDays: number;
+  medicalLeaveDays: number; lopDays: number; lopIsOverridden: boolean; holidayDays: number; weekOffDays: number;
   attendancePercentage: number; rows: StaffAttendance[];
 }
 
@@ -34,11 +34,34 @@ function daysInMonth(month: string): number {
 
 export default function StaffAttendanceSummaryModal({ employee, month, onClose }: StaffAttendanceSummaryModalProps) {
   const [summary, setSummary] = useState<MonthlySummary | null>(null);
+  const [editingLop, setEditingLop] = useState(false);
+  const [lopInput, setLopInput] = useState('');
+  const [isSavingLop, setIsSavingLop] = useState(false);
 
-  useEffect(() => {
+  const loadSummary = () => {
     fetch(`/api/staff/attendance/monthly/${encodeURIComponent(employee.id)}/${month}`)
       .then(r => r.json()).then(({ data }) => setSummary(data)).catch(() => setSummary(null));
-  }, [employee.id, month]);
+  };
+
+  useEffect(() => { loadSummary(); setEditingLop(false); }, [employee.id, month]);
+
+  const startEditLop = () => {
+    setLopInput(String(summary?.lopDays ?? 0));
+    setEditingLop(true);
+  };
+
+  const saveLopOverride = async () => {
+    setIsSavingLop(true);
+    try {
+      const res = await fetch(`/api/staff/attendance-adjustment/${encodeURIComponent(employee.id)}/${month}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lopDaysOverride: Number(lopInput) })
+      });
+      if (res.ok) { loadSummary(); setEditingLop(false); }
+    } finally {
+      setIsSavingLop(false);
+    }
+  };
 
   const totalDays = daysInMonth(month);
 
@@ -73,9 +96,20 @@ export default function StaffAttendanceSummaryModal({ employee, month, onClose }
                 <p className="font-bold text-amber-700 text-lg">{summary.halfDays}</p>
                 <p className="text-amber-600 uppercase text-[9px] font-bold">Half Day</p>
               </div>
-              <div className="bg-orange-50 border border-orange-200 rounded-lg p-2.5 text-center">
-                <p className="font-bold text-orange-700 text-lg">{summary.lopDays}</p>
-                <p className="text-orange-600 uppercase text-[9px] font-bold">LOP</p>
+              <div className="bg-orange-50 border border-orange-200 rounded-lg p-2.5 text-center relative">
+                {editingLop ? (
+                  <div className="flex items-center gap-1 justify-center">
+                    <input type="number" value={lopInput} onChange={e => setLopInput(e.target.value)}
+                      className="w-12 border border-orange-300 rounded px-1 py-0.5 text-center font-bold text-orange-700" autoFocus />
+                    <button onClick={saveLopOverride} disabled={isSavingLop} className="text-orange-700 hover:text-orange-900 cursor-pointer font-bold">✓</button>
+                    <button onClick={() => setEditingLop(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer font-bold">✕</button>
+                  </div>
+                ) : (
+                  <p className="font-bold text-orange-700 text-lg cursor-pointer" onClick={startEditLop} title="Click to manually set LOP days">
+                    {summary.lopDays}{summary.lopIsOverridden && <span className="text-[9px] align-top ml-0.5">*</span>}
+                  </p>
+                )}
+                <p className="text-orange-600 uppercase text-[9px] font-bold">LOP {!editingLop && '(click to edit)'}</p>
               </div>
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-center">
                 <p className="font-bold text-slate-700 text-lg">{summary.attendancePercentage}%</p>

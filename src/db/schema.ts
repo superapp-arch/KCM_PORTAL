@@ -54,7 +54,7 @@ export const staffEmployees = pgTable('staff_employees', {
   data: text('data').notNull(), // JSON string representing the full StaffEmployee object
 });
 
-// Staff salary detail table (CTC + fuel/other addition)
+// Staff salary detail table (CTC + advance)
 export const staffSalaryDetails = pgTable('staff_salary_details', {
   id: text('id').primaryKey(),
   empId: text('emp_id'),
@@ -66,6 +66,27 @@ export const staffSalaryHikes = pgTable('staff_salary_hikes', {
   id: text('id').primaryKey(),
   empId: text('emp_id'),
   data: text('data').notNull(), // JSON string representing the full StaffSalaryHike object
+});
+
+// Staff advance deductions table (one row per monthly deduction against an advance)
+export const staffAdvanceDeductions = pgTable('staff_advance_deductions', {
+  id: text('id').primaryKey(),
+  empId: text('emp_id'),
+  data: text('data').notNull(), // JSON string representing the full StaffAdvanceDeduction object
+});
+
+// Staff provident fund / monthly payroll breakdown table
+export const staffProvidentFund = pgTable('staff_provident_fund', {
+  id: text('id').primaryKey(),
+  empId: text('emp_id'),
+  data: text('data').notNull(), // JSON string representing the full StaffProvidentFund object
+});
+
+// Staff attendance adjustments table (manual LOP override per emp/month)
+export const staffAttendanceAdjustments = pgTable('staff_attendance_adjustments', {
+  id: text('id').primaryKey(),
+  empId: text('emp_id'),
+  data: text('data').notNull(), // JSON string representing the full StaffAttendanceAdjustment object
 });
 
 // Staff bank detail table

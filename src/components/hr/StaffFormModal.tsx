@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, User, Coins, Landmark } from 'lucide-react';
-import { StaffEmployee, StaffSalaryDetail, StaffSalaryHike, StaffBankDetail } from '../../types';
+import { X, Plus, Trash2, User, Coins, Landmark, Wallet } from 'lucide-react';
+import { StaffEmployee, StaffSalaryDetail, StaffSalaryHike, StaffAdvanceDeduction, StaffBankDetail, StaffProvidentFund } from '../../types';
 import DateInput from '../DateInput';
 
 interface StaffFormModalProps {
@@ -11,11 +11,21 @@ interface StaffFormModalProps {
   onSaved: () => Promise<void>;
 }
 
-type FormTab = 'basic' | 'salary' | 'bank';
+type FormTab = 'basic' | 'salary' | 'pf' | 'bank';
 
 function deriveOrgUnitPreview(empId: string): 'KCM_SUPPLY' | 'KCM_INSTA' {
   return /^KCMI\d+/i.test(empId) ? 'KCM_INSTA' : 'KCM_SUPPLY';
 }
+
+function currentMonthKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+const emptyPfForm = {
+  basic: '', hra: '', conveyance: '', medicalAllowance: '', lta: '', foodAllowance: '', cca: '', fuelAllowance: '', otherAllowances: '', extraDaysAmount: '',
+  professionalTax: '', epf: '', esi: '', lopAmount: '', fullAndFinal: '', otherDeductions: '', advances: '', incomeTax: ''
+};
 
 export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmployee, onClose, onSaved }: StaffFormModalProps) {
   const isEditing = !!employee;
@@ -30,24 +40,39 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
     remarks: employee?.remarks || ''
   });
 
-  const [salary, setSalary] = useState({ ctc25: '', annualCtc25: '', fuelOtherAddition: '', remarks: '' });
+  const [salary, setSalary] = useState({ ctc25: '', annualCtc25: '', advanceAmount: '', remarks: '' });
   const [salaryDetailId, setSalaryDetailId] = useState<string | null>(null);
+  const [advanceBalance, setAdvanceBalance] = useState(0);
+  const [advanceDeductions, setAdvanceDeductions] = useState<StaffAdvanceDeduction[]>([]);
+  const [deductionForm, setDeductionForm] = useState({ date: '', amount: '' });
   const [bank, setBank] = useState({ accountNumber: '', ifscCode: '', bankName: '', amount: '' });
   const [bankDetailId, setBankDetailId] = useState<string | null>(null);
   const [hikes, setHikes] = useState<StaffSalaryHike[]>([]);
   const [hikeForm, setHikeForm] = useState({ effectiveDate: '', amount: '' });
   const [revealAccount, setRevealAccount] = useState(false);
 
+  const [pfMonth, setPfMonth] = useState(currentMonthKey());
+  const [pfForm, setPfForm] = useState({ ...emptyPfForm });
+  const [pfAttendance, setPfAttendance] = useState({ totalDays: 0, workingDays: 0, lopDays: 0 });
+
+  const loadAdvanceDeductions = () => {
+    if (!employee) return;
+    fetch('/api/staff/advance-deductions').then(r => r.json()).then((all: StaffAdvanceDeduction[]) => {
+      setAdvanceDeductions(all.filter(d => d.empId === employee.id));
+    }).catch(() => {});
+  };
+
   useEffect(() => {
     if (!employee) return;
-    fetch('/api/staff/salary-detail').then(r => r.json()).then((all: (StaffSalaryDetail & { effectiveSalary: number })[]) => {
+    fetch('/api/staff/salary-detail').then(r => r.json()).then((all: (StaffSalaryDetail & { effectiveSalary: number; advanceBalance: number })[]) => {
       const mine = all.find(d => d.empId === employee.id);
       if (mine) {
         setSalaryDetailId(mine.id);
         setSalary({
           ctc25: String(mine.ctc25 ?? ''), annualCtc25: String(mine.annualCtc25 ?? ''),
-          fuelOtherAddition: String(mine.fuelOtherAddition ?? ''), remarks: mine.remarks || ''
+          advanceAmount: String(mine.advanceAmount ?? ''), remarks: mine.remarks || ''
         });
+        setAdvanceBalance(mine.advanceBalance || 0);
       }
     }).catch(() => {});
     fetch('/api/staff/bank-detail').then(r => r.json()).then((all: StaffBankDetail[]) => {
@@ -63,7 +88,32 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
     fetch('/api/staff/salary-hikes').then(r => r.json()).then((all: StaffSalaryHike[]) => {
       setHikes(all.filter(h => h.empId === employee.id));
     }).catch(() => {});
+    loadAdvanceDeductions();
   }, [employee]);
+
+  useEffect(() => {
+    if (!employee) return;
+    fetch('/api/staff/provident-fund').then(r => r.json()).then((all: (StaffProvidentFund & { totalDays: number; workingDays: number; lopDays: number })[]) => {
+      const mine = all.find(r => r.empId === employee.id && r.month === pfMonth);
+      setPfAttendance({ totalDays: mine?.totalDays || 0, workingDays: mine?.workingDays || 0, lopDays: mine?.lopDays || 0 });
+      if (mine) {
+        setPfForm({
+          basic: String(mine.basic ?? ''), hra: String(mine.hra ?? ''), conveyance: String(mine.conveyance ?? ''),
+          medicalAllowance: String(mine.medicalAllowance ?? ''), lta: String(mine.lta ?? ''), foodAllowance: String(mine.foodAllowance ?? ''),
+          cca: String(mine.cca ?? ''), fuelAllowance: String(mine.fuelAllowance ?? ''), otherAllowances: String(mine.otherAllowances ?? ''),
+          extraDaysAmount: String(mine.extraDaysAmount ?? ''), professionalTax: String(mine.professionalTax ?? ''), epf: String(mine.epf ?? ''),
+          esi: String(mine.esi ?? ''), lopAmount: String(mine.lopAmount ?? ''), fullAndFinal: String(mine.fullAndFinal ?? ''),
+          otherDeductions: String(mine.otherDeductions ?? ''), advances: String(mine.advances ?? ''), incomeTax: String(mine.incomeTax ?? '')
+        });
+      } else {
+        setPfForm({ ...emptyPfForm });
+      }
+    }).catch(() => {});
+    // Attendance-derived totalDays/workingDays/lopDays should show even before a PF record exists for this month.
+    fetch(`/api/staff/attendance/monthly/${encodeURIComponent(employee.id)}/${pfMonth}`).then(r => r.json()).then(({ data }) => {
+      if (data) setPfAttendance(prev => ({ totalDays: data.totalDays, workingDays: data.workingDays, lopDays: data.lopDays }));
+    }).catch(() => {});
+  }, [employee, pfMonth]);
 
   const handleDateOfLeavingChange = (value: string) => {
     if (value && !basic.dateOfLeaving) {
@@ -93,10 +143,23 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
       const salaryPayload = {
         id: salaryDetailId || undefined, empId: basic.id,
         ctc25: Number(salary.ctc25) || undefined, annualCtc25: Number(salary.annualCtc25) || undefined,
-        fuelOtherAddition: Number(salary.fuelOtherAddition) || undefined, remarks: salary.remarks || undefined
+        advanceAmount: Number(salary.advanceAmount) || undefined, remarks: salary.remarks || undefined
       };
       await fetch(salaryDetailId ? `/api/staff/salary-detail/${salaryDetailId}` : '/api/staff/salary-detail', {
         method: salaryDetailId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(salaryPayload)
+      });
+
+      const pfPayload = {
+        id: `${basic.id}-${pfMonth}`, empId: basic.id, month: pfMonth,
+        basic: Number(pfForm.basic) || undefined, hra: Number(pfForm.hra) || undefined, conveyance: Number(pfForm.conveyance) || undefined,
+        medicalAllowance: Number(pfForm.medicalAllowance) || undefined, lta: Number(pfForm.lta) || undefined, foodAllowance: Number(pfForm.foodAllowance) || undefined,
+        cca: Number(pfForm.cca) || undefined, fuelAllowance: Number(pfForm.fuelAllowance) || undefined, otherAllowances: Number(pfForm.otherAllowances) || undefined,
+        extraDaysAmount: Number(pfForm.extraDaysAmount) || undefined, professionalTax: Number(pfForm.professionalTax) || undefined, epf: Number(pfForm.epf) || undefined,
+        esi: Number(pfForm.esi) || undefined, lopAmount: Number(pfForm.lopAmount) || undefined, fullAndFinal: Number(pfForm.fullAndFinal) || undefined,
+        otherDeductions: Number(pfForm.otherDeductions) || undefined, advances: Number(pfForm.advances) || undefined, incomeTax: Number(pfForm.incomeTax) || undefined
+      };
+      await fetch('/api/staff/provident-fund', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pfPayload)
       });
 
       const bankPayload = {
@@ -138,6 +201,44 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
     }
   };
 
+  const addDeduction = async () => {
+    if (!employee || !deductionForm.date || !deductionForm.amount) return;
+    const res = await fetch('/api/staff/advance-deductions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ empId: employee.id, date: deductionForm.date, amount: Number(deductionForm.amount) })
+    });
+    if (res.ok) {
+      setDeductionForm({ date: '', amount: '' });
+      loadAdvanceDeductions();
+      // Refresh the computed balance immediately rather than waiting for the modal to reopen.
+      const detailRes = await fetch('/api/staff/salary-detail');
+      const all = await detailRes.json();
+      const mine = all.find((d: any) => d.empId === employee.id);
+      if (mine) setAdvanceBalance(mine.advanceBalance || 0);
+    }
+  };
+
+  const removeDeduction = async (id: string) => {
+    const res = await fetch(`/api/staff/advance-deductions/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      loadAdvanceDeductions();
+      if (employee) {
+        const detailRes = await fetch('/api/staff/salary-detail');
+        const all = await detailRes.json();
+        const mine = all.find((d: any) => d.empId === employee.id);
+        if (mine) setAdvanceBalance(mine.advanceBalance || 0);
+      }
+    }
+  };
+
+  const num = (v: string) => Number(v) || 0;
+  const pfTotalEarnings = num(pfForm.basic) + num(pfForm.hra) + num(pfForm.conveyance) + num(pfForm.medicalAllowance) +
+    num(pfForm.lta) + num(pfForm.foodAllowance) + num(pfForm.cca) + num(pfForm.fuelAllowance) + num(pfForm.otherAllowances) + num(pfForm.extraDaysAmount);
+  const pfTotalDeductions = num(pfForm.professionalTax) + num(pfForm.epf) + num(pfForm.esi) + num(pfForm.lopAmount) +
+    num(pfForm.fullAndFinal) + num(pfForm.otherDeductions) + num(pfForm.advances) + num(pfForm.incomeTax);
+  const pfGrossSalary = pfTotalEarnings;
+  const pfNetSalary = Math.round(pfGrossSalary - pfTotalDeductions);
+
   const maskedAccount = bank.accountNumber && bank.accountNumber.length > 4
     ? `${'•'.repeat(bank.accountNumber.length - 4)}${bank.accountNumber.slice(-4)}`
     : bank.accountNumber;
@@ -152,7 +253,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
         </div>
 
         <div className="flex items-center gap-1.5 px-5 pt-4 text-xs font-semibold">
-          {([['basic', 'Basic Info', User], ['salary', 'Salary Details', Coins], ['bank', 'Bank Details', Landmark]] as const).map(([key, label, Icon]) => (
+          {([['basic', 'Basic Info', User], ['salary', 'Salary Details', Coins], ['pf', 'Provident Fund', Wallet], ['bank', 'Bank Details', Landmark]] as const).map(([key, label, Icon]) => (
             <button key={key} onClick={() => setTab(key)}
               className={`px-3 py-1.5 rounded-md flex items-center gap-1.5 cursor-pointer ${tab === key ? 'bg-gradient-to-r from-pink-600 to-purple-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
               <Icon className="w-3.5 h-3.5" /> {label}
@@ -229,8 +330,9 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                 </div>
               </div>
               <div>
-                <label className="block font-semibold text-slate-500 mb-1">Fuel / Other Addition</label>
-                <input type="number" value={salary.fuelOtherAddition} onChange={e => setSalary({ ...salary, fuelOtherAddition: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                <label className="block font-semibold text-slate-500 mb-1">Advance</label>
+                <input type="number" value={salary.advanceAmount} onChange={e => setSalary({ ...salary, advanceAmount: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                <p className="text-slate-400 mt-1">Amount the staff has taken as an advance from the company.</p>
               </div>
               <div>
                 <label className="block font-semibold text-slate-500 mb-1">Remarks</label>
@@ -238,27 +340,113 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
               </div>
 
               {isEditing ? (
-                <div className="border border-slate-200 rounded-lg p-3">
-                  <p className="font-bold text-slate-600 uppercase mb-2">Salary Hikes</p>
-                  <div className="space-y-1.5 mb-2">
-                    {hikes.sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate)).map(h => (
-                      <div key={h.id} className="flex items-center justify-between bg-slate-50 rounded-lg px-2.5 py-1.5">
-                        <span className="font-mono">{h.effectiveDate}</span>
-                        <span className="font-semibold">Rs. {h.amount.toLocaleString('en-IN')}</span>
-                        <button onClick={() => removeHike(h.id)} className="text-slate-400 hover:text-rose-600 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
-                      </div>
-                    ))}
-                    {hikes.length === 0 && <p className="text-slate-400 text-center py-2">No hikes recorded yet.</p>}
+                <>
+                  <div className="border border-slate-200 rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="font-bold text-slate-600 uppercase">Advance Deductions</p>
+                      <span className="bg-purple-50 text-purple-700 border border-purple-200 rounded-full px-2.5 py-1 font-bold">
+                        Balance: Rs. {advanceBalance.toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                    <div className="space-y-1.5 mb-2">
+                      {advanceDeductions.sort((a, b) => b.date.localeCompare(a.date)).map(d => (
+                        <div key={d.id} className="flex items-center justify-between bg-slate-50 rounded-lg px-2.5 py-1.5">
+                          <span className="font-mono">{d.date}</span>
+                          <span className="font-semibold">Rs. {d.amount.toLocaleString('en-IN')}</span>
+                          <button onClick={() => removeDeduction(d.id)} className="text-slate-400 hover:text-rose-600 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </div>
+                      ))}
+                      {advanceDeductions.length === 0 && <p className="text-slate-400 text-center py-2">No deductions recorded yet.</p>}
+                    </div>
+                    <div className="flex gap-2">
+                      <input type="date" value={deductionForm.date} onChange={e => setDeductionForm({ ...deductionForm, date: e.target.value })} className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
+                      <input type="number" placeholder="Amount" value={deductionForm.amount} onChange={e => setDeductionForm({ ...deductionForm, amount: e.target.value })} className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
+                      <button onClick={addDeduction} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white px-3 rounded-lg cursor-pointer flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> Add</button>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <input type="date" value={hikeForm.effectiveDate} onChange={e => setHikeForm({ ...hikeForm, effectiveDate: e.target.value })} className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
-                    <input type="number" placeholder="Amount" value={hikeForm.amount} onChange={e => setHikeForm({ ...hikeForm, amount: e.target.value })} className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
-                    <button onClick={addHike} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white px-3 rounded-lg cursor-pointer flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> Add</button>
+
+                  <div className="border border-slate-200 rounded-lg p-3">
+                    <p className="font-bold text-slate-600 uppercase mb-2">Salary Hikes</p>
+                    <div className="space-y-1.5 mb-2">
+                      {hikes.sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate)).map(h => (
+                        <div key={h.id} className="flex items-center justify-between bg-slate-50 rounded-lg px-2.5 py-1.5">
+                          <span className="font-mono">{h.effectiveDate}</span>
+                          <span className="font-semibold">Rs. {h.amount.toLocaleString('en-IN')}</span>
+                          <button onClick={() => removeHike(h.id)} className="text-slate-400 hover:text-rose-600 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </div>
+                      ))}
+                      {hikes.length === 0 && <p className="text-slate-400 text-center py-2">No hikes recorded yet.</p>}
+                    </div>
+                    <div className="flex gap-2">
+                      <input type="date" value={hikeForm.effectiveDate} onChange={e => setHikeForm({ ...hikeForm, effectiveDate: e.target.value })} className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
+                      <input type="number" placeholder="Amount" value={hikeForm.amount} onChange={e => setHikeForm({ ...hikeForm, amount: e.target.value })} className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
+                      <button onClick={addHike} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white px-3 rounded-lg cursor-pointer flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> Add</button>
+                    </div>
                   </div>
-                </div>
+                </>
               ) : (
-                <p className="text-slate-400 italic">Save this employee first to start adding salary hikes.</p>
+                <p className="text-slate-400 italic">Save this employee first to start adding advance deductions and salary hikes.</p>
               )}
+            </div>
+          )}
+
+          {tab === 'pf' && (
+            <div className="space-y-3">
+              <input type="month" value={pfMonth} onChange={e => setPfMonth(e.target.value)} className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
+
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-center">
+                  <p className="text-slate-400 uppercase text-[9px] font-bold">Total Days</p>
+                  <p className="font-black text-slate-700">{pfAttendance.totalDays}</p>
+                </div>
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-center">
+                  <p className="text-slate-400 uppercase text-[9px] font-bold">Working Days</p>
+                  <p className="font-black text-slate-700">{pfAttendance.workingDays}</p>
+                </div>
+                <div className="bg-orange-50 border border-orange-200 rounded-lg p-2 text-center">
+                  <p className="text-orange-600 uppercase text-[9px] font-bold">LOP Days</p>
+                  <p className="font-black text-orange-700">{pfAttendance.lopDays}</p>
+                </div>
+              </div>
+
+              <div className="border border-slate-200 rounded-lg p-3">
+                <p className="font-bold text-emerald-700 uppercase mb-2">Allowances (Earnings)</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    ['basic', 'Basic Salary'], ['hra', 'HRA'], ['conveyance', 'Conveyance'], ['medicalAllowance', 'Medical Allowance'],
+                    ['lta', 'LTA'], ['foodAllowance', 'Food Allowance'], ['cca', 'CCA'], ['fuelAllowance', 'Fuel Allowance'],
+                    ['otherAllowances', 'Other Allowances'], ['extraDaysAmount', 'Extra Days (Amount)']
+                  ] as const).map(([key, label]) => (
+                    <div key={key}>
+                      <label className="block text-slate-400 mb-0.5">{label}</label>
+                      <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="border border-slate-200 rounded-lg p-3">
+                <p className="font-bold text-rose-700 uppercase mb-2">Deductions</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    ['professionalTax', 'Professional Tax'], ['epf', 'EPF'], ['esi', 'ESI'], ['lopAmount', 'LOP Amount'],
+                    ['fullAndFinal', 'F&F'], ['otherDeductions', 'Other Deductions'], ['advances', 'Advances'], ['incomeTax', 'Income Tax']
+                  ] as const).map(([key, label]) => (
+                    <div key={key}>
+                      <label className="block text-slate-400 mb-0.5">{label}</label>
+                      <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="border border-purple-200 bg-purple-50 rounded-lg p-3 grid grid-cols-2 gap-y-1.5">
+                <span className="text-purple-500 font-semibold">Total Earnings</span><span className="text-right font-bold">Rs. {pfTotalEarnings.toLocaleString('en-IN')}</span>
+                <span className="text-purple-500 font-semibold">Total Deductions</span><span className="text-right font-bold">Rs. {pfTotalDeductions.toLocaleString('en-IN')}</span>
+                <span className="text-purple-500 font-semibold">Gross Salary</span><span className="text-right font-bold">Rs. {pfGrossSalary.toLocaleString('en-IN')}</span>
+                <span className="text-purple-700 font-black">Net Salary</span><span className="text-right font-black text-purple-700">Rs. {pfNetSalary.toLocaleString('en-IN')}</span>
+              </div>
+              {!isEditing && <p className="text-slate-400 italic">Save this employee first to record Provident Fund details.</p>}
             </div>
           )}
 

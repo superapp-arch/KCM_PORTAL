@@ -182,7 +182,7 @@ export interface StaffSalaryDetail {
   empId: string;
   ctc25?: number;
   annualCtc25?: number;
-  fuelOtherAddition?: number;
+  advanceAmount?: number; // total advance taken from the company; reduced by StaffAdvanceDeduction rows
   remarks?: string;
 }
 
@@ -194,6 +194,58 @@ export interface StaffSalaryHike {
   empId: string;
   effectiveDate: string; // YYYY-MM-DD
   amount: number;
+}
+
+// One deduction entry per month against an employee's advance - rows-based
+// (like StaffSalaryHike) so the balance and full deduction history are always
+// derivable: balance = StaffSalaryDetail.advanceAmount - sum(these amounts).
+export interface StaffAdvanceDeduction {
+  id: string;
+  empId: string;
+  date: string; // YYYY-MM-DD
+  amount: number;
+}
+
+// Monthly payroll breakdown per employee - one record per empId+month.
+// totalDays/workingDays/lopDays are intentionally NOT stored here; they're
+// always read live from attendance (see StaffAttendanceAdjustment for the
+// manual LOP override), consistent with how attendance summaries elsewhere
+// are computed rather than persisted.
+export interface StaffProvidentFund {
+  id: string; // deterministic: `${empId}-${month}`
+  empId: string;
+  month: string; // YYYY-MM
+  // Earnings
+  basic?: number;
+  hra?: number;
+  conveyance?: number;
+  medicalAllowance?: number;
+  lta?: number;
+  foodAllowance?: number;
+  cca?: number;
+  fuelAllowance?: number;
+  otherAllowances?: number;
+  extraDaysAmount?: number;
+  // Deductions
+  professionalTax?: number;
+  epf?: number;
+  esi?: number;
+  lopAmount?: number;
+  fullAndFinal?: number;
+  otherDeductions?: number;
+  advances?: number;
+  incomeTax?: number;
+}
+
+// Lets HR manually override the attendance-derived LOP day count for a given
+// employee/month (e.g. to waive or adjust LOP), set from the attendance
+// summary modal. When present, this wins over the auto-counted LOP days
+// everywhere LOP is shown/used (summary modal, Provident Fund tab).
+export interface StaffAttendanceAdjustment {
+  id: string; // deterministic: `${empId}-${month}`
+  empId: string;
+  month: string; // YYYY-MM
+  lopDaysOverride?: number;
 }
 
 export interface StaffBankDetail {

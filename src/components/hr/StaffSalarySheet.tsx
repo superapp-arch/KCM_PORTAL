@@ -10,7 +10,7 @@ interface StaffSalarySheetProps {
   onDeleteEmployee: (id: string) => Promise<void>;
 }
 
-type SalaryDetailWithEffective = StaffSalaryDetail & { effectiveSalary: number };
+type SalaryDetailWithEffective = StaffSalaryDetail & { effectiveSalary: number; advanceBalance: number };
 
 export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmployee, onDeleteEmployee }: StaffSalarySheetProps) {
   const [salaryDetails, setSalaryDetails] = useState<SalaryDetailWithEffective[]>([]);
@@ -120,7 +120,7 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
                 <th className="px-3 py-2.5">Status</th>
                 <th className="px-3 py-2.5">CTC</th>
                 <th className="px-3 py-2.5">Annual CTC</th>
-                <th className="px-3 py-2.5">Fuel/Other</th>
+                <th className="px-3 py-2.5">Advance Balance</th>
                 <th className="px-3 py-2.5">Hikes</th>
                 <th className="px-3 py-2.5">DOL</th>
                 <th className="px-3 py-2.5">Remarks</th>
@@ -147,7 +147,13 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
                     </td>
                     <td className="px-3 py-2.5">{detail?.ctc25 != null ? `Rs. ${detail.ctc25.toLocaleString('en-IN')}` : '-'}</td>
                     <td className="px-3 py-2.5">{detail?.annualCtc25 != null ? `Rs. ${detail.annualCtc25.toLocaleString('en-IN')}` : '-'}</td>
-                    <td className="px-3 py-2.5">{detail?.fuelOtherAddition != null ? `Rs. ${detail.fuelOtherAddition.toLocaleString('en-IN')}` : '-'}</td>
+                    <td className="px-3 py-2.5">
+                      {detail?.advanceAmount ? (
+                        <span className="bg-purple-50 text-purple-700 border border-purple-200 rounded-full px-2 py-0.5 font-bold whitespace-nowrap">
+                          Rs. {detail.advanceBalance.toLocaleString('en-IN')}
+                        </span>
+                      ) : '-'}
+                    </td>
                     <td className="px-3 py-2.5">{hikeInfo ? `${hikeInfo.count} (+Rs. ${hikeInfo.total.toLocaleString('en-IN')})` : '-'}</td>
                     <td className="px-3 py-2.5 font-mono text-slate-500">{emp.dateOfLeaving || '-'}</td>
                     <td className="px-3 py-2.5 text-slate-500 max-w-[150px] truncate">{emp.remarks || '-'}</td>
