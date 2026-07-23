@@ -322,16 +322,16 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">CTC (2025)</label>
-                  <input type="number" value={salary.ctc25} onChange={e => setSalary({ ...salary, ctc25: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <input type="number" value={salary.ctc25} onChange={e => setSalary({ ...salary, ctc25: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Annual CTC (2025)</label>
-                  <input type="number" value={salary.annualCtc25} onChange={e => setSalary({ ...salary, annualCtc25: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <input type="number" value={salary.annualCtc25} onChange={e => setSalary({ ...salary, annualCtc25: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
               </div>
               <div>
                 <label className="block font-semibold text-slate-500 mb-1">Advance</label>
-                <input type="number" value={salary.advanceAmount} onChange={e => setSalary({ ...salary, advanceAmount: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                <input type="number" value={salary.advanceAmount} onChange={e => setSalary({ ...salary, advanceAmount: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 <p className="text-slate-400 mt-1">Amount the staff has taken as an advance from the company.</p>
               </div>
               <div>
@@ -360,7 +360,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                     </div>
                     <div className="flex gap-2">
                       <input type="date" value={deductionForm.date} onChange={e => setDeductionForm({ ...deductionForm, date: e.target.value })} className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
-                      <input type="number" placeholder="Amount" value={deductionForm.amount} onChange={e => setDeductionForm({ ...deductionForm, amount: e.target.value })} className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
+                      <input type="number" placeholder="Amount" value={deductionForm.amount} onChange={e => setDeductionForm({ ...deductionForm, amount: e.target.value })} className="no-spinner flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
                       <button onClick={addDeduction} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white px-3 rounded-lg cursor-pointer flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> Add</button>
                     </div>
                   </div>
@@ -379,7 +379,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                     </div>
                     <div className="flex gap-2">
                       <input type="date" value={hikeForm.effectiveDate} onChange={e => setHikeForm({ ...hikeForm, effectiveDate: e.target.value })} className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
-                      <input type="number" placeholder="Amount" value={hikeForm.amount} onChange={e => setHikeForm({ ...hikeForm, amount: e.target.value })} className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
+                      <input type="number" placeholder="Amount" value={hikeForm.amount} onChange={e => setHikeForm({ ...hikeForm, amount: e.target.value })} className="no-spinner flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
                       <button onClick={addHike} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white px-3 rounded-lg cursor-pointer flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> Add</button>
                     </div>
                   </div>
@@ -419,7 +419,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                   ] as const).map(([key, label]) => (
                     <div key={key}>
                       <label className="block text-slate-400 mb-0.5">{label}</label>
-                      <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+                      <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                     </div>
                   ))}
                 </div>
@@ -434,7 +434,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                   ] as const).map(([key, label]) => (
                     <div key={key}>
                       <label className="block text-slate-400 mb-0.5">{label}</label>
-                      <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+                      <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                     </div>
                   ))}
                 </div>
@@ -479,7 +479,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
               </div>
               <div>
                 <label className="block font-semibold text-slate-500 mb-1">Amount</label>
-                <input type="number" value={bank.amount} onChange={e => setBank({ ...bank, amount: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                <input type="number" value={bank.amount} onChange={e => setBank({ ...bank, amount: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
               </div>
             </div>
           )}
