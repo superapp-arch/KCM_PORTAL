@@ -2,7 +2,6 @@ import express from "express";
 import path from "path";
 import { Resend } from "resend";
 import dotenv from "dotenv";
-import upload from "./src/upload/upload";
 dotenv.config();
 
 const resend = new Resend(process.env.RESEND_API_KEY);
