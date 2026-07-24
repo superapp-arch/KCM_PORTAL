@@ -11,7 +11,8 @@ import {
   StaffEmployee,
   DashboardNotification,
   WarehouseEntry,
-  MileageReport
+  MileageReport,
+  FuelVendor
 } from '../types';
 import FleetSheet from './FleetSheet';
 import FuelManagement from './FuelManagement';
@@ -93,6 +94,9 @@ interface AdministrationProps {
   onUpdateMileageReport: (id: string, report: Partial<MileageReport>) => Promise<void>;
   onDeleteMileageReport: (id: string) => Promise<void>;
   onClearImportedPettyCash: () => Promise<void>;
+  fuelVendors: FuelVendor[];
+  onAddFuelVendor: (vendor: Omit<FuelVendor, 'id'>) => Promise<void>;
+  onDeleteFuelVendor: (id: string) => Promise<void>;
 }
 
 export default function Administration({
@@ -137,7 +141,10 @@ export default function Administration({
   onAddMileageReport,
   onUpdateMileageReport,
   onDeleteMileageReport,
-  onClearImportedPettyCash
+  onClearImportedPettyCash,
+  fuelVendors,
+  onAddFuelVendor,
+  onDeleteFuelVendor
 }: AdministrationProps) {
   
   // Tab Management
@@ -846,11 +853,20 @@ export default function Administration({
           )}
 
           {activeTab === 'fuel' && hasAccess('fuel') && (
-            <FuelManagement 
-              logs={fuelLogs} 
-              onAddLog={onAddFuelLog} 
+            <FuelManagement
+              user={user}
+              logs={fuelLogs}
+              onAddLog={onAddFuelLog}
               onUpdateLog={onUpdateFuelLog}
               onDeleteLog={onDeleteFuelLog}
+              vehicles={vehicles}
+              vendors={fuelVendors}
+              onAddVendor={onAddFuelVendor}
+              onDeleteVendor={onDeleteFuelVendor}
+              mileageReports={mileageReports}
+              onAddMileageReport={onAddMileageReport}
+              onUpdateMileageReport={onUpdateMileageReport}
+              onDeleteMileageReport={onDeleteMileageReport}
             />
           )}
 

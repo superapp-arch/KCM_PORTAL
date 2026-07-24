@@ -33,7 +33,8 @@ import {
   AbnormalLogin,
   DashboardNotification,
   WarehouseEntry,
-  MileageReport
+  MileageReport,
+  FuelVendor
 } from './src/types.ts';
 import {
   seedDatabase,
@@ -94,7 +95,10 @@ import {
   clearImportedPettyCashVouchers,
   getMileageReports,
   saveMileageReport,
-  deleteMileageReport
+  deleteMileageReport,
+  getFuelVendors,
+  saveFuelVendor,
+  deleteFuelVendor
 } from './src/db/service.ts';
 
 // Parses "DD.MM.YYYY" or "YYYY-MM-DD" expiry strings used across fleet records.
@@ -1199,6 +1203,35 @@ async function startServer() {
     try {
       const { id } = req.params;
       const result = await deleteMileageReport(id);
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Fuel Vendor (Vendor Master) endpoints
+  app.get('/api/fuel-vendors', async (req, res) => {
+    try {
+      res.json(await getFuelVendors());
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/fuel-vendors', async (req, res) => {
+    try {
+      const entry: FuelVendor = req.body;
+      const result = await saveFuelVendor(entry);
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/fuel-vendors/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const result = await deleteFuelVendor(id);
       res.json({ success: true, data: result });
     } catch (err: any) {
       res.status(500).json({ error: err.message });

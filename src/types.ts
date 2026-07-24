@@ -101,15 +101,33 @@ export interface Vehicle {
 
 export interface FuelLog {
   id: string;
-  regNo: string;
-  date: string;
-  quantity: number; // in Litres
+  entryNumber: number; // auto-generated, sequential
+  period: string; // YYYY-MM - billing/statement month
+  date: string; // YYYY-MM-DD - exact fill-up day
+  location: string;
+  bunkName: string;
+  bunkOrCard: 'Bunk' | 'Card';
+  vehicleNumber: string; // autofetched from Fleet, manual entry allowed if not found
+  indentNumber: string;
+  ltrs: number;
   rate: number;
-  amount: number;
-  odometer: number;
-  slipNo: string;
-  filledBy: string;
+  amount: number; // auto = ltrs * rate, editable override
+  client: string;
+  type: 'Vendor' | 'KCM';
+  vendorName?: string; // from Vendor Master, searchable
+  vendorCode?: string; // auto-filled from matched vendor
+  remarks?: string;
+  requestedBy?: string;
+  rqId?: string;
   documents?: VehicleDocument[];
+}
+
+// Vendor Master for Fuel Entry's Vendor Name/Vendor Code fields. Starts empty;
+// vendors are added one at a time via the Fuel Entry tab's "Add Vendor" form.
+export interface FuelVendor {
+  id: string;
+  name: string;
+  code: string;
 }
 
 export interface BillingInvoice {
@@ -174,9 +192,10 @@ export interface StaffEmployee {
   location?: string; // defaults to "Bangalore" in the UI
   status: 'Active' | 'Inactive';
   orgUnit: StaffOrgUnit; // server-derived from EmpId prefix (^KCMI\d+ -> Insta, else Supply); read-only in the UI
-  contactNumber?: string;
-  aadharNumber?: string;
-  panNumber?: string;
+  employmentType?: 'On-Roll' | 'Contract';
+  contactNumber?: string; // exactly 10 digits
+  aadharNumber?: string; // exactly 12 digits
+  panNumber?: string; // exactly 10 characters
   remarks?: string;
   documents?: VehicleDocument[]; // "Other Documents" - unlimited
   aadharDocuments?: VehicleDocument[]; // mandatory in the UI, limited to one file
@@ -360,10 +379,13 @@ export interface MileageReport {
   litres: number;
   dieselAmount: number;
   mileage: number;
-  driverName: string;
+  driverName: string; // UI label "Authorized Driver" - supports multiple names, e.g. "Suresh / Adhithya"
   location: string;
   remarks: string;
   actualMileage: number;
+  extraFuel?: number;
+  ratePerLitreNew?: number; // rate applied to extraFuel in the Total Amount calc
+  totalAmount?: number; // auto = dieselAmount + (extraFuel * ratePerLitreNew)
   documents?: VehicleDocument[];
 }
 

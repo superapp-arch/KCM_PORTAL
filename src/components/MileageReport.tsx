@@ -67,6 +67,9 @@ export default function MileageReportModule({
   const [location, setLocation] = useState('');
   const [remarks, setRemarks] = useState('');
   const [actualMileage, setActualMileage] = useState('');
+  const [extraFuel, setExtraFuel] = useState('');
+  const [ratePerLitreNew, setRatePerLitreNew] = useState('');
+  const [totalAmount, setTotalAmount] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // File import ref
@@ -144,6 +147,25 @@ export default function MileageReportModule({
     }
   }, [totalKm, litres]);
 
+  // 5. Same-day Rate per Litre carry-forward: once any vehicle's entry sets a
+  // rate for a given date, subsequent entries that same date default to it.
+  // A new date requires fresh manual entry (then repeats for that new date).
+  useEffect(() => {
+    if (!date || editingId) return;
+    const sameDayReports = reports.filter(r => r.date === date);
+    if (sameDayReports.length > 0) {
+      setRatePerLitre(String(sameDayReports[sameDayReports.length - 1].ratePerLitre));
+    }
+  }, [date, reports, editingId]);
+
+  // 6. Total Amount = Diesel Amount + (Extra Fuel * Rate per Ltr (new))
+  useEffect(() => {
+    const diesel = parseFloat(dieselAmount) || 0;
+    const extra = parseFloat(extraFuel) || 0;
+    const rateNew = parseFloat(ratePerLitreNew) || 0;
+    setTotalAmount(String(parseFloat((diesel + extra * rateNew).toFixed(2))));
+  }, [dieselAmount, extraFuel, ratePerLitreNew]);
+
   // Handle Create / Update Submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -167,6 +189,9 @@ export default function MileageReportModule({
       const calculatedDieselAmount = parseFloat((rate * l).toFixed(2));
       const calculatedMileage = l > 0 ? parseFloat((calculatedTotalKm / l).toFixed(2)) : 0;
       const manualActualMileage = parseFloat(actualMileage) || 0;
+      const extra = parseFloat(extraFuel) || 0;
+      const rateNew = parseFloat(ratePerLitreNew) || 0;
+      const calculatedTotalAmount = parseFloat((calculatedDieselAmount + extra * rateNew).toFixed(2));
 
       // Determine next Sl No if adding new
       const nextSlNo = reports.length > 0 ? Math.max(...reports.map(r => r.slNo || 0)) + 1 : 1;
@@ -185,7 +210,10 @@ export default function MileageReportModule({
         driverName: driverName.trim(),
         location: location.trim(),
         remarks: remarks.trim(),
-        actualMileage: manualActualMileage
+        actualMileage: manualActualMileage,
+        extraFuel: extra,
+        ratePerLitreNew: rateNew,
+        totalAmount: calculatedTotalAmount
       };
 
       if (editingId) {
@@ -217,6 +245,8 @@ export default function MileageReportModule({
     setLocation(report.location);
     setRemarks(report.remarks || '');
     setActualMileage(String(report.actualMileage || ''));
+    setExtraFuel(String(report.extraFuel || ''));
+    setRatePerLitreNew(String(report.ratePerLitreNew || ''));
     setShowSidebar(true);
   };
 
@@ -235,6 +265,9 @@ export default function MileageReportModule({
     setLocation('');
     setRemarks('');
     setActualMileage('');
+    setExtraFuel('');
+    setRatePerLitreNew('');
+    setTotalAmount('');
     setShowSidebar(false);
   };
 
@@ -361,7 +394,10 @@ export default function MileageReportModule({
       'Diesel Amount': r.dieselAmount,
       'Mileage': r.mileage,
       'Actual Mileage': r.actualMileage || 0,
-      'Driver Name': r.driverName,
+      'Extra Fuel': r.extraFuel || 0,
+      'Rate per Ltr (new)': r.ratePerLitreNew || 0,
+      'Total Amount': r.totalAmount || 0,
+      'Authorized Driver': r.driverName,
       'Location': r.location,
       'Remarks': r.remarks || ''
     }));
@@ -548,7 +584,10 @@ export default function MileageReportModule({
                 <th className="px-3 py-2.5 text-right text-teal-400">Diesel Amount</th>
                 <th className="px-3 py-2.5 text-right text-pink-400">Mileage</th>
                 <th className="px-3 py-2.5 text-right text-purple-400">Actual Mileage</th>
-                <th className="px-3 py-2.5">Driver Name</th>
+                <th className="px-3 py-2.5 text-right">Extra Fuel</th>
+                <th className="px-3 py-2.5 text-right">Rate/Ltr (new)</th>
+                <th className="px-3 py-2.5 text-right text-teal-400">Total Amount</th>
+                <th className="px-3 py-2.5">Authorized Driver</th>
                 <th className="px-3 py-2.5">Location</th>
                 <th className="px-3 py-2.5 max-w-xs">Remarks</th>
                 <th className="px-3 py-2.5 text-center">Actions</th>
@@ -557,7 +596,7 @@ export default function MileageReportModule({
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
               {filteredReports.length === 0 ? (
                 <tr>
-                  <td colSpan={15} className="text-center py-20 text-slate-400 font-mono text-xs">
+                  <td colSpan={18} className="text-center py-20 text-slate-400 font-mono text-xs">
                     🚫 NO REGISTERED MILEAGE ENTRIES DISCOVERED FOR THIS SEGMENT.
                     <div className="text-[10px] text-slate-400 font-sans mt-1">
                       Use the "Add Details" sidebar button to authorize new mileage and fuel log books.
@@ -578,6 +617,9 @@ export default function MileageReportModule({
                     <td className="px-3 py-2 text-right font-mono font-bold text-teal-700 bg-teal-50/20">₹{r.dieselAmount.toLocaleString('en-IN')}</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-pink-700 bg-pink-50/20">{r.mileage.toFixed(2)} KM/L</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-purple-700 bg-purple-50/20">{r.actualMileage ? `${r.actualMileage.toFixed(2)} KM/L` : '-'}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-600">{r.extraFuel ? r.extraFuel.toFixed(2) : '-'}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-600">{r.ratePerLitreNew ? `₹${r.ratePerLitreNew.toFixed(2)}` : '-'}</td>
+                    <td className="px-3 py-2 text-right font-mono font-bold text-teal-700 bg-teal-50/20">{r.totalAmount ? `₹${r.totalAmount.toLocaleString('en-IN')}` : '-'}</td>
                     <td className="px-3 py-2 text-slate-800 whitespace-nowrap font-semibold">{r.driverName}</td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <span className="bg-slate-100 text-slate-800 border border-slate-200 px-2 py-0.5 rounded text-[9.5px] font-bold">
@@ -827,20 +869,62 @@ export default function MileageReportModule({
                     </p>
                   </div>
 
-                  {/* Driver Name */}
+                  {/* Extra Fuel and Rate per Ltr (new) */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        Extra Fuel
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="e.g. 5"
+                        value={extraFuel}
+                        onChange={(e) => setExtraFuel(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-pink-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        Rate per Ltr (new)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="e.g. 96.50"
+                        value={ratePerLitreNew}
+                        onChange={(e) => setRatePerLitreNew(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-pink-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Total Amount (auto) */}
+                  <div className="p-3 bg-gradient-to-r from-pink-50/50 to-purple-50/50 rounded-xl border border-pink-100 flex items-center justify-between font-mono">
+                    <div>
+                      <span className="text-[9px] text-slate-400 uppercase font-bold block">Total Amount</span>
+                      <span className="text-xs font-black text-pink-700">₹{totalAmount}</span>
+                    </div>
+                    <DollarSign className="w-5 h-5 text-pink-300" />
+                  </div>
+
+                  {/* Authorized Driver */}
                   <div>
                     <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1">
                       <UserIcon className="w-3.5 h-3.5 text-pink-600" />
-                      Driver Name *
+                      Authorized Driver *
                     </label>
                     <input
                       type="text"
                       required
-                      placeholder="Enter authorized driver"
+                      placeholder="e.g. Suresh / Adhithya"
                       value={driverName}
                       onChange={(e) => setDriverName(e.target.value)}
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-pink-500 font-semibold"
                     />
+                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                      Multiple drivers can be entered in one field, separated by "/".
+                    </p>
                   </div>
 
                   {/* Location */}

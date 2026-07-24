@@ -19,7 +19,8 @@ import {
   abnormalLogins,
   notifications,
   warehouseEntries,
-  mileageReports
+  mileageReports,
+  fuelVendors
 } from './schema.ts';
 import { eq, ne } from 'drizzle-orm';
 import { hashPassword, isHashed } from '../auth/password.ts';
@@ -43,7 +44,8 @@ import {
   AbnormalLogin,
   DashboardNotification,
   WarehouseEntry,
-  MileageReport
+  MileageReport,
+  FuelVendor
 } from '../types.ts';
 
 // Default Users Seed
@@ -1154,6 +1156,46 @@ export async function deleteMileageReport(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteMileageReport:", error);
     throw new Error("Failed to delete mileage report.", { cause: error });
+  }
+}
+
+// --- FUEL VENDOR (VENDOR MASTER) OPERATIONS ---
+export async function getFuelVendors(): Promise<FuelVendor[]> {
+  try {
+    const rows = await db.select().from(fuelVendors);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getFuelVendors:", error);
+    throw new Error("Failed to retrieve fuel vendors.", { cause: error });
+  }
+}
+
+export async function saveFuelVendor(vendor: FuelVendor) {
+  try {
+    const id = vendor.id || String(Date.now());
+    const completeVendor = { ...vendor, id };
+    const dataString = JSON.stringify(completeVendor);
+
+    const existing = await db.select().from(fuelVendors).where(eq(fuelVendors.id, id));
+    if (existing.length > 0) {
+      await db.update(fuelVendors).set({ data: dataString }).where(eq(fuelVendors.id, id));
+    } else {
+      await db.insert(fuelVendors).values({ id, data: dataString });
+    }
+    return await getFuelVendors();
+  } catch (error) {
+    console.error("Database action failed in saveFuelVendor:", error);
+    throw new Error("Failed to save fuel vendor.", { cause: error });
+  }
+}
+
+export async function deleteFuelVendor(id: string) {
+  try {
+    await db.delete(fuelVendors).where(eq(fuelVendors.id, id));
+    return await getFuelVendors();
+  } catch (error) {
+    console.error("Database action failed in deleteFuelVendor:", error);
+    throw new Error("Failed to delete fuel vendor.", { cause: error });
   }
 }
 

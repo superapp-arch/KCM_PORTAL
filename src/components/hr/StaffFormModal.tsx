@@ -39,9 +39,11 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
     id: employee?.id || '', name: employee?.name || '', designation: employee?.designation || '',
     dateOfJoining: employee?.dateOfJoining || '', dateOfLeaving: employee?.dateOfLeaving || '',
     location: employee?.location || 'Bangalore', status: employee?.status || 'Active' as StaffEmployee['status'],
+    employmentType: employee?.employmentType || 'On-Roll' as StaffEmployee['employmentType'],
     contactNumber: employee?.contactNumber || '', aadharNumber: employee?.aadharNumber || '', panNumber: employee?.panNumber || '',
     remarks: employee?.remarks || ''
   });
+  const [basicErrors, setBasicErrors] = useState<{ aadharNumber?: boolean; panNumber?: boolean; contactNumber?: boolean }>({});
   const [aadharDocuments, setAadharDocuments] = useState<VehicleDocument[]>(employee?.aadharDocuments || []);
   const [panDocuments, setPanDocuments] = useState<VehicleDocument[]>(employee?.panDocuments || []);
   const [otherDocuments, setOtherDocuments] = useState<VehicleDocument[]>(employee?.documents || []);
@@ -137,13 +139,14 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
       setTab('basic');
       return;
     }
-    if (!basic.aadharNumber.trim()) {
-      setError('Aadhar Number is required.');
-      setTab('basic');
-      return;
-    }
-    if (!basic.panNumber.trim()) {
-      setError('PAN Card Number is required.');
+    const nextBasicErrors = {
+      aadharNumber: basic.aadharNumber.length !== 12,
+      panNumber: basic.panNumber.length !== 10,
+      contactNumber: basic.contactNumber.length !== 10
+    };
+    setBasicErrors(nextBasicErrors);
+    if (nextBasicErrors.aadharNumber || nextBasicErrors.panNumber || nextBasicErrors.contactNumber) {
+      setError('Please fix the highlighted fields below.');
       setTab('basic');
       return;
     }
@@ -332,21 +335,26 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-500 mb-1">Contact Number</label>
-                  <input type="number" value={basic.contactNumber} onChange={e => setBasic({ ...basic, contactNumber: e.target.value })}
-                    autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <label className="block font-semibold text-slate-500 mb-1">Contact Number* <span className="text-slate-400 font-normal">(10 digits)</span></label>
+                  <input type="text" inputMode="numeric" value={basic.contactNumber}
+                    onChange={e => setBasic({ ...basic, contactNumber: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                    autoComplete="off" maxLength={10} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  {basicErrors.contactNumber && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-500 mb-1">Aadhar Number*</label>
-                  <input value={basic.aadharNumber} onChange={e => setBasic({ ...basic, aadharNumber: e.target.value })}
-                    autoComplete="off" placeholder="XXXX XXXX XXXX" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <label className="block font-semibold text-slate-500 mb-1">Aadhar Number* <span className="text-slate-400 font-normal">(12 digits)</span></label>
+                  <input type="text" inputMode="numeric" value={basic.aadharNumber}
+                    onChange={e => setBasic({ ...basic, aadharNumber: e.target.value.replace(/\D/g, '').slice(0, 12) })}
+                    autoComplete="off" maxLength={12} placeholder="XXXXXXXXXXXX" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  {basicErrors.aadharNumber && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-500 mb-1">PAN Card Number*</label>
-                  <input value={basic.panNumber} onChange={e => setBasic({ ...basic, panNumber: e.target.value.toUpperCase() })}
-                    autoComplete="off" placeholder="ABCDE1234F" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <label className="block font-semibold text-slate-500 mb-1">PAN Card Number* <span className="text-slate-400 font-normal">(10 characters)</span></label>
+                  <input value={basic.panNumber} onChange={e => setBasic({ ...basic, panNumber: e.target.value.toUpperCase().slice(0, 10) })}
+                    autoComplete="off" maxLength={10} placeholder="ABCDE1234F" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  {basicErrors.panNumber && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Status</label>
@@ -356,9 +364,18 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                   </select>
                 </div>
               </div>
-              <div>
-                <label className="block font-semibold text-slate-500 mb-1">Org Unit (auto)</label>
-                <input value={basic.id ? deriveOrgUnitPreview(basic.id) : ''} disabled className="w-full border border-slate-200 bg-slate-100 rounded-lg px-2.5 py-1.5 text-slate-500" />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-500 mb-1">Type</label>
+                  <select value={basic.employmentType} onChange={e => setBasic({ ...basic, employmentType: e.target.value as StaffEmployee['employmentType'] })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5">
+                    <option value="On-Roll">On-Roll</option>
+                    <option value="Contract">Contract</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-500 mb-1">Org Unit (auto)</label>
+                  <input value={basic.id ? deriveOrgUnitPreview(basic.id) : ''} disabled className="w-full border border-slate-200 bg-slate-100 rounded-lg px-2.5 py-1.5 text-slate-500" />
+                </div>
               </div>
               <div>
                 <label className="block font-semibold text-slate-500 mb-1">Remarks</label>
@@ -390,11 +407,11 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-500 mb-1">CTC (2025)</label>
+                  <label className="block font-semibold text-slate-500 mb-1">CTC</label>
                   <input type="number" value={salary.ctc25} onChange={e => setSalary({ ...salary, ctc25: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-500 mb-1">Annual CTC (2025)</label>
+                  <label className="block font-semibold text-slate-500 mb-1">Annual CTC</label>
                   <input type="number" value={salary.annualCtc25} onChange={e => setSalary({ ...salary, annualCtc25: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
               </div>

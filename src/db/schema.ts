@@ -133,4 +133,10 @@ export const mileageReports = pgTable('mileage_reports', {
   data: text('data').notNull(), // JSON string representing the full MileageReport object
 });
 
+// Fuel vendor master table (Vendor Name/Vendor Code lookup for Fuel Entry)
+export const fuelVendors = pgTable('fuel_vendors', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full FuelVendor object
+});
+
 
