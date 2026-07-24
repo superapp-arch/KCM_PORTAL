@@ -33,44 +33,50 @@ export default function DocumentAttachment({
   const [isReading, setIsReading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  const processFiles = (files: FileList) => {
+  // Uploads each file to the server (saved to disk under /uploads, see
+  // src/upload/upload.ts + server.ts) rather than embedding it as base64 in
+  // the database - keeps DB rows small regardless of file size.
+  const processFiles = async (files: FileList) => {
     setIsReading(true);
-    const promises = Array.from(files).map((file) => {
-      return new Promise<VehicleDocument>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const base64 = reader.result as string;
-          const docType: 'pdf' | 'image' | 'other' = file.type.includes('pdf')
-            ? 'pdf'
-            : file.type.includes('image')
-            ? 'image'
-            : 'other';
+    try {
+      const uploadedDocs: VehicleDocument[] = [];
 
-          resolve({
-            id: Math.random().toString(36).substring(2, 11),
-            name: file.name.substring(0, file.name.lastIndexOf('.')) || file.name,
-            type: docType,
-            fileName: file.name,
-            fileSize: (file.size / 1024).toFixed(1) + ' KB',
-            uploadDate: new Date().toISOString().substring(0, 10),
-            fileData: base64
-          });
-        };
-        reader.onerror = (err) => reject(err);
-        reader.readAsDataURL(file);
-      });
-    });
+      for (const file of Array.from(files)) {
+        const formData = new FormData();
+        formData.append('file', file);
 
-    Promise.all(promises)
-      .then((newDocs) => {
-        onChange([...documents, ...newDocs]);
-      })
-      .catch((err) => {
-        console.error("Error reading file:", err);
-      })
-      .finally(() => {
-        setIsReading(false);
-      });
+        const response = await fetch('/api/upload/vehicle', { method: 'POST', body: formData });
+        const result = await response.json();
+
+        if (!result.success) {
+          alert(result.message || `Failed to upload ${file.name}.`);
+          continue;
+        }
+
+        const docType: 'pdf' | 'image' | 'other' = file.type.includes('pdf')
+          ? 'pdf'
+          : file.type.includes('image')
+          ? 'image'
+          : 'other';
+
+        uploadedDocs.push({
+          id: Math.random().toString(36).substring(2, 11),
+          name: file.name.substring(0, file.name.lastIndexOf('.')) || file.name,
+          type: docType,
+          fileName: file.name,
+          fileSize: (file.size / 1024).toFixed(1) + ' KB',
+          uploadDate: new Date().toISOString().substring(0, 10),
+          filePath: result.path
+        });
+      }
+
+      onChange([...documents, ...uploadedDocs]);
+    } catch (err) {
+      console.error('Error uploading file:', err);
+      alert('Failed to upload one or more files. Please try again.');
+    } finally {
+      setIsReading(false);
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -193,9 +199,9 @@ export default function DocumentAttachment({
               </div>
 
               <div className="flex items-center space-x-1 ml-3">
-                {doc.fileData ? (
+                {doc.filePath || doc.fileData ? (
                   <a
-                    href={doc.fileData}
+                    href={doc.filePath ? `/${doc.filePath}` : doc.fileData}
                     download={doc.fileName}
                     title="Download document file"
                     className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"

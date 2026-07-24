@@ -24,7 +24,8 @@ export interface VehicleDocument {
   fileName: string;
   fileSize: string;
   uploadDate: string;
-  fileData?: string; // base64 payload or preview placeholder
+  filePath?: string; // relative path under /uploads, served statically - used by new uploads
+  fileData?: string; // base64 payload - legacy documents saved before server-side upload existed
 }
 
 export interface Vehicle {

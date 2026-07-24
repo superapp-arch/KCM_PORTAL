@@ -53,6 +53,14 @@ const VEHICLE_OWNERSHIPS = [
   'KCM SUPPLY', 'KCM INSTA'
 ];
 
+// New uploads are saved server-side under /uploads (see doc.filePath);
+// older documents saved before that existed still carry their base64 payload
+// directly on doc.fileData. This resolves either into a usable URL.
+const resolveDocUrl = (doc: VehicleDocument): string | null => {
+  if (doc.filePath) return `/${doc.filePath}`;
+  return doc.fileData || null;
+};
+
 // Parses "DD.MM.YYYY" or "YYYY-MM-DD" expiry strings and flags whether the
 // date falls within the given alert window (days remaining until expiry).
 const getExpiryAlertStatus = (dateStr?: string, minDays = 0, maxDays = 10): { isAlert: boolean; diffDays: number | null } => {
@@ -901,31 +909,36 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                           <input
                                             type="file"
                                             ref={fileInputRef}
-                                            onChange={(e) => {
+                                            onChange={async (e) => {
                                               const file = e.target.files?.[0];
-                                              if (file) {
-                                                const reader = new FileReader();
-                                                reader.onloadend = async () => {
-                                                  const base64String = reader.result as string;
-                                                  const newDoc: VehicleDocument = {
-                                                    id: String(Date.now()),
-                                                    name: uploadCategory,
-                                                    type: file.type.includes('pdf') ? 'pdf' : 'image',
-                                                    fileName: file.name,
-                                                    fileSize: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
-                                                    uploadDate: new Date().toISOString().split('T')[0],
-                                                    fileData: base64String
-                                                  };
-                                                  const currentDocs = v.documents || [];
-                                                  const updatedVehicle = {
-                                                    ...v,
-                                                    documents: [...currentDocs, newDoc]
-                                                  };
-                                                  setIsUpdating(true);
-                                                  await onUpdateVehicle(updatedVehicle);
-                                                  setIsUpdating(false);
+                                              if (!file) return;
+                                              setIsUpdating(true);
+                                              try {
+                                                const formData = new FormData();
+                                                formData.append('file', file);
+                                                const res = await fetch('/api/upload/vehicle', { method: 'POST', body: formData });
+                                                const result = await res.json();
+                                                if (!result.success) {
+                                                  triggerNotif(result.message || 'Failed to upload document.', 'error');
+                                                  return;
+                                                }
+                                                const newDoc: VehicleDocument = {
+                                                  id: String(Date.now()),
+                                                  name: uploadCategory,
+                                                  type: file.type.includes('pdf') ? 'pdf' : 'image',
+                                                  fileName: file.name,
+                                                  fileSize: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
+                                                  uploadDate: new Date().toISOString().split('T')[0],
+                                                  filePath: result.path
                                                 };
-                                                reader.readAsDataURL(file);
+                                                const currentDocs = v.documents || [];
+                                                const updatedVehicle = {
+                                                  ...v,
+                                                  documents: [...currentDocs, newDoc]
+                                                };
+                                                await onUpdateVehicle(updatedVehicle);
+                                              } finally {
+                                                setIsUpdating(false);
                                               }
                                             }}
                                             className="hidden"
@@ -1013,9 +1026,10 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                 {/* Download */}
                                                 <button
                                                   onClick={() => {
-                                                    if (!doc.fileData) return;
+                                                    const url = resolveDocUrl(doc);
+                                                    if (!url) return;
                                                     const link = document.createElement('a');
-                                                    link.href = doc.fileData;
+                                                    link.href = url;
                                                     link.download = doc.fileName;
                                                     document.body.appendChild(link);
                                                     link.click();
@@ -1030,7 +1044,8 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                 {/* Print */}
                                                 <button
                                                   onClick={() => {
-                                                    if (!doc.fileData) return;
+                                                    const url = resolveDocUrl(doc);
+                                                    if (!url) return;
                                                     const printWindow = window.open('', '_blank');
                                                     if (!printWindow) return;
                                                     printWindow.document.write(`
@@ -1045,7 +1060,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                         </head>
                                                         <body>
                                                           <h1>KCM Logistics Document Registry: ${doc.name} (${doc.fileName})</h1>
-                                                          <img src="${doc.fileData}" />
+                                                          <img src="${url}" />
                                                           <script>
                                                             window.onload = function() { window.print(); };
                                                           </script>
@@ -1091,11 +1106,12 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                       <button
                                                         onClick={async () => {
                                                           setSharingDoc(null);
-                                                          if (!doc.fileData) return;
+                                                          const url = resolveDocUrl(doc);
+                                                          if (!url) return;
                                                           const canNativeShare = typeof navigator !== 'undefined' && !!navigator.share;
                                                           if (canNativeShare) {
                                                             try {
-                                                              const res = await fetch(doc.fileData);
+                                                              const res = await fetch(url);
                                                               const blob = await res.blob();
                                                               const file = new File([blob], doc.fileName, { type: blob.type || 'application/octet-stream' });
                                                               const shareData: ShareData = {
@@ -1113,7 +1129,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                             }
                                                           }
                                                           const link = document.createElement('a');
-                                                          link.href = doc.fileData;
+                                                          link.href = url;
                                                           link.download = doc.fileName;
                                                           document.body.appendChild(link);
                                                           link.click();

@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import { Resend } from "resend";
 import dotenv from "dotenv";
+import upload from "./src/upload/upload.ts";
 
 dotenv.config();
 
@@ -370,6 +371,21 @@ async function startServer() {
   // Health endpoint
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date() });
+  });
+
+  // Serves uploaded documents (Aadhar/PAN/licenses/etc.) saved to disk by the
+  // /api/upload/vehicle endpoint below - e.g. GET /uploads/171234-567.pdf.
+  app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+
+  // Generic document upload used by DocumentAttachment across every module
+  // (Fleet documents, HR Aadhar/PAN, driver salary bank proof, etc.) - saves
+  // the file to disk and returns its path for the frontend to store on the
+  // record, instead of embedding the file as base64 in the database.
+  app.post('/api/upload/vehicle', upload.single('file'), (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No file was uploaded.' });
+    }
+    res.json({ success: true, path: `uploads/${req.file.filename}` });
   });
 
   // Current session endpoint - resolves strictly from this client's own token
