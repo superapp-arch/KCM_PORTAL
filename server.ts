@@ -197,9 +197,9 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.urlencoded({ limit: '50mb', extended: true }));
-
+  app.use(express.json({ limit: '100mb' }));
+  app.use(express.urlencoded({ limit: '100mb', extended: true }));
+  app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
   // Initialize and seed the database, then upgrade any legacy plain-text
   // passwords left over from before hashing was introduced.
   await seedDatabase();
@@ -372,10 +372,6 @@ async function startServer() {
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date() });
   });
-
-  // Serves uploaded documents (Aadhar/PAN/licenses/etc.) saved to disk by the
-  // /api/upload/vehicle endpoint below - e.g. GET /uploads/171234-567.pdf.
-  app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
   // Generic document upload used by DocumentAttachment across every module
   // (Fleet documents, HR Aadhar/PAN, driver salary bank proof, etc.) - saves
