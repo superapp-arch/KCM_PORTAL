@@ -175,11 +175,12 @@ export interface StaffEmployee {
   status: 'Active' | 'Inactive';
   orgUnit: StaffOrgUnit; // server-derived from EmpId prefix (^KCMI\d+ -> Insta, else Supply); read-only in the UI
   contactNumber?: string;
+  aadharNumber?: string;
   panNumber?: string;
   remarks?: string;
-  documents?: VehicleDocument[];
-  aadharDocuments?: VehicleDocument[]; // mandatory in the UI
-  panDocuments?: VehicleDocument[]; // mandatory in the UI
+  documents?: VehicleDocument[]; // "Other Documents" - unlimited
+  aadharDocuments?: VehicleDocument[]; // mandatory in the UI, limited to one file
+  panDocuments?: VehicleDocument[]; // mandatory in the UI, limited to one file
 }
 
 export interface StaffSalaryDetail {

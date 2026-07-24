@@ -949,7 +949,7 @@ async function startServer() {
         const netSalary = Math.round(grossSalary - totalDeductions);
         return {
           ...r,
-          totalDays: attendance.totalDays, workingDays: attendance.workingDays, lopDays: attendance.lopDays,
+          totalDays: attendance.totalDays, workingDays: attendance.workingDays, totalAbsent: attendance.totalAbsent, lopDays: attendance.lopDays,
           perDaySalary, extraDaysAmount, lopAmount,
           totalEarnings, totalDeductions, grossSalary, netSalary
         };

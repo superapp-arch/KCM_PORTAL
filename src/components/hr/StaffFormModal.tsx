@@ -39,11 +39,12 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
     id: employee?.id || '', name: employee?.name || '', designation: employee?.designation || '',
     dateOfJoining: employee?.dateOfJoining || '', dateOfLeaving: employee?.dateOfLeaving || '',
     location: employee?.location || 'Bangalore', status: employee?.status || 'Active' as StaffEmployee['status'],
-    contactNumber: employee?.contactNumber || '', panNumber: employee?.panNumber || '',
+    contactNumber: employee?.contactNumber || '', aadharNumber: employee?.aadharNumber || '', panNumber: employee?.panNumber || '',
     remarks: employee?.remarks || ''
   });
   const [aadharDocuments, setAadharDocuments] = useState<VehicleDocument[]>(employee?.aadharDocuments || []);
   const [panDocuments, setPanDocuments] = useState<VehicleDocument[]>(employee?.panDocuments || []);
+  const [otherDocuments, setOtherDocuments] = useState<VehicleDocument[]>(employee?.documents || []);
 
   const [salary, setSalary] = useState({ ctc25: '', annualCtc25: '', advanceAmount: '', remarks: '' });
   const [salaryDetailId, setSalaryDetailId] = useState<string | null>(null);
@@ -58,7 +59,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
 
   const [pfMonth, setPfMonth] = useState(currentMonthKey());
   const [pfForm, setPfForm] = useState({ ...emptyPfForm });
-  const [pfAttendance, setPfAttendance] = useState({ totalDays: 0, workingDays: 0, lopDays: 0 });
+  const [pfAttendance, setPfAttendance] = useState({ totalDays: 0, workingDays: 0, totalAbsent: 0, lopDays: 0 });
 
   const loadAdvanceDeductions = () => {
     if (!employee) return;
@@ -98,9 +99,9 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
 
   useEffect(() => {
     if (!employee) return;
-    fetch('/api/staff/provident-fund').then(r => r.json()).then((all: (StaffProvidentFund & { totalDays: number; workingDays: number; lopDays: number })[]) => {
+    fetch('/api/staff/provident-fund').then(r => r.json()).then((all: (StaffProvidentFund & { totalDays: number; workingDays: number; totalAbsent: number; lopDays: number })[]) => {
       const mine = all.find(r => r.empId === employee.id && r.month === pfMonth);
-      setPfAttendance({ totalDays: mine?.totalDays || 0, workingDays: mine?.workingDays || 0, lopDays: mine?.lopDays || 0 });
+      setPfAttendance({ totalDays: mine?.totalDays || 0, workingDays: mine?.workingDays || 0, totalAbsent: mine?.totalAbsent || 0, lopDays: mine?.lopDays || 0 });
       if (mine) {
         setPfForm({
           basic: String(mine.basic ?? ''), hra: String(mine.hra ?? ''), conveyance: String(mine.conveyance ?? ''),
@@ -114,9 +115,9 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
         setPfForm({ ...emptyPfForm });
       }
     }).catch(() => {});
-    // Attendance-derived totalDays/workingDays/lopDays should show even before a PF record exists for this month.
+    // Attendance-derived totalDays/workingDays/totalAbsent/lopDays should show even before a PF record exists for this month.
     fetch(`/api/staff/attendance/monthly/${encodeURIComponent(employee.id)}/${pfMonth}`).then(r => r.json()).then(({ data }) => {
-      if (data) setPfAttendance(prev => ({ totalDays: data.totalDays, workingDays: data.workingDays, lopDays: data.lopDays }));
+      if (data) setPfAttendance({ totalDays: data.totalDays, workingDays: data.workingDays, totalAbsent: data.totalAbsent, lopDays: data.lopDays });
     }).catch(() => {});
   }, [employee, pfMonth]);
 
@@ -136,6 +137,11 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
       setTab('basic');
       return;
     }
+    if (!basic.aadharNumber.trim()) {
+      setError('Aadhar Number is required.');
+      setTab('basic');
+      return;
+    }
     if (!basic.panNumber.trim()) {
       setError('PAN Card Number is required.');
       setTab('basic');
@@ -149,7 +155,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
     setIsSubmitting(true);
     setError('');
     try {
-      const employeePayload = { ...basic, aadharDocuments, panDocuments };
+      const employeePayload = { ...basic, aadharDocuments, panDocuments, documents: otherDocuments };
       if (isEditing) {
         await onUpdateEmployee(basic.id, employeePayload);
       } else {
@@ -295,48 +301,53 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Employee ID*</label>
                   <input value={basic.id} onChange={e => setBasic({ ...basic, id: e.target.value.toUpperCase() })} disabled={isEditing}
-                    placeholder="KCM15001" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 disabled:bg-slate-100" />
+                    autoComplete="off" placeholder="KCM15001" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 disabled:bg-slate-100" />
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Name*</label>
-                  <input value={basic.name} onChange={e => setBasic({ ...basic, name: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <input value={basic.name} onChange={e => setBasic({ ...basic, name: e.target.value })} autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Designation</label>
-                  <input value={basic.designation} onChange={e => setBasic({ ...basic, designation: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <input value={basic.designation} onChange={e => setBasic({ ...basic, designation: e.target.value })} autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Location</label>
-                  <input value={basic.location} onChange={e => setBasic({ ...basic, location: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <input value={basic.location} onChange={e => setBasic({ ...basic, location: e.target.value })} autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Date of Joining</label>
                   <input value={basic.dateOfJoining} onChange={e => setBasic({ ...basic, dateOfJoining: e.target.value })}
-                    placeholder="DD/MM/YYYY" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                    autoComplete="off" placeholder="DD/MM/YYYY" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Date of Leaving</label>
                   <input value={basic.dateOfLeaving} onChange={e => handleDateOfLeavingChange(e.target.value)}
-                    placeholder="DD/MM/YYYY" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                    autoComplete="off" placeholder="DD/MM/YYYY" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Contact Number</label>
                   <input type="number" value={basic.contactNumber} onChange={e => setBasic({ ...basic, contactNumber: e.target.value })}
-                    className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                    autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-500 mb-1">PAN Card Number*</label>
-                  <input value={basic.panNumber} onChange={e => setBasic({ ...basic, panNumber: e.target.value.toUpperCase() })}
-                    placeholder="ABCDE1234F" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <label className="block font-semibold text-slate-500 mb-1">Aadhar Number*</label>
+                  <input value={basic.aadharNumber} onChange={e => setBasic({ ...basic, aadharNumber: e.target.value })}
+                    autoComplete="off" placeholder="XXXX XXXX XXXX" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-500 mb-1">PAN Card Number*</label>
+                  <input value={basic.panNumber} onChange={e => setBasic({ ...basic, panNumber: e.target.value.toUpperCase() })}
+                    autoComplete="off" placeholder="ABCDE1234F" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                </div>
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Status</label>
                   <select value={basic.status} onChange={e => setBasic({ ...basic, status: e.target.value as StaffEmployee['status'] })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5">
@@ -344,14 +355,14 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                     <option value="Inactive">Inactive</option>
                   </select>
                 </div>
-                <div>
-                  <label className="block font-semibold text-slate-500 mb-1">Org Unit (auto)</label>
-                  <input value={basic.id ? deriveOrgUnitPreview(basic.id) : ''} disabled className="w-full border border-slate-200 bg-slate-100 rounded-lg px-2.5 py-1.5 text-slate-500" />
-                </div>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-500 mb-1">Org Unit (auto)</label>
+                <input value={basic.id ? deriveOrgUnitPreview(basic.id) : ''} disabled className="w-full border border-slate-200 bg-slate-100 rounded-lg px-2.5 py-1.5 text-slate-500" />
               </div>
               <div>
                 <label className="block font-semibold text-slate-500 mb-1">Remarks</label>
-                <input value={basic.remarks} onChange={e => setBasic({ ...basic, remarks: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                <input value={basic.remarks} onChange={e => setBasic({ ...basic, remarks: e.target.value })} autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
               </div>
             </div>
           )}
@@ -359,14 +370,18 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
           {tab === 'documents' && (
             <div className="space-y-4">
               <div>
-                <p className="font-semibold text-slate-600 mb-1.5">Aadhar Card*</p>
-                <DocumentAttachment documents={aadharDocuments} onChange={setAadharDocuments} label="Attach Aadhar Card" />
+                <p className="font-semibold text-slate-600 mb-1.5">Aadhar Card* (one file)</p>
+                <DocumentAttachment documents={aadharDocuments} onChange={setAadharDocuments} label="Attach Aadhar Card" hideDropzone maxFiles={1} />
                 {aadharDocuments.length === 0 && <p className="text-rose-500 mt-1">Required - please attach the Aadhar document.</p>}
               </div>
               <div>
-                <p className="font-semibold text-slate-600 mb-1.5">PAN Card*</p>
-                <DocumentAttachment documents={panDocuments} onChange={setPanDocuments} label="Attach PAN Card" />
+                <p className="font-semibold text-slate-600 mb-1.5">PAN Card* (one file)</p>
+                <DocumentAttachment documents={panDocuments} onChange={setPanDocuments} label="Attach PAN Card" hideDropzone maxFiles={1} />
                 {panDocuments.length === 0 && <p className="text-rose-500 mt-1">Required - please attach the PAN document.</p>}
+              </div>
+              <div>
+                <p className="font-semibold text-slate-600 mb-1.5">Other Documents</p>
+                <DocumentAttachment documents={otherDocuments} onChange={setOtherDocuments} label="Attach Other Documents" hideDropzone />
               </div>
             </div>
           )}
@@ -376,21 +391,21 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">CTC (2025)</label>
-                  <input type="number" value={salary.ctc25} onChange={e => setSalary({ ...salary, ctc25: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <input type="number" value={salary.ctc25} onChange={e => setSalary({ ...salary, ctc25: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Annual CTC (2025)</label>
-                  <input type="number" value={salary.annualCtc25} onChange={e => setSalary({ ...salary, annualCtc25: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <input type="number" value={salary.annualCtc25} onChange={e => setSalary({ ...salary, annualCtc25: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
               </div>
               <div>
                 <label className="block font-semibold text-slate-500 mb-1">Advance</label>
-                <input type="number" value={salary.advanceAmount} onChange={e => setSalary({ ...salary, advanceAmount: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                <input type="number" value={salary.advanceAmount} onChange={e => setSalary({ ...salary, advanceAmount: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 <p className="text-slate-400 mt-1">Amount the staff has taken as an advance from the company.</p>
               </div>
               <div>
                 <label className="block font-semibold text-slate-500 mb-1">Remarks</label>
-                <input value={salary.remarks} onChange={e => setSalary({ ...salary, remarks: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                <input value={salary.remarks} onChange={e => setSalary({ ...salary, remarks: e.target.value })} autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
               </div>
 
               {isEditing ? (
@@ -413,8 +428,8 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                       {advanceDeductions.length === 0 && <p className="text-slate-400 text-center py-2">No deductions recorded yet.</p>}
                     </div>
                     <div className="flex gap-2">
-                      <input type="date" value={deductionForm.date} onChange={e => setDeductionForm({ ...deductionForm, date: e.target.value })} className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
-                      <input type="number" placeholder="Amount" value={deductionForm.amount} onChange={e => setDeductionForm({ ...deductionForm, amount: e.target.value })} className="no-spinner flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
+                      <input type="date" value={deductionForm.date} onChange={e => setDeductionForm({ ...deductionForm, date: e.target.value })} autoComplete="off" className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
+                      <input type="number" placeholder="Amount" value={deductionForm.amount} onChange={e => setDeductionForm({ ...deductionForm, amount: e.target.value })} autoComplete="off" className="no-spinner flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
                       <button onClick={addDeduction} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white px-3 rounded-lg cursor-pointer flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> Add</button>
                     </div>
                   </div>
@@ -432,8 +447,8 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                       {hikes.length === 0 && <p className="text-slate-400 text-center py-2">No hikes recorded yet.</p>}
                     </div>
                     <div className="flex gap-2">
-                      <input type="date" value={hikeForm.effectiveDate} onChange={e => setHikeForm({ ...hikeForm, effectiveDate: e.target.value })} className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
-                      <input type="number" placeholder="Amount" value={hikeForm.amount} onChange={e => setHikeForm({ ...hikeForm, amount: e.target.value })} className="no-spinner flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
+                      <input type="date" value={hikeForm.effectiveDate} onChange={e => setHikeForm({ ...hikeForm, effectiveDate: e.target.value })} autoComplete="off" className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
+                      <input type="number" placeholder="Amount" value={hikeForm.amount} onChange={e => setHikeForm({ ...hikeForm, amount: e.target.value })} autoComplete="off" className="no-spinner flex-1 border border-slate-300 rounded-lg px-2 py-1.5" />
                       <button onClick={addHike} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white px-3 rounded-lg cursor-pointer flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> Add</button>
                     </div>
                   </div>
@@ -446,9 +461,9 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
 
           {tab === 'pf' && (
             <div className="space-y-3">
-              <input type="month" value={pfMonth} onChange={e => setPfMonth(e.target.value)} className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
+              <input type="month" value={pfMonth} onChange={e => setPfMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-4 gap-2">
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-center">
                   <p className="text-slate-400 uppercase text-[9px] font-bold">Total Days</p>
                   <p className="font-black text-slate-700">{pfAttendance.totalDays}</p>
@@ -456,6 +471,10 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-center">
                   <p className="text-slate-400 uppercase text-[9px] font-bold">Working Days</p>
                   <p className="font-black text-slate-700">{pfAttendance.workingDays}</p>
+                </div>
+                <div className="bg-rose-50 border border-rose-200 rounded-lg p-2 text-center">
+                  <p className="text-rose-600 uppercase text-[9px] font-bold">Absent</p>
+                  <p className="font-black text-rose-700">{pfAttendance.totalAbsent}</p>
                 </div>
                 <div className="bg-orange-50 border border-orange-200 rounded-lg p-2 text-center">
                   <p className="text-orange-600 uppercase text-[9px] font-bold">LOP Days</p>
@@ -472,12 +491,12 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                   ] as const).map(([key, label]) => (
                     <div key={key}>
                       <label className="block text-slate-400 mb-0.5">{label}</label>
-                      <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+                      <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                     </div>
                   ))}
                   <div>
                     <label className="block text-slate-400 mb-0.5">Extra Days (count)</label>
-                    <input type="number" value={pfForm.extraDays} onChange={e => setPfForm({ ...pfForm, extraDays: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+                    <input type="number" value={pfForm.extraDays} onChange={e => setPfForm({ ...pfForm, extraDays: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-slate-100">
@@ -501,7 +520,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                   ] as const).map(([key, label]) => (
                     <div key={key}>
                       <label className="block text-slate-400 mb-0.5">{label}</label>
-                      <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+                      <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                     </div>
                   ))}
                   <div className="bg-rose-50 border border-rose-200 rounded-lg p-2">
@@ -531,6 +550,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                     value={revealAccount ? bank.accountNumber : maskedAccount}
                     onChange={e => setBank({ ...bank, accountNumber: e.target.value })}
                     onFocus={() => setRevealAccount(true)}
+                    autoComplete="new-password"
                     className="flex-1 border border-slate-300 rounded-lg px-2.5 py-1.5"
                   />
                   <button type="button" onClick={() => setRevealAccount(!revealAccount)} className="px-2.5 py-1 border border-slate-300 rounded-lg text-slate-500 hover:bg-slate-50 cursor-pointer">
@@ -541,16 +561,16 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">IFSC Code</label>
-                  <input value={bank.ifscCode} onChange={e => setBank({ ...bank, ifscCode: e.target.value.toUpperCase() })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <input value={bank.ifscCode} onChange={e => setBank({ ...bank, ifscCode: e.target.value.toUpperCase() })} autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Bank Name</label>
-                  <input value={bank.bankName} onChange={e => setBank({ ...bank, bankName: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <input value={bank.bankName} onChange={e => setBank({ ...bank, bankName: e.target.value })} autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
               </div>
               <div>
                 <label className="block font-semibold text-slate-500 mb-1">Amount</label>
-                <input type="number" value={bank.amount} onChange={e => setBank({ ...bank, amount: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                <input type="number" value={bank.amount} onChange={e => setBank({ ...bank, amount: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
               </div>
             </div>
           )}

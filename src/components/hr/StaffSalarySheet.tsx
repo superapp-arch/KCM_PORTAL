@@ -16,7 +16,7 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
   const [salaryDetails, setSalaryDetails] = useState<SalaryDetailWithEffective[]>([]);
   const [hikeCounts, setHikeCounts] = useState<Record<string, { count: number; total: number }>>({});
   const [searchTerm, setSearchTerm] = useState('');
-  const [locationFilter, setLocationFilter] = useState('Bangalore');
+  const [locationFilter, setLocationFilter] = useState(''); // '' = All Locations
   const [statusFilter, setStatusFilter] = useState<'Active' | 'Inactive' | 'All'>('Active');
   const [modalEmployee, setModalEmployee] = useState<StaffEmployee | null | undefined>(undefined); // undefined = closed
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -45,6 +45,14 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
   };
 
   useEffect(() => { loadSalaryData(); }, [employees.length]);
+
+  // Location options are derived from whatever locations staff have actually
+  // been entered with, rather than a hardcoded list - a new location shows up
+  // in this dropdown automatically as soon as a staff member is saved with it.
+  const locationOptions = useMemo(() => {
+    const distinct = Array.from(new Set(employees.map(e => (e.location || '').trim()).filter(Boolean)));
+    return distinct.sort();
+  }, [employees]);
 
   const filtered = useMemo(() => employees.filter(e => {
     if (statusFilter !== 'All' && e.status !== statusFilter) return false;
@@ -94,9 +102,12 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex flex-wrap items-center gap-2 text-xs">
         <div className="flex items-center gap-2 border border-slate-300 rounded-lg px-2.5 py-1.5 flex-1 min-w-[200px]">
           <Search className="w-3.5 h-3.5 text-slate-400" />
-          <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search by Name or Emp ID..." className="flex-1 outline-none" />
+          <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search by Name or Emp ID..." autoComplete="off" className="flex-1 outline-none" />
         </div>
-        <input value={locationFilter} onChange={e => setLocationFilter(e.target.value)} placeholder="Location" className="border border-slate-300 rounded-lg px-2.5 py-1.5 w-32" />
+        <select value={locationFilter} onChange={e => setLocationFilter(e.target.value)} className="border border-slate-300 rounded-lg px-2.5 py-1.5 w-40">
+          <option value="">All Locations</option>
+          {locationOptions.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+        </select>
         <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
           {(['Active', 'Inactive', 'All'] as const).map(s => (
             <button key={s} onClick={() => setStatusFilter(s)}

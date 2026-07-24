@@ -100,7 +100,7 @@ export default function StaffAttendanceSummaryModal({ employee, month, onClose }
                 {editingLop ? (
                   <div className="flex items-center gap-1 justify-center">
                     <input type="number" value={lopInput} onChange={e => setLopInput(e.target.value)}
-                      className="no-spinner w-12 border border-orange-300 rounded px-1 py-0.5 text-center font-bold text-orange-700" autoFocus />
+                      autoComplete="off" className="no-spinner w-12 border border-orange-300 rounded px-1 py-0.5 text-center font-bold text-orange-700" autoFocus />
                     <button onClick={saveLopOverride} disabled={isSavingLop} className="text-orange-700 hover:text-orange-900 cursor-pointer font-bold">✓</button>
                     <button onClick={() => setEditingLop(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer font-bold">✕</button>
                   </div>

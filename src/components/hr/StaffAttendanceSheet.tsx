@@ -166,7 +166,7 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-4">
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <button onClick={() => setMonth(shiftMonth(month, -1))} className="p-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"><ChevronLeft className="w-3.5 h-3.5" /></button>
-          <input type="month" value={month} onChange={e => setMonth(e.target.value)} className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          <input type="month" value={month} onChange={e => setMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
           <button onClick={() => setMonth(shiftMonth(month, 1))} className="p-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"><ChevronRight className="w-3.5 h-3.5" /></button>
           <button onClick={autoFillSundaysAndHolidays} className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-lg font-semibold cursor-pointer">
             Auto-fill Sundays (Week Off) &amp; Holidays
@@ -237,7 +237,7 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
             <select value={popoverStatus} onChange={e => setPopoverStatus(e.target.value as AttendanceStatusCode)} className="w-full border border-slate-300 rounded-lg px-2 py-1.5">
               {ALL_STATUSES.map(s => <option key={s.status} value={s.status}>{s.label}</option>)}
             </select>
-            <input value={popoverRemarks} onChange={e => setPopoverRemarks(e.target.value)} placeholder="Remarks (optional)" className="w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+            <input value={popoverRemarks} onChange={e => setPopoverRemarks(e.target.value)} placeholder="Remarks (optional)" autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2 py-1.5" />
             <button onClick={savePopover} className="w-full bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white font-bold py-1.5 rounded-lg uppercase text-[10px] cursor-pointer">Save</button>
           </div>
         </>,

@@ -20,18 +20,23 @@ interface DocumentAttachmentProps {
   label?: string;
   isReadOnly?: boolean;
   hideAddFilesButton?: boolean;
+  hideDropzone?: boolean; // when true, only the "Add Files" button can trigger an upload (no drag-and-drop area)
+  maxFiles?: number; // when set and reached, the upload trigger(s) are hidden until a document is removed
 }
 
-export default function DocumentAttachment({ 
-  documents = [], 
-  onChange, 
+export default function DocumentAttachment({
+  documents = [],
+  onChange,
   label = "Attachments & Verified Documents",
   isReadOnly = false,
-  hideAddFilesButton = false
+  hideAddFilesButton = false,
+  hideDropzone = false,
+  maxFiles
 }: DocumentAttachmentProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isReading, setIsReading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const atMax = maxFiles != null && documents.length >= maxFiles;
   
   // Uploads each file to the server (saved to disk under /uploads, see
   // src/upload/upload.ts + server.ts) rather than embedding it as base64 in
@@ -126,7 +131,7 @@ export default function DocumentAttachment({
           <span className="text-[10px] font-mono font-normal text-slate-400 capitalize">({documents.length} files)</span>
         </label>
         
-        {!isReadOnly && !hideAddFilesButton && (
+        {!isReadOnly && !hideAddFilesButton && !atMax && (
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
@@ -138,40 +143,41 @@ export default function DocumentAttachment({
         )}
       </div>
 
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileChange}
+        multiple={maxFiles !== 1}
+        className="hidden"
+      />
+
+      {isReading && (
+        <div className="flex flex-col items-center justify-center space-y-1 py-3 mb-4">
+          <Loader2 className="w-6 h-6 text-teal-600 animate-spin" />
+          <p className="text-xs font-medium text-slate-500">Processing files...</p>
+        </div>
+      )}
+
       {/* Drag & Drop Zone */}
-      {!isReadOnly && (
+      {!isReadOnly && !hideDropzone && !atMax && !isReading && (
         <div
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onClick={() => fileInputRef.current?.click()}
           className={`border-2 border-dashed rounded-lg p-5 text-center cursor-pointer transition-all ${
-            isDragging 
-              ? 'border-teal-500 bg-teal-50/50' 
+            isDragging
+              ? 'border-teal-500 bg-teal-50/50'
               : 'border-slate-300 hover:border-slate-400 bg-white'
           } mb-4`}
         >
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileChange}
-            multiple
-            className="hidden"
-          />
-          {isReading ? (
-            <div className="flex flex-col items-center justify-center space-y-1">
-              <Loader2 className="w-6 h-6 text-teal-600 animate-spin" />
-              <p className="text-xs font-medium text-slate-500">Processing files...</p>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center space-y-1">
-              <Upload className="w-6 h-6 text-slate-400" />
-              <p className="text-xs font-semibold text-slate-600">
-                Drag and drop files here, or <span className="text-teal-600 font-bold">browse</span>
-              </p>
-              <p className="text-[10px] text-slate-400">PDF, JPG, PNG, Excel, Word (Up to 10MB)</p>
-            </div>
-          )}
+          <div className="flex flex-col items-center justify-center space-y-1">
+            <Upload className="w-6 h-6 text-slate-400" />
+            <p className="text-xs font-semibold text-slate-600">
+              Drag and drop files here, or <span className="text-teal-600 font-bold">browse</span>
+            </p>
+            <p className="text-[10px] text-slate-400">PDF, JPG, PNG, Excel, Word (Up to 10MB)</p>
+          </div>
         </div>
       )}
 
