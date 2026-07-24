@@ -129,6 +129,7 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
                 <th className="px-3 py-2.5">Designation</th>
                 <th className="px-3 py-2.5">Location</th>
                 <th className="px-3 py-2.5">Status</th>
+                <th className="px-3 py-2.5">Type</th>
                 <th className="px-3 py-2.5">CTC</th>
                 <th className="px-3 py-2.5">Annual CTC</th>
                 <th className="px-3 py-2.5">Advance Balance</th>
@@ -140,7 +141,7 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
-                <tr><td colSpan={13} className="text-center py-10 text-slate-400">No staff records found.</td></tr>
+                <tr><td colSpan={14} className="text-center py-10 text-slate-400">No staff records found.</td></tr>
               ) : filtered.map(emp => {
                 const detail = salaryDetails.find(d => d.empId === emp.id);
                 const hikeInfo = hikeCounts[emp.id];
@@ -155,6 +156,11 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
                       <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase border ${
                         emp.status === 'Active' ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-slate-200 text-slate-600 border-slate-300'
                       }`}>{emp.status}</span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase border ${
+                        emp.employmentType === 'Contract' ? 'bg-amber-100 text-amber-800 border-amber-300' : 'bg-sky-100 text-sky-800 border-sky-300'
+                      }`}>{emp.employmentType || 'On-Roll'}</span>
                     </td>
                     <td className="px-3 py-2.5">{detail?.ctc25 != null ? `Rs. ${detail.ctc25.toLocaleString('en-IN')}` : '-'}</td>
                     <td className="px-3 py-2.5">{detail?.annualCtc25 != null ? `Rs. ${detail.annualCtc25.toLocaleString('en-IN')}` : '-'}</td>

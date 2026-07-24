@@ -1053,12 +1053,25 @@ async function startServer() {
         monthKeys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
       }
 
-      const [employees, attendanceRows] = await Promise.all([getStaffEmployees(), getStaffAttendance()]);
+      const [employees, attendanceRows, salaryDetails, salaryHikes, advanceDeductions] = await Promise.all([
+        getStaffEmployees(), getStaffAttendance(), getStaffSalaryDetails(), getStaffSalaryHikes(), getStaffAdvanceDeductions()
+      ]);
       const employee = employees.find(e => e.id === empId);
       const summaries = await Promise.all(monthKeys.map(m => computeMonthlyAttendanceSummary(empId, m)));
       const rows = attendanceRows.filter(a => a.empId === empId && monthKeys.includes(a.date.slice(0, 7)));
 
-      res.json({ success: true, data: { employee, monthKeys, summaries, rows } });
+      const detail = salaryDetails.find(d => d.empId === empId);
+      const empDeductions = advanceDeductions.filter(x => x.empId === empId);
+      const deductedTotal = empDeductions.reduce((s, x) => s + (x.amount || 0), 0);
+      const today = new Date().toISOString().slice(0, 10);
+      const salary = detail ? {
+        ctc25: detail.ctc25,
+        annualCtc25: detail.annualCtc25,
+        effectiveSalary: computeEffectiveSalary(detail.ctc25, salaryHikes.filter(h => h.empId === empId), today),
+        advanceBalance: Math.max(0, (detail.advanceAmount || 0) - deductedTotal)
+      } : null;
+
+      res.json({ success: true, data: { employee, monthKeys, summaries, rows, salary } });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -1077,11 +1090,25 @@ async function startServer() {
         monthKeys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
       }
 
-      const employees = await getStaffEmployees();
-      const perEmployee = await Promise.all(employees.map(async e => ({
-        empId: e.id, name: e.name,
-        summaries: await Promise.all(monthKeys.map(m => computeMonthlyAttendanceSummary(e.id, m)))
-      })));
+      const [employees, salaryDetails, salaryHikes, advanceDeductions] = await Promise.all([
+        getStaffEmployees(), getStaffSalaryDetails(), getStaffSalaryHikes(), getStaffAdvanceDeductions()
+      ]);
+      const today = new Date().toISOString().slice(0, 10);
+      const perEmployee = await Promise.all(employees.map(async e => {
+        const detail = salaryDetails.find(d => d.empId === e.id);
+        const empDeductions = advanceDeductions.filter(x => x.empId === e.id);
+        const deductedTotal = empDeductions.reduce((s, x) => s + (x.amount || 0), 0);
+        return {
+          empId: e.id, name: e.name,
+          summaries: await Promise.all(monthKeys.map(m => computeMonthlyAttendanceSummary(e.id, m))),
+          salary: detail ? {
+            ctc25: detail.ctc25,
+            annualCtc25: detail.annualCtc25,
+            effectiveSalary: computeEffectiveSalary(detail.ctc25, salaryHikes.filter(h => h.empId === e.id), today),
+            advanceBalance: Math.max(0, (detail.advanceAmount || 0) - deductedTotal)
+          } : null
+        };
+      }));
 
       res.json({ success: true, data: { monthKeys, perEmployee } });
     } catch (err: any) {

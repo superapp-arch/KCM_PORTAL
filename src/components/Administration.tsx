@@ -253,7 +253,7 @@ export default function Administration({
     if (tabName === 'pettycash' && user.department === 'petty_cash') return true;
     if (tabName === 'maintenance' && user.department === 'maintenance') return true;
     if (tabName === 'accounts' && user.department === 'accounts_finance') return true;
-    if (tabName === 'hr' && (user.department === 'hr' || user.email === 'bhagya@kcmlogistics.in')) return true;
+    if (tabName === 'hr' && user.email === 'bhagya@kcmlogistics.in') return true;
     return false;
   };
 

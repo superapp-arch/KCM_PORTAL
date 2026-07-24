@@ -32,6 +32,25 @@ function dayLabel(month: string, day: number): string {
   return `${MONTH_ABBR[d.getMonth()]}${d.getDate()}`;
 }
 
+type SalaryInfo = { ctc25?: number; annualCtc25?: number; effectiveSalary?: number; advanceBalance?: number } | null;
+
+// Writes a small "Salary Details" block a couple of rows below the
+// attendance data, so the exported report also carries CTC/advance info
+// without disturbing the attendance grid/summary rows above it.
+function appendSalarySection(sheet: ExcelJS.Worksheet, salary: SalaryInfo, startRow: number) {
+  sheet.getCell(startRow, 1).value = 'Salary Details';
+  sheet.getCell(startRow, 1).font = { bold: true };
+  const fmt = (n: number | undefined) => (n != null ? `Rs. ${n.toLocaleString('en-IN')}` : '-');
+  sheet.getCell(startRow + 1, 1).value = 'CTC';
+  sheet.getCell(startRow + 1, 2).value = fmt(salary?.ctc25);
+  sheet.getCell(startRow + 2, 1).value = 'Annual CTC';
+  sheet.getCell(startRow + 2, 2).value = fmt(salary?.annualCtc25);
+  sheet.getCell(startRow + 3, 1).value = 'Effective Salary';
+  sheet.getCell(startRow + 3, 2).value = fmt(salary?.effectiveSalary);
+  sheet.getCell(startRow + 4, 1).value = 'Advance Balance';
+  sheet.getCell(startRow + 4, 2).value = fmt(salary?.advanceBalance);
+}
+
 export default function AttendanceReportDownload({ employees }: AttendanceReportDownloadProps) {
   const [open, setOpen] = useState(false);
   const [empId, setEmpId] = useState(employees[0]?.id || '');
@@ -46,6 +65,7 @@ export default function AttendanceReportDownload({ employees }: AttendanceReport
       const { data } = await res.json();
       const employee: StaffEmployee = data.employee;
       const rows: StaffAttendance[] = data.rows;
+      const salary = data.salary;
 
       const wb = new ExcelJS.Workbook();
 
@@ -68,6 +88,7 @@ export default function AttendanceReportDownload({ employees }: AttendanceReport
         sheet.getRow(1).font = { bold: true };
         sheet.columns.forEach(c => { c.width = 8; });
         sheet.getColumn(1).width = 24;
+        appendSalarySection(sheet, salary, 4);
       } else {
         const sheet = wb.addWorksheet('6-Month Summary');
         sheet.addRow(['Month', 'Working Days', 'Present', 'Absent', 'Half Day', 'Paid Leave', 'LOP', 'Attendance %']);
@@ -76,6 +97,7 @@ export default function AttendanceReportDownload({ employees }: AttendanceReport
           sheet.addRow([s.month, s.workingDays, s.presentDays, s.totalAbsent, s.halfDays, s.paidLeaveDays, s.lopDays, `${s.attendancePercentage}%`]);
         });
         sheet.columns.forEach(c => { c.width = 16; });
+        appendSalarySection(sheet, salary, data.summaries.length + 3);
       }
 
       const buffer = await wb.xlsx.writeBuffer();
@@ -98,13 +120,14 @@ export default function AttendanceReportDownload({ employees }: AttendanceReport
 
       const wb = new ExcelJS.Workbook();
       const sheet = wb.addWorksheet('All Staff');
-      const header = ['Emp ID', 'Name'];
+      const header = ['Emp ID', 'Name', 'CTC', 'Annual CTC', 'Effective Salary', 'Advance Balance'];
       data.monthKeys.forEach((m: string) => header.push(`${m} Working`, `${m} Present`, `${m} Absent`, `${m} PL`, `${m} LOP`, `${m} %`));
       sheet.addRow(header);
       sheet.getRow(1).font = { bold: true };
 
+      const fmt = (n: number | undefined) => (n != null ? `Rs. ${n.toLocaleString('en-IN')}` : '-');
       data.perEmployee.forEach((e: any) => {
-        const row = [e.empId, e.name];
+        const row = [e.empId, e.name, fmt(e.salary?.ctc25), fmt(e.salary?.annualCtc25), fmt(e.salary?.effectiveSalary), fmt(e.salary?.advanceBalance)];
         e.summaries.forEach((s: any) => row.push(s.workingDays, s.presentDays, s.totalAbsent, s.paidLeaveDays, s.lopDays, `${s.attendancePercentage}%`));
         sheet.addRow(row);
       });
