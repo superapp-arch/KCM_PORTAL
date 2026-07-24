@@ -914,7 +914,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                     fileName: file.name,
                                                     fileSize: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
                                                     uploadDate: new Date().toISOString().split('T')[0],
-                                                    filePath: result.path
+                                                    fileData: base64String
                                                   };
                                                   const currentDocs = v.documents || [];
                                                   const updatedVehicle = {
@@ -1013,9 +1013,9 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                 {/* Download */}
                                                 <button
                                                   onClick={() => {
-                                                    if (!doc.filePath) return;
+                                                    if (!doc.fileData) return;
                                                     const link = document.createElement('a');
-                                                    link.href = doc.filePath;
+                                                    link.href = doc.fileData;
                                                     link.download = doc.fileName;
                                                     document.body.appendChild(link);
                                                     link.click();
@@ -1030,7 +1030,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                 {/* Print */}
                                                 <button
                                                   onClick={() => {
-                                                    if (!doc.filePath) return;
+                                                    if (!doc.fileData) return;
                                                     const printWindow = window.open('', '_blank');
                                                     if (!printWindow) return;
                                                     printWindow.document.write(`
@@ -1045,7 +1045,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                         </head>
                                                         <body>
                                                           <h1>KCM Logistics Document Registry: ${doc.name} (${doc.fileName})</h1>
-                                                          <img src="${doc.filePath}" />
+                                                          <img src="${doc.fileData}" />
                                                           <script>
                                                             window.onload = function() { window.print(); };
                                                           </script>
@@ -1091,11 +1091,11 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                       <button
                                                         onClick={async () => {
                                                           setSharingDoc(null);
-                                                          if (!doc.filePath) return;
+                                                          if (!doc.fileData) return;
                                                           const canNativeShare = typeof navigator !== 'undefined' && !!navigator.share;
                                                           if (canNativeShare) {
                                                             try {
-                                                              const res = await fetch(doc.filePath);
+                                                              const res = await fetch(doc.fileData);
                                                               const blob = await res.blob();
                                                               const file = new File([blob], doc.fileName, { type: blob.type || 'application/octet-stream' });
                                                               const shareData: ShareData = {
@@ -1113,7 +1113,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                                             }
                                                           }
                                                           const link = document.createElement('a');
-                                                          link.href = doc.filePath;
+                                                          link.href = doc.fileData;
                                                           link.download = doc.fileName;
                                                           document.body.appendChild(link);
                                                           link.click();

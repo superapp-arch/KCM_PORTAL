@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { Calendar } from 'lucide-react';
 
 interface DateInputProps {
@@ -42,13 +42,31 @@ const formatDisplayDate = (iso: string): string => {
 
 export default function DateInput({ value, onChange, className, required, disabled, id, name }: DateInputProps) {
   const isoValue = normalizeToISO(value);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Opens the native picker on hover (desktop mouse users), in addition to the
+  // existing click-to-open behavior. Touch devices don't fire mouseenter, so
+  // they naturally fall back to the existing tap-to-open. There is no
+  // standard API to programmatically close a native date picker (it's
+  // OS/browser-rendered, not something this component renders) - it already
+  // closes itself on date selection, Escape, or an outside click, same as
+  // before this change.
+  const handleMouseEnter = () => {
+    if (disabled) return;
+    const el = inputRef.current as (HTMLInputElement & { showPicker?: () => void }) | null;
+    if (el && typeof el.showPicker === 'function') {
+      try { el.showPicker(); } catch { /* blocked (e.g. no transient user activation) - click-to-open still works */ }
+    }
+  };
+
   return (
-    <div className="relative">
+    <div className="relative" onMouseEnter={handleMouseEnter}>
       <div className={`${className} flex items-center pr-7`}>
         {isoValue ? formatDisplayDate(isoValue) : <span className="text-slate-400">dd/mm/yyyy</span>}
       </div>
       <Calendar className="w-4 h-4 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
       <input
+        ref={inputRef}
         type="date"
         id={id}
         name={name}

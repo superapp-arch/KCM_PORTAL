@@ -33,55 +33,46 @@ export default function DocumentAttachment({
   const [isReading, setIsReading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  const processFiles = async (files: FileList) => {
+  const processFiles = (files: FileList) => {
     setIsReading(true);
+    const promises = Array.from(files).map((file) => {
+      return new Promise<VehicleDocument>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const base64 = reader.result as string;
+          const docType: 'pdf' | 'image' | 'other' = file.type.includes('pdf')
+            ? 'pdf'
+            : file.type.includes('image')
+            ? 'image'
+            : 'other';
 
-    try {
-      const uploadedDocs: VehicleDocument[] = [];
+          resolve({
+            id: Math.random().toString(36).substring(2, 11),
+            name: file.name.substring(0, file.name.lastIndexOf('.')) || file.name,
+            type: docType,
+            fileName: file.name,
+            fileSize: (file.size / 1024).toFixed(1) + ' KB',
+            uploadDate: new Date().toISOString().substring(0, 10),
+            fileData: base64
+          });
+        };
+        reader.onerror = (err) => reject(err);
+        reader.readAsDataURL(file);
+      });
+    });
 
-      for (const file of Array.from(files)) {
-        const formData = new FormData();
-        formData.append("file", file);
-
-        const response = await fetch("/api/upload/vehicle", {
-          method: "POST",
-          body: formData,
-        });
-
-        const result = await response.json();
-
-        if (!result.success) {
-          alert(result.message);
-          continue;
-        }
-
-        uploadedDocs.push({
-          id: Math.random().toString(36).substring(2, 11),
-          name: file.name.replace(/\.[^/.]+$/, ""),
-          type: file.type.includes("pdf")
-            ? "pdf"
-            : file.type.includes("image")
-            ? "image"
-            : "other",
-          fileName: file.name,
-          fileSize: (file.size / 1024).toFixed(1) + " KB",
-          uploadDate: new Date().toISOString().substring(0, 10),
-
-          // THIS IS IMPORTANT
-          filePath: result.path
-        });
-      }
-
-      onChange([...documents, ...uploadedDocs]);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsReading(false);
-    }
+    Promise.all(promises)
+      .then((newDocs) => {
+        onChange([...documents, ...newDocs]);
+      })
+      .catch((err) => {
+        console.error("Error reading file:", err);
+      })
+      .finally(() => {
+        setIsReading(false);
+      });
   };
-  
 
-    
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       processFiles(e.target.files);
@@ -202,9 +193,9 @@ export default function DocumentAttachment({
               </div>
 
               <div className="flex items-center space-x-1 ml-3">
-                {doc.filePath ? (
+                {doc.fileData ? (
                   <a
-                    href={`/${doc.filePath}`}
+                    href={doc.fileData}
                     download={doc.fileName}
                     title="Download document file"
                     className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
@@ -212,7 +203,7 @@ export default function DocumentAttachment({
                     <Download className="w-4 h-4" />
                   </a>
                 ) : (
-                  <span className="text-[9px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded font-mono">File not available</span>
+                  <span className="text-[9px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded font-mono">No payload</span>
                 )}
                 
                 {!isReadOnly && (

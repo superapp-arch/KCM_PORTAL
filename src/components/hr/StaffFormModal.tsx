@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, User, Coins, Landmark, Wallet } from 'lucide-react';
-import { StaffEmployee, StaffSalaryDetail, StaffSalaryHike, StaffAdvanceDeduction, StaffBankDetail, StaffProvidentFund } from '../../types';
-import DateInput from '../DateInput';
+import { X, Plus, Trash2, User, Coins, Landmark, Wallet, Upload } from 'lucide-react';
+import { StaffEmployee, StaffSalaryDetail, StaffSalaryHike, StaffAdvanceDeduction, StaffBankDetail, StaffProvidentFund, VehicleDocument } from '../../types';
+import DocumentAttachment from '../DocumentAttachment';
 
 interface StaffFormModalProps {
   employee: StaffEmployee | null; // null = creating a new employee
@@ -11,7 +11,9 @@ interface StaffFormModalProps {
   onSaved: () => Promise<void>;
 }
 
-type FormTab = 'basic' | 'salary' | 'pf' | 'bank';
+type FormTab = 'basic' | 'documents' | 'salary' | 'pf' | 'bank';
+
+const WORKING_DAYS_DIVISOR = 30.5;
 
 function deriveOrgUnitPreview(empId: string): 'KCM_SUPPLY' | 'KCM_INSTA' {
   return /^KCMI\d+/i.test(empId) ? 'KCM_INSTA' : 'KCM_SUPPLY';
@@ -23,8 +25,8 @@ function currentMonthKey(): string {
 }
 
 const emptyPfForm = {
-  basic: '', hra: '', conveyance: '', medicalAllowance: '', lta: '', foodAllowance: '', cca: '', fuelAllowance: '', otherAllowances: '', extraDaysAmount: '',
-  professionalTax: '', epf: '', esi: '', lopAmount: '', fullAndFinal: '', otherDeductions: '', advances: '', incomeTax: ''
+  basic: '', hra: '', conveyance: '', medicalAllowance: '', lta: '', cca: '', fuelAllowance: '', otherAllowances: '', extraDays: '',
+  professionalTax: '', epf: '', esi: '', fullAndFinal: '', otherDeductions: '', advances: '', incomeTax: ''
 };
 
 export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmployee, onClose, onSaved }: StaffFormModalProps) {
@@ -37,8 +39,11 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
     id: employee?.id || '', name: employee?.name || '', designation: employee?.designation || '',
     dateOfJoining: employee?.dateOfJoining || '', dateOfLeaving: employee?.dateOfLeaving || '',
     location: employee?.location || 'Bangalore', status: employee?.status || 'Active' as StaffEmployee['status'],
+    contactNumber: employee?.contactNumber || '', panNumber: employee?.panNumber || '',
     remarks: employee?.remarks || ''
   });
+  const [aadharDocuments, setAadharDocuments] = useState<VehicleDocument[]>(employee?.aadharDocuments || []);
+  const [panDocuments, setPanDocuments] = useState<VehicleDocument[]>(employee?.panDocuments || []);
 
   const [salary, setSalary] = useState({ ctc25: '', annualCtc25: '', advanceAmount: '', remarks: '' });
   const [salaryDetailId, setSalaryDetailId] = useState<string | null>(null);
@@ -99,10 +104,10 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
       if (mine) {
         setPfForm({
           basic: String(mine.basic ?? ''), hra: String(mine.hra ?? ''), conveyance: String(mine.conveyance ?? ''),
-          medicalAllowance: String(mine.medicalAllowance ?? ''), lta: String(mine.lta ?? ''), foodAllowance: String(mine.foodAllowance ?? ''),
+          medicalAllowance: String(mine.medicalAllowance ?? ''), lta: String(mine.lta ?? ''),
           cca: String(mine.cca ?? ''), fuelAllowance: String(mine.fuelAllowance ?? ''), otherAllowances: String(mine.otherAllowances ?? ''),
-          extraDaysAmount: String(mine.extraDaysAmount ?? ''), professionalTax: String(mine.professionalTax ?? ''), epf: String(mine.epf ?? ''),
-          esi: String(mine.esi ?? ''), lopAmount: String(mine.lopAmount ?? ''), fullAndFinal: String(mine.fullAndFinal ?? ''),
+          extraDays: String(mine.extraDays ?? ''), professionalTax: String(mine.professionalTax ?? ''), epf: String(mine.epf ?? ''),
+          esi: String(mine.esi ?? ''), fullAndFinal: String(mine.fullAndFinal ?? ''),
           otherDeductions: String(mine.otherDeductions ?? ''), advances: String(mine.advances ?? ''), incomeTax: String(mine.incomeTax ?? '')
         });
       } else {
@@ -131,13 +136,24 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
       setTab('basic');
       return;
     }
+    if (!basic.panNumber.trim()) {
+      setError('PAN Card Number is required.');
+      setTab('basic');
+      return;
+    }
+    if (aadharDocuments.length === 0 || panDocuments.length === 0) {
+      setError('Aadhar Card and PAN Card document uploads are both required.');
+      setTab('documents');
+      return;
+    }
     setIsSubmitting(true);
     setError('');
     try {
+      const employeePayload = { ...basic, aadharDocuments, panDocuments };
       if (isEditing) {
-        await onUpdateEmployee(basic.id, basic);
+        await onUpdateEmployee(basic.id, employeePayload);
       } else {
-        await onAddEmployee(basic as StaffEmployee);
+        await onAddEmployee(employeePayload as StaffEmployee);
       }
 
       const salaryPayload = {
@@ -152,10 +168,10 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
       const pfPayload = {
         id: `${basic.id}-${pfMonth}`, empId: basic.id, month: pfMonth,
         basic: Number(pfForm.basic) || undefined, hra: Number(pfForm.hra) || undefined, conveyance: Number(pfForm.conveyance) || undefined,
-        medicalAllowance: Number(pfForm.medicalAllowance) || undefined, lta: Number(pfForm.lta) || undefined, foodAllowance: Number(pfForm.foodAllowance) || undefined,
+        medicalAllowance: Number(pfForm.medicalAllowance) || undefined, lta: Number(pfForm.lta) || undefined,
         cca: Number(pfForm.cca) || undefined, fuelAllowance: Number(pfForm.fuelAllowance) || undefined, otherAllowances: Number(pfForm.otherAllowances) || undefined,
-        extraDaysAmount: Number(pfForm.extraDaysAmount) || undefined, professionalTax: Number(pfForm.professionalTax) || undefined, epf: Number(pfForm.epf) || undefined,
-        esi: Number(pfForm.esi) || undefined, lopAmount: Number(pfForm.lopAmount) || undefined, fullAndFinal: Number(pfForm.fullAndFinal) || undefined,
+        extraDays: Number(pfForm.extraDays) || undefined, professionalTax: Number(pfForm.professionalTax) || undefined, epf: Number(pfForm.epf) || undefined,
+        esi: Number(pfForm.esi) || undefined, fullAndFinal: Number(pfForm.fullAndFinal) || undefined,
         otherDeductions: Number(pfForm.otherDeductions) || undefined, advances: Number(pfForm.advances) || undefined, incomeTax: Number(pfForm.incomeTax) || undefined
       };
       await fetch('/api/staff/provident-fund', {
@@ -231,10 +247,19 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
     }
   };
 
+  // Mirrors the server's calculation exactly (see /api/staff/provident-fund) so the
+  // form shows live totals while typing, before anything is saved. Per Day Salary is
+  // based only on the recurring monthly earnings (excludes extra-days pay, since that
+  // pay is itself derived from this figure), and LOP Amount is linked straight from
+  // attendance's LOP day count - so attendance and salary stay in sync automatically.
   const num = (v: string) => Number(v) || 0;
-  const pfTotalEarnings = num(pfForm.basic) + num(pfForm.hra) + num(pfForm.conveyance) + num(pfForm.medicalAllowance) +
-    num(pfForm.lta) + num(pfForm.foodAllowance) + num(pfForm.cca) + num(pfForm.fuelAllowance) + num(pfForm.otherAllowances) + num(pfForm.extraDaysAmount);
-  const pfTotalDeductions = num(pfForm.professionalTax) + num(pfForm.epf) + num(pfForm.esi) + num(pfForm.lopAmount) +
+  const pfRecurringEarnings = num(pfForm.basic) + num(pfForm.hra) + num(pfForm.conveyance) + num(pfForm.medicalAllowance) +
+    num(pfForm.lta) + num(pfForm.cca) + num(pfForm.fuelAllowance) + num(pfForm.otherAllowances);
+  const pfPerDaySalary = pfRecurringEarnings / WORKING_DAYS_DIVISOR;
+  const pfExtraDaysAmount = num(pfForm.extraDays) * pfPerDaySalary;
+  const pfLopAmount = pfAttendance.lopDays * pfPerDaySalary;
+  const pfTotalEarnings = pfRecurringEarnings + pfExtraDaysAmount;
+  const pfTotalDeductions = num(pfForm.professionalTax) + num(pfForm.epf) + num(pfForm.esi) + pfLopAmount +
     num(pfForm.fullAndFinal) + num(pfForm.otherDeductions) + num(pfForm.advances) + num(pfForm.incomeTax);
   const pfGrossSalary = pfTotalEarnings;
   const pfNetSalary = Math.round(pfGrossSalary - pfTotalDeductions);
@@ -253,7 +278,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
         </div>
 
         <div className="flex items-center gap-1.5 px-5 pt-4 text-xs font-semibold">
-          {([['basic', 'Basic Info', User], ['salary', 'Salary Details', Coins], ['pf', 'Provident Fund', Wallet], ['bank', 'Bank Details', Landmark]] as const).map(([key, label, Icon]) => (
+          {([['basic', 'Basic Info', User], ['documents', 'Upload Documents', Upload], ['salary', 'Salary Details', Coins], ['pf', 'Salary Breakup', Wallet], ['bank', 'Bank Details', Landmark]] as const).map(([key, label, Icon]) => (
             <button key={key} onClick={() => setTab(key)}
               className={`px-3 py-1.5 rounded-md flex items-center gap-1.5 cursor-pointer ${tab === key ? 'bg-gradient-to-r from-pink-600 to-purple-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
               <Icon className="w-3.5 h-3.5" /> {label}
@@ -290,11 +315,25 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Date of Joining</label>
-                  <DateInput value={basic.dateOfJoining} onChange={e => setBasic({ ...basic, dateOfJoining: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <input value={basic.dateOfJoining} onChange={e => setBasic({ ...basic, dateOfJoining: e.target.value })}
+                    placeholder="DD/MM/YYYY" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Date of Leaving</label>
-                  <DateInput value={basic.dateOfLeaving} onChange={e => handleDateOfLeavingChange(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <input value={basic.dateOfLeaving} onChange={e => handleDateOfLeavingChange(e.target.value)}
+                    placeholder="DD/MM/YYYY" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-500 mb-1">Contact Number</label>
+                  <input type="number" value={basic.contactNumber} onChange={e => setBasic({ ...basic, contactNumber: e.target.value })}
+                    className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-500 mb-1">PAN Card Number*</label>
+                  <input value={basic.panNumber} onChange={e => setBasic({ ...basic, panNumber: e.target.value.toUpperCase() })}
+                    placeholder="ABCDE1234F" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -313,6 +352,21 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
               <div>
                 <label className="block font-semibold text-slate-500 mb-1">Remarks</label>
                 <input value={basic.remarks} onChange={e => setBasic({ ...basic, remarks: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+              </div>
+            </div>
+          )}
+
+          {tab === 'documents' && (
+            <div className="space-y-4">
+              <div>
+                <p className="font-semibold text-slate-600 mb-1.5">Aadhar Card*</p>
+                <DocumentAttachment documents={aadharDocuments} onChange={setAadharDocuments} label="Attach Aadhar Card" />
+                {aadharDocuments.length === 0 && <p className="text-rose-500 mt-1">Required - please attach the Aadhar document.</p>}
+              </div>
+              <div>
+                <p className="font-semibold text-slate-600 mb-1.5">PAN Card*</p>
+                <DocumentAttachment documents={panDocuments} onChange={setPanDocuments} label="Attach PAN Card" />
+                {panDocuments.length === 0 && <p className="text-rose-500 mt-1">Required - please attach the PAN document.</p>}
               </div>
             </div>
           )}
@@ -414,14 +468,27 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                 <div className="grid grid-cols-2 gap-2">
                   {([
                     ['basic', 'Basic Salary'], ['hra', 'HRA'], ['conveyance', 'Conveyance'], ['medicalAllowance', 'Medical Allowance'],
-                    ['lta', 'LTA'], ['foodAllowance', 'Food Allowance'], ['cca', 'CCA'], ['fuelAllowance', 'Fuel Allowance'],
-                    ['otherAllowances', 'Other Allowances'], ['extraDaysAmount', 'Extra Days (Amount)']
+                    ['lta', 'LTA'], ['cca', 'CCA'], ['fuelAllowance', 'Fuel Allowance'], ['otherAllowances', 'Other Allowances']
                   ] as const).map(([key, label]) => (
                     <div key={key}>
                       <label className="block text-slate-400 mb-0.5">{label}</label>
                       <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                     </div>
                   ))}
+                  <div>
+                    <label className="block text-slate-400 mb-0.5">Extra Days (count)</label>
+                    <input type="number" value={pfForm.extraDays} onChange={e => setPfForm({ ...pfForm, extraDays: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-slate-100">
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2">
+                    <p className="text-emerald-600 uppercase text-[9px] font-bold">Per Day Salary (auto)</p>
+                    <p className="font-black text-emerald-700">Rs. {pfPerDaySalary.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
+                  </div>
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2">
+                    <p className="text-emerald-600 uppercase text-[9px] font-bold">Extra Days Amount (auto)</p>
+                    <p className="font-black text-emerald-700">Rs. {pfExtraDaysAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
+                  </div>
                 </div>
               </div>
 
@@ -429,24 +496,28 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                 <p className="font-bold text-rose-700 uppercase mb-2">Deductions</p>
                 <div className="grid grid-cols-2 gap-2">
                   {([
-                    ['professionalTax', 'Professional Tax'], ['epf', 'EPF'], ['esi', 'ESI'], ['lopAmount', 'LOP Amount'],
-                    ['fullAndFinal', 'F&F'], ['otherDeductions', 'Other Deductions'], ['advances', 'Advances'], ['incomeTax', 'Income Tax']
+                    ['professionalTax', 'Professional Tax'], ['epf', 'EPF'], ['esi', 'ESI'], ['fullAndFinal', 'F&F'],
+                    ['otherDeductions', 'Other Deductions'], ['advances', 'Advances'], ['incomeTax', 'Income Tax']
                   ] as const).map(([key, label]) => (
                     <div key={key}>
                       <label className="block text-slate-400 mb-0.5">{label}</label>
                       <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                     </div>
                   ))}
+                  <div className="bg-rose-50 border border-rose-200 rounded-lg p-2">
+                    <p className="text-rose-600 uppercase text-[9px] font-bold">LOP Amount (auto = LOP Days &times; Per Day Salary)</p>
+                    <p className="font-black text-rose-700">Rs. {pfLopAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
+                  </div>
                 </div>
               </div>
 
               <div className="border border-purple-200 bg-purple-50 rounded-lg p-3 grid grid-cols-2 gap-y-1.5">
-                <span className="text-purple-500 font-semibold">Total Earnings</span><span className="text-right font-bold">Rs. {pfTotalEarnings.toLocaleString('en-IN')}</span>
-                <span className="text-purple-500 font-semibold">Total Deductions</span><span className="text-right font-bold">Rs. {pfTotalDeductions.toLocaleString('en-IN')}</span>
-                <span className="text-purple-500 font-semibold">Gross Salary</span><span className="text-right font-bold">Rs. {pfGrossSalary.toLocaleString('en-IN')}</span>
+                <span className="text-purple-500 font-semibold">Total Earnings</span><span className="text-right font-bold">Rs. {pfTotalEarnings.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                <span className="text-purple-500 font-semibold">Total Deductions</span><span className="text-right font-bold">Rs. {pfTotalDeductions.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                <span className="text-purple-500 font-semibold">Gross Salary</span><span className="text-right font-bold">Rs. {pfGrossSalary.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                 <span className="text-purple-700 font-black">Net Salary</span><span className="text-right font-black text-purple-700">Rs. {pfNetSalary.toLocaleString('en-IN')}</span>
               </div>
-              {!isEditing && <p className="text-slate-400 italic">Save this employee first to record Provident Fund details.</p>}
+              {!isEditing && <p className="text-slate-400 italic">Save this employee first to record Salary Breakup details.</p>}
             </div>
           )}
 

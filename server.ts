@@ -911,21 +911,34 @@ async function startServer() {
     try { res.json({ success: true, data: await deleteStaffAdvanceDeduction(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  // ===== STAFF PROVIDENT FUND (monthly payroll breakdown; totalDays/workingDays/lopDays read live from attendance) =====
+  // ===== STAFF SALARY BREAKUP (formerly "Provident Fund"); totalDays/workingDays/lopDays
+  // read live from attendance, and perDaySalary/extraDaysAmount/lopAmount are derived from
+  // that same attendance data plus the recurring earnings below, so salary and attendance
+  // stay linked without any manual re-entry. =====
   app.get('/api/staff/provident-fund', async (req, res) => {
     try {
       const records = await getStaffProvidentFundRecords();
       const enriched = await Promise.all(records.map(async r => {
         const attendance = await computeMonthlyAttendanceSummary(r.empId, r.month);
-        const totalEarnings = (r.basic || 0) + (r.hra || 0) + (r.conveyance || 0) + (r.medicalAllowance || 0) +
-          (r.lta || 0) + (r.foodAllowance || 0) + (r.cca || 0) + (r.fuelAllowance || 0) + (r.otherAllowances || 0) + (r.extraDaysAmount || 0);
-        const totalDeductions = (r.professionalTax || 0) + (r.epf || 0) + (r.esi || 0) + (r.lopAmount || 0) +
+
+        // Recurring monthly earnings only - excludes extra-days pay, since extra-days
+        // pay is itself derived from this figure (avoids a circular calculation).
+        const recurringEarnings = (r.basic || 0) + (r.hra || 0) + (r.conveyance || 0) + (r.medicalAllowance || 0) +
+          (r.lta || 0) + (r.cca || 0) + (r.fuelAllowance || 0) + (r.otherAllowances || 0);
+
+        const perDaySalary = recurringEarnings / 30.5;
+        const extraDaysAmount = (r.extraDays || 0) * perDaySalary;
+        const lopAmount = attendance.lopDays * perDaySalary;
+
+        const totalEarnings = recurringEarnings + extraDaysAmount;
+        const totalDeductions = (r.professionalTax || 0) + (r.epf || 0) + (r.esi || 0) + lopAmount +
           (r.fullAndFinal || 0) + (r.otherDeductions || 0) + (r.advances || 0) + (r.incomeTax || 0);
         const grossSalary = totalEarnings;
         const netSalary = Math.round(grossSalary - totalDeductions);
         return {
           ...r,
           totalDays: attendance.totalDays, workingDays: attendance.workingDays, lopDays: attendance.lopDays,
+          perDaySalary, extraDaysAmount, lopAmount,
           totalEarnings, totalDeductions, grossSalary, netSalary
         };
       }));

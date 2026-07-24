@@ -24,7 +24,7 @@ export interface VehicleDocument {
   fileName: string;
   fileSize: string;
   uploadDate: string;
-  filePath?: string; 
+  fileData?: string; // base64 payload or preview placeholder
 }
 
 export interface Vehicle {
@@ -168,13 +168,17 @@ export interface StaffEmployee {
   id: string; // EmpId, e.g. KCM15001 or KCMI30001
   name: string;
   designation?: string;
-  dateOfJoining?: string;
-  dateOfLeaving?: string; // setting this prompts the UI to also set status to Inactive
+  dateOfJoining?: string; // free-text dd/mm/yyyy, entered manually (no date picker)
+  dateOfLeaving?: string; // free-text dd/mm/yyyy; setting this prompts the UI to also set status to Inactive
   location?: string; // defaults to "Bangalore" in the UI
   status: 'Active' | 'Inactive';
   orgUnit: StaffOrgUnit; // server-derived from EmpId prefix (^KCMI\d+ -> Insta, else Supply); read-only in the UI
+  contactNumber?: string;
+  panNumber?: string;
   remarks?: string;
   documents?: VehicleDocument[];
+  aadharDocuments?: VehicleDocument[]; // mandatory in the UI
+  panDocuments?: VehicleDocument[]; // mandatory in the UI
 }
 
 export interface StaffSalaryDetail {
@@ -211,6 +215,14 @@ export interface StaffAdvanceDeduction {
 // always read live from attendance (see StaffAttendanceAdjustment for the
 // manual LOP override), consistent with how attendance summaries elsewhere
 // are computed rather than persisted.
+// "Salary Breakup" (formerly labeled Provident Fund). perDaySalary,
+// extraDaysAmount, and lopAmount are intentionally NOT stored here - they're
+// always computed on read from the fields below plus attendance, exactly
+// like totalDays/workingDays/lopDays, so attendance and salary stay linked
+// without any manual re-entry or sync bugs:
+//   perDaySalary = (basic+hra+conveyance+medicalAllowance+lta+cca+fuelAllowance+otherAllowances) / 30.5
+//   extraDaysAmount = extraDays * perDaySalary
+//   lopAmount = lopDays (from attendance, or its manual override) * perDaySalary
 export interface StaffProvidentFund {
   id: string; // deterministic: `${empId}-${month}`
   empId: string;
@@ -221,16 +233,14 @@ export interface StaffProvidentFund {
   conveyance?: number;
   medicalAllowance?: number;
   lta?: number;
-  foodAllowance?: number;
   cca?: number;
   fuelAllowance?: number;
   otherAllowances?: number;
-  extraDaysAmount?: number;
-  // Deductions
+  extraDays?: number; // count of extra days worked; amount is computed (extraDays * perDaySalary)
+  // Deductions (lopAmount is computed, not stored - see above)
   professionalTax?: number;
   epf?: number;
   esi?: number;
-  lopAmount?: number;
   fullAndFinal?: number;
   otherDeductions?: number;
   advances?: number;
