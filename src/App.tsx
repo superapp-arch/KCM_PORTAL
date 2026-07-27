@@ -100,7 +100,7 @@ export default function App() {
         fetch('/api/accounts'),
         authFetch('/api/staff/employees'),
         fetch('/api/notifications'),
-        fetch('/api/warehouse'),
+        authFetch('/api/warehouse'),
         authFetch('/api/mileage'),
         authFetch('/api/fuel-vendors'),
         authFetch('/api/vehicle-mileage')
@@ -444,7 +444,7 @@ export default function App() {
 
   const handleAddWarehouseEntry = async (entry: Omit<WarehouseEntry, 'id'>) => {
     try {
-      const res = await fetch('/api/warehouse', {
+      const res = await authFetch('/api/warehouse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(entry)
@@ -459,7 +459,7 @@ export default function App() {
 
   const handleUpdateWarehouseEntry = async (id: string, entry: Partial<WarehouseEntry>) => {
     try {
-      const res = await fetch('/api/warehouse', {
+      const res = await authFetch('/api/warehouse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...entry, id })
@@ -474,7 +474,7 @@ export default function App() {
 
   const handleDeleteWarehouseEntry = async (id: string) => {
     try {
-      const res = await fetch(`/api/warehouse/${id}`, {
+      const res = await authFetch(`/api/warehouse/${id}`, {
         method: 'DELETE'
       });
       if (res.ok) {

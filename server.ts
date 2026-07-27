@@ -244,6 +244,19 @@ function requireFuelAccess(req: express.Request, res: express.Response, next: ex
   next();
 }
 
+// Warehouse Details is super-admin-only for now (the user may open it up to
+// specific other roles later - this is the one place to widen that).
+function requireWarehouseAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (sessionUser.department !== 'super_admin') {
+    return res.status(403).json({ error: 'You do not have access to Warehouse Details.' });
+  }
+  next();
+}
+
 // Applies the Chandan/Praveen row-level visibility rule shared by /api/fuel
 // and /api/mileage: super admins see every row with enteredBy intact; anyone
 // else only sees rows they personally entered, with enteredBy stripped out
@@ -450,6 +463,7 @@ async function startServer() {
   // the file to disk and returns its path for the frontend to store on the
   // record, instead of embedding the file as base64 in the database.
   app.post('/api/upload/:module', upload.single('file'), (req, res) => {
+    const module = req.params.module;
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No file was uploaded.' });
     }
@@ -1263,7 +1277,9 @@ async function startServer() {
     }
   });
 
-  // Warehouse Details endpoints
+  // Warehouse Details endpoints - super-admin-only for now
+  app.use('/api/warehouse', requireWarehouseAccess);
+
   app.get('/api/warehouse', async (req, res) => {
     try {
       res.json(await getWarehouseEntries());

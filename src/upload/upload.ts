@@ -14,6 +14,15 @@ if (!fs.existsSync(uploadsDir)) {
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
+    
+    const moduleName = req.params.module;
+
+    const folder = path.join(uploadsDir, moduleName);
+
+    if (!fs.existsSync(folder)) {
+        fs.mkdirSync(folder, { recursive: true });
+    }
+
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
