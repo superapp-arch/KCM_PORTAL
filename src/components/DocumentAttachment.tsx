@@ -50,7 +50,7 @@ export default function DocumentAttachment({
         const formData = new FormData();
         formData.append('file', file);
 
-        const response = await fetch('/api/upload/vehicles', { method: 'POST', body: formData });
+        const response = await fetch('/api/upload/vehicle', { method: 'POST', body: formData });
         const result = await response.json();
 
         if (!result.success) {
