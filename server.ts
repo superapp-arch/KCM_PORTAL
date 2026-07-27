@@ -197,6 +197,22 @@ async function computeMonthlyAttendanceSummary(empId: string, month: string) {
   };
 }
 
+// HR & Payroll data is restricted to Bhagya and super admins - the frontend
+// already hides the tab from everyone else, but that's UI-only. This is the
+// actual enforcement: without it, anyone with a valid session token could
+// call /api/staff/* directly (e.g. via devtools) and read or edit employee/
+// salary data regardless of what the UI shows them.
+function requireHrAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (sessionUser.department !== 'super_admin' && sessionUser.email !== 'bhagya@kcmlogistics.in') {
+    return res.status(403).json({ error: 'You do not have access to HR & Payroll.' });
+  }
+  next();
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -864,6 +880,10 @@ async function startServer() {
   app.delete('/api/accounts/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteAccountsEntry(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
+
+  // Every /api/staff/* route below is HR & Payroll data - gate the whole
+  // prefix once here rather than per-route.
+  app.use('/api/staff', requireHrAccess);
 
   // ===== STAFF EMPLOYEES =====
   app.get('/api/staff/employees', async (req, res) => {

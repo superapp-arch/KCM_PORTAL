@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { StaffEmployee, StaffAttendance, AttendanceStatusCode } from '../../types';
+import { authFetch } from '../../authFetch';
 
 interface StaffAttendanceSummaryModalProps {
   employee: StaffEmployee;
@@ -39,7 +40,7 @@ export default function StaffAttendanceSummaryModal({ employee, month, onClose }
   const [isSavingLop, setIsSavingLop] = useState(false);
 
   const loadSummary = () => {
-    fetch(`/api/staff/attendance/monthly/${encodeURIComponent(employee.id)}/${month}`)
+    authFetch(`/api/staff/attendance/monthly/${encodeURIComponent(employee.id)}/${month}`)
       .then(r => r.json()).then(({ data }) => setSummary(data)).catch(() => setSummary(null));
   };
 
@@ -53,7 +54,7 @@ export default function StaffAttendanceSummaryModal({ employee, month, onClose }
   const saveLopOverride = async () => {
     setIsSavingLop(true);
     try {
-      const res = await fetch(`/api/staff/attendance-adjustment/${encodeURIComponent(employee.id)}/${month}`, {
+      const res = await authFetch(`/api/staff/attendance-adjustment/${encodeURIComponent(employee.id)}/${month}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lopDaysOverride: Number(lopInput) })
       });

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { StaffEmployee, StaffSalaryDetail } from '../../types';
 import StaffFormModal from './StaffFormModal';
+import { authFetch } from '../../authFetch';
 
 interface StaffSalarySheetProps {
   employees: StaffEmployee[];
@@ -28,9 +29,9 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
 
   const loadSalaryData = async () => {
     try {
-      const detailRes = await fetch('/api/staff/salary-detail');
+      const detailRes = await authFetch('/api/staff/salary-detail');
       if (detailRes.ok) setSalaryDetails(await detailRes.json());
-      const hikeRes = await fetch('/api/staff/salary-hikes');
+      const hikeRes = await authFetch('/api/staff/salary-hikes');
       if (hikeRes.ok) {
         const hikes = await hikeRes.json();
         const grouped: Record<string, { count: number; total: number }> = {};

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Plus, Trash2, User, Coins, Landmark, Wallet, Upload } from 'lucide-react';
 import { StaffEmployee, StaffSalaryDetail, StaffSalaryHike, StaffAdvanceDeduction, StaffBankDetail, StaffProvidentFund, VehicleDocument } from '../../types';
 import DocumentAttachment from '../DocumentAttachment';
+import { authFetch } from '../../authFetch';
 
 interface StaffFormModalProps {
   employee: StaffEmployee | null; // null = creating a new employee
@@ -65,14 +66,14 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
 
   const loadAdvanceDeductions = () => {
     if (!employee) return;
-    fetch('/api/staff/advance-deductions').then(r => r.json()).then((all: StaffAdvanceDeduction[]) => {
+    authFetch('/api/staff/advance-deductions').then(r => r.json()).then((all: StaffAdvanceDeduction[]) => {
       setAdvanceDeductions(all.filter(d => d.empId === employee.id));
     }).catch(() => {});
   };
 
   useEffect(() => {
     if (!employee) return;
-    fetch('/api/staff/salary-detail').then(r => r.json()).then((all: (StaffSalaryDetail & { effectiveSalary: number; advanceBalance: number })[]) => {
+    authFetch('/api/staff/salary-detail').then(r => r.json()).then((all: (StaffSalaryDetail & { effectiveSalary: number; advanceBalance: number })[]) => {
       const mine = all.find(d => d.empId === employee.id);
       if (mine) {
         setSalaryDetailId(mine.id);
@@ -83,7 +84,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
         setAdvanceBalance(mine.advanceBalance || 0);
       }
     }).catch(() => {});
-    fetch('/api/staff/bank-detail').then(r => r.json()).then((all: StaffBankDetail[]) => {
+    authFetch('/api/staff/bank-detail').then(r => r.json()).then((all: StaffBankDetail[]) => {
       const mine = all.find(d => d.empId === employee.id);
       if (mine) {
         setBankDetailId(mine.id);
@@ -93,7 +94,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
         });
       }
     }).catch(() => {});
-    fetch('/api/staff/salary-hikes').then(r => r.json()).then((all: StaffSalaryHike[]) => {
+    authFetch('/api/staff/salary-hikes').then(r => r.json()).then((all: StaffSalaryHike[]) => {
       setHikes(all.filter(h => h.empId === employee.id));
     }).catch(() => {});
     loadAdvanceDeductions();
@@ -101,7 +102,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
 
   useEffect(() => {
     if (!employee) return;
-    fetch('/api/staff/provident-fund').then(r => r.json()).then((all: (StaffProvidentFund & { totalDays: number; workingDays: number; totalAbsent: number; lopDays: number })[]) => {
+    authFetch('/api/staff/provident-fund').then(r => r.json()).then((all: (StaffProvidentFund & { totalDays: number; workingDays: number; totalAbsent: number; lopDays: number })[]) => {
       const mine = all.find(r => r.empId === employee.id && r.month === pfMonth);
       setPfAttendance({ totalDays: mine?.totalDays || 0, workingDays: mine?.workingDays || 0, totalAbsent: mine?.totalAbsent || 0, lopDays: mine?.lopDays || 0 });
       if (mine) {
@@ -118,7 +119,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
       }
     }).catch(() => {});
     // Attendance-derived totalDays/workingDays/totalAbsent/lopDays should show even before a PF record exists for this month.
-    fetch(`/api/staff/attendance/monthly/${encodeURIComponent(employee.id)}/${pfMonth}`).then(r => r.json()).then(({ data }) => {
+    authFetch(`/api/staff/attendance/monthly/${encodeURIComponent(employee.id)}/${pfMonth}`).then(r => r.json()).then(({ data }) => {
       if (data) setPfAttendance({ totalDays: data.totalDays, workingDays: data.workingDays, totalAbsent: data.totalAbsent, lopDays: data.lopDays });
     }).catch(() => {});
   }, [employee, pfMonth]);
@@ -170,7 +171,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
         ctc25: Number(salary.ctc25) || undefined, annualCtc25: Number(salary.annualCtc25) || undefined,
         advanceAmount: Number(salary.advanceAmount) || undefined, remarks: salary.remarks || undefined
       };
-      await fetch(salaryDetailId ? `/api/staff/salary-detail/${salaryDetailId}` : '/api/staff/salary-detail', {
+      await authFetch(salaryDetailId ? `/api/staff/salary-detail/${salaryDetailId}` : '/api/staff/salary-detail', {
         method: salaryDetailId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(salaryPayload)
       });
 
@@ -183,7 +184,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
         esi: Number(pfForm.esi) || undefined, fullAndFinal: Number(pfForm.fullAndFinal) || undefined,
         otherDeductions: Number(pfForm.otherDeductions) || undefined, advances: Number(pfForm.advances) || undefined, incomeTax: Number(pfForm.incomeTax) || undefined
       };
-      await fetch('/api/staff/provident-fund', {
+      await authFetch('/api/staff/provident-fund', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pfPayload)
       });
 
@@ -192,7 +193,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
         accountNumber: bank.accountNumber || undefined, ifscCode: bank.ifscCode || undefined,
         bankName: bank.bankName || undefined, amount: Number(bank.amount) || undefined
       };
-      await fetch(bankDetailId ? `/api/staff/bank-detail/${bankDetailId}` : '/api/staff/bank-detail', {
+      await authFetch(bankDetailId ? `/api/staff/bank-detail/${bankDetailId}` : '/api/staff/bank-detail', {
         method: bankDetailId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bankPayload)
       });
 
@@ -207,7 +208,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
 
   const addHike = async () => {
     if (!employee || !hikeForm.effectiveDate || !hikeForm.amount) return;
-    const res = await fetch('/api/staff/salary-hikes', {
+    const res = await authFetch('/api/staff/salary-hikes', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ empId: employee.id, effectiveDate: hikeForm.effectiveDate, amount: Number(hikeForm.amount) })
     });
@@ -219,7 +220,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
   };
 
   const removeHike = async (id: string) => {
-    const res = await fetch(`/api/staff/salary-hikes/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/staff/salary-hikes/${id}`, { method: 'DELETE' });
     if (res.ok && employee) {
       const { data } = await res.json();
       setHikes(data.filter((h: StaffSalaryHike) => h.empId === employee.id));
@@ -228,7 +229,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
 
   const addDeduction = async () => {
     if (!employee || !deductionForm.date || !deductionForm.amount) return;
-    const res = await fetch('/api/staff/advance-deductions', {
+    const res = await authFetch('/api/staff/advance-deductions', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ empId: employee.id, date: deductionForm.date, amount: Number(deductionForm.amount) })
     });
@@ -236,7 +237,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
       setDeductionForm({ date: '', amount: '' });
       loadAdvanceDeductions();
       // Refresh the computed balance immediately rather than waiting for the modal to reopen.
-      const detailRes = await fetch('/api/staff/salary-detail');
+      const detailRes = await authFetch('/api/staff/salary-detail');
       const all = await detailRes.json();
       const mine = all.find((d: any) => d.empId === employee.id);
       if (mine) setAdvanceBalance(mine.advanceBalance || 0);
@@ -244,11 +245,11 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
   };
 
   const removeDeduction = async (id: string) => {
-    const res = await fetch(`/api/staff/advance-deductions/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/staff/advance-deductions/${id}`, { method: 'DELETE' });
     if (res.ok) {
       loadAdvanceDeductions();
       if (employee) {
-        const detailRes = await fetch('/api/staff/salary-detail');
+        const detailRes = await authFetch('/api/staff/salary-detail');
         const all = await detailRes.json();
         const mine = all.find((d: any) => d.empId === employee.id);
         if (mine) setAdvanceBalance(mine.advanceBalance || 0);

@@ -3,6 +3,7 @@ import SplashScreen from './components/SplashScreen';
 import Login from './components/Login';
 import Administration from './components/Administration';
 import kcmLogo from './assets/images/logo.png';
+import { authFetch } from './authFetch';
 import {
   User,
   Vehicle,
@@ -94,7 +95,7 @@ export default function App() {
         fetch('/api/petty-cash'),
         fetch('/api/maintenance'),
         fetch('/api/accounts'),
-        fetch('/api/staff/employees'),
+        authFetch('/api/staff/employees'),
         fetch('/api/notifications'),
         fetch('/api/warehouse'),
         fetch('/api/mileage'),
@@ -238,7 +239,7 @@ export default function App() {
 
   const handleUpdateEmployee = async (id: string, emp: Partial<StaffEmployee>) => {
     try {
-      const res = await fetch(`/api/staff/employees/${id}`, {
+      const res = await authFetch(`/api/staff/employees/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(emp)
@@ -253,7 +254,7 @@ export default function App() {
 
   const handleDeleteEmployee = async (id: string) => {
     try {
-      const res = await fetch(`/api/staff/employees/${id}`, {
+      const res = await authFetch(`/api/staff/employees/${id}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -266,7 +267,7 @@ export default function App() {
 
   const handleAddEmployee = async (emp: Omit<StaffEmployee, 'id'> & { id: string }) => {
     try {
-      const res = await fetch('/api/staff/employees', {
+      const res = await authFetch('/api/staff/employees', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(emp)

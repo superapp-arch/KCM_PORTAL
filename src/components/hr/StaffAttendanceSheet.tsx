@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import { StaffEmployee, StaffAttendance, StaffHoliday, AttendanceStatusCode } from '../../types';
+import { authFetch } from '../../authFetch';
 import StaffAttendanceSummaryModal from './StaffAttendanceSummaryModal';
 import AttendanceReportDownload from './AttendanceReportDownload';
 
@@ -74,8 +75,8 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
   const [popoverStatus, setPopoverStatus] = useState<AttendanceStatusCode>('Present');
   const [popoverRemarks, setPopoverRemarks] = useState('');
 
-  const loadAttendance = () => fetch('/api/staff/attendance').then(r => r.json()).then(setAttendance).catch(() => {});
-  const loadHolidays = () => fetch('/api/staff/holidays').then(r => r.json()).then(setHolidays).catch(() => {});
+  const loadAttendance = () => authFetch('/api/staff/attendance').then(r => r.json()).then(setAttendance).catch(() => {});
+  const loadHolidays = () => authFetch('/api/staff/holidays').then(r => r.json()).then(setHolidays).catch(() => {});
   useEffect(() => { loadAttendance(); loadHolidays(); }, []);
 
   const totalDays = daysInMonth(month);
@@ -100,7 +101,7 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
 
   const markCell = async (empId: string, day: number, status: AttendanceStatusCode, remarks?: string) => {
     const date = `${month}-${String(day).padStart(2, '0')}`;
-    const res = await fetch('/api/staff/attendance/mark', {
+    const res = await authFetch('/api/staff/attendance/mark', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ empId, date, status, remarks })
     });
@@ -145,7 +146,7 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
       });
     }
     if (entries.length === 0) return;
-    const res = await fetch('/api/staff/attendance/bulk', {
+    const res = await authFetch('/api/staff/attendance/bulk', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(entries)
     });
     if (res.ok) await loadAttendance();

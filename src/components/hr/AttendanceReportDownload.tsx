@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import ExcelJS from 'exceljs';
 import { Download } from 'lucide-react';
 import { StaffEmployee, StaffAttendance, AttendanceStatusCode } from '../../types';
+import { authFetch } from '../../authFetch';
 
 interface AttendanceReportDownloadProps {
   employees: StaffEmployee[];
@@ -61,7 +62,7 @@ export default function AttendanceReportDownload({ employees }: AttendanceReport
     if (!empId) return;
     setIsDownloading(true);
     try {
-      const res = await fetch(`/api/staff/attendance/${encodeURIComponent(empId)}/report?range=${range}`);
+      const res = await authFetch(`/api/staff/attendance/${encodeURIComponent(empId)}/report?range=${range}`);
       const { data } = await res.json();
       const employee: StaffEmployee = data.employee;
       const rows: StaffAttendance[] = data.rows;
@@ -115,7 +116,7 @@ export default function AttendanceReportDownload({ employees }: AttendanceReport
   const downloadAllStaffReport = async () => {
     setIsDownloading(true);
     try {
-      const res = await fetch(`/api/staff/attendance/report/all?range=${range}`);
+      const res = await authFetch(`/api/staff/attendance/report/all?range=${range}`);
       const { data } = await res.json();
 
       const wb = new ExcelJS.Workbook();
