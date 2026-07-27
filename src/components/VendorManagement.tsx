@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Vendor } from '../types';
+import { Vendor, VehicleDocument } from '../types';
 import { Building2, Plus, Search, Edit2, Trash2, X, Car } from 'lucide-react';
+import DocumentAttachment from './DocumentAttachment';
 
 interface VendorManagementProps {
   vendors: Vendor[];
@@ -35,6 +36,10 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
   const [vehicleNumbers, setVehicleNumbers] = useState<string[]>([]);
   const [vehicleInput, setVehicleInput] = useState('');
   const [errors, setErrors] = useState<FormErrors>({});
+  const [aadharDocuments, setAadharDocuments] = useState<VehicleDocument[]>([]);
+  const [panDocuments, setPanDocuments] = useState<VehicleDocument[]>([]);
+  const [rcDocuments, setRcDocuments] = useState<VehicleDocument[]>([]);
+  const [bankStatementDocuments, setBankStatementDocuments] = useState<VehicleDocument[]>([]);
 
   const resetForm = () => {
     setEditingId(null);
@@ -42,6 +47,10 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
     setVehicleNumbers([]);
     setVehicleInput('');
     setErrors({});
+    setAadharDocuments([]);
+    setPanDocuments([]);
+    setRcDocuments([]);
+    setBankStatementDocuments([]);
     setShowModal(false);
   };
 
@@ -55,6 +64,10 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
     setVehicleNumbers(vendor.vehicleNumbers || []);
     setVehicleInput('');
     setErrors({});
+    setAadharDocuments(vendor.aadharDocuments || []);
+    setPanDocuments(vendor.panDocuments || []);
+    setRcDocuments(vendor.rcDocuments || []);
+    setBankStatementDocuments(vendor.bankStatementDocuments || []);
     setShowModal(true);
   };
 
@@ -84,6 +97,9 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
     };
     setErrors(nextErrors);
     if (Object.values(nextErrors).some(Boolean)) return;
+    if (aadharDocuments.length === 0 || panDocuments.length === 0 || rcDocuments.length === 0 || bankStatementDocuments.length === 0) {
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -95,7 +111,11 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
         aadharNumber: form.aadharNumber,
         panNumber: form.panNumber,
         bankAccountNumber: form.bankAccountNumber.trim(),
-        ifscCode: form.ifscCode.trim().toUpperCase()
+        ifscCode: form.ifscCode.trim().toUpperCase(),
+        aadharDocuments,
+        panDocuments,
+        rcDocuments,
+        bankStatementDocuments
       };
       if (editingId) {
         await onUpdateVendor(editingId, payload);
@@ -292,6 +312,29 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
                     <input value={form.ifscCode} onChange={e => setForm({ ...form, ifscCode: e.target.value.toUpperCase() })}
                       autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                     {errors.ifscCode && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
+                  </div>
+                </div>
+
+                <div className="space-y-3 pt-3 border-t border-slate-100">
+                  <div>
+                    <label className="block font-semibold text-slate-500 mb-1">Aadhar Document*</label>
+                    <DocumentAttachment documents={aadharDocuments} onChange={setAadharDocuments} label="Attach Aadhar Card" hideDropzone maxFiles={1} />
+                    {aadharDocuments.length === 0 && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-500 mb-1">PAN Document*</label>
+                    <DocumentAttachment documents={panDocuments} onChange={setPanDocuments} label="Attach PAN Card" hideDropzone maxFiles={1} />
+                    {panDocuments.length === 0 && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-500 mb-1">RC Document*</label>
+                    <DocumentAttachment documents={rcDocuments} onChange={setRcDocuments} label="Attach RC" hideDropzone maxFiles={1} />
+                    {rcDocuments.length === 0 && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-500 mb-1">Bank Statement*</label>
+                    <DocumentAttachment documents={bankStatementDocuments} onChange={setBankStatementDocuments} label="Attach Bank Statement" hideDropzone maxFiles={1} />
+                    {bankStatementDocuments.length === 0 && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
                   </div>
                 </div>
 

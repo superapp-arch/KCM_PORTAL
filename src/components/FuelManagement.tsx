@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { FuelLog, FuelVendor, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage, Vendor } from '../types';
+import { FuelLog, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage, Vendor, StaffEmployee } from '../types';
 import {
   Fuel,
   Plus,
@@ -20,7 +20,7 @@ import DateInput from './DateInput';
 import MileageReportModule from './MileageReport';
 
 const LOCATIONS = [
-  'AP', 'Nelmangala', 'Belagaum', 'BLR', 'Chennai', 'Goa', 'Hyd', 'Hassan',
+  'AP', 'Nelmangala', 'Belagaum', 'BLR', 'Chennai', 'Goa', 'Hyderabad', 'Hassan',
   'Hoskote', 'Kandlakoya', 'Mysore', 'Manoharabad', 'Vijayawada', 'Vizag'
 ];
 
@@ -32,6 +32,40 @@ const BUNK_NAMES = [
 
 const CLIENTS = ['DHL', 'KCM', 'Market Vehicle', 'Reliance', 'Shadowfax', 'Swiggy'];
 
+// Which bunks are available at each location, so selecting one filters/
+// auto-fills the other. Bunks shared across multiple locations (HPCL) are
+// deliberately not reverse-mapped back to a single location.
+const LOCATION_BUNK_MAP: Record<string, string[]> = {
+  Hoskote: ['Sri Venkateshwara'],
+  Nelmangala: ['Kamala'],
+  Hyderabad: ['Sri Sai Baba', 'Isnapur'],
+  Kandlakoya: ['Vayuputra'],
+  Mysore: ['Simhadhri'],
+  Vizag: ['Visalakshi'],
+  Hassan: ['H V Subbaya'],
+  BLR: ['HPCL'],
+  Chennai: ['HPCL'],
+  Goa: ['HPCL'],
+  Belagaum: ['OM Petroleum', 'Atharv'],
+  Vijayawada: ['Tejashri'],
+  Manoharabad: ['Lakshmi']
+};
+
+// Reverse lookup, built once: a bunk maps back to a location only when it
+// belongs to exactly one location (skips shared bunks like HPCL).
+const BUNK_LOCATION_MAP: Record<string, string> = (() => {
+  const counts: Record<string, number> = {};
+  const map: Record<string, string> = {};
+  Object.entries(LOCATION_BUNK_MAP).forEach(([loc, bunks]) => {
+    bunks.forEach(bunk => {
+      counts[bunk] = (counts[bunk] || 0) + 1;
+      map[bunk] = loc;
+    });
+  });
+  Object.keys(map).forEach(bunk => { if (counts[bunk] > 1) delete map[bunk]; });
+  return map;
+})();
+
 interface FuelManagementProps {
   user: User;
   logs: FuelLog[];
@@ -39,20 +73,19 @@ interface FuelManagementProps {
   onUpdateLog: (id: string, log: Partial<FuelLog>) => Promise<void>;
   onDeleteLog: (id: string) => Promise<void>;
   vehicles: Vehicle[];
-  vendors: FuelVendor[];
-  onAddVendor: (vendor: Omit<FuelVendor, 'id'>) => Promise<void>;
-  onDeleteVendor: (id: string) => Promise<void>;
   mileageReports: MileageReport[];
   onAddMileageReport: (report: Omit<MileageReport, 'id'>) => Promise<void>;
   onUpdateMileageReport: (id: string, report: Partial<MileageReport>) => Promise<void>;
   onDeleteMileageReport: (id: string) => Promise<void>;
   vehicleMileages: VehicleMileage[];
   onAddVehicleMileage: (entry: Omit<VehicleMileage, 'id'>) => Promise<void>;
+  onUpdateVehicleMileage: (id: string, entry: Partial<VehicleMileage>) => Promise<void>;
   onDeleteVehicleMileage: (id: string) => Promise<void>;
   // Read-only lookup into the Vendor Management registry (separate module,
   // separate access group) - used only to auto-fill/select Vehicle Number
   // when the typed Vendor Name matches a registered vendor there.
   vendorProfiles: Vendor[];
+  employees: StaffEmployee[];
 }
 
 export default function FuelManagement({
@@ -62,17 +95,16 @@ export default function FuelManagement({
   onUpdateLog,
   onDeleteLog,
   vehicles,
-  vendors,
-  onAddVendor,
-  onDeleteVendor,
   mileageReports,
   onAddMileageReport,
   onUpdateMileageReport,
   onDeleteMileageReport,
   vehicleMileages,
   onAddVehicleMileage,
+  onUpdateVehicleMileage,
   onDeleteVehicleMileage,
-  vendorProfiles
+  vendorProfiles,
+  employees
 }: FuelManagementProps) {
   const [activeSubTab, setActiveSubTab] = useState<'entry' | 'trip'>('entry');
   const [searchTerm, setSearchTerm] = useState('');
@@ -103,11 +135,6 @@ export default function FuelManagement({
   const [rqId, setRqId] = useState('');
   const [entryDocs, setEntryDocs] = useState<VehicleDocument[]>([]);
 
-  // Vendor Master mini-management
-  const [showVendorManager, setShowVendorManager] = useState(false);
-  const [vendorFormName, setVendorFormName] = useState('');
-  const [vendorFormCode, setVendorFormCode] = useState('');
-
   const triggerNotif = (msg: string) => {
     setNotif(msg);
     setTimeout(() => setNotif(null), 4000);
@@ -128,24 +155,54 @@ export default function FuelManagement({
     setAmount(String(parseFloat((l * r).toFixed(2))));
   }, [ltrs, rate]);
 
-  // Vendor Code auto-fill based on the selected Vendor Name
-  useEffect(() => {
-    const matched = vendors.find(v => v.name.trim().toLowerCase() === vendorName.trim().toLowerCase());
-    if (matched) setVendorCode(matched.code);
-  }, [vendorName, vendors]);
-
-  // Vehicle Number auto-fill from the Vendor Management registry (separate
-  // read-only lookup, keyed by the same Vendor Name text). If the matched
-  // vendor has exactly one registered vehicle, fill it directly; if several,
-  // a picker is shown below instead so the user chooses which one.
+  // Vendor Name/Code/Vehicle all come from the Vendor Management registry
+  // (vendorProfiles) - there is no separate "Manage Vendors" list anymore.
   const matchedVendorProfile = vendorProfiles.find(
     v => v.name.trim().toLowerCase() === vendorName.trim().toLowerCase()
   );
+
+  // Vendor Code auto-fill based on the selected Vendor Name
+  useEffect(() => {
+    if (matchedVendorProfile) setVendorCode(matchedVendorProfile.code);
+  }, [matchedVendorProfile]);
+
+  // Vehicle Number auto-fill: if the matched vendor has exactly one
+  // registered vehicle, fill it directly; if several, a picker is shown
+  // below instead so the user chooses which one.
   useEffect(() => {
     if (matchedVendorProfile && matchedVendorProfile.vehicleNumbers.length === 1) {
       setVehicleNumber(matchedVendorProfile.vehicleNumbers[0]);
     }
   }, [matchedVendorProfile]);
+
+  // Bunk options for the currently selected location, per LOCATION_BUNK_MAP -
+  // falls back to the full list if the location isn't mapped (or none picked).
+  const bunkOptionsForLocation = location && LOCATION_BUNK_MAP[location] ? LOCATION_BUNK_MAP[location] : BUNK_NAMES;
+
+  // Location -> Bunk: auto-fill when the location maps to exactly one bunk.
+  useEffect(() => {
+    const bunks = location ? LOCATION_BUNK_MAP[location] : undefined;
+    if (bunks && bunks.length === 1) setBunkName(bunks[0]);
+  }, [location]);
+
+  // Bunk -> Location: auto-fill only when that bunk belongs to exactly one
+  // location (skipped for bunks shared across locations, like HPCL).
+  useEffect(() => {
+    const loc = BUNK_LOCATION_MAP[bunkName];
+    if (loc) setLocation(loc);
+  }, [bunkName]);
+
+  // Same-(bunk, date) Rate carry-forward: the first entry for a bunk on a
+  // given day sets the rate; later entries for that same bunk that day
+  // auto-fill it. A new date (or backdated entry for a different date)
+  // requires fresh manual entry, keyed off whatever date is in the form.
+  useEffect(() => {
+    if (!bunkName || !date || editingId) return;
+    const sameBunkDayLogs = logs.filter(l => l.bunkName === bunkName && l.date === date);
+    if (sameBunkDayLogs.length > 0) {
+      setRate(String(sameBunkDayLogs[sameBunkDayLogs.length - 1].rate));
+    }
+  }, [bunkName, date, logs, editingId]);
 
   const resetForm = () => {
     setEditingId(null);
@@ -255,18 +312,6 @@ export default function FuelManagement({
     }
   };
 
-  const handleAddVendor = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!vendorFormName.trim() || !vendorFormCode.trim()) return;
-    try {
-      await onAddVendor({ name: vendorFormName.trim(), code: vendorFormCode.trim() });
-      setVendorFormName('');
-      setVendorFormCode('');
-      triggerNotif('Vendor added to Vendor Master.');
-    } catch (err) {
-      console.error(err);
-    }
-  };
 
   const filteredLogs = logs.filter(log =>
     (log?.vehicleNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -500,7 +545,9 @@ export default function FuelManagement({
           onDeleteReport={onDeleteMileageReport}
           vehicleMileages={vehicleMileages}
           onAddVehicleMileage={onAddVehicleMileage}
+          onUpdateVehicleMileage={onUpdateVehicleMileage}
           onDeleteVehicleMileage={onDeleteVehicleMileage}
+          employees={employees}
         />
       )}
 
@@ -581,8 +628,13 @@ export default function FuelManagement({
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
                       />
                       <datalist id="fuel-bunks-datalist">
-                        {BUNK_NAMES.map((b, i) => <option key={i} value={b} />)}
+                        {bunkOptionsForLocation.map((b, i) => <option key={i} value={b} />)}
                       </datalist>
+                      {location && LOCATION_BUNK_MAP[location] && (
+                        <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                          Suggested for {location}: {LOCATION_BUNK_MAP[location].join(', ')}
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -702,18 +754,9 @@ export default function FuelManagement({
                   </div>
 
                   <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
-                        <Building2 className="w-3 h-3" /> Vendor Master
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setShowVendorManager(!showVendorManager)}
-                        className="text-[10px] font-bold text-blue-600 hover:text-blue-800 cursor-pointer"
-                      >
-                        {showVendorManager ? 'Hide' : 'Manage Vendors'}
-                      </button>
-                    </div>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                      <Building2 className="w-3 h-3" /> Vendor (from Vendor Management)
+                    </span>
 
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1">Vendor Name</label>
@@ -727,8 +770,11 @@ export default function FuelManagement({
                         className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-800"
                       />
                       <datalist id="fuel-vendors-datalist">
-                        {vendors.map((v) => <option key={v.id} value={v.name} />)}
+                        {vendorProfiles.map((v) => <option key={v.id} value={v.name} />)}
                       </datalist>
+                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                        Type a name registered in Vendor Management, or enter one manually if not found.
+                      </p>
                     </div>
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1">Vendor Code (auto)</label>
@@ -740,49 +786,6 @@ export default function FuelManagement({
                         className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono text-slate-800"
                       />
                     </div>
-
-                    {showVendorManager && (
-                      <div className="pt-2 border-t border-slate-200 space-y-2">
-                        <p className="text-[9px] text-slate-400 font-mono">Add a vendor to the Vendor Master list.</p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <input
-                            type="text"
-                            placeholder="Vendor name"
-                            value={vendorFormName}
-                            onChange={(e) => setVendorFormName(e.target.value)}
-                            autoComplete="off"
-                            className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-slate-800 text-[11px]"
-                          />
-                          <input
-                            type="text"
-                            placeholder="Vendor code"
-                            value={vendorFormCode}
-                            onChange={(e) => setVendorFormCode(e.target.value)}
-                            autoComplete="off"
-                            className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-slate-800 text-[11px]"
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          onClick={handleAddVendor}
-                          className="w-full bg-slate-800 hover:bg-slate-900 text-white rounded-lg py-1.5 font-semibold text-[10px] uppercase cursor-pointer"
-                        >
-                          Add Vendor
-                        </button>
-                        {vendors.length > 0 && (
-                          <div className="max-h-28 overflow-y-auto space-y-1 pt-1">
-                            {vendors.map(v => (
-                              <div key={v.id} className="flex items-center justify-between bg-white border border-slate-100 rounded-md px-2 py-1">
-                                <span className="text-[10px] font-semibold text-slate-700">{v.name} <span className="text-slate-400 font-mono">({v.code})</span></span>
-                                <button type="button" onClick={() => onDeleteVendor(v.id)} className="text-rose-400 hover:text-rose-600 cursor-pointer">
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
 
                   <div>

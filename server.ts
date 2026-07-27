@@ -1455,6 +1455,15 @@ async function startServer() {
     }
   });
 
+  app.put('/api/vehicle-mileage/:id', async (req, res) => {
+    try {
+      const result = await saveVehicleMileage({ ...req.body, id: req.params.id });
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.delete('/api/vehicle-mileage/:id', async (req, res) => {
     try {
       const { id } = req.params;

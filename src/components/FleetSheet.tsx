@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx';
 import { motion } from 'motion/react';
-import { Vehicle, VehicleDocument } from '../types';
+import { Vehicle, VehicleDocument, VehicleMileage } from '../types';
 import {
   Search,
   Filter,
@@ -39,6 +39,13 @@ interface FleetSheetProps {
   userRole: string;
   onUpdateVehicle: (vehicle: Vehicle) => Promise<void>;
   onDeleteVehicle: (id: string) => Promise<void>;
+  // Actual Mileage (fixed KM/L reference) is stored in the shared
+  // Vehicle Mileage Master table (src/db/schema.ts: vehicleMileage), the
+  // same data the Vehicle Mileage Master panel in Trip Details edits - so
+  // both surfaces stay in sync with no duplicate/conflicting values.
+  vehicleMileages: VehicleMileage[];
+  onAddVehicleMileage: (entry: Omit<VehicleMileage, 'id'>) => Promise<void>;
+  onUpdateVehicleMileage: (id: string, entry: Partial<VehicleMileage>) => Promise<void>;
 }
 
 const VEHICLE_TYPES = [
@@ -78,7 +85,7 @@ const getExpiryAlertStatus = (dateStr?: string, minDays = 0, maxDays = 10): { is
   return { isAlert: diffDays >= minDays && diffDays <= maxDays, diffDays };
 };
 
-export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDeleteVehicle }: FleetSheetProps) {
+export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDeleteVehicle, vehicleMileages, onAddVehicleMileage, onUpdateVehicleMileage }: FleetSheetProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedType, setSelectedType] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -329,11 +336,18 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
   };
 
   const [editForm, setEditForm] = useState<Vehicle | null>(null);
+  const [actualMileageInput, setActualMileageInput] = useState('');
+
+  const findVehicleMileage = (regNo: string) =>
+    vehicleMileages.find(v => v.vehicleNo.trim().toUpperCase() === regNo.trim().toUpperCase());
 
   const startEdit = (vehicle: Vehicle) => {
     setEditForm({ ...vehicle });
     setIsNewVehicle(false);
     setActiveTab('general');
+    const regNo = vehicle['Reg. No.'] || vehicle.regNo || '';
+    const existing = findVehicleMileage(regNo);
+    setActualMileageInput(existing ? String(existing.mileage) : '');
   };
 
   const startCreate = () => {
@@ -376,6 +390,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
     setEditForm(fresh);
     setIsNewVehicle(true);
     setActiveTab('general');
+    setActualMileageInput('');
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -395,6 +410,16 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
         body: JSON.stringify(finalVehicle)
       });
       if (response.ok) {
+        const regNo = finalVehicle['Reg. No.'] || finalVehicle.regNo || '';
+        if (regNo && actualMileageInput.trim()) {
+          const mileageValue = parseFloat(actualMileageInput);
+          const existing = findVehicleMileage(regNo);
+          if (existing) {
+            await onUpdateVehicleMileage(existing.id, { mileage: mileageValue });
+          } else {
+            await onAddVehicleMileage({ vehicleNo: regNo, mileage: mileageValue });
+          }
+        }
         setEditForm(null);
         await onUpdateVehicle(finalVehicle);
       }
@@ -1299,6 +1324,23 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                         className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-mono font-bold tracking-wider text-slate-800 focus:ring-1 focus:ring-teal-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
                         placeholder="e.g. KA53AA0069"
                       />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
+                        Actual Mileage (KM/L)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={actualMileageInput}
+                        onChange={(e) => setActualMileageInput(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-mono font-bold text-slate-800 focus:ring-1 focus:ring-teal-500 focus:outline-none"
+                        placeholder="Fixed reference mileage, e.g. 8.5"
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Shared with the Vehicle Mileage Master panel in Trip Details - editing either updates the same value.
+                      </p>
                     </div>
 
                     <div>

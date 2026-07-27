@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
-import { MileageReport, Vehicle, User, VehicleMileage } from '../types';
+import { MileageReport, Vehicle, User, VehicleMileage, StaffEmployee } from '../types';
 import {
   Gauge,
   Plus,
@@ -35,8 +35,13 @@ interface MileageReportModuleProps {
   onDeleteReport: (id: string) => Promise<void>;
   vehicleMileages?: VehicleMileage[];
   onAddVehicleMileage?: (entry: Omit<VehicleMileage, 'id'>) => Promise<void>;
+  onUpdateVehicleMileage?: (id: string, entry: Partial<VehicleMileage>) => Promise<void>;
   onDeleteVehicleMileage?: (id: string) => Promise<void>;
   readOnly?: boolean;
+  // Used only to word the fuel-audit note when Authorized Driver contains a
+  // single name that exactly matches exactly one employee - informational
+  // only, no payroll record is created (that's a future Driver Salary module).
+  employees?: StaffEmployee[];
 }
 
 export default function MileageReportModule({
@@ -48,8 +53,10 @@ export default function MileageReportModule({
   onDeleteReport,
   vehicleMileages = [],
   onAddVehicleMileage,
+  onUpdateVehicleMileage,
   onDeleteVehicleMileage,
-  readOnly = false
+  readOnly = false,
+  employees = []
 }: MileageReportModuleProps) {
   // UI Panels
   const [showSidebar, setShowSidebar] = useState(false);
@@ -89,9 +96,8 @@ export default function MileageReportModule({
   // File import ref
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // The selected vehicle's fixed mileage rating, looked up from the Vehicle
-  // Mileage Master - this is what now drives Distance Covered/Cost per KM,
-  // instead of odometer-derived per-entry calculations.
+  // The selected vehicle's fixed Actual Mileage reference, looked up from the
+  // Vehicle Mileage Master (same value editable from Fleet & Vehicles).
   const fixedMileageForVehicle = vehicleMileages.find(
     v => v.vehicleNo.trim().toUpperCase() === vehicleNo.trim().toUpperCase()
   )?.mileage;
@@ -141,20 +147,23 @@ export default function MileageReportModule({
     }
   }, [vehicleNo, reports, editingId]);
 
-  // 2. Mileage = the vehicle's fixed rating from the Vehicle Mileage Master
-  // (not computed from odometer anymore - it's a per-vehicle constant).
+  // 2. Actual Mileage = the vehicle's FIXED reference rating from the Vehicle
+  // Mileage Master / Fleet & Vehicles (same shared value) - a per-vehicle
+  // constant, not computed per trip.
   useEffect(() => {
-    setMileage(fixedMileageForVehicle != null ? String(fixedMileageForVehicle) : '0');
+    setActualMileage(fixedMileageForVehicle != null ? String(fixedMileageForVehicle) : '0');
   }, [fixedMileageForVehicle]);
 
-  // 3. Distance Covered (Total KM) = Mileage * Litres - auto from fuel data,
-  // replacing the old Closing KM - Opening KM calculation. Opening/Closing KM
-  // are now optional, record-keeping-only fields that don't feed this.
+  // 3. Distance Covered (Total KM) = Closing KM - Opening KM (real odometer).
   useEffect(() => {
-    const m = parseFloat(mileage) || 0;
-    const l = parseFloat(litres) || 0;
-    setTotalKm(String(parseFloat((m * l).toFixed(2))));
-  }, [mileage, litres]);
+    const o = parseFloat(openingKm) || 0;
+    const c = parseFloat(closingKm) || 0;
+    if (c >= o) {
+      setTotalKm(String(c - o));
+    } else {
+      setTotalKm('0');
+    }
+  }, [openingKm, closingKm]);
 
   // 4. Calculate Diesel Amount = Rate per Litre * Litres
   useEffect(() => {
@@ -163,14 +172,23 @@ export default function MileageReportModule({
     setDieselAmount(String(parseFloat((rate * l).toFixed(2))));
   }, [ratePerLitre, litres]);
 
-  // 4b. Cost per KM = Rate per Litre / Mileage
+  // 5. Mileage = the REAL, achieved-this-trip efficiency = Total KM / Litres
+  // - compared against the fixed Actual Mileage above to catch fuel theft,
+  // misuse, or meter tampering (see Difference below).
+  useEffect(() => {
+    const tKm = parseFloat(totalKm) || 0;
+    const l = parseFloat(litres) || 0;
+    setMileage(l > 0 ? String(parseFloat((tKm / l).toFixed(2))) : '0');
+  }, [totalKm, litres]);
+
+  // 6. Cost per KM = Rate per Litre / Mileage (this trip's real efficiency)
   useEffect(() => {
     const rate = parseFloat(ratePerLitre) || 0;
     const m = parseFloat(mileage) || 0;
     setCostPerKm(m > 0 ? String(parseFloat((rate / m).toFixed(2))) : '0');
   }, [ratePerLitre, mileage]);
 
-  // 5. Same-day Rate per Litre carry-forward: once any vehicle's entry sets a
+  // 7. Same-day Rate per Litre carry-forward: once any vehicle's entry sets a
   // rate for a given date, subsequent entries that same date default to it.
   // A new date requires fresh manual entry (then repeats for that new date).
   useEffect(() => {
@@ -181,7 +199,7 @@ export default function MileageReportModule({
     }
   }, [date, reports, editingId]);
 
-  // 6. Total Amount = Diesel Amount + (Extra Fuel * Rate per Ltr (new))
+  // 8. Total Amount = Diesel Amount + (Extra Fuel * Rate per Ltr (new))
   useEffect(() => {
     const diesel = parseFloat(dieselAmount) || 0;
     const extra = parseFloat(extraFuel) || 0;
@@ -189,17 +207,52 @@ export default function MileageReportModule({
     setTotalAmount(String(parseFloat((diesel + extra * rateNew).toFixed(2))));
   }, [dieselAmount, extraFuel, ratePerLitreNew]);
 
+  // The fuel-audit note is appended to Remarks in a recognizable, strippable
+  // format so re-submitting/editing an entry replaces it instead of piling up
+  // duplicate notes each time.
+  const AUDIT_NOTE_PATTERN = /\s*\(Fuel Audit:[^)]*\)\s*$/;
+  const stripPreviousAuditNote = (text: string) => text.replace(AUDIT_NOTE_PATTERN, '').trim();
+
+  // Resolves "the driver" wording for the audit note: only names a specific
+  // employee when Authorized Driver contains exactly one name that exactly
+  // matches exactly one Staff Employee - otherwise stays generic. No employee
+  // record is looked up or modified; this is wording only.
+  const resolveDriverWord = (driverNameValue: string): string => {
+    const names = driverNameValue.split('/').map(n => n.trim()).filter(Boolean);
+    if (names.length !== 1) return 'the driver';
+    const matches = employees.filter(e => e.name.trim().toLowerCase() === names[0].toLowerCase());
+    return matches.length === 1 ? matches[0].name : 'the driver';
+  };
+
+  // Computes the Difference (Actual Mileage - Mileage) and, when positive,
+  // the informational fuel-audit note comparing expected vs. actual litres.
+  const computeFuelAudit = (totalKmVal: number, litresVal: number, rateVal: number, actualMileageVal: number, mileageVal: number, driverNameValue: string) => {
+    const difference = parseFloat((actualMileageVal - mileageVal).toFixed(2));
+    if (difference <= 0 || actualMileageVal <= 0) return { difference, note: undefined as string | undefined };
+
+    const expectedLitres = totalKmVal / actualMileageVal;
+    const litresDiff = parseFloat(Math.abs(expectedLitres - litresVal).toFixed(2));
+    if (litresDiff === 0) return { difference, note: undefined as string | undefined };
+    const costDelta = parseFloat((litresDiff * rateVal).toFixed(2));
+    const driverWord = resolveDriverWord(driverNameValue);
+
+    const note = expectedLitres < litresVal
+      ? `Possible fuel misuse: Rs.${costDelta} to be deducted from ${driverWord}'s salary`
+      : `Fuel efficiency credit: Rs.${costDelta} to be credited to ${driverWord}`;
+    return { difference, note };
+  };
+
   // Handle Create / Update Submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!date || !vehicleNo || !ratePerLitre || !litres || !driverName || !location) {
+    if (!date || !vehicleNo || !openingKm || !closingKm || !ratePerLitre || !litres || !driverName || !location) {
       triggerNotif('Please complete all required fields (*)', 'error');
       return;
     }
 
-    const o = openingKm ? parseFloat(openingKm) : undefined;
-    const c = closingKm ? parseFloat(closingKm) : undefined;
-    if (o != null && c != null && c < o) {
+    const o = parseFloat(openingKm);
+    const c = parseFloat(closingKm);
+    if (c < o) {
       triggerNotif('Closing KM cannot be less than Opening KM', 'error');
       return;
     }
@@ -209,13 +262,16 @@ export default function MileageReportModule({
       const rate = parseFloat(ratePerLitre);
       const l = parseFloat(litres);
       const calculatedDieselAmount = parseFloat((rate * l).toFixed(2));
-      // Snapshot the vehicle's current fixed mileage rating at entry time, so
-      // later edits to the Vehicle Mileage Master don't retroactively change
-      // historical entries.
-      const calculatedMileage = fixedMileageForVehicle || 0;
-      const calculatedTotalKm = parseFloat((calculatedMileage * l).toFixed(2));
+      const calculatedTotalKm = c - o;
+      const calculatedMileage = l > 0 ? parseFloat((calculatedTotalKm / l).toFixed(2)) : 0;
       const calculatedCostPerKm = calculatedMileage > 0 ? parseFloat((rate / calculatedMileage).toFixed(2)) : 0;
-      const manualActualMileage = parseFloat(actualMileage) || 0;
+      // Snapshot the vehicle's current fixed Actual Mileage reference at entry
+      // time, so later edits to the Vehicle Mileage Master don't retroactively
+      // change historical entries.
+      const calculatedActualMileage = fixedMileageForVehicle || 0;
+      const { difference, note } = computeFuelAudit(calculatedTotalKm, l, rate, calculatedActualMileage, calculatedMileage, driverName);
+      const baseRemarks = stripPreviousAuditNote(remarks);
+      const finalRemarks = note ? `${baseRemarks}${baseRemarks ? ' ' : ''}(Fuel Audit: ${note})` : baseRemarks;
       const extra = parseFloat(extraFuel) || 0;
       const rateNew = parseFloat(ratePerLitreNew) || 0;
       const calculatedTotalAmount = parseFloat((calculatedDieselAmount + extra * rateNew).toFixed(2));
@@ -237,8 +293,10 @@ export default function MileageReportModule({
         costPerKm: calculatedCostPerKm,
         driverName: driverName.trim(),
         location: location.trim(),
-        remarks: remarks.trim(),
-        actualMileage: manualActualMileage,
+        remarks: finalRemarks,
+        actualMileage: calculatedActualMileage,
+        difference,
+        fuelAuditNote: note,
         extraFuel: extra,
         ratePerLitreNew: rateNew,
         totalAmount: calculatedTotalAmount
@@ -271,8 +329,7 @@ export default function MileageReportModule({
     setLitres(String(report.litres));
     setDriverName(report.driverName);
     setLocation(report.location);
-    setRemarks(report.remarks || '');
-    setActualMileage(String(report.actualMileage || ''));
+    setRemarks(stripPreviousAuditNote(report.remarks || ''));
     setExtraFuel(String(report.extraFuel || ''));
     setRatePerLitreNew(String(report.ratePerLitreNew || ''));
     setShowSidebar(true);
@@ -304,7 +361,17 @@ export default function MileageReportModule({
     e.preventDefault();
     if (!mileageFormVehicleNo.trim() || !mileageFormValue.trim() || !onAddVehicleMileage) return;
     try {
-      await onAddVehicleMileage({ vehicleNo: mileageFormVehicleNo.trim().toUpperCase(), mileage: parseFloat(mileageFormValue) });
+      const vNo = mileageFormVehicleNo.trim().toUpperCase();
+      const mileageValue = parseFloat(mileageFormValue);
+      // Find-existing-or-create: this is the SAME underlying value the
+      // Actual Mileage field in Fleet & Vehicles edits, so re-saving here
+      // updates that row in place instead of creating a duplicate.
+      const existing = vehicleMileages.find(v => v.vehicleNo.trim().toUpperCase() === vNo);
+      if (existing && onUpdateVehicleMileage) {
+        await onUpdateVehicleMileage(existing.id, { mileage: mileageValue });
+      } else {
+        await onAddVehicleMileage({ vehicleNo: vNo, mileage: mileageValue });
+      }
       setMileageFormVehicleNo('');
       setMileageFormValue('');
       triggerNotif('Vehicle mileage rating saved.', 'success');
@@ -437,6 +504,7 @@ export default function MileageReportModule({
       'Mileage': r.mileage,
       'Cost per KM': r.costPerKm || 0,
       'Actual Mileage': r.actualMileage || 0,
+      'Difference': r.difference ?? '',
       'Extra Fuel': r.extraFuel || 0,
       'Rate per Ltr (new)': r.ratePerLitreNew || 0,
       'Total Amount': r.totalAmount || 0,
@@ -635,6 +703,7 @@ export default function MileageReportModule({
                 <th className="px-3 py-2.5 text-right text-pink-400">Mileage</th>
                 <th className="px-3 py-2.5 text-right text-amber-400">Cost/KM</th>
                 <th className="px-3 py-2.5 text-right text-purple-400">Actual Mileage</th>
+                <th className="px-3 py-2.5 text-right">Difference</th>
                 <th className="px-3 py-2.5 text-right">Extra Fuel</th>
                 <th className="px-3 py-2.5 text-right">Rate/Ltr (new)</th>
                 <th className="px-3 py-2.5 text-right text-teal-400">Total Amount</th>
@@ -648,7 +717,7 @@ export default function MileageReportModule({
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
               {filteredReports.length === 0 ? (
                 <tr>
-                  <td colSpan={19 + (isSuperAdmin ? 1 : 0) + (readOnly ? 0 : 1)} className="text-center py-20 text-slate-400 font-mono text-xs">
+                  <td colSpan={20 + (isSuperAdmin ? 1 : 0) + (readOnly ? 0 : 1)} className="text-center py-20 text-slate-400 font-mono text-xs">
                     🚫 NO REGISTERED MILEAGE ENTRIES DISCOVERED FOR THIS SEGMENT.
                     <div className="text-[10px] text-slate-400 font-sans mt-1">
                       {readOnly ? 'Entries are added from the Trip Details tab in Fuel Management.' : 'Use the "Add Details" sidebar button to authorize new mileage and fuel log books.'}
@@ -670,6 +739,9 @@ export default function MileageReportModule({
                     <td className="px-3 py-2 text-right font-mono font-bold text-pink-700 bg-pink-50/20">{r.mileage.toFixed(2)} KM/L</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-amber-700 bg-amber-50/20">{r.costPerKm ? `₹${r.costPerKm.toFixed(2)}` : '-'}</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-purple-700 bg-purple-50/20">{r.actualMileage ? `${r.actualMileage.toFixed(2)} KM/L` : '-'}</td>
+                    <td className={`px-3 py-2 text-right font-mono font-bold ${r.difference == null ? 'text-slate-400' : r.difference > 0 ? 'text-emerald-600' : r.difference < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
+                      {r.difference == null ? '-' : `${r.difference > 0 ? '+' : ''}${r.difference.toFixed(2)}`}
+                    </td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.extraFuel ? r.extraFuel.toFixed(2) : '-'}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.ratePerLitreNew ? `₹${r.ratePerLitreNew.toFixed(2)}` : '-'}</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-teal-700 bg-teal-50/20">{r.totalAmount ? `₹${r.totalAmount.toLocaleString('en-IN')}` : '-'}</td>
@@ -898,30 +970,31 @@ export default function MileageReportModule({
                     )}
                   </div>
 
-                  {/* Opening and Closing KM - optional record-keeping fields only;
-                      Distance Covered now comes from the fixed mileage rating above */}
+                  {/* Opening and Closing KM - required, real odometer readings */}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block font-bold text-slate-700 mb-1">
-                        Opening KM (optional)
+                        Opening KM *
                       </label>
                       <input
                         type="number"
+                        required
                         placeholder="Automatic/Manual"
                         value={openingKm}
                         onChange={(e) => setOpeningKm(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-pink-500"
                       />
                       <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                        {openingKm ? '✓ Autoloaded previous' : 'For record-keeping only'}
+                        {openingKm ? '✓ Autoloaded previous' : 'Enter manually first time'}
                       </p>
                     </div>
                     <div>
                       <label className="block font-bold text-slate-700 mb-1">
-                        Closing KM (optional)
+                        Closing KM *
                       </label>
                       <input
                         type="number"
+                        required
                         placeholder="Current reading"
                         value={closingKm}
                         onChange={(e) => setClosingKm(e.target.value)}
@@ -971,40 +1044,55 @@ export default function MileageReportModule({
                     </div>
                   </div>
 
-                  {/* Fuel cost and fixed Mileage/Cost-per-KM indicators (all auto) */}
-                  <div className="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 font-mono">
+                  {/* Mileage (this trip, computed) vs Actual Mileage (fixed
+                      reference) and the Difference between them - all auto */}
+                  <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 font-mono">
                     <div>
                       <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Diesel cost</span>
                       <span className="text-xs font-black text-teal-700">₹{dieselAmount}</span>
                     </div>
                     <div>
-                      <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Mileage (fixed)</span>
-                      <span className="text-xs font-black text-pink-700">{mileage} KM/L</span>
-                    </div>
-                    <div>
                       <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Cost/KM</span>
                       <span className="text-xs font-black text-amber-700">₹{costPerKm}</span>
                     </div>
+                    <div>
+                      <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Mileage (this trip)</span>
+                      <span className="text-xs font-black text-pink-700">{mileage} KM/L</span>
+                    </div>
+                    <div>
+                      <span className="text-[8.5px] text-slate-400 font-bold uppercase flex items-center gap-1">
+                        <HelpCircle className="w-2.5 h-2.5 text-purple-500" /> Actual Mileage (fixed)
+                      </span>
+                      <span className="text-xs font-black text-purple-700">{actualMileage} KM/L</span>
+                    </div>
+                    {(() => {
+                      const diffPreview = parseFloat((parseFloat(actualMileage || '0') - parseFloat(mileage || '0')).toFixed(2));
+                      return (
+                        <div className="col-span-2 pt-2 border-t border-slate-200">
+                          <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Difference</span>
+                          <span className={`text-xs font-black ${diffPreview > 0 ? 'text-emerald-600' : diffPreview < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
+                            {diffPreview > 0 ? '+' : ''}{diffPreview} KM/L
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </div>
 
-                  {/* Actual Mileage */}
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1">
-                      <HelpCircle className="w-3.5 h-3.5 text-purple-600" />
-                      Actual Mileage (KM/L)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      placeholder="e.g. 4.5"
-                      value={actualMileage}
-                      onChange={(e) => setActualMileage(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-pink-500 font-bold"
-                    />
-                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                      Optionally override calculated mileage with actual manual logs.
-                    </p>
-                  </div>
+                  {(() => {
+                    const totalKmVal = parseFloat(totalKm) || 0;
+                    const litresVal = parseFloat(litres) || 0;
+                    const rateVal = parseFloat(ratePerLitre) || 0;
+                    const actualMileageVal = parseFloat(actualMileage) || 0;
+                    const mileageVal = parseFloat(mileage) || 0;
+                    const { note } = computeFuelAudit(totalKmVal, litresVal, rateVal, actualMileageVal, mileageVal, driverName);
+                    if (!note) return null;
+                    return (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                        <span className="text-[9px] text-amber-600 font-bold uppercase block mb-0.5">Fuel Audit (auto-added to Remarks)</span>
+                        <p className="text-xs font-semibold text-amber-800">{note}</p>
+                      </div>
+                    );
+                  })()}
 
                   {/* Extra Fuel and Rate per Ltr (new) */}
                   <div className="grid grid-cols-2 gap-3">

@@ -102,6 +102,7 @@ interface AdministrationProps {
   onDeleteFuelVendor: (id: string) => Promise<void>;
   vehicleMileages: VehicleMileage[];
   onAddVehicleMileage: (entry: Omit<VehicleMileage, 'id'>) => Promise<void>;
+  onUpdateVehicleMileage: (id: string, entry: Partial<VehicleMileage>) => Promise<void>;
   onDeleteVehicleMileage: (id: string) => Promise<void>;
   vendors: Vendor[];
   onAddVendor: (vendor: Omit<Vendor, 'id'>) => Promise<void>;
@@ -157,6 +158,7 @@ export default function Administration({
   onDeleteFuelVendor,
   vehicleMileages,
   onAddVehicleMileage,
+  onUpdateVehicleMileage,
   onDeleteVehicleMileage,
   vendors,
   onAddVendor,
@@ -875,11 +877,14 @@ export default function Administration({
 
           {/* Departmental Main Content Views */}
           {activeTab === 'fleet' && hasAccess('fleet') && (
-            <FleetSheet 
-              vehicles={vehicles} 
-              userRole={user.department} 
-              onUpdateVehicle={onUpdateVehicle} 
+            <FleetSheet
+              vehicles={vehicles}
+              userRole={user.department}
+              onUpdateVehicle={onUpdateVehicle}
               onDeleteVehicle={onDeleteVehicle}
+              vehicleMileages={vehicleMileages}
+              onAddVehicleMileage={onAddVehicleMileage}
+              onUpdateVehicleMileage={onUpdateVehicleMileage}
             />
           )}
 
@@ -891,17 +896,16 @@ export default function Administration({
               onUpdateLog={onUpdateFuelLog}
               onDeleteLog={onDeleteFuelLog}
               vehicles={vehicles}
-              vendors={fuelVendors}
-              onAddVendor={onAddFuelVendor}
-              onDeleteVendor={onDeleteFuelVendor}
               mileageReports={mileageReports}
               onAddMileageReport={onAddMileageReport}
               onUpdateMileageReport={onUpdateMileageReport}
               onDeleteMileageReport={onDeleteMileageReport}
               vehicleMileages={vehicleMileages}
               onAddVehicleMileage={onAddVehicleMileage}
+              onUpdateVehicleMileage={onUpdateVehicleMileage}
               onDeleteVehicleMileage={onDeleteVehicleMileage}
               vendorProfiles={vendors}
+              employees={employees}
             />
           )}
 
@@ -982,7 +986,9 @@ export default function Administration({
               onDeleteReport={onDeleteMileageReport}
               vehicleMileages={vehicleMileages}
               onAddVehicleMileage={onAddVehicleMileage}
+              onUpdateVehicleMileage={onUpdateVehicleMileage}
               onDeleteVehicleMileage={onDeleteVehicleMileage}
+              employees={employees}
               readOnly
             />
           )}

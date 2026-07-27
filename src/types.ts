@@ -156,6 +156,10 @@ export interface Vendor {
   panNumber: string; // exactly 10 characters
   bankAccountNumber: string;
   ifscCode: string;
+  aadharDocuments: VehicleDocument[]; // mandatory, at least one file
+  panDocuments: VehicleDocument[]; // mandatory, at least one file
+  rcDocuments: VehicleDocument[]; // mandatory, at least one file
+  bankStatementDocuments: VehicleDocument[]; // mandatory, at least one file
 }
 
 export interface BillingInvoice {
@@ -400,18 +404,20 @@ export interface MileageReport {
   slNo: number;
   date: string;
   vehicleNo: string;
-  openingKm?: number; // optional - record-keeping only, no longer feeds totalKm
-  closingKm?: number; // optional - record-keeping only, no longer feeds totalKm
-  totalKm: number; // Distance Covered, auto = mileage * litres
+  openingKm: number; // required - real odometer reading, feeds totalKm
+  closingKm: number; // required - real odometer reading, feeds totalKm
+  totalKm: number; // Distance Covered, = closingKm - openingKm
   ratePerLitre: number;
   litres: number;
   dieselAmount: number;
-  mileage: number; // snapshot of the vehicle's fixed Vehicle Mileage Master rating at entry time
+  mileage: number; // computed per trip = totalKm / litres (the REAL achieved efficiency this trip)
   costPerKm?: number; // auto = ratePerLitre / mileage
   driverName: string; // UI label "Authorized Driver" - supports multiple names, e.g. "Suresh / Adhithya"
   location: string;
   remarks: string;
-  actualMileage: number;
+  actualMileage: number; // FIXED per-vehicle reference, looked up from the Vehicle Mileage Master (src/db/schema.ts: vehicleMileage) by vehicleNo - not manually typed
+  difference?: number; // auto = actualMileage - mileage; positive (green, +) = achieved worse than reference, negative (red, -) = better than reference
+  fuelAuditNote?: string; // auto-generated advisory text appended to remarks when difference is positive - informational only, no payroll record created
   extraFuel?: number;
   ratePerLitreNew?: number; // rate applied to extraFuel in the Total Amount calc
   totalAmount?: number; // auto = dieselAmount + (extraFuel * ratePerLitreNew)

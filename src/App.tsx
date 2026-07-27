@@ -589,6 +589,21 @@ export default function App() {
     }
   };
 
+  const handleUpdateVehicleMileage = async (id: string, entry: Partial<VehicleMileage>) => {
+    try {
+      const res = await authFetch(`/api/vehicle-mileage/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error updating vehicle mileage:', err);
+    }
+  };
+
   const handleDeleteVehicleMileage = async (id: string) => {
     try {
       const res = await authFetch(`/api/vehicle-mileage/${id}`, {
@@ -728,6 +743,7 @@ export default function App() {
         onDeleteFuelVendor={handleDeleteFuelVendor}
         vehicleMileages={vehicleMileages}
         onAddVehicleMileage={handleAddVehicleMileage}
+        onUpdateVehicleMileage={handleUpdateVehicleMileage}
         onDeleteVehicleMileage={handleDeleteVehicleMileage}
         vendors={vendors}
         onAddVendor={handleAddVendor}
