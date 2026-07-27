@@ -34,7 +34,8 @@ import {
   DashboardNotification,
   WarehouseEntry,
   MileageReport,
-  FuelVendor
+  FuelVendor,
+  VehicleMileage
 } from './src/types.ts';
 import {
   seedDatabase,
@@ -98,7 +99,10 @@ import {
   deleteMileageReport,
   getFuelVendors,
   saveFuelVendor,
-  deleteFuelVendor
+  deleteFuelVendor,
+  getVehicleMileages,
+  saveVehicleMileage,
+  deleteVehicleMileage
 } from './src/db/service.ts';
 
 // Parses "DD.MM.YYYY" or "YYYY-MM-DD" expiry strings used across fleet records.
@@ -111,6 +115,15 @@ function parseFlexibleDate(raw?: string): Date | null {
   }
   if (raw.includes('-')) return new Date(raw);
   return null;
+}
+
+// Formats a parsed expiry Date as DD-MM-YYYY for display, regardless of
+// whichever format (DD.MM.YYYY, YYYY-MM-DD, ...) the source field was in.
+function formatDateDDMMYYYY(date: Date): string {
+  const d = String(date.getDate()).padStart(2, '0');
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const y = date.getFullYear();
+  return `${d}-${m}-${y}`;
 }
 
 // Compliance fields checked for upcoming expiry, each with its own alert window
@@ -213,6 +226,45 @@ function requireHrAccess(req: express.Request, res: express.Response, next: expr
   next();
 }
 
+const FUEL_ENTRY_USER_EMAILS = ['chandanreddy@kcmlogistics.in', 'praveenkumar@kcmlogistics.in'];
+
+// Fuel Management + Mileage Report are restricted to Chandan, Praveen, and
+// super admins - nobody else may access or see this data at all. Within that,
+// see the row-level enteredBy filtering applied inside the /api/fuel and
+// /api/mileage handlers themselves (this middleware only gates the module as
+// a whole, the same two-layer pattern as requireHrAccess above).
+function requireFuelAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (sessionUser.department !== 'super_admin' && !FUEL_ENTRY_USER_EMAILS.includes(sessionUser.email || '')) {
+    return res.status(403).json({ error: 'You do not have access to Fuel Management.' });
+  }
+  next();
+}
+
+// Applies the Chandan/Praveen row-level visibility rule shared by /api/fuel
+// and /api/mileage: super admins see every row with enteredBy intact; anyone
+// else only sees rows they personally entered, with enteredBy stripped out
+// (that "who entered it" information is for super admins only - even the
+// entering user themselves doesn't see it on their own rows).
+function filterEntryRowsForViewer<T extends { enteredBy?: string }>(rows: T[], sessionUser?: ReturnType<typeof getSessionUser>): T[] {
+  if (!sessionUser) return [];
+  if (sessionUser.department === 'super_admin') return rows;
+  return rows
+    .filter(r => r.enteredBy === sessionUser.username)
+    .map(r => { const { enteredBy, ...rest } = r; return rest as T; });
+}
+
+// A non-super-admin may only modify (update/delete) a row they themselves
+// created - mirrors the read-side filtering above for write operations.
+function canModifyEntryRow(row: { enteredBy?: string } | undefined, sessionUser?: ReturnType<typeof getSessionUser>): boolean {
+  if (!sessionUser) return false;
+  if (sessionUser.department === 'super_admin') return true;
+  return !!row && row.enteredBy === sessionUser.username;
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -298,7 +350,7 @@ async function startServer() {
         alerts.push({
           vehicleRegNo: regNo,
           checkLabel: check.label,
-          expiryDate: raw,
+          expiryDate: formatDateDDMMYYYY(expDate),
           diffDays
         });
       });
@@ -340,11 +392,11 @@ async function startServer() {
     await resend.emails.send({
       from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
       to: recipients,
-      subject: `KCM Fleet Compliance Digest - ${sortedAlerts.length} Expir${sortedAlerts.length === 1 ? 'y' : 'ies'} at 3/7/15-Day Mark (${todayKey})`,
+      subject: 'KCM Fleet Compliance Digest',
       html: `
         <div style="font-family:Arial,sans-serif;line-height:1.5;">
           <p>Hello,</p>
-          <p>The following documents are expiring in exactly 3, 7, or 15 days (soonest first):</p>
+          <p>The following documents are expiring, please renew before expiry.</p>
           <table style="border-collapse:collapse;font-size:13px;">
             <thead>
               <tr>
@@ -397,7 +449,7 @@ async function startServer() {
   // (Fleet documents, HR Aadhar/PAN, driver salary bank proof, etc.) - saves
   // the file to disk and returns its path for the frontend to store on the
   // record, instead of embedding the file as base64 in the database.
-  app.post('/api/upload/vehicle', upload.single('file'), (req, res) => {
+  app.post('/api/upload/:module', upload.single('file'), (req, res) => {
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No file was uploaded.' });
     }
@@ -815,18 +867,41 @@ async function startServer() {
     res.json({ success: true, message: 'Emails dispatched successfully' });
   });
 
-  // API endpoints for all departments
+  // Fuel Management is restricted to Chandan, Praveen, and super admins, with
+  // Chandan/Praveen each only seeing their own entries - see requireFuelAccess
+  // and filterEntryRowsForViewer above.
+  app.use('/api/fuel', requireFuelAccess);
+
   app.get('/api/fuel', async (req, res) => {
-    try { res.json(await getFuelLogs()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      res.json(filterEntryRowsForViewer(await getFuelLogs(), sessionUser));
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/fuel', async (req, res) => {
-    try { res.json({ success: true, data: await saveFuelLog(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const result = await saveFuelLog({ ...req.body, enteredBy: sessionUser?.username });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/fuel/:id', async (req, res) => {
-    try { res.json({ success: true, data: await saveFuelLog({ ...req.body, id: req.params.id }) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getFuelLogs()).find(l => l.id === req.params.id);
+      if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
+      const result = await saveFuelLog({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/fuel/:id', async (req, res) => {
-    try { res.json({ success: true, data: await deleteFuelLog(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getFuelLogs()).find(l => l.id === req.params.id);
+      if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
+      const result = await deleteFuelLog(req.params.id);
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.get('/api/billing', async (req, res) => {
@@ -1227,10 +1302,16 @@ async function startServer() {
     }
   });
 
-  // Mileage Reports endpoints
+  // Mileage Reports (Trip Details) endpoints - same restricted-access +
+  // row-filtering pattern as /api/fuel above. Note there is no PUT route:
+  // saveMileageReport upserts by id, so create vs. update is distinguished by
+  // whether entry.id already exists.
+  app.use('/api/mileage', requireFuelAccess);
+
   app.get('/api/mileage', async (req, res) => {
     try {
-      res.json(await getMileageReports());
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      res.json(filterEntryRowsForViewer(await getMileageReports(), sessionUser));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1238,9 +1319,18 @@ async function startServer() {
 
   app.post('/api/mileage', async (req, res) => {
     try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
       const entry: MileageReport = req.body;
-      const result = await saveMileageReport(entry);
-      res.json({ success: true, data: result });
+      if (entry.id) {
+        const existing = (await getMileageReports()).find(r => r.id === entry.id);
+        if (!canModifyEntryRow(existing, sessionUser)) {
+          return res.status(403).json({ error: 'You cannot modify this entry.' });
+        }
+        const result = await saveMileageReport({ ...entry, enteredBy: existing?.enteredBy });
+        return res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+      }
+      const result = await saveMileageReport({ ...entry, enteredBy: sessionUser?.username });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1248,15 +1338,22 @@ async function startServer() {
 
   app.delete('/api/mileage/:id', async (req, res) => {
     try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
       const { id } = req.params;
+      const existing = (await getMileageReports()).find(r => r.id === id);
+      if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
       const result = await deleteMileageReport(id);
-      res.json({ success: true, data: result });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  // Fuel Vendor (Vendor Master) endpoints
+  // Fuel Vendor (Vendor Master) endpoints - shared reference list, gated to
+  // the module as a whole but not row-filtered (both Chandan and Praveen need
+  // the same vendor lookup data).
+  app.use('/api/fuel-vendors', requireFuelAccess);
+
   app.get('/api/fuel-vendors', async (req, res) => {
     try {
       res.json(await getFuelVendors());
@@ -1279,6 +1376,38 @@ async function startServer() {
     try {
       const { id } = req.params;
       const result = await deleteFuelVendor(id);
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Vehicle Mileage Master endpoints - same shared-reference-list pattern as
+  // Fuel Vendors above (fixed KM/L rating per vehicle for Trip Details).
+  app.use('/api/vehicle-mileage', requireFuelAccess);
+
+  app.get('/api/vehicle-mileage', async (req, res) => {
+    try {
+      res.json(await getVehicleMileages());
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/vehicle-mileage', async (req, res) => {
+    try {
+      const entry: VehicleMileage = req.body;
+      const result = await saveVehicleMileage(entry);
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/vehicle-mileage/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const result = await deleteVehicleMileage(id);
       res.json({ success: true, data: result });
     } catch (err: any) {
       res.status(500).json({ error: err.message });

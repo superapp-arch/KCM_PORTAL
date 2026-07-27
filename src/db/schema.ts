@@ -139,4 +139,10 @@ export const fuelVendors = pgTable('fuel_vendors', {
   data: text('data').notNull(), // JSON string representing the full FuelVendor object
 });
 
+// Vehicle mileage master table (fixed KM/L rating per vehicle for Trip Details)
+export const vehicleMileage = pgTable('vehicle_mileage', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full VehicleMileage object
+});
+
 

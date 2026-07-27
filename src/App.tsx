@@ -16,7 +16,8 @@ import {
   DashboardNotification,
   WarehouseEntry,
   MileageReport,
-  FuelVendor
+  FuelVendor,
+  VehicleMileage
 } from './types';
 
 export default function App() {
@@ -37,6 +38,7 @@ export default function App() {
   const [warehouseEntries, setWarehouseEntries] = useState<WarehouseEntry[]>([]);
   const [mileageReports, setMileageReports] = useState<MileageReport[]>([]);
   const [fuelVendors, setFuelVendors] = useState<FuelVendor[]>([]);
+  const [vehicleMileages, setVehicleMileages] = useState<VehicleMileage[]>([]);
 
   // 1. Initial Session Handshake
   // Restores strictly from THIS browser's own stored token - never from a
@@ -87,10 +89,11 @@ export default function App() {
         notifRes,
         warehouseRes,
         mileageRes,
-        fuelVendorsRes
+        fuelVendorsRes,
+        vehicleMileagesRes
       ] = await Promise.all([
         fetch('/api/fleet'),
-        fetch('/api/fuel'),
+        authFetch('/api/fuel'),
         fetch('/api/billing'),
         fetch('/api/petty-cash'),
         fetch('/api/maintenance'),
@@ -98,8 +101,9 @@ export default function App() {
         authFetch('/api/staff/employees'),
         fetch('/api/notifications'),
         fetch('/api/warehouse'),
-        fetch('/api/mileage'),
-        fetch('/api/fuel-vendors')
+        authFetch('/api/mileage'),
+        authFetch('/api/fuel-vendors'),
+        authFetch('/api/vehicle-mileage')
       ]);
 
       if (fleetRes.ok) setVehicles(await fleetRes.json());
@@ -113,6 +117,7 @@ export default function App() {
       if (warehouseRes.ok) setWarehouseEntries(await warehouseRes.json());
       if (mileageRes.ok) setMileageReports(await mileageRes.json());
       if (fuelVendorsRes.ok) setFuelVendors(await fuelVendorsRes.json());
+      if (vehicleMileagesRes.ok) setVehicleMileages(await vehicleMileagesRes.json());
     } catch (err) {
       console.error('Failed to populate core ledgers:', err);
     }
@@ -136,7 +141,7 @@ export default function App() {
 
   const handleAddFuelLog = async (log: Omit<FuelLog, 'id'>) => {
     try {
-      const res = await fetch('/api/fuel', {
+      const res = await authFetch('/api/fuel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(log)
@@ -295,7 +300,7 @@ export default function App() {
 
   const handleUpdateFuelLog = async (id: string, log: Partial<FuelLog>) => {
     try {
-      const res = await fetch(`/api/fuel/${id}`, {
+      const res = await authFetch(`/api/fuel/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(log)
@@ -310,7 +315,7 @@ export default function App() {
 
   const handleDeleteFuelLog = async (id: string) => {
     try {
-      const res = await fetch(`/api/fuel/${id}`, {
+      const res = await authFetch(`/api/fuel/${id}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -495,7 +500,7 @@ export default function App() {
 
   const handleAddMileageReport = async (report: Omit<MileageReport, 'id'>) => {
     try {
-      const res = await fetch('/api/mileage', {
+      const res = await authFetch('/api/mileage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(report)
@@ -510,7 +515,7 @@ export default function App() {
 
   const handleUpdateMileageReport = async (id: string, report: Partial<MileageReport>) => {
     try {
-      const res = await fetch('/api/mileage', {
+      const res = await authFetch('/api/mileage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...report, id })
@@ -525,7 +530,7 @@ export default function App() {
 
   const handleDeleteMileageReport = async (id: string) => {
     try {
-      const res = await fetch(`/api/mileage/${id}`, {
+      const res = await authFetch(`/api/mileage/${id}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -538,7 +543,7 @@ export default function App() {
 
   const handleAddFuelVendor = async (vendor: Omit<FuelVendor, 'id'>) => {
     try {
-      const res = await fetch('/api/fuel-vendors', {
+      const res = await authFetch('/api/fuel-vendors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(vendor)
@@ -553,7 +558,7 @@ export default function App() {
 
   const handleDeleteFuelVendor = async (id: string) => {
     try {
-      const res = await fetch(`/api/fuel-vendors/${id}`, {
+      const res = await authFetch(`/api/fuel-vendors/${id}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -561,6 +566,34 @@ export default function App() {
       }
     } catch (err) {
       console.error('Error deleting fuel vendor:', err);
+    }
+  };
+
+  const handleAddVehicleMileage = async (entry: Omit<VehicleMileage, 'id'>) => {
+    try {
+      const res = await authFetch('/api/vehicle-mileage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error adding vehicle mileage:', err);
+    }
+  };
+
+  const handleDeleteVehicleMileage = async (id: string) => {
+    try {
+      const res = await authFetch(`/api/vehicle-mileage/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error deleting vehicle mileage:', err);
     }
   };
 
@@ -645,6 +678,9 @@ export default function App() {
         fuelVendors={fuelVendors}
         onAddFuelVendor={handleAddFuelVendor}
         onDeleteFuelVendor={handleDeleteFuelVendor}
+        vehicleMileages={vehicleMileages}
+        onAddVehicleMileage={handleAddVehicleMileage}
+        onDeleteVehicleMileage={handleDeleteVehicleMileage}
       />
 
       {/* Permanent lightly visible Company Watermark */}

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
-import { MileageReport, Vehicle, User } from '../types';
+import { MileageReport, Vehicle, User, VehicleMileage } from '../types';
 import {
   Gauge,
   Plus,
@@ -33,6 +33,10 @@ interface MileageReportModuleProps {
   onAddReport: (report: Omit<MileageReport, 'id'>) => Promise<void>;
   onUpdateReport: (id: string, report: Partial<MileageReport>) => Promise<void>;
   onDeleteReport: (id: string) => Promise<void>;
+  vehicleMileages?: VehicleMileage[];
+  onAddVehicleMileage?: (entry: Omit<VehicleMileage, 'id'>) => Promise<void>;
+  onDeleteVehicleMileage?: (id: string) => Promise<void>;
+  readOnly?: boolean;
 }
 
 export default function MileageReportModule({
@@ -41,7 +45,11 @@ export default function MileageReportModule({
   vehicles = [],
   onAddReport,
   onUpdateReport,
-  onDeleteReport
+  onDeleteReport,
+  vehicleMileages = [],
+  onAddVehicleMileage,
+  onDeleteVehicleMileage,
+  readOnly = false
 }: MileageReportModuleProps) {
   // UI Panels
   const [showSidebar, setShowSidebar] = useState(false);
@@ -70,10 +78,23 @@ export default function MileageReportModule({
   const [extraFuel, setExtraFuel] = useState('');
   const [ratePerLitreNew, setRatePerLitreNew] = useState('');
   const [totalAmount, setTotalAmount] = useState('');
+  const [costPerKm, setCostPerKm] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Vehicle Mileage Master mini-management (fixed KM/L per vehicle)
+  const [showMileageManager, setShowMileageManager] = useState(false);
+  const [mileageFormVehicleNo, setMileageFormVehicleNo] = useState('');
+  const [mileageFormValue, setMileageFormValue] = useState('');
 
   // File import ref
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // The selected vehicle's fixed mileage rating, looked up from the Vehicle
+  // Mileage Master - this is what now drives Distance Covered/Cost per KM,
+  // instead of odometer-derived per-entry calculations.
+  const fixedMileageForVehicle = vehicleMileages.find(
+    v => v.vehicleNo.trim().toUpperCase() === vehicleNo.trim().toUpperCase()
+  )?.mileage;
 
   // Unique list of vehicle numbers from existing reports and fleet
   const vehicleList = Array.from(
@@ -93,6 +114,8 @@ export default function MileageReportModule({
     setNotif({ message: msg, type });
     setTimeout(() => setNotif(null), 4000);
   };
+
+  const isSuperAdmin = user.department === 'super_admin';
 
   // Auto Calculations
   // 1. Fetch Previous Entry Closing KM for selected vehicle
@@ -118,34 +141,34 @@ export default function MileageReportModule({
     }
   }, [vehicleNo, reports, editingId]);
 
-  // 2. Calculate Total KM = Closing KM - Opening KM
+  // 2. Mileage = the vehicle's fixed rating from the Vehicle Mileage Master
+  // (not computed from odometer anymore - it's a per-vehicle constant).
   useEffect(() => {
-    const o = parseFloat(openingKm) || 0;
-    const c = parseFloat(closingKm) || 0;
-    if (c >= o) {
-      setTotalKm(String(c - o));
-    } else {
-      setTotalKm('0');
-    }
-  }, [openingKm, closingKm]);
+    setMileage(fixedMileageForVehicle != null ? String(fixedMileageForVehicle) : '0');
+  }, [fixedMileageForVehicle]);
 
-  // 3. Calculate Diesel Amount = Rate per Litre * Litres
+  // 3. Distance Covered (Total KM) = Mileage * Litres - auto from fuel data,
+  // replacing the old Closing KM - Opening KM calculation. Opening/Closing KM
+  // are now optional, record-keeping-only fields that don't feed this.
+  useEffect(() => {
+    const m = parseFloat(mileage) || 0;
+    const l = parseFloat(litres) || 0;
+    setTotalKm(String(parseFloat((m * l).toFixed(2))));
+  }, [mileage, litres]);
+
+  // 4. Calculate Diesel Amount = Rate per Litre * Litres
   useEffect(() => {
     const rate = parseFloat(ratePerLitre) || 0;
     const l = parseFloat(litres) || 0;
     setDieselAmount(String(parseFloat((rate * l).toFixed(2))));
   }, [ratePerLitre, litres]);
 
-  // 4. Calculate Mileage = Total KM / Litres
+  // 4b. Cost per KM = Rate per Litre / Mileage
   useEffect(() => {
-    const tKm = parseFloat(totalKm) || 0;
-    const l = parseFloat(litres) || 0;
-    if (l > 0) {
-      setMileage(String(parseFloat((tKm / l).toFixed(2))));
-    } else {
-      setMileage('0');
-    }
-  }, [totalKm, litres]);
+    const rate = parseFloat(ratePerLitre) || 0;
+    const m = parseFloat(mileage) || 0;
+    setCostPerKm(m > 0 ? String(parseFloat((rate / m).toFixed(2))) : '0');
+  }, [ratePerLitre, mileage]);
 
   // 5. Same-day Rate per Litre carry-forward: once any vehicle's entry sets a
   // rate for a given date, subsequent entries that same date default to it.
@@ -169,25 +192,29 @@ export default function MileageReportModule({
   // Handle Create / Update Submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!date || !vehicleNo || !openingKm || !closingKm || !ratePerLitre || !litres || !driverName || !location) {
+    if (!date || !vehicleNo || !ratePerLitre || !litres || !driverName || !location) {
       triggerNotif('Please complete all required fields (*)', 'error');
       return;
     }
 
-    const o = parseFloat(openingKm);
-    const c = parseFloat(closingKm);
-    if (c < o) {
+    const o = openingKm ? parseFloat(openingKm) : undefined;
+    const c = closingKm ? parseFloat(closingKm) : undefined;
+    if (o != null && c != null && c < o) {
       triggerNotif('Closing KM cannot be less than Opening KM', 'error');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      const calculatedTotalKm = c - o;
       const rate = parseFloat(ratePerLitre);
       const l = parseFloat(litres);
       const calculatedDieselAmount = parseFloat((rate * l).toFixed(2));
-      const calculatedMileage = l > 0 ? parseFloat((calculatedTotalKm / l).toFixed(2)) : 0;
+      // Snapshot the vehicle's current fixed mileage rating at entry time, so
+      // later edits to the Vehicle Mileage Master don't retroactively change
+      // historical entries.
+      const calculatedMileage = fixedMileageForVehicle || 0;
+      const calculatedTotalKm = parseFloat((calculatedMileage * l).toFixed(2));
+      const calculatedCostPerKm = calculatedMileage > 0 ? parseFloat((rate / calculatedMileage).toFixed(2)) : 0;
       const manualActualMileage = parseFloat(actualMileage) || 0;
       const extra = parseFloat(extraFuel) || 0;
       const rateNew = parseFloat(ratePerLitreNew) || 0;
@@ -207,6 +234,7 @@ export default function MileageReportModule({
         litres: l,
         dieselAmount: calculatedDieselAmount,
         mileage: calculatedMileage,
+        costPerKm: calculatedCostPerKm,
         driverName: driverName.trim(),
         location: location.trim(),
         remarks: remarks.trim(),
@@ -237,8 +265,8 @@ export default function MileageReportModule({
     setEditingId(report.id);
     setDate(report.date);
     setVehicleNo(report.vehicleNo);
-    setOpeningKm(String(report.openingKm));
-    setClosingKm(String(report.closingKm));
+    setOpeningKm(report.openingKm != null ? String(report.openingKm) : '');
+    setClosingKm(report.closingKm != null ? String(report.closingKm) : '');
     setRatePerLitre(String(report.ratePerLitre));
     setLitres(String(report.litres));
     setDriverName(report.driverName);
@@ -268,7 +296,21 @@ export default function MileageReportModule({
     setExtraFuel('');
     setRatePerLitreNew('');
     setTotalAmount('');
+    setCostPerKm('');
     setShowSidebar(false);
+  };
+
+  const handleAddVehicleMileage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mileageFormVehicleNo.trim() || !mileageFormValue.trim() || !onAddVehicleMileage) return;
+    try {
+      await onAddVehicleMileage({ vehicleNo: mileageFormVehicleNo.trim().toUpperCase(), mileage: parseFloat(mileageFormValue) });
+      setMileageFormVehicleNo('');
+      setMileageFormValue('');
+      triggerNotif('Vehicle mileage rating saved.', 'success');
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   // Robust CSV Line parser
@@ -386,20 +428,22 @@ export default function MileageReportModule({
       'Sl. No': r.slNo || (i + 1),
       'Date': r.date,
       'Vehicle No': r.vehicleNo,
-      'Opening KM': r.openingKm,
-      'Closing KM': r.closingKm,
+      'Opening KM': r.openingKm ?? '',
+      'Closing KM': r.closingKm ?? '',
       'Total KM': r.totalKm,
       'Rate Per Litre': r.ratePerLitre,
       'Litres': r.litres,
       'Diesel Amount': r.dieselAmount,
       'Mileage': r.mileage,
+      'Cost per KM': r.costPerKm || 0,
       'Actual Mileage': r.actualMileage || 0,
       'Extra Fuel': r.extraFuel || 0,
       'Rate per Ltr (new)': r.ratePerLitreNew || 0,
       'Total Amount': r.totalAmount || 0,
       'Authorized Driver': r.driverName,
       'Location': r.location,
-      'Remarks': r.remarks || ''
+      'Remarks': r.remarks || '',
+      ...(isSuperAdmin ? { 'Entered By': r.enteredBy || '' } : {})
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(data);
@@ -439,19 +483,21 @@ export default function MileageReportModule({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Add New Details Sidebar Trigger */}
-          <button
-            onClick={() => {
-              resetForm();
-              setShowSidebar(true);
-            }}
-            className="bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-xs text-white font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-md shadow-pink-500/10"
-          >
-            <Plus className="w-4 h-4" />
-            Add Details
-          </button>
-        </div>
+        {!readOnly && (
+          <div className="flex items-center gap-2">
+            {/* Add New Details Sidebar Trigger */}
+            <button
+              onClick={() => {
+                resetForm();
+                setShowSidebar(true);
+              }}
+              className="bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-xs text-white font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-md shadow-pink-500/10"
+            >
+              <Plus className="w-4 h-4" />
+              Add Details
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Notifications banner */}
@@ -479,23 +525,27 @@ export default function MileageReportModule({
             Operations Console:
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {/* Import CSV */}
-            <input
-              type="file"
-              accept=".csv"
-              ref={fileInputRef}
-              onChange={handleCSVImport}
-              className="hidden"
-            />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-medium px-3 py-1.5 rounded-lg flex items-center gap-1.5 shadow-2xs cursor-pointer transition-all"
-              title="Import mileage data from CSV"
-            >
-              <Upload className="w-3.5 h-3.5 text-teal-600" />
-              Import Data
-            </button>
+            {/* Import CSV - creates entries, so hidden in read-only view */}
+            {!readOnly && (
+              <>
+                <input
+                  type="file"
+                  accept=".csv"
+                  ref={fileInputRef}
+                  onChange={handleCSVImport}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-medium px-3 py-1.5 rounded-lg flex items-center gap-1.5 shadow-2xs cursor-pointer transition-all"
+                  title="Import mileage data from CSV"
+                >
+                  <Upload className="w-3.5 h-3.5 text-teal-600" />
+                  Import Data
+                </button>
+              </>
+            )}
 
             {/* Export CSV */}
             <button
@@ -583,6 +633,7 @@ export default function MileageReportModule({
                 <th className="px-3 py-2.5 text-right">Litres</th>
                 <th className="px-3 py-2.5 text-right text-teal-400">Diesel Amount</th>
                 <th className="px-3 py-2.5 text-right text-pink-400">Mileage</th>
+                <th className="px-3 py-2.5 text-right text-amber-400">Cost/KM</th>
                 <th className="px-3 py-2.5 text-right text-purple-400">Actual Mileage</th>
                 <th className="px-3 py-2.5 text-right">Extra Fuel</th>
                 <th className="px-3 py-2.5 text-right">Rate/Ltr (new)</th>
@@ -590,16 +641,17 @@ export default function MileageReportModule({
                 <th className="px-3 py-2.5">Authorized Driver</th>
                 <th className="px-3 py-2.5">Location</th>
                 <th className="px-3 py-2.5 max-w-xs">Remarks</th>
-                <th className="px-3 py-2.5 text-center">Actions</th>
+                {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
+                {!readOnly && <th className="px-3 py-2.5 text-center">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
               {filteredReports.length === 0 ? (
                 <tr>
-                  <td colSpan={18} className="text-center py-20 text-slate-400 font-mono text-xs">
+                  <td colSpan={19 + (isSuperAdmin ? 1 : 0) + (readOnly ? 0 : 1)} className="text-center py-20 text-slate-400 font-mono text-xs">
                     🚫 NO REGISTERED MILEAGE ENTRIES DISCOVERED FOR THIS SEGMENT.
                     <div className="text-[10px] text-slate-400 font-sans mt-1">
-                      Use the "Add Details" sidebar button to authorize new mileage and fuel log books.
+                      {readOnly ? 'Entries are added from the Trip Details tab in Fuel Management.' : 'Use the "Add Details" sidebar button to authorize new mileage and fuel log books.'}
                     </div>
                   </td>
                 </tr>
@@ -609,13 +661,14 @@ export default function MileageReportModule({
                     <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{r.slNo || (i + 1)}</td>
                     <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">{r.date}</td>
                     <td className="px-3 py-2 font-bold font-mono text-slate-900 whitespace-nowrap">{r.vehicleNo}</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-600">{r.openingKm.toLocaleString('en-IN')} KM</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-600">{r.closingKm.toLocaleString('en-IN')} KM</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-600">{r.openingKm != null ? `${r.openingKm.toLocaleString('en-IN')} KM` : '-'}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-600">{r.closingKm != null ? `${r.closingKm.toLocaleString('en-IN')} KM` : '-'}</td>
                     <td className="px-3 py-2 text-right font-mono font-bold bg-slate-50 text-slate-900">{r.totalKm.toLocaleString('en-IN')} KM</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">₹{r.ratePerLitre.toFixed(2)}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.litres.toFixed(2)} L</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-teal-700 bg-teal-50/20">₹{r.dieselAmount.toLocaleString('en-IN')}</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-pink-700 bg-pink-50/20">{r.mileage.toFixed(2)} KM/L</td>
+                    <td className="px-3 py-2 text-right font-mono font-bold text-amber-700 bg-amber-50/20">{r.costPerKm ? `₹${r.costPerKm.toFixed(2)}` : '-'}</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-purple-700 bg-purple-50/20">{r.actualMileage ? `${r.actualMileage.toFixed(2)} KM/L` : '-'}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.extraFuel ? r.extraFuel.toFixed(2) : '-'}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.ratePerLitreNew ? `₹${r.ratePerLitreNew.toFixed(2)}` : '-'}</td>
@@ -627,29 +680,36 @@ export default function MileageReportModule({
                       </span>
                     </td>
                     <td className="px-3 py-2 text-slate-500 max-w-xs truncate" title={r.remarks}>{r.remarks || '-'}</td>
-                    <td className="px-3 py-2 whitespace-nowrap text-center">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <button
-                          onClick={() => startEdit(r)}
-                          className="text-pink-600 hover:text-pink-800 bg-pink-50 hover:bg-pink-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
-                          title="Edit this entry"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (window.confirm(`Are you sure you want to delete mileage report entry sl.no ${r.slNo || (i + 1)}?`)) {
-                              onDeleteReport(r.id);
-                              triggerNotif('Entry deleted successfully!', 'success');
-                            }
-                          }}
-                          className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
-                          title="Delete this entry"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                    </td>
+                    {isSuperAdmin && (
+                      <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">
+                        {r.enteredBy || '-'}
+                      </td>
+                    )}
+                    {!readOnly && (
+                      <td className="px-3 py-2 whitespace-nowrap text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => startEdit(r)}
+                            className="text-pink-600 hover:text-pink-800 bg-pink-50 hover:bg-pink-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+                            title="Edit this entry"
+                          >
+                            <Edit2 className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (window.confirm(`Are you sure you want to delete mileage report entry sl.no ${r.slNo || (i + 1)}?`)) {
+                                onDeleteReport(r.id);
+                                triggerNotif('Entry deleted successfully!', 'success');
+                              }
+                            }}
+                            className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+                            title="Delete this entry"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))
               )}
@@ -658,7 +718,7 @@ export default function MileageReportModule({
         </div>
 
         {/* Calculated Totals Mini Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 pt-2 text-xs">
           <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
             <span className="text-[10px] text-slate-400 font-bold uppercase">Total KM Accumulated</span>
             <div className="text-sm font-black text-slate-800 font-mono mt-0.5">
@@ -680,9 +740,17 @@ export default function MileageReportModule({
           <div className="bg-pink-50/40 p-3 rounded-xl border border-pink-100">
             <span className="text-[10px] text-pink-600 font-bold uppercase">Avg Segmented Mileage</span>
             <div className="text-sm font-black text-pink-700 font-mono mt-0.5">
-              {filteredReports.length > 0 
+              {filteredReports.length > 0
                 ? (filteredReports.reduce((s, r) => s + (r.mileage || 0), 0) / filteredReports.length).toFixed(2)
                 : '0.00'} KM/L
+            </div>
+          </div>
+          <div className="bg-amber-50/40 p-3 rounded-xl border border-amber-100">
+            <span className="text-[10px] text-amber-600 font-bold uppercase">Avg Cost/KM</span>
+            <div className="text-sm font-black text-amber-700 font-mono mt-0.5">
+              ₹{filteredReports.length > 0
+                ? (filteredReports.reduce((s, r) => s + (r.costPerKm || 0), 0) / filteredReports.length).toFixed(2)
+                : '0.00'}
             </div>
           </div>
         </div>
@@ -764,31 +832,96 @@ export default function MileageReportModule({
                     </p>
                   </div>
 
-                  {/* Opening and Closing KM */}
+                  {/* Vehicle Mileage Master mini-manager */}
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                        <Gauge className="w-3 h-3" /> Vehicle Mileage Master
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowMileageManager(!showMileageManager)}
+                        className="text-[10px] font-bold text-pink-600 hover:text-pink-800 cursor-pointer"
+                      >
+                        {showMileageManager ? 'Hide' : 'Manage Ratings'}
+                      </button>
+                    </div>
+                    <p className="text-[10px] font-mono text-slate-500">
+                      {vehicleNo
+                        ? fixedMileageForVehicle != null
+                          ? `Fixed rating for ${vehicleNo}: ${fixedMileageForVehicle} KM/L`
+                          : `No fixed mileage set yet for ${vehicleNo} - add one below.`
+                        : 'Select a vehicle above to see its fixed mileage rating.'}
+                    </p>
+
+                    {showMileageManager && (
+                      <div className="pt-2 border-t border-slate-200 space-y-2">
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            type="text"
+                            placeholder="Vehicle No"
+                            value={mileageFormVehicleNo}
+                            onChange={(e) => setMileageFormVehicleNo(e.target.value.toUpperCase())}
+                            autoComplete="off"
+                            className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-slate-800 text-[11px] font-mono"
+                          />
+                          <input
+                            type="number"
+                            step="0.01"
+                            placeholder="Mileage (KM/L)"
+                            value={mileageFormValue}
+                            onChange={(e) => setMileageFormValue(e.target.value)}
+                            autoComplete="off"
+                            className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-slate-800 text-[11px] font-mono"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleAddVehicleMileage}
+                          className="w-full bg-slate-800 hover:bg-slate-900 text-white rounded-lg py-1.5 font-semibold text-[10px] uppercase cursor-pointer"
+                        >
+                          Save Rating
+                        </button>
+                        {vehicleMileages.length > 0 && (
+                          <div className="max-h-28 overflow-y-auto space-y-1 pt-1">
+                            {vehicleMileages.map(v => (
+                              <div key={v.id} className="flex items-center justify-between bg-white border border-slate-100 rounded-md px-2 py-1">
+                                <span className="text-[10px] font-semibold text-slate-700">{v.vehicleNo} <span className="text-slate-400 font-mono">({v.mileage} KM/L)</span></span>
+                                <button type="button" onClick={() => onDeleteVehicleMileage?.(v.id)} className="text-rose-400 hover:text-rose-600 cursor-pointer">
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Opening and Closing KM - optional record-keeping fields only;
+                      Distance Covered now comes from the fixed mileage rating above */}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block font-bold text-slate-700 mb-1">
-                        Opening KM *
+                        Opening KM (optional)
                       </label>
                       <input
                         type="number"
-                        required
                         placeholder="Automatic/Manual"
                         value={openingKm}
                         onChange={(e) => setOpeningKm(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-pink-500"
                       />
                       <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                        {openingKm ? '✓ Autoloaded previous' : 'Enter manually first time'}
+                        {openingKm ? '✓ Autoloaded previous' : 'For record-keeping only'}
                       </p>
                     </div>
                     <div>
                       <label className="block font-bold text-slate-700 mb-1">
-                        Closing KM *
+                        Closing KM (optional)
                       </label>
                       <input
                         type="number"
-                        required
                         placeholder="Current reading"
                         value={closingKm}
                         onChange={(e) => setClosingKm(e.target.value)}
@@ -800,7 +933,7 @@ export default function MileageReportModule({
                   {/* Calculations Info Card */}
                   <div className="p-3 bg-gradient-to-r from-pink-50/50 to-purple-50/50 rounded-xl border border-pink-100 flex items-center justify-between font-mono">
                     <div>
-                      <span className="text-[9px] text-slate-400 uppercase font-bold block">Calculated Total KM</span>
+                      <span className="text-[9px] text-slate-400 uppercase font-bold block">Distance Covered (auto)</span>
                       <span className="text-xs font-black text-pink-700">{totalKm} Kilometers</span>
                     </div>
                     <ArrowRightLeft className="w-5 h-5 text-pink-300" />
@@ -838,15 +971,19 @@ export default function MileageReportModule({
                     </div>
                   </div>
 
-                  {/* Fuel cost and Mileage Auto indicators */}
-                  <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 font-mono">
+                  {/* Fuel cost and fixed Mileage/Cost-per-KM indicators (all auto) */}
+                  <div className="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 font-mono">
                     <div>
                       <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Diesel cost</span>
                       <span className="text-xs font-black text-teal-700">₹{dieselAmount}</span>
                     </div>
                     <div>
-                      <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Avg Mileage</span>
+                      <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Mileage (fixed)</span>
                       <span className="text-xs font-black text-pink-700">{mileage} KM/L</span>
+                    </div>
+                    <div>
+                      <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Cost/KM</span>
+                      <span className="text-xs font-black text-amber-700">₹{costPerKm}</span>
                     </div>
                   </div>
 

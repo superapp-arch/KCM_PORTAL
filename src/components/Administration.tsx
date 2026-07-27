@@ -12,7 +12,8 @@ import {
   DashboardNotification,
   WarehouseEntry,
   MileageReport,
-  FuelVendor
+  FuelVendor,
+  VehicleMileage
 } from '../types';
 import FleetSheet from './FleetSheet';
 import FuelManagement from './FuelManagement';
@@ -97,6 +98,9 @@ interface AdministrationProps {
   fuelVendors: FuelVendor[];
   onAddFuelVendor: (vendor: Omit<FuelVendor, 'id'>) => Promise<void>;
   onDeleteFuelVendor: (id: string) => Promise<void>;
+  vehicleMileages: VehicleMileage[];
+  onAddVehicleMileage: (entry: Omit<VehicleMileage, 'id'>) => Promise<void>;
+  onDeleteVehicleMileage: (id: string) => Promise<void>;
 }
 
 export default function Administration({
@@ -144,7 +148,10 @@ export default function Administration({
   onClearImportedPettyCash,
   fuelVendors,
   onAddFuelVendor,
-  onDeleteFuelVendor
+  onDeleteFuelVendor,
+  vehicleMileages,
+  onAddVehicleMileage,
+  onDeleteVehicleMileage
 }: AdministrationProps) {
   
   // Tab Management
@@ -246,9 +253,8 @@ export default function Administration({
   const hasAccess = (tabName: string): boolean => {
     if (user.department === 'super_admin') return true;
     if (tabName === 'warehouse') return true; // Accessible to all roles for operational logging
-    if (tabName === 'mileage') return true; // Accessible to all roles for operational logging
+    if ((tabName === 'fuel' || tabName === 'mileage') && (user.email === 'chandanreddy@kcmlogistics.in' || user.email === 'praveenkumar@kcmlogistics.in')) return true;
     if (tabName === 'fleet' && (user.department === 'vehicle_manager' || user.email === 'bhagya@kcmlogistics.in')) return true;
-    if (tabName === 'fuel' && (user.department === 'fuel_management' || user.email === 'vinod@kcmlogistics.in' || user.email === 'ramesh@kcmlogistics.in')) return true;
     if (tabName === 'billing' && (user.department === 'billing' || user.email === 'bhagya@kcmlogistics.in')) return true;
     if (tabName === 'pettycash' && user.department === 'petty_cash') return true;
     if (tabName === 'maintenance' && user.department === 'maintenance') return true;
@@ -867,6 +873,9 @@ export default function Administration({
               onAddMileageReport={onAddMileageReport}
               onUpdateMileageReport={onUpdateMileageReport}
               onDeleteMileageReport={onDeleteMileageReport}
+              vehicleMileages={vehicleMileages}
+              onAddVehicleMileage={onAddVehicleMileage}
+              onDeleteVehicleMileage={onDeleteVehicleMileage}
             />
           )}
 
@@ -936,6 +945,10 @@ export default function Administration({
               onAddReport={onAddMileageReport}
               onUpdateReport={onUpdateMileageReport}
               onDeleteReport={onDeleteMileageReport}
+              vehicleMileages={vehicleMileages}
+              onAddVehicleMileage={onAddVehicleMileage}
+              onDeleteVehicleMileage={onDeleteVehicleMileage}
+              readOnly
             />
           )}
 

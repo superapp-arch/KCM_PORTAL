@@ -20,7 +20,8 @@ import {
   notifications,
   warehouseEntries,
   mileageReports,
-  fuelVendors
+  fuelVendors,
+  vehicleMileage
 } from './schema.ts';
 import { eq, ne } from 'drizzle-orm';
 import { hashPassword, isHashed } from '../auth/password.ts';
@@ -45,7 +46,8 @@ import {
   DashboardNotification,
   WarehouseEntry,
   MileageReport,
-  FuelVendor
+  FuelVendor,
+  VehicleMileage
 } from '../types.ts';
 
 // Default Users Seed
@@ -1196,6 +1198,46 @@ export async function deleteFuelVendor(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteFuelVendor:", error);
     throw new Error("Failed to delete fuel vendor.", { cause: error });
+  }
+}
+
+// --- VEHICLE MILEAGE MASTER OPERATIONS ---
+export async function getVehicleMileages(): Promise<VehicleMileage[]> {
+  try {
+    const rows = await db.select().from(vehicleMileage);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getVehicleMileages:", error);
+    throw new Error("Failed to retrieve vehicle mileages.", { cause: error });
+  }
+}
+
+export async function saveVehicleMileage(entry: VehicleMileage) {
+  try {
+    const id = entry.id || String(Date.now());
+    const completeEntry = { ...entry, id };
+    const dataString = JSON.stringify(completeEntry);
+
+    const existing = await db.select().from(vehicleMileage).where(eq(vehicleMileage.id, id));
+    if (existing.length > 0) {
+      await db.update(vehicleMileage).set({ data: dataString }).where(eq(vehicleMileage.id, id));
+    } else {
+      await db.insert(vehicleMileage).values({ id, data: dataString });
+    }
+    return await getVehicleMileages();
+  } catch (error) {
+    console.error("Database action failed in saveVehicleMileage:", error);
+    throw new Error("Failed to save vehicle mileage.", { cause: error });
+  }
+}
+
+export async function deleteVehicleMileage(id: string) {
+  try {
+    await db.delete(vehicleMileage).where(eq(vehicleMileage.id, id));
+    return await getVehicleMileages();
+  } catch (error) {
+    console.error("Database action failed in deleteVehicleMileage:", error);
+    throw new Error("Failed to delete vehicle mileage.", { cause: error });
   }
 }
 

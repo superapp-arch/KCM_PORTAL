@@ -120,6 +120,7 @@ export interface FuelLog {
   requestedBy?: string;
   rqId?: string;
   documents?: VehicleDocument[];
+  enteredBy?: string; // username, stamped server-side; visible only to super admins
 }
 
 // Vendor Master for Fuel Entry's Vendor Name/Vendor Code fields. Starts empty;
@@ -128,6 +129,15 @@ export interface FuelVendor {
   id: string;
   name: string;
   code: string;
+}
+
+// Vehicle Mileage Master: a fixed KM/L rating per vehicle, set once and reused
+// by every Trip Details entry for that vehicle - replaces the old per-entry
+// odometer-derived mileage calculation.
+export interface VehicleMileage {
+  id: string;
+  vehicleNo: string;
+  mileage: number;
 }
 
 export interface BillingInvoice {
@@ -372,13 +382,14 @@ export interface MileageReport {
   slNo: number;
   date: string;
   vehicleNo: string;
-  openingKm: number;
-  closingKm: number;
-  totalKm: number;
+  openingKm?: number; // optional - record-keeping only, no longer feeds totalKm
+  closingKm?: number; // optional - record-keeping only, no longer feeds totalKm
+  totalKm: number; // Distance Covered, auto = mileage * litres
   ratePerLitre: number;
   litres: number;
   dieselAmount: number;
-  mileage: number;
+  mileage: number; // snapshot of the vehicle's fixed Vehicle Mileage Master rating at entry time
+  costPerKm?: number; // auto = ratePerLitre / mileage
   driverName: string; // UI label "Authorized Driver" - supports multiple names, e.g. "Suresh / Adhithya"
   location: string;
   remarks: string;
@@ -387,6 +398,7 @@ export interface MileageReport {
   ratePerLitreNew?: number; // rate applied to extraFuel in the Total Amount calc
   totalAmount?: number; // auto = dieselAmount + (extraFuel * ratePerLitreNew)
   documents?: VehicleDocument[];
+  enteredBy?: string; // username, stamped server-side; visible only to super admins
 }
 
 

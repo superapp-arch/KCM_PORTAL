@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { FuelLog, FuelVendor, MileageReport, Vehicle, VehicleDocument, User } from '../types';
+import { FuelLog, FuelVendor, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage } from '../types';
 import {
   Fuel,
   Plus,
@@ -46,6 +46,9 @@ interface FuelManagementProps {
   onAddMileageReport: (report: Omit<MileageReport, 'id'>) => Promise<void>;
   onUpdateMileageReport: (id: string, report: Partial<MileageReport>) => Promise<void>;
   onDeleteMileageReport: (id: string) => Promise<void>;
+  vehicleMileages: VehicleMileage[];
+  onAddVehicleMileage: (entry: Omit<VehicleMileage, 'id'>) => Promise<void>;
+  onDeleteVehicleMileage: (id: string) => Promise<void>;
 }
 
 export default function FuelManagement({
@@ -61,7 +64,10 @@ export default function FuelManagement({
   mileageReports,
   onAddMileageReport,
   onUpdateMileageReport,
-  onDeleteMileageReport
+  onDeleteMileageReport,
+  vehicleMileages,
+  onAddVehicleMileage,
+  onDeleteVehicleMileage
 }: FuelManagementProps) {
   const [activeSubTab, setActiveSubTab] = useState<'entry' | 'trip'>('entry');
   const [searchTerm, setSearchTerm] = useState('');
@@ -251,6 +257,8 @@ export default function FuelManagement({
     (log?.indentNumber || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const isSuperAdmin = user.department === 'super_admin';
+
   // KPI calculations - unchanged in label/position/layout, only field refs updated (ltrs replaces quantity)
   const totalFuelAmt = logs.reduce((sum, log) => sum + (log.amount || 0), 0);
   const totalLitres = logs.reduce((sum, log) => sum + (log.ltrs || 0), 0);
@@ -390,13 +398,14 @@ export default function FuelManagement({
                   <th className="px-3 py-2.5">RQ ID</th>
                   <th className="px-3 py-2.5 max-w-xs">Remarks</th>
                   <th className="px-3 py-2.5 text-center">Docs</th>
+                  {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
                   <th className="px-3 py-2.5 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {filteredLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={20} className="text-center py-10 text-slate-400 font-mono">
+                    <td colSpan={20 + (isSuperAdmin ? 1 : 0)} className="text-center py-10 text-slate-400 font-mono">
                       NO FUEL ENTRIES FOUND IN CURRENT LEDGER.
                     </td>
                   </tr>
@@ -431,6 +440,11 @@ export default function FuelManagement({
                           <span className="text-slate-300">-</span>
                         )}
                       </td>
+                      {isSuperAdmin && (
+                        <td className="px-3 py-2.5 whitespace-nowrap text-slate-500 font-mono text-[10px]">
+                          {log.enteredBy || '-'}
+                        </td>
+                      )}
                       <td className="px-3 py-2.5 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end space-x-1">
                           <button
@@ -466,6 +480,9 @@ export default function FuelManagement({
           onAddReport={onAddMileageReport}
           onUpdateReport={onUpdateMileageReport}
           onDeleteReport={onDeleteMileageReport}
+          vehicleMileages={vehicleMileages}
+          onAddVehicleMileage={onAddVehicleMileage}
+          onDeleteVehicleMileage={onDeleteVehicleMileage}
         />
       )}
 
@@ -792,6 +809,7 @@ export default function FuelManagement({
           </div>
         )}
       </AnimatePresence>
+
     </div>
   );
 }
