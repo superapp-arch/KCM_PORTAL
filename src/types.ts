@@ -140,6 +140,24 @@ export interface VehicleMileage {
   mileage: number;
 }
 
+// Vendor Management: a full KYC/bank registry, separate from the lightweight
+// FuelVendor name+code list used inside Fuel Entry's "Manage Vendors" panel.
+// Fuel Entry has read-only lookup access to this list (by vendor name) to
+// auto-fill/select the vendor's registered vehicle(s), but the module itself
+// (and its Aadhar/PAN/bank fields) is restricted to Divya, Rakshina, and
+// Super Admins.
+export interface Vendor {
+  id: string;
+  name: string;
+  code: string;
+  vehicleNumbers: string[]; // at least one; a vendor may have multiple vehicles
+  contactNumber: string; // exactly 10 digits
+  aadharNumber: string; // exactly 12 digits
+  panNumber: string; // exactly 10 characters
+  bankAccountNumber: string;
+  ifscCode: string;
+}
+
 export interface BillingInvoice {
   id: string;
   invoiceNo: string;

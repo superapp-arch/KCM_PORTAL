@@ -21,7 +21,8 @@ import {
   warehouseEntries,
   mileageReports,
   fuelVendors,
-  vehicleMileage
+  vehicleMileage,
+  vendors
 } from './schema.ts';
 import { eq, ne } from 'drizzle-orm';
 import { hashPassword, isHashed } from '../auth/password.ts';
@@ -47,7 +48,8 @@ import {
   WarehouseEntry,
   MileageReport,
   FuelVendor,
-  VehicleMileage
+  VehicleMileage,
+  Vendor
 } from '../types.ts';
 
 // Default Users Seed
@@ -1238,6 +1240,46 @@ export async function deleteVehicleMileage(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteVehicleMileage:", error);
     throw new Error("Failed to delete vehicle mileage.", { cause: error });
+  }
+}
+
+// --- VENDOR MANAGEMENT OPERATIONS ---
+export async function getVendors(): Promise<Vendor[]> {
+  try {
+    const rows = await db.select().from(vendors);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getVendors:", error);
+    throw new Error("Failed to retrieve vendors.", { cause: error });
+  }
+}
+
+export async function saveVendor(vendor: Vendor) {
+  try {
+    const id = vendor.id || String(Date.now());
+    const completeVendor = { ...vendor, id };
+    const dataString = JSON.stringify(completeVendor);
+
+    const existing = await db.select().from(vendors).where(eq(vendors.id, id));
+    if (existing.length > 0) {
+      await db.update(vendors).set({ data: dataString }).where(eq(vendors.id, id));
+    } else {
+      await db.insert(vendors).values({ id, data: dataString });
+    }
+    return await getVendors();
+  } catch (error) {
+    console.error("Database action failed in saveVendor:", error);
+    throw new Error("Failed to save vendor.", { cause: error });
+  }
+}
+
+export async function deleteVendor(id: string) {
+  try {
+    await db.delete(vendors).where(eq(vendors.id, id));
+    return await getVendors();
+  } catch (error) {
+    console.error("Database action failed in deleteVendor:", error);
+    throw new Error("Failed to delete vendor.", { cause: error });
   }
 }
 

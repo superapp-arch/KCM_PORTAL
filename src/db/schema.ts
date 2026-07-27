@@ -145,4 +145,10 @@ export const vehicleMileage = pgTable('vehicle_mileage', {
   data: text('data').notNull(), // JSON string representing the full VehicleMileage object
 });
 
+// Vendor Management table (full KYC/bank registry, separate from fuelVendors)
+export const vendors = pgTable('vendors', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full Vendor object
+});
+
 

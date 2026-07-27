@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { FuelLog, FuelVendor, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage } from '../types';
+import { FuelLog, FuelVendor, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage, Vendor } from '../types';
 import {
   Fuel,
   Plus,
@@ -49,6 +49,10 @@ interface FuelManagementProps {
   vehicleMileages: VehicleMileage[];
   onAddVehicleMileage: (entry: Omit<VehicleMileage, 'id'>) => Promise<void>;
   onDeleteVehicleMileage: (id: string) => Promise<void>;
+  // Read-only lookup into the Vendor Management registry (separate module,
+  // separate access group) - used only to auto-fill/select Vehicle Number
+  // when the typed Vendor Name matches a registered vendor there.
+  vendorProfiles: Vendor[];
 }
 
 export default function FuelManagement({
@@ -67,7 +71,8 @@ export default function FuelManagement({
   onDeleteMileageReport,
   vehicleMileages,
   onAddVehicleMileage,
-  onDeleteVehicleMileage
+  onDeleteVehicleMileage,
+  vendorProfiles
 }: FuelManagementProps) {
   const [activeSubTab, setActiveSubTab] = useState<'entry' | 'trip'>('entry');
   const [searchTerm, setSearchTerm] = useState('');
@@ -128,6 +133,19 @@ export default function FuelManagement({
     const matched = vendors.find(v => v.name.trim().toLowerCase() === vendorName.trim().toLowerCase());
     if (matched) setVendorCode(matched.code);
   }, [vendorName, vendors]);
+
+  // Vehicle Number auto-fill from the Vendor Management registry (separate
+  // read-only lookup, keyed by the same Vendor Name text). If the matched
+  // vendor has exactly one registered vehicle, fill it directly; if several,
+  // a picker is shown below instead so the user chooses which one.
+  const matchedVendorProfile = vendorProfiles.find(
+    v => v.name.trim().toLowerCase() === vendorName.trim().toLowerCase()
+  );
+  useEffect(() => {
+    if (matchedVendorProfile && matchedVendorProfile.vehicleNumbers.length === 1) {
+      setVehicleNumber(matchedVendorProfile.vehicleNumbers[0]);
+    }
+  }, [matchedVendorProfile]);
 
   const resetForm = () => {
     setEditingId(null);
@@ -596,6 +614,23 @@ export default function FuelManagement({
                       <datalist id="fuel-vehicles-datalist">
                         {vehicleList.map((v, i) => <option key={i} value={v} />)}
                       </datalist>
+                      {matchedVendorProfile && matchedVendorProfile.vehicleNumbers.length > 1 && (
+                        <div className="mt-1.5">
+                          <label className="block text-[9.5px] font-bold text-slate-500 uppercase mb-0.5">
+                            {matchedVendorProfile.name} has multiple vehicles - pick one
+                          </label>
+                          <select
+                            value={vehicleNumber}
+                            onChange={(e) => setVehicleNumber(e.target.value)}
+                            className="w-full bg-indigo-50 border border-indigo-200 rounded-lg p-1.5 font-mono font-bold text-indigo-800 text-[11px]"
+                          >
+                            <option value="">Select vehicle...</option>
+                            {matchedVendorProfile.vehicleNumbers.map((v) => (
+                              <option key={v} value={v}>{v}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                     </div>
                   </div>
 

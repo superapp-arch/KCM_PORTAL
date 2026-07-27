@@ -13,7 +13,8 @@ import {
   WarehouseEntry,
   MileageReport,
   FuelVendor,
-  VehicleMileage
+  VehicleMileage,
+  Vendor
 } from '../types';
 import FleetSheet from './FleetSheet';
 import FuelManagement from './FuelManagement';
@@ -24,6 +25,7 @@ import Accounts from './Accounts';
 import HR from './HR';
 import WarehouseDetails from './WarehouseDetails';
 import MileageReportModule from './MileageReport';
+import VendorManagement from './VendorManagement';
 import kcmLogo from '../assets/images/logo.png';
 import Watermark from './Watermark';
 import companyTruck from '../assets/images/kcm_vehicle_cutout.png';
@@ -31,7 +33,7 @@ import {
   LogOut, ShieldAlert, FileSpreadsheet, Fuel, FileText, Landmark,
   Settings, DollarSign, Contact, Bell, Mail, RefreshCw, CheckCircle, Clock,
   KeyRound, Cpu, Terminal, Copy, Check, Eye, EyeOff, Warehouse, Gauge, X,
-  Truck
+  Truck, Building2
 } from 'lucide-react';
 
 // Displays the live header clock in Indian Standard Time regardless of the
@@ -101,6 +103,10 @@ interface AdministrationProps {
   vehicleMileages: VehicleMileage[];
   onAddVehicleMileage: (entry: Omit<VehicleMileage, 'id'>) => Promise<void>;
   onDeleteVehicleMileage: (id: string) => Promise<void>;
+  vendors: Vendor[];
+  onAddVendor: (vendor: Omit<Vendor, 'id'>) => Promise<void>;
+  onUpdateVendor: (id: string, vendor: Partial<Vendor>) => Promise<void>;
+  onDeleteVendor: (id: string) => Promise<void>;
 }
 
 export default function Administration({
@@ -151,7 +157,11 @@ export default function Administration({
   onDeleteFuelVendor,
   vehicleMileages,
   onAddVehicleMileage,
-  onDeleteVehicleMileage
+  onDeleteVehicleMileage,
+  vendors,
+  onAddVendor,
+  onUpdateVendor,
+  onDeleteVendor
 }: AdministrationProps) {
   
   // Tab Management
@@ -260,6 +270,7 @@ export default function Administration({
     if (tabName === 'maintenance' && user.department === 'maintenance') return true;
     if (tabName === 'accounts' && user.department === 'accounts_finance') return true;
     if (tabName === 'hr' && user.email === 'bhagya@kcmlogistics.in') return true;
+    if (tabName === 'vendors' && (user.email === 'divya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in')) return true;
     return false;
   };
 
@@ -404,6 +415,20 @@ export default function Administration({
             >
               <Contact className="w-4 h-4 shrink-0 text-pink-400" />
               HR & Payroll
+            </button>
+          )}
+
+          {hasAccess('vendors') && (
+            <button
+              onClick={() => setActiveTab('vendors')}
+              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
+                activeTab === 'vendors'
+                  ? 'bg-gradient-to-r from-indigo-500/20 to-sky-500/20 text-indigo-300 border-l-4 border-indigo-500'
+                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <Building2 className="w-4 h-4 shrink-0 text-indigo-400" />
+              Vendor Management
             </button>
           )}
 
@@ -876,6 +901,7 @@ export default function Administration({
               vehicleMileages={vehicleMileages}
               onAddVehicleMileage={onAddVehicleMileage}
               onDeleteVehicleMileage={onDeleteVehicleMileage}
+              vendorProfiles={vendors}
             />
           )}
 
@@ -923,6 +949,15 @@ export default function Administration({
               onAddEmployee={onAddEmployee}
               onUpdateEmployee={onUpdateEmployee}
               onDeleteEmployee={onDeleteEmployee}
+            />
+          )}
+
+          {activeTab === 'vendors' && hasAccess('vendors') && (
+            <VendorManagement
+              vendors={vendors}
+              onAddVendor={onAddVendor}
+              onUpdateVendor={onUpdateVendor}
+              onDeleteVendor={onDeleteVendor}
             />
           )}
 

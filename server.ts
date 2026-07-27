@@ -35,7 +35,8 @@ import {
   WarehouseEntry,
   MileageReport,
   FuelVendor,
-  VehicleMileage
+  VehicleMileage,
+  Vendor
 } from './src/types.ts';
 import {
   seedDatabase,
@@ -102,7 +103,10 @@ import {
   deleteFuelVendor,
   getVehicleMileages,
   saveVehicleMileage,
-  deleteVehicleMileage
+  deleteVehicleMileage,
+  getVendors,
+  saveVendor,
+  deleteVendor
 } from './src/db/service.ts';
 
 // Parses "DD.MM.YYYY" or "YYYY-MM-DD" expiry strings used across fleet records.
@@ -253,6 +257,37 @@ function requireWarehouseAccess(req: express.Request, res: express.Response, nex
   }
   if (sessionUser.department !== 'super_admin') {
     return res.status(403).json({ error: 'You do not have access to Warehouse Details.' });
+  }
+  next();
+}
+
+const VENDOR_MANAGEMENT_EMAILS = ['divya@kcmlogistics.in', 'finance@kcmlogistics.in'];
+// Chandan/Praveen (the Fuel Entry group) get read-only lookup access to
+// vendor records so Fuel Entry's vehicle auto-fill/picker works for them,
+// without letting them into the Vendor Management module itself.
+const VENDOR_READ_ONLY_EMAILS = [...VENDOR_MANAGEMENT_EMAILS, ...FUEL_ENTRY_USER_EMAILS];
+
+// GET /api/vendors: Divya, Rakshina, Chandan, Praveen, or super admin.
+function requireVendorReadAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (sessionUser.department !== 'super_admin' && !VENDOR_READ_ONLY_EMAILS.includes(sessionUser.email || '')) {
+    return res.status(403).json({ error: 'You do not have access to vendor records.' });
+  }
+  next();
+}
+
+// POST/PUT/DELETE /api/vendors*: Divya, Rakshina, or super admin only - the
+// full Vendor Management module (Aadhar/PAN/bank fields included).
+function requireVendorManagementAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (sessionUser.department !== 'super_admin' && !VENDOR_MANAGEMENT_EMAILS.includes(sessionUser.email || '')) {
+    return res.status(403).json({ error: 'You do not have access to Vendor Management.' });
   }
   next();
 }
@@ -1424,6 +1459,46 @@ async function startServer() {
     try {
       const { id } = req.params;
       const result = await deleteVehicleMileage(id);
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Vendor Management endpoints - full CRUD restricted to Divya/Rakshina/
+  // super admin; GET additionally allowed for Chandan/Praveen (read-only
+  // lookup so Fuel Entry's vehicle auto-fill/picker can work for them).
+  app.get('/api/vendors', requireVendorReadAccess, async (req, res) => {
+    try {
+      res.json(await getVendors());
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/vendors', requireVendorManagementAccess, async (req, res) => {
+    try {
+      const entry: Vendor = req.body;
+      const result = await saveVendor(entry);
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/vendors/:id', requireVendorManagementAccess, async (req, res) => {
+    try {
+      const result = await saveVendor({ ...req.body, id: req.params.id });
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/vendors/:id', requireVendorManagementAccess, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const result = await deleteVendor(id);
       res.json({ success: true, data: result });
     } catch (err: any) {
       res.status(500).json({ error: err.message });

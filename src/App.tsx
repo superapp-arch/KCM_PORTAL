@@ -17,7 +17,8 @@ import {
   WarehouseEntry,
   MileageReport,
   FuelVendor,
-  VehicleMileage
+  VehicleMileage,
+  Vendor
 } from './types';
 
 export default function App() {
@@ -39,6 +40,7 @@ export default function App() {
   const [mileageReports, setMileageReports] = useState<MileageReport[]>([]);
   const [fuelVendors, setFuelVendors] = useState<FuelVendor[]>([]);
   const [vehicleMileages, setVehicleMileages] = useState<VehicleMileage[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
 
   // 1. Initial Session Handshake
   // Restores strictly from THIS browser's own stored token - never from a
@@ -90,7 +92,8 @@ export default function App() {
         warehouseRes,
         mileageRes,
         fuelVendorsRes,
-        vehicleMileagesRes
+        vehicleMileagesRes,
+        vendorsRes
       ] = await Promise.all([
         fetch('/api/fleet'),
         authFetch('/api/fuel'),
@@ -103,7 +106,8 @@ export default function App() {
         authFetch('/api/warehouse'),
         authFetch('/api/mileage'),
         authFetch('/api/fuel-vendors'),
-        authFetch('/api/vehicle-mileage')
+        authFetch('/api/vehicle-mileage'),
+        authFetch('/api/vendors')
       ]);
 
       if (fleetRes.ok) setVehicles(await fleetRes.json());
@@ -118,6 +122,7 @@ export default function App() {
       if (mileageRes.ok) setMileageReports(await mileageRes.json());
       if (fuelVendorsRes.ok) setFuelVendors(await fuelVendorsRes.json());
       if (vehicleMileagesRes.ok) setVehicleMileages(await vehicleMileagesRes.json());
+      if (vendorsRes.ok) setVendors(await vendorsRes.json());
     } catch (err) {
       console.error('Failed to populate core ledgers:', err);
     }
@@ -597,6 +602,49 @@ export default function App() {
     }
   };
 
+  const handleAddVendor = async (vendor: Omit<Vendor, 'id'>) => {
+    try {
+      const res = await authFetch('/api/vendors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(vendor)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error adding vendor:', err);
+    }
+  };
+
+  const handleUpdateVendor = async (id: string, vendor: Partial<Vendor>) => {
+    try {
+      const res = await authFetch(`/api/vendors/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(vendor)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error updating vendor:', err);
+    }
+  };
+
+  const handleDeleteVendor = async (id: string) => {
+    try {
+      const res = await authFetch(`/api/vendors/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error deleting vendor:', err);
+    }
+  };
+
   const handleLoginSuccess = async (loggedInUser: User, sessionToken?: string) => {
     setUser(loggedInUser);
     if (sessionToken) setToken(sessionToken);
@@ -681,6 +729,10 @@ export default function App() {
         vehicleMileages={vehicleMileages}
         onAddVehicleMileage={handleAddVehicleMileage}
         onDeleteVehicleMileage={handleDeleteVehicleMileage}
+        vendors={vendors}
+        onAddVendor={handleAddVendor}
+        onUpdateVendor={handleUpdateVendor}
+        onDeleteVendor={handleDeleteVendor}
       />
 
       {/* Permanent lightly visible Company Watermark */}
