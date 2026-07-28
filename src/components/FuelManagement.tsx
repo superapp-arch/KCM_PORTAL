@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { FuelLog, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage, Vendor, StaffEmployee } from '../types';
 import {
   Fuel,
   Plus,
   Search,
-  Calendar,
   Landmark,
   CheckCircle2,
   Edit2,
@@ -13,7 +13,8 @@ import {
   Paperclip,
   X,
   Route,
-  Building2
+  Building2,
+  Download
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
@@ -108,8 +109,14 @@ export default function FuelManagement({
 }: FuelManagementProps) {
   const [activeSubTab, setActiveSubTab] = useState<'entry' | 'trip'>('entry');
   const [searchTerm, setSearchTerm] = useState('');
+  const [bunkFilter, setBunkFilter] = useState('All');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<string | null>(null);
+
+  // Period-based report download (replaces the old "Total Active Fuel
+  // Vouchers" KPI card) - reference date + day/month/year-till-date dropdown.
+  const [downloadDate, setDownloadDate] = useState(new Date().toISOString().slice(0, 10));
+  const [downloadPeriod, setDownloadPeriod] = useState<'day' | 'month' | 'year'>('day');
 
   // Sidebar / editing state
   const [showSidebar, setShowSidebar] = useState(false);
@@ -147,6 +154,9 @@ export default function FuelManagement({
       ...logs.map(l => l.vehicleNumber).filter(Boolean)
     ])
   ).sort();
+
+  // Bunks actually used in the ledger so far, for the bunk-wise download filter
+  const usedBunks = Array.from(new Set(logs.map(l => l.bunkName).filter(Boolean))).sort();
 
   // Amount auto-calc = Ltrs * Rate (editable override afterward)
   useEffect(() => {
@@ -314,13 +324,110 @@ export default function FuelManagement({
 
 
   const filteredLogs = logs.filter(log =>
-    (log?.vehicleNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (log?.vendorName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (log?.rqId || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (log?.indentNumber || '').toLowerCase().includes(searchTerm.toLowerCase())
+    (bunkFilter === 'All' || log.bunkName === bunkFilter) &&
+    (
+      (log?.vehicleNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (log?.vendorName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (log?.rqId || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (log?.indentNumber || '').toLowerCase().includes(searchTerm.toLowerCase())
+    )
   );
 
   const isSuperAdmin = user.department === 'super_admin';
+
+  // Maps fuel log rows to the flat shape used for Excel export, shared by
+  // both the ledger's own download button and the period report below.
+  const toFuelSheetRows = (rows: FuelLog[]) => rows.map(l => ({
+    'Entry #': l.entryNumber,
+    'Period': l.period,
+    'Date': l.date,
+    'Location': l.location,
+    'Bunk Name': l.bunkName,
+    'Bunk/Card': l.bunkOrCard,
+    'Vehicle No': l.vehicleNumber,
+    'Indent No': l.indentNumber,
+    'Ltrs': l.ltrs,
+    'Rate': l.rate,
+    'Amount': l.amount,
+    'Client': l.client,
+    'Type': l.type,
+    'Vendor Name': l.vendorName || '',
+    'Vendor Code': l.vendorCode || '',
+    'Requested By': l.requestedBy || '',
+    'RQ ID': l.rqId || '',
+    'Remarks': l.remarks || '',
+    ...(isSuperAdmin ? { 'Entered By': l.enteredBy || '' } : {})
+  }));
+
+  // Bunk-wise (and search-filtered) download of the Fuel Entry Ledger.
+  const handleDownloadFuelEntries = () => {
+    if (filteredLogs.length === 0) {
+      triggerNotif('No fuel entries match the current filters to download.');
+      return;
+    }
+    const worksheet = XLSX.utils.json_to_sheet(toFuelSheetRows(filteredLogs));
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Fuel Entries');
+    const bunkLabel = bunkFilter === 'All' ? 'AllBunks' : bunkFilter.replace(/\s+/g, '_');
+    XLSX.writeFile(workbook, `KCM_Fuel_Entries_${bunkLabel}.xlsx`);
+    triggerNotif('Fuel entries downloaded successfully!');
+  };
+
+  // Resolves the [start, end] date-string window (inclusive) for the
+  // dashboard's "For the Day / Monthly Till Date / Year Till Date" download.
+  const getDownloadDateRange = (period: 'day' | 'month' | 'year', refDate: string): { start: string; end: string } => {
+    if (period === 'day') return { start: refDate, end: refDate };
+    if (period === 'month') return { start: `${refDate.slice(0, 7)}-01`, end: refDate };
+    return { start: `${refDate.slice(0, 4)}-01-01`, end: refDate };
+  };
+
+  // Combined period report: pulls both Fuel Entries and Trip Details (mileage
+  // reports) dated within the selected window into one workbook, so whichever
+  // was logged for that day/month/year shows up automatically.
+  const handleDownloadPeriodReport = () => {
+    if (!downloadDate) {
+      triggerNotif('Please pick a reference date first.');
+      return;
+    }
+    const { start, end } = getDownloadDateRange(downloadPeriod, downloadDate);
+    const periodLogs = logs.filter(l => l.date >= start && l.date <= end);
+    const periodTrips = mileageReports.filter(r => r.date >= start && r.date <= end);
+
+    if (periodLogs.length === 0 && periodTrips.length === 0) {
+      triggerNotif('No fuel entries or trip details found for the selected period.');
+      return;
+    }
+
+    const workbook = XLSX.utils.book_new();
+    if (periodLogs.length > 0) {
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(toFuelSheetRows(periodLogs)), 'Fuel Entries');
+    }
+    if (periodTrips.length > 0) {
+      const tripRows = periodTrips.map(r => ({
+        'Sl. No': r.slNo,
+        'Date': r.date,
+        'Vehicle No': r.vehicleNo,
+        'Opening KM': r.openingKm ?? '',
+        'Closing KM': r.closingKm ?? '',
+        'Total KM': r.totalKm,
+        'Rate Per Litre': r.ratePerLitre,
+        'Litres': r.litres,
+        'Diesel Amount': r.dieselAmount,
+        'Mileage': r.mileage,
+        'Actual Mileage': r.actualMileage || 0,
+        'Difference': r.difference ?? '',
+        'Authorized Driver': r.driverName,
+        'Location': r.location,
+        'Remarks': r.remarks || '',
+        ...(isSuperAdmin ? { 'Entered By': r.enteredBy || '' } : {})
+      }));
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(tripRows), 'Trip Details');
+    }
+
+    const periodLabel = downloadPeriod === 'day' ? 'Daily' : downloadPeriod === 'month' ? 'MTD' : 'YTD';
+    XLSX.writeFile(workbook, `KCM_Fuel_Report_${periodLabel}_${downloadDate}.xlsx`);
+    triggerNotif('Fuel report downloaded successfully!');
+  };
 
   // KPI calculations - unchanged in label/position/layout, only field refs updated (ltrs replaces quantity)
   const totalFuelAmt = logs.reduce((sum, log) => sum + (log.amount || 0), 0);
@@ -372,15 +479,33 @@ export default function FuelManagement({
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Active Fuel Vouchers</p>
-            <h3 className="text-xl font-bold text-slate-800 mt-1">{logs.length} logged slips</h3>
-            <p className="text-xs text-emerald-500 font-medium mt-0.5">Synced with secure servers</p>
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Download Fuel Report</p>
+          <div className="flex items-center gap-1.5">
+            <input
+              type="date"
+              value={downloadDate}
+              onChange={(e) => setDownloadDate(e.target.value)}
+              className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-mono text-slate-800 focus:outline-none"
+            />
+            <select
+              value={downloadPeriod}
+              onChange={(e) => setDownloadPeriod(e.target.value as 'day' | 'month' | 'year')}
+              className="bg-slate-50 border border-slate-200 rounded-lg px-1.5 py-1.5 text-[10px] font-semibold text-slate-800 focus:outline-none"
+            >
+              <option value="day">For the Day</option>
+              <option value="month">Monthly Till Date</option>
+              <option value="year">Year Till Date</option>
+            </select>
+            <button
+              onClick={handleDownloadPeriodReport}
+              title="Download Fuel Entries & Trip Details for the selected period"
+              className="p-2 bg-teal-50 text-teal-600 hover:bg-teal-100 rounded-lg cursor-pointer shrink-0 transition-colors"
+            >
+              <Download className="w-4 h-4" />
+            </button>
           </div>
-          <div className="p-3 bg-teal-50 text-teal-600 rounded-lg">
-            <Calendar className="w-5 h-5" />
-          </div>
+          <p className="text-[9px] text-slate-400 mt-1.5">{logs.length} fuel vouchers logged</p>
         </div>
       </div>
 
@@ -415,7 +540,7 @@ export default function FuelManagement({
               <Fuel className="w-4 h-4 text-emerald-600" />
               Fuel Entry Ledger
             </h2>
-            <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               <div className="relative flex-1 sm:w-48">
                 <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400 pointer-events-none">
                   <Search className="w-3.5 h-3.5" />
@@ -429,6 +554,22 @@ export default function FuelManagement({
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-7 pr-3 py-1.5 text-[11px] focus:outline-none text-slate-800 font-semibold"
                 />
               </div>
+              <select
+                value={bunkFilter}
+                onChange={(e) => setBunkFilter(e.target.value)}
+                title="Filter by bunk"
+                className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-700 focus:outline-none"
+              >
+                <option value="All">All Bunks</option>
+                {usedBunks.map((b, i) => <option key={i} value={b}>{b}</option>)}
+              </select>
+              <button
+                onClick={handleDownloadFuelEntries}
+                title="Download fuel entries (respects search & bunk filter)"
+                className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 shadow-2xs cursor-pointer transition-all text-[11px] whitespace-nowrap"
+              >
+                <Download className="w-3.5 h-3.5 text-blue-600" /> Download
+              </button>
               <button
                 onClick={() => { resetForm(); setShowSidebar(true); }}
                 className="bg-gradient-to-r from-emerald-500 to-blue-600 hover:from-emerald-600 hover:to-blue-700 text-xs text-white font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-md whitespace-nowrap"
