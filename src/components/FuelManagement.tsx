@@ -482,12 +482,13 @@ export default function FuelManagement({
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Download Fuel Report</p>
           <div className="flex items-center gap-1.5">
-            <input
-              type="date"
-              value={downloadDate}
-              onChange={(e) => setDownloadDate(e.target.value)}
-              className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-mono text-slate-800 focus:outline-none"
-            />
+            <div className="flex-1 min-w-0">
+              <DateInput
+                value={downloadDate}
+                onChange={(e) => setDownloadDate(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-mono text-slate-800"
+              />
+            </div>
             <select
               value={downloadPeriod}
               onChange={(e) => setDownloadPeriod(e.target.value as 'day' | 'month' | 'year')}
