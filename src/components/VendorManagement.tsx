@@ -13,6 +13,7 @@ interface VendorManagementProps {
 interface FormErrors {
   name?: boolean;
   code?: boolean;
+  client?: boolean;
   vehicleNumbers?: boolean;
   contactNumber?: boolean;
   aadharNumber?: boolean;
@@ -22,8 +23,14 @@ interface FormErrors {
 }
 
 const emptyForm = {
-  name: '', code: '', contactNumber: '', aadharNumber: '', panNumber: '',
+  name: '', code: '', client: '', contactNumber: '', aadharNumber: '', panNumber: '',
   bankAccountNumber: '', ifscCode: ''
+};
+
+// Client badge colors for the table: Swiggy = yellow, Reliance = red.
+const CLIENT_BADGE_STYLE: Record<string, string> = {
+  Swiggy: 'bg-yellow-100 text-yellow-800 border-yellow-300',
+  Reliance: 'bg-red-100 text-red-700 border-red-300'
 };
 
 export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor, onDeleteVendor }: VendorManagementProps) {
@@ -57,7 +64,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
   const startEdit = (vendor: Vendor) => {
     setEditingId(vendor.id);
     setForm({
-      name: vendor.name, code: vendor.code, contactNumber: vendor.contactNumber,
+      name: vendor.name, code: vendor.code, client: vendor.client || '', contactNumber: vendor.contactNumber,
       aadharNumber: vendor.aadharNumber, panNumber: vendor.panNumber,
       bankAccountNumber: vendor.bankAccountNumber, ifscCode: vendor.ifscCode
     });
@@ -88,6 +95,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
     const nextErrors: FormErrors = {
       name: !form.name.trim(),
       code: !form.code.trim(),
+      client: !form.client,
       vehicleNumbers: vehicleNumbers.length === 0,
       contactNumber: form.contactNumber.length !== 10,
       aadharNumber: form.aadharNumber.length !== 12,
@@ -106,6 +114,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
       const payload = {
         name: form.name.trim(),
         code: form.code.trim(),
+        client: form.client as 'Swiggy' | 'Reliance',
         vehicleNumbers,
         contactNumber: form.contactNumber,
         aadharNumber: form.aadharNumber,
@@ -180,6 +189,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
               <tr>
                 <th className="px-3 py-2.5">Vendor Name</th>
                 <th className="px-3 py-2.5">Vendor Code</th>
+                <th className="px-3 py-2.5">Client</th>
                 <th className="px-3 py-2.5">Vehicle Number(s)</th>
                 <th className="px-3 py-2.5">Contact</th>
                 <th className="px-3 py-2.5">Aadhar</th>
@@ -191,11 +201,20 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
-                <tr><td colSpan={9} className="text-center py-10 text-slate-400">No vendors found.</td></tr>
+                <tr><td colSpan={10} className="text-center py-10 text-slate-400">No vendors found.</td></tr>
               ) : filtered.map(v => (
                 <tr key={v.id} className="hover:bg-slate-50">
                   <td className="px-3 py-2.5 font-semibold text-slate-800">{v.name}</td>
                   <td className="px-3 py-2.5 font-mono text-slate-600">{v.code}</td>
+                  <td className="px-3 py-2.5">
+                    {v.client ? (
+                      <span className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] ${CLIENT_BADGE_STYLE[v.client] || 'bg-slate-100 text-slate-600 border-slate-300'}`}>
+                        {v.client}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300">-</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2.5">
                     <div className="flex flex-wrap gap-1">
                       {(v.vehicleNumbers || []).map(n => (
@@ -246,6 +265,17 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
                       autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                     {errors.code && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
                   </div>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-500 mb-1">Client*</label>
+                  <select value={form.client} onChange={e => setForm({ ...form, client: e.target.value })}
+                    className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5">
+                    <option value="">Select client</option>
+                    <option value="Swiggy">Swiggy</option>
+                    <option value="Reliance">Reliance</option>
+                  </select>
+                  {errors.client && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
                 </div>
 
                 <div>

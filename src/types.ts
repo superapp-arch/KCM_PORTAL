@@ -150,6 +150,7 @@ export interface Vendor {
   id: string;
   name: string;
   code: string;
+  client?: 'Swiggy' | 'Reliance'; // which client this vendor is contracted under
   vehicleNumbers: string[]; // at least one; a vendor may have multiple vehicles
   contactNumber: string; // exactly 10 digits
   aadharNumber: string; // exactly 12 digits
