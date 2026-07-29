@@ -278,7 +278,6 @@ export default function Administration({
 
   return (
     <>
-      <Watermark src={kcmLogo} />
       <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans text-slate-900 overflow-hidden relative z-10" id="admin-main-stage">
 
       {/* Vibrant Pink & Purple Bento Sidebar */}
@@ -508,25 +507,9 @@ export default function Administration({
       {/* Main Workspace Frame */}
       <main className="flex-1 flex flex-col overflow-hidden bg-slate-50 relative" id="admin-workspace-grid">
         
-        {/* Permanent light green logo watermark */}
-        <div className="absolute inset-0 pointer-events-none flex items-center justify-center overflow-hidden opacity-[0.03] select-none z-0">
-          <svg viewBox="0 0 500 500" className="w-[300px] h-[300px] sm:w-[400px] sm:h-[400px] md:w-[500px] md:h-[500px] text-emerald-600 fill-current">
-            <path d="M 50,250 C 60,150 180,70 340,60 C 370,58 410,48 440,30 C 420,70 390,110 330,120 C 270,130 180,150 120,220 C 100,240 80,250 50,250 Z" />
-            <path d="M 450,250 C 440,350 320,430 160,440 C 130,442 90,452 60,470 C 80,430 110,390 170,380 C 230,370 320,350 380,280 C 400,260 420,250 450,250 Z" />
-            <circle cx="250" cy="250" r="100" stroke="currentColor" strokeWidth="8" fill="none" />
-            <line x1="150" y1="250" x2="350" y2="250" stroke="currentColor" strokeWidth="6" />
-            <path d="M 170,200 Q 250,220 330,200" stroke="currentColor" strokeWidth="6" fill="none" />
-            <path d="M 170,300 Q 250,280 330,300" stroke="currentColor" strokeWidth="6" fill="none" />
-            <path d="M 195,170 Q 250,185 305,170" stroke="currentColor" strokeWidth="6" fill="none" />
-            <path d="M 195,330 Q 250,315 305,330" stroke="currentColor" strokeWidth="6" fill="none" />
-            <line x1="250" y1="150" x2="250" y2="350" stroke="currentColor" strokeWidth="6" />
-            <path d="M 250,150 Q 200,250 250,350" stroke="currentColor" strokeWidth="6" fill="none" />
-            <path d="M 250,150 Q 300,250 250,350" stroke="currentColor" strokeWidth="6" fill="none" />
-            <path d="M 250,150 Q 170,250 250,350" stroke="currentColor" strokeWidth="6" fill="none" />
-            <path d="M 250,150 Q 330,250 250,350" stroke="currentColor" strokeWidth="6" fill="none" />
-          </svg>
-        </div>
-        
+        {/* Same brand watermark as the Login page */}
+        <Watermark src={kcmLogo} />
+
         {/* Sticky Sub-Header Bar */}
         <header className="h-16 bg-white border-b border-pink-100 flex items-center justify-between px-6 shrink-0 shadow-xs" id="admin-global-header">
           <div className="flex items-center gap-3 text-xs sm:text-sm font-semibold text-slate-600">

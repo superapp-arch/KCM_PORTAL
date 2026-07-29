@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import SplashScreen from './components/SplashScreen';
 import Login from './components/Login';
 import Administration from './components/Administration';
-import kcmLogo from './assets/images/logo.png';
 import { authFetch } from './authFetch';
 import {
   User,
@@ -750,19 +749,6 @@ export default function App() {
         onUpdateVendor={handleUpdateVendor}
         onDeleteVendor={handleDeleteVendor}
       />
-
-      {/* Permanent lightly visible Company Watermark */}
-      <div 
-        className="fixed inset-0 pointer-events-none flex items-center justify-center z-[-10] overflow-hidden bg-transparent select-none"
-        id="kcm-company-watermark"
-      >
-        <img 
-          src={kcmLogo} 
-          alt="KCM Company Watermark" 
-          className="w-[300px] sm:w-[500px] md:w-[700px] object-contain opacity-[0.08]"
-          referrerPolicy="no-referrer"
-        />
-      </div>
     </>
   );
 }
