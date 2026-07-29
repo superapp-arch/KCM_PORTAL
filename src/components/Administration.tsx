@@ -321,13 +321,16 @@ export default function Administration({
             </button>
           )}
 
-          {/* Department tabs with access control checks */}
+          {/* Department tabs with access control checks - ordered per the
+              requested workspace arrangement: Super Admin Terminal, Fleet &
+              Vehicles, Fuel Management, Mileage Report, Vendor Management,
+              HR & Payroll, then the remaining modules. */}
           {hasAccess('fleet') && (
             <button
               onClick={() => setActiveTab('fleet')}
               className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'fleet' 
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500' 
+                activeTab === 'fleet'
+                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
                   : 'text-purple-200 hover:bg-white/5 hover:text-white'
               }`}
             >
@@ -340,8 +343,8 @@ export default function Administration({
             <button
               onClick={() => setActiveTab('fuel')}
               className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'fuel' 
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500' 
+                activeTab === 'fuel'
+                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
                   : 'text-purple-200 hover:bg-white/5 hover:text-white'
               }`}
             >
@@ -350,73 +353,17 @@ export default function Administration({
             </button>
           )}
 
-          {hasAccess('billing') && (
+          {hasAccess('mileage') && (
             <button
-              onClick={() => setActiveTab('billing')}
+              onClick={() => setActiveTab('mileage')}
               className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'billing' 
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500' 
+                activeTab === 'mileage'
+                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
                   : 'text-purple-200 hover:bg-white/5 hover:text-white'
               }`}
             >
-              <FileText className="w-4 h-4 shrink-0 text-pink-400" />
-              Customer Billings
-            </button>
-          )}
-
-          {hasAccess('pettycash') && (
-            <button
-              onClick={() => setActiveTab('pettycash')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'pettycash' 
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500' 
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <Landmark className="w-4 h-4 shrink-0 text-pink-400" />
-              Petty cash
-            </button>
-          )}
-
-          {hasAccess('maintenance') && (
-            <button
-              onClick={() => setActiveTab('maintenance')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'maintenance' 
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500' 
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <Settings className="w-4 h-4 shrink-0 text-pink-400" />
-              Fleet Maintenance
-            </button>
-          )}
-
-          {hasAccess('accounts') && (
-            <button
-              onClick={() => setActiveTab('accounts')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'accounts' 
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500' 
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <DollarSign className="w-4 h-4 shrink-0 text-pink-400" />
-              Accounts and Finance
-            </button>
-          )}
-
-          {hasAccess('hr') && (
-            <button
-              onClick={() => setActiveTab('hr')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'hr' 
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500' 
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <Contact className="w-4 h-4 shrink-0 text-pink-400" />
-              HR & Payroll
+              <Gauge className="w-4 h-4 shrink-0 text-pink-400" />
+              Mileage Report
             </button>
           )}
 
@@ -434,31 +381,87 @@ export default function Administration({
             </button>
           )}
 
+          {hasAccess('hr') && (
+            <button
+              onClick={() => setActiveTab('hr')}
+              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
+                activeTab === 'hr'
+                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
+                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <Contact className="w-4 h-4 shrink-0 text-pink-400" />
+              HR & Payroll
+            </button>
+          )}
+
+          {hasAccess('billing') && (
+            <button
+              onClick={() => setActiveTab('billing')}
+              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
+                activeTab === 'billing'
+                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
+                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <FileText className="w-4 h-4 shrink-0 text-pink-400" />
+              Customer Billings
+            </button>
+          )}
+
+          {hasAccess('pettycash') && (
+            <button
+              onClick={() => setActiveTab('pettycash')}
+              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
+                activeTab === 'pettycash'
+                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
+                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <Landmark className="w-4 h-4 shrink-0 text-pink-400" />
+              Petty cash
+            </button>
+          )}
+
+          {hasAccess('maintenance') && (
+            <button
+              onClick={() => setActiveTab('maintenance')}
+              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
+                activeTab === 'maintenance'
+                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
+                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <Settings className="w-4 h-4 shrink-0 text-pink-400" />
+              Fleet Maintenance
+            </button>
+          )}
+
+          {hasAccess('accounts') && (
+            <button
+              onClick={() => setActiveTab('accounts')}
+              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
+                activeTab === 'accounts'
+                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
+                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <DollarSign className="w-4 h-4 shrink-0 text-pink-400" />
+              Accounts and Finance
+            </button>
+          )}
+
           {hasAccess('warehouse') && (
             <button
               onClick={() => setActiveTab('warehouse')}
               className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'warehouse' 
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500' 
+                activeTab === 'warehouse'
+                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
                   : 'text-purple-200 hover:bg-white/5 hover:text-white'
               }`}
             >
               <Warehouse className="w-4 h-4 shrink-0 text-pink-400" />
               Warehouse Details
-            </button>
-          )}
-
-          {hasAccess('mileage') && (
-            <button
-              onClick={() => setActiveTab('mileage')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'mileage' 
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500' 
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <Gauge className="w-4 h-4 shrink-0 text-pink-400" />
-              Mileage Report
             </button>
           )}
 
