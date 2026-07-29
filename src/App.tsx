@@ -17,7 +17,8 @@ import {
   MileageReport,
   FuelVendor,
   VehicleMileage,
-  Vendor
+  Vendor,
+  DriverEmployee
 } from './types';
 
 export default function App() {
@@ -40,6 +41,7 @@ export default function App() {
   const [fuelVendors, setFuelVendors] = useState<FuelVendor[]>([]);
   const [vehicleMileages, setVehicleMileages] = useState<VehicleMileage[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [drivers, setDrivers] = useState<DriverEmployee[]>([]);
 
   // 1. Initial Session Handshake
   // Restores strictly from THIS browser's own stored token - never from a
@@ -92,7 +94,8 @@ export default function App() {
         mileageRes,
         fuelVendorsRes,
         vehicleMileagesRes,
-        vendorsRes
+        vendorsRes,
+        driversRes
       ] = await Promise.all([
         fetch('/api/fleet'),
         authFetch('/api/fuel'),
@@ -106,7 +109,8 @@ export default function App() {
         authFetch('/api/mileage'),
         authFetch('/api/fuel-vendors'),
         authFetch('/api/vehicle-mileage'),
-        authFetch('/api/vendors')
+        authFetch('/api/vendors'),
+        authFetch('/api/drivers/employees')
       ]);
 
       if (fleetRes.ok) setVehicles(await fleetRes.json());
@@ -122,6 +126,7 @@ export default function App() {
       if (fuelVendorsRes.ok) setFuelVendors(await fuelVendorsRes.json());
       if (vehicleMileagesRes.ok) setVehicleMileages(await vehicleMileagesRes.json());
       if (vendorsRes.ok) setVendors(await vendorsRes.json());
+      if (driversRes.ok) setDrivers(await driversRes.json());
     } catch (err) {
       console.error('Failed to populate core ledgers:', err);
     }
@@ -286,6 +291,49 @@ export default function App() {
       }
     } catch (err) {
       console.error(emp);
+    }
+  };
+
+  const handleAddDriver = async (driver: Omit<DriverEmployee, 'id'> & { id: string }) => {
+    try {
+      const res = await authFetch('/api/drivers/employees', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(driver)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error adding driver:', err);
+    }
+  };
+
+  const handleUpdateDriver = async (id: string, driver: Partial<DriverEmployee>) => {
+    try {
+      const res = await authFetch(`/api/drivers/employees/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(driver)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error updating driver:', err);
+    }
+  };
+
+  const handleDeleteDriver = async (id: string) => {
+    try {
+      const res = await authFetch(`/api/drivers/employees/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error deleting driver:', err);
     }
   };
 
@@ -748,6 +796,10 @@ export default function App() {
         onAddVendor={handleAddVendor}
         onUpdateVendor={handleUpdateVendor}
         onDeleteVendor={handleDeleteVendor}
+        drivers={drivers}
+        onAddDriver={handleAddDriver}
+        onUpdateDriver={handleUpdateDriver}
+        onDeleteDriver={handleDeleteDriver}
       />
     </>
   );

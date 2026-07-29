@@ -1,0 +1,163 @@
+import React, { useState, useMemo } from 'react';
+import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Paperclip } from 'lucide-react';
+import { DriverEmployee, DRIVER_LOCATION_CATEGORIES } from '../../types';
+import DriverFormModal from './DriverFormModal';
+
+interface DriverSalarySheetProps {
+  drivers: DriverEmployee[];
+  onAddDriver: (driver: Omit<DriverEmployee, 'id'> & { id: string }) => Promise<void>;
+  onUpdateDriver: (id: string, driver: Partial<DriverEmployee>) => Promise<void>;
+  onDeleteDriver: (id: string) => Promise<void>;
+}
+
+export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver, onDeleteDriver }: DriverSalarySheetProps) {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [locationFilter, setLocationFilter] = useState(''); // '' = All Locations
+  const [modalDriver, setModalDriver] = useState<DriverEmployee | null | undefined>(undefined); // undefined = closed
+  const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const triggerNotif = (message: string, type: 'success' | 'error') => {
+    setNotif({ message, type });
+    setTimeout(() => setNotif(null), 4000);
+  };
+
+  // Only the location categories actually assigned to drivers show up (plus
+  // whatever this viewer is scoped to, since the backend already only sends
+  // drivers within their allowed locations).
+  const locationOptions = useMemo(() => {
+    const distinct = Array.from(new Set(drivers.map(d => d.location).filter(Boolean)));
+    return DRIVER_LOCATION_CATEGORIES.filter(c => distinct.includes(c));
+  }, [drivers]);
+
+  const filtered = useMemo(() => drivers.filter(d => {
+    if (locationFilter && d.location !== locationFilter) return false;
+    if (searchTerm) {
+      const q = searchTerm.toLowerCase();
+      if (!d.id.toLowerCase().includes(q) && !d.name.toLowerCase().includes(q) && !(d.vehicleNo || '').toLowerCase().includes(q)) return false;
+    }
+    return true;
+  }), [drivers, locationFilter, searchTerm]);
+
+  const handleDelete = async (driver: DriverEmployee) => {
+    if (!confirm(`Delete driver ${driver.id} - ${driver.name}? This cannot be undone.`)) return;
+    await onDeleteDriver(driver.id);
+    triggerNotif(`Driver ${driver.id} removed.`, 'success');
+  };
+
+  const handleSaved = () => {
+    triggerNotif('Driver record saved.', 'success');
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col md:flex-row md:items-center justify-between pb-4 border-b border-slate-200 gap-3">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight text-slate-900 font-sans flex items-center gap-2">
+            <Coins className="text-amber-600 w-5 h-5" />
+            Driver Salary
+          </h1>
+          <p className="text-xs text-slate-500 font-mono mt-1">Master driver record, salary and bank details</p>
+        </div>
+        <button onClick={() => setModalDriver(null)} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all">
+          <Plus className="w-3.5 h-3.5" /> Add Driver
+        </button>
+      </div>
+
+      {notif && (
+        <div className={`p-3 border rounded-lg text-xs font-semibold flex items-center gap-2 ${
+          notif.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
+        }`}>
+          {notif.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+          <span>{notif.message}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex flex-wrap items-center gap-2 text-xs">
+        <div className="flex items-center gap-2 border border-slate-300 rounded-lg px-2.5 py-1.5 flex-1 min-w-[200px]">
+          <Search className="w-3.5 h-3.5 text-slate-400" />
+          <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search by Driver Name, Driver ID, or Vehicle No..." autoComplete="off" className="flex-1 outline-none" />
+        </div>
+        <select value={locationFilter} onChange={e => setLocationFilter(e.target.value)} className="border border-slate-300 rounded-lg px-2.5 py-1.5 w-56">
+          <option value="">All Locations</option>
+          {locationOptions.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+        </select>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 text-purple-100 uppercase text-[10px] tracking-wider">
+              <tr>
+                <th className="px-3 py-2.5">Sl.No</th>
+                <th className="px-3 py-2.5">Driver Name</th>
+                <th className="px-3 py-2.5">Driver ID</th>
+                <th className="px-3 py-2.5">Driver No</th>
+                <th className="px-3 py-2.5">Vehicle No</th>
+                <th className="px-3 py-2.5">A/C No</th>
+                <th className="px-3 py-2.5">IFSC Code</th>
+                <th className="px-3 py-2.5">Reporting</th>
+                <th className="px-3 py-2.5">Remark</th>
+                <th className="px-3 py-2.5">LOP Amount</th>
+                <th className="px-3 py-2.5">Petty Cash/Advance</th>
+                <th className="px-3 py-2.5">Month</th>
+                <th className="px-3 py-2.5">Loan Deduction</th>
+                <th className="px-3 py-2.5">Recovery Amount</th>
+                <th className="px-3 py-2.5">Driver Welfare</th>
+                <th className="px-3 py-2.5">Location</th>
+                <th className="px-3 py-2.5 text-center">Docs</th>
+                <th className="px-3 py-2.5 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filtered.length === 0 ? (
+                <tr><td colSpan={18} className="text-center py-10 text-slate-400">No driver records found.</td></tr>
+              ) : filtered.map((driver, i) => (
+                <tr key={driver.id} className="hover:bg-slate-50">
+                  <td className="px-3 py-2.5 font-mono text-slate-500">{i + 1}</td>
+                  <td className="px-3 py-2.5 font-semibold text-slate-700 whitespace-nowrap">{driver.name}</td>
+                  <td className="px-3 py-2.5 font-mono font-bold text-slate-800 whitespace-nowrap">{driver.id}</td>
+                  <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{driver.driverNo}</td>
+                  <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{driver.vehicleNo || '-'}</td>
+                  <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{driver.accountNumber || '-'}</td>
+                  <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{driver.ifscCode || '-'}</td>
+                  <td className="px-3 py-2.5 text-slate-500">{driver.reporting || '-'}</td>
+                  <td className="px-3 py-2.5 text-slate-500 max-w-[150px] truncate" title={driver.remark}>{driver.remark || '-'}</td>
+                  <td className="px-3 py-2.5 font-mono text-rose-700">{driver.lopAmount ? `Rs. ${driver.lopAmount.toLocaleString('en-IN')}` : '-'}</td>
+                  <td className="px-3 py-2.5 font-mono text-slate-600">{driver.pettyCashAdvance ? `Rs. ${driver.pettyCashAdvance.toLocaleString('en-IN')}` : '-'}</td>
+                  <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{driver.month || '-'}</td>
+                  <td className="px-3 py-2.5 font-mono text-slate-600">{driver.loanDeduction ? `Rs. ${driver.loanDeduction.toLocaleString('en-IN')}` : '-'}</td>
+                  <td className="px-3 py-2.5 font-mono text-slate-600">{driver.recoveryAmount ? `Rs. ${driver.recoveryAmount.toLocaleString('en-IN')}` : '-'}</td>
+                  <td className="px-3 py-2.5 font-mono text-slate-600">{driver.driverWelfare ? `Rs. ${driver.driverWelfare.toLocaleString('en-IN')}` : '-'}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap">
+                    <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded text-[9.5px] font-bold">{driver.location}</span>
+                  </td>
+                  <td className="px-3 py-2.5 text-center">
+                    {driver.documents && driver.documents.length > 0 ? (
+                      <span className="inline-flex items-center justify-center px-1.5 py-0.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-[10px] font-bold">
+                        <Paperclip className="w-2.5 h-2.5 mr-0.5" />{driver.documents.length}
+                      </span>
+                    ) : <span className="text-slate-300">-</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                    <button onClick={() => setModalDriver(driver)} className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => handleDelete(driver)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {modalDriver !== undefined && (
+        <DriverFormModal
+          driver={modalDriver}
+          onAddDriver={onAddDriver}
+          onUpdateDriver={onUpdateDriver}
+          onClose={() => setModalDriver(undefined)}
+          onSaved={handleSaved}
+        />
+      )}
+    </div>
+  );
+}

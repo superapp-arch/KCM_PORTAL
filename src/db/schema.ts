@@ -151,4 +151,16 @@ export const vendors = pgTable('vendors', {
   data: text('data').notNull(), // JSON string representing the full Vendor object
 });
 
+// Driver Details module tables
+export const driverEmployees = pgTable('driver_employees', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full DriverEmployee object
+});
+
+export const driverAttendance = pgTable('driver_attendance', {
+  id: text('id').primaryKey(),
+  driverId: text('driver_id'),
+  data: text('data').notNull(), // JSON string representing the full DriverAttendance object
+});
+
 

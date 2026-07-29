@@ -430,4 +430,63 @@ export interface MileageReport {
   enteredBy?: string; // username, stamped server-side; visible only to super admins
 }
 
+// Driver Details module - a driver-focused counterpart to HR & Payroll.
+// Access is location-scoped (see server.ts: DRIVER_LOCATION_SCOPES) rather
+// than a single fixed group - each regional handler only sees/manages
+// drivers in their assigned location(s); Super Admins see everything.
+export type DriverLocationCategory =
+  | 'HSK RIL F&V Drivers'
+  | 'Market Vehicle Driver Details'
+  | 'Belgaum Drivers Details'
+  | 'Vijayawada Drivers Details'
+  | 'Swiggy - Vizag Driver'
+  | 'Hyd Swiggy'
+  | "Walke's & Parking Drivers"
+  | 'BLR Swiggy'
+  | 'Cold Star'
+  | 'Goa Vehicle'
+  | 'Chennai Hybrid'
+  | 'Nelmangala Reliance'
+  | 'Nidaghatta Reliance'
+  | 'Swiggy DHL'
+  | 'KCM Service Station';
+
+export const DRIVER_LOCATION_CATEGORIES: DriverLocationCategory[] = [
+  'HSK RIL F&V Drivers', 'Market Vehicle Driver Details', 'Belgaum Drivers Details',
+  'Vijayawada Drivers Details', 'Swiggy - Vizag Driver', 'Hyd Swiggy',
+  "Walke's & Parking Drivers", 'BLR Swiggy', 'Cold Star', 'Goa Vehicle',
+  'Chennai Hybrid', 'Nelmangala Reliance', 'Nidaghatta Reliance', 'Swiggy DHL', 'KCM Service Station'
+];
+
+// "Sl.No" is a display-only row index, not persisted. "Wages Per Day" and
+// "Total" are pure computed/derived values (like HR's Per Day Salary/Net
+// Salary) - not stored. lopAmount IS stored as a snapshot (recomputed from
+// attendance + wagesPerDay whenever the driver record is saved).
+export interface DriverEmployee {
+  id: string; // Driver ID*, e.g. KCMDRV19102
+  name: string; // Driver Name*
+  driverNo: string; // 10-digit mobile, required
+  vehicleNo?: string;
+  accountNumber?: string; // A/C No
+  ifscCode?: string;
+  reporting?: string;
+  remark?: string;
+  lopAmount?: number; // snapshot = LOP day-count (for `month`) x Wages Per Day
+  pettyCashAdvance?: number;
+  month?: string; // YYYY-MM - which month the salary figures apply to
+  loanDeduction?: number;
+  recoveryAmount?: number;
+  driverWelfare?: number;
+  grossSalary?: number;
+  location: DriverLocationCategory;
+  documents?: VehicleDocument[];
+}
+
+export interface DriverAttendance {
+  id: string; // deterministic: `${driverId}-${date}`
+  driverId: string;
+  date: string; // YYYY-MM-DD
+  status: 'Present' | 'Absent' | 'Leave';
+}
+
 

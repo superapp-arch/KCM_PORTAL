@@ -22,7 +22,9 @@ import {
   mileageReports,
   fuelVendors,
   vehicleMileage,
-  vendors
+  vendors,
+  driverEmployees,
+  driverAttendance
 } from './schema.ts';
 import { eq, ne } from 'drizzle-orm';
 import { hashPassword, isHashed } from '../auth/password.ts';
@@ -49,7 +51,9 @@ import {
   MileageReport,
   FuelVendor,
   VehicleMileage,
-  Vendor
+  Vendor,
+  DriverEmployee,
+  DriverAttendance
 } from '../types.ts';
 
 // Default Users Seed
@@ -67,6 +71,7 @@ export const DEFAULT_USERS = [
   { username: 'saneel', name: 'Saneel', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'saneel@kcmlogistics.in', pass: 'KCM@saneel105' },
   { username: 'rajeshwar', name: 'Rajeshwar', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'rajeshwar@kcmlogistics.in', pass: 'KCM@rajeshwar498' },
   { username: 'rakshina', name: 'Rakshina', department: 'accounts_finance', departmentLabel: 'Accounts & Finance', email: 'finance@kcmlogistics.in', pass: 'KCM@finance337' },
+  { username: 'nagaraju', name: 'Nagaraju Linga', department: 'maintenance', departmentLabel: 'Driver Coordination', email: 'nagaraju.linga@kcmlogistics.in', pass: 'KCM@nagaraju471' },
   { username: 'super2', name: 'Super Admin Principal', department: 'super_admin', departmentLabel: 'Super Administration', email: 'superapp@kcmlogistics.in', pass: 'super123' },
 ];
 
@@ -1280,6 +1285,85 @@ export async function deleteVendor(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteVendor:", error);
     throw new Error("Failed to delete vendor.", { cause: error });
+  }
+}
+
+// --- DRIVER DETAILS OPERATIONS ---
+export async function getDriverEmployees(): Promise<DriverEmployee[]> {
+  try {
+    const rows = await db.select().from(driverEmployees);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getDriverEmployees:", error);
+    throw new Error("Failed to retrieve driver employees.", { cause: error });
+  }
+}
+
+export async function saveDriverEmployee(driver: DriverEmployee) {
+  try {
+    const id = driver.id || String(Date.now());
+    const complete = { ...driver, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(driverEmployees).where(eq(driverEmployees.id, id));
+    if (existing.length > 0) {
+      await db.update(driverEmployees).set({ data: dataString }).where(eq(driverEmployees.id, id));
+    } else {
+      await db.insert(driverEmployees).values({ id, data: dataString });
+    }
+    return await getDriverEmployees();
+  } catch (error) {
+    console.error("Database action failed in saveDriverEmployee:", error);
+    throw new Error("Failed to save driver employee.", { cause: error });
+  }
+}
+
+export async function deleteDriverEmployee(id: string) {
+  try {
+    await db.delete(driverEmployees).where(eq(driverEmployees.id, id));
+    return await getDriverEmployees();
+  } catch (error) {
+    console.error("Database action failed in deleteDriverEmployee:", error);
+    throw new Error("Failed to delete driver employee.", { cause: error });
+  }
+}
+
+export async function getDriverAttendance(): Promise<DriverAttendance[]> {
+  try {
+    const rows = await db.select().from(driverAttendance);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getDriverAttendance:", error);
+    throw new Error("Failed to retrieve driver attendance.", { cause: error });
+  }
+}
+
+export async function saveDriverAttendanceRecord(record: DriverAttendance) {
+  try {
+    const id = record.id || String(Date.now());
+    const complete = { ...record, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(driverAttendance).where(eq(driverAttendance.id, id));
+    if (existing.length > 0) {
+      await db.update(driverAttendance).set({ driverId: complete.driverId, data: dataString }).where(eq(driverAttendance.id, id));
+    } else {
+      await db.insert(driverAttendance).values({ id, driverId: complete.driverId, data: dataString });
+    }
+    return await getDriverAttendance();
+  } catch (error) {
+    console.error("Database action failed in saveDriverAttendanceRecord:", error);
+    throw new Error("Failed to save driver attendance record.", { cause: error });
+  }
+}
+
+export async function deleteDriverAttendanceRecord(id: string) {
+  try {
+    await db.delete(driverAttendance).where(eq(driverAttendance.id, id));
+    return await getDriverAttendance();
+  } catch (error) {
+    console.error("Database action failed in deleteDriverAttendanceRecord:", error);
+    throw new Error("Failed to delete driver attendance record.", { cause: error });
   }
 }
 

@@ -36,7 +36,10 @@ import {
   MileageReport,
   FuelVendor,
   VehicleMileage,
-  Vendor
+  Vendor,
+  DriverEmployee,
+  DriverAttendance,
+  DriverLocationCategory
 } from './src/types.ts';
 import {
   seedDatabase,
@@ -106,7 +109,13 @@ import {
   deleteVehicleMileage,
   getVendors,
   saveVendor,
-  deleteVendor
+  deleteVendor,
+  getDriverEmployees,
+  saveDriverEmployee,
+  deleteDriverEmployee,
+  getDriverAttendance,
+  saveDriverAttendanceRecord,
+  deleteDriverAttendanceRecord
 } from './src/db/service.ts';
 
 // Parses "DD.MM.YYYY" or "YYYY-MM-DD" expiry strings used across fleet records.
@@ -214,6 +223,21 @@ async function computeMonthlyAttendanceSummary(empId: string, month: string) {
   };
 }
 
+// Driver Details' simplified 3-status attendance model (Present/Absent/Leave)
+// - "Absent" feeds LOP, "Leave" feeds Exemption Leave, mirroring how Staff
+// Attendance feeds the HR Salary Breakup tab but without the 9-status enum.
+async function computeDriverMonthlyAttendanceSummary(driverId: string, month: string) {
+  const attendanceRows = await getDriverAttendance();
+  const rows = attendanceRows.filter(a => a.driverId === driverId && a.date.startsWith(month));
+  const totalDays = daysInMonth(month);
+  const lopDays = rows.filter(r => r.status === 'Absent').length;
+  const exemptionLeaveDays = rows.filter(r => r.status === 'Leave').length;
+  const presentDays = rows.filter(r => r.status === 'Present').length;
+  const workingDays = totalDays - lopDays - exemptionLeaveDays;
+
+  return { driverId, month, totalDays, workingDays, lopDays, exemptionLeaveDays, presentDays, rows };
+}
+
 // HR & Payroll data is restricted to Bhagya and super admins - the frontend
 // already hides the tab from everyone else, but that's UI-only. This is the
 // actual enforcement: without it, anyone with a valid session token could
@@ -311,6 +335,42 @@ function canModifyEntryRow(row: { enteredBy?: string } | undefined, sessionUser?
   if (!sessionUser) return false;
   if (sessionUser.department === 'super_admin') return true;
   return !!row && row.enteredBy === sessionUser.username;
+}
+
+// Driver Details is location-scoped rather than a single fixed access group -
+// each regional handler only sees/manages drivers in their assigned
+// location(s); Super Admins see every location. Unassigned categories (HSK
+// RIL F&V Drivers, Walke's & Parking Drivers, Cold Star, Swiggy DHL, KCM
+// Service Station) stay Super-Admin-only since nobody is scoped to them yet.
+const DRIVER_LOCATION_SCOPES: Record<string, DriverLocationCategory[]> = {
+  'rajeshwar@kcmlogistics.in': ['Hyd Swiggy', 'Swiggy - Vizag Driver'],
+  'nagaraju.linga@kcmlogistics.in': ['Hyd Swiggy', 'Swiggy - Vizag Driver'],
+  'ramesh@kcmlogistics.in': ['Nelmangala Reliance', 'Nidaghatta Reliance', 'Chennai Hybrid'],
+  'saneel@kcmlogistics.in': ['BLR Swiggy', 'Goa Vehicle'],
+  'vinod@kcmlogistics.in': ['BLR Swiggy', 'Vijayawada Drivers Details', 'Market Vehicle Driver Details']
+};
+
+function requireDriverAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (sessionUser.department !== 'super_admin' && !DRIVER_LOCATION_SCOPES[sessionUser.email || '']) {
+    return res.status(403).json({ error: 'You do not have access to Driver Details.' });
+  }
+  next();
+}
+
+// Super admins see every location; everyone else only their assigned set.
+function getAllowedDriverLocations(sessionUser?: ReturnType<typeof getSessionUser>): DriverLocationCategory[] | 'ALL' {
+  if (!sessionUser) return [];
+  if (sessionUser.department === 'super_admin') return 'ALL';
+  return DRIVER_LOCATION_SCOPES[sessionUser.email || ''] || [];
+}
+
+function canAccessDriverLocation(location: string, sessionUser?: ReturnType<typeof getSessionUser>): boolean {
+  const allowed = getAllowedDriverLocations(sessionUser);
+  return allowed === 'ALL' || allowed.includes(location as DriverLocationCategory);
 }
 
 async function startServer() {
@@ -498,11 +558,14 @@ async function startServer() {
   // the file to disk and returns its path for the frontend to store on the
   // record, instead of embedding the file as base64 in the database.
   app.post('/api/upload/:module', upload.single('file'), (req, res) => {
-    const module = req.params.module;
+    const moduleName = req.params.module;
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No file was uploaded.' });
     }
-    res.json({ success: true, path: `uploads/${req.file.filename}` });
+    res.json({
+      success: true,
+      path: `uploads/${moduleName}/${req.file.filename}`
+    });
   });
 
   // Current session endpoint - resolves strictly from this client's own token
@@ -1511,6 +1574,146 @@ async function startServer() {
       res.json({ success: true, data: result });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Driver Details endpoints - location-scoped, see DRIVER_LOCATION_SCOPES.
+  app.use('/api/drivers/employees', requireDriverAccess);
+
+  app.get('/api/drivers/employees', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const allowed = getAllowedDriverLocations(sessionUser);
+      const all = await getDriverEmployees();
+      res.json(allowed === 'ALL' ? all : all.filter(d => allowed.includes(d.location)));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/drivers/employees', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const entry: DriverEmployee = req.body;
+      if (!canAccessDriverLocation(entry.location, sessionUser)) {
+        return res.status(403).json({ error: 'You cannot add a driver in this location.' });
+      }
+      const result = await saveDriverEmployee(entry);
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/drivers/employees/:id', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getDriverEmployees()).find(d => d.id === req.params.id);
+      const targetLocation = req.body.location || existing?.location;
+      if (!existing || !canAccessDriverLocation(existing.location, sessionUser) || !canAccessDriverLocation(targetLocation, sessionUser)) {
+        return res.status(403).json({ error: 'You cannot modify this driver.' });
+      }
+      const result = await saveDriverEmployee({ ...req.body, id: req.params.id });
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/drivers/employees/:id', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getDriverEmployees()).find(d => d.id === req.params.id);
+      if (!existing || !canAccessDriverLocation(existing.location, sessionUser)) {
+        return res.status(403).json({ error: 'You cannot delete this driver.' });
+      }
+      const result = await deleteDriverEmployee(req.params.id);
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Driver Attendance - same location scoping, resolved via the driver's own
+  // location (attendance rows themselves don't carry a location).
+  app.use('/api/drivers/attendance', requireDriverAccess);
+
+  async function assertDriverAccessible(driverId: string, sessionUser?: ReturnType<typeof getSessionUser>) {
+    const driver = (await getDriverEmployees()).find(d => d.id === driverId);
+    return !!driver && canAccessDriverLocation(driver.location, sessionUser);
+  }
+
+  app.get('/api/drivers/attendance', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const allowed = getAllowedDriverLocations(sessionUser);
+      const [rows, drivers] = await Promise.all([getDriverAttendance(), getDriverEmployees()]);
+      if (allowed === 'ALL') return res.json(rows);
+      const allowedDriverIds = new Set(drivers.filter(d => allowed.includes(d.location)).map(d => d.id));
+      res.json(rows.filter(r => allowedDriverIds.has(r.driverId)));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/drivers/attendance/mark', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const { driverId, date, status } = req.body;
+      if (!(await assertDriverAccessible(driverId, sessionUser))) {
+        return res.status(403).json({ success: false, error: 'You cannot mark attendance for this driver.' });
+      }
+      const id = `${driverId}-${date}`;
+      const record: DriverAttendance = { id, driverId, date, status };
+      await saveDriverAttendanceRecord(record);
+      res.json({ success: true, data: record });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/drivers/attendance/bulk', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const entries = req.body as Array<{ driverId: string; date: string; status: string }>;
+      if (!Array.isArray(entries)) return res.status(400).json({ success: false, error: 'Request body must be an array of attendance entries.' });
+      const results: DriverAttendance[] = [];
+      for (const entry of entries) {
+        if (!(await assertDriverAccessible(entry.driverId, sessionUser))) continue;
+        const id = `${entry.driverId}-${entry.date}`;
+        const record: DriverAttendance = { id, driverId: entry.driverId, date: entry.date, status: entry.status as DriverAttendance['status'] };
+        await saveDriverAttendanceRecord(record);
+        results.push(record);
+      }
+      res.json({ success: true, data: results });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete('/api/drivers/attendance/:id', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getDriverAttendance()).find(r => r.id === req.params.id);
+      if (!existing || !(await assertDriverAccessible(existing.driverId, sessionUser))) {
+        return res.status(403).json({ error: 'You cannot delete this attendance record.' });
+      }
+      res.json({ success: true, data: await deleteDriverAttendanceRecord(req.params.id) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/drivers/attendance/monthly/:driverId/:month', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const { driverId, month } = req.params;
+      if (!(await assertDriverAccessible(driverId, sessionUser))) {
+        return res.status(403).json({ success: false, error: 'You cannot view this driver.' });
+      }
+      res.json({ success: true, data: await computeDriverMonthlyAttendanceSummary(driverId, month) });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 

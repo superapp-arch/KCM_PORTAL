@@ -14,7 +14,8 @@ import {
   MileageReport,
   FuelVendor,
   VehicleMileage,
-  Vendor
+  Vendor,
+  DriverEmployee
 } from '../types';
 import FleetSheet from './FleetSheet';
 import FuelManagement from './FuelManagement';
@@ -26,6 +27,7 @@ import HR from './HR';
 import WarehouseDetails from './WarehouseDetails';
 import MileageReportModule from './MileageReport';
 import VendorManagement from './VendorManagement';
+import DriverDetails from './DriverDetails';
 import kcmLogo from '../assets/images/logo.png';
 import Watermark from './Watermark';
 import companyTruck from '../assets/images/kcm_vehicle_cutout.png';
@@ -35,6 +37,17 @@ import {
   KeyRound, Cpu, Terminal, Copy, Check, Eye, EyeOff, Warehouse, Gauge, X,
   Truck, Building2
 } from 'lucide-react';
+
+// Driver Details module gate - mirrors server.ts's DRIVER_LOCATION_SCOPES
+// keys exactly (which locations each person actually sees is filtered
+// server-side, this just decides who can open the tab at all).
+const DRIVER_ACCESS_EMAILS = [
+  'rajeshwar@kcmlogistics.in',
+  'nagaraju.linga@kcmlogistics.in',
+  'ramesh@kcmlogistics.in',
+  'saneel@kcmlogistics.in',
+  'vinod@kcmlogistics.in'
+];
 
 // Displays the live header clock in Indian Standard Time regardless of the
 // device/browser's own timezone, so the portal reads consistently for an
@@ -108,6 +121,10 @@ interface AdministrationProps {
   onAddVendor: (vendor: Omit<Vendor, 'id'>) => Promise<void>;
   onUpdateVendor: (id: string, vendor: Partial<Vendor>) => Promise<void>;
   onDeleteVendor: (id: string) => Promise<void>;
+  drivers: DriverEmployee[];
+  onAddDriver: (driver: Omit<DriverEmployee, 'id'> & { id: string }) => Promise<void>;
+  onUpdateDriver: (id: string, driver: Partial<DriverEmployee>) => Promise<void>;
+  onDeleteDriver: (id: string) => Promise<void>;
 }
 
 export default function Administration({
@@ -163,7 +180,11 @@ export default function Administration({
   vendors,
   onAddVendor,
   onUpdateVendor,
-  onDeleteVendor
+  onDeleteVendor,
+  drivers,
+  onAddDriver,
+  onUpdateDriver,
+  onDeleteDriver
 }: AdministrationProps) {
   
   // Tab Management
@@ -273,6 +294,10 @@ export default function Administration({
     if (tabName === 'accounts' && user.department === 'accounts_finance') return true;
     if (tabName === 'hr' && user.email === 'bhagya@kcmlogistics.in') return true;
     if (tabName === 'vendors' && (user.email === 'divya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in')) return true;
+    // Driver Details is location-scoped (see server.ts: DRIVER_LOCATION_SCOPES)
+    // - this just gates the tab/module itself; which drivers each of these
+    // people actually sees is filtered server-side.
+    if (tabName === 'drivers' && DRIVER_ACCESS_EMAILS.includes(user.email || '')) return true;
     return false;
   };
 
@@ -391,6 +416,20 @@ export default function Administration({
             >
               <Contact className="w-4 h-4 shrink-0 text-pink-400" />
               HR & Payroll
+            </button>
+          )}
+
+          {hasAccess('drivers') && (
+            <button
+              onClick={() => setActiveTab('drivers')}
+              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
+                activeTab === 'drivers'
+                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
+                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <Truck className="w-4 h-4 shrink-0 text-pink-400" />
+              Driver Details
             </button>
           )}
 
@@ -939,6 +978,16 @@ export default function Administration({
               onAddEmployee={onAddEmployee}
               onUpdateEmployee={onUpdateEmployee}
               onDeleteEmployee={onDeleteEmployee}
+            />
+          )}
+
+          {activeTab === 'drivers' && hasAccess('drivers') && (
+            <DriverDetails
+              user={user}
+              drivers={drivers}
+              onAddDriver={onAddDriver}
+              onUpdateDriver={onUpdateDriver}
+              onDeleteDriver={onDeleteDriver}
             />
           )}
 
