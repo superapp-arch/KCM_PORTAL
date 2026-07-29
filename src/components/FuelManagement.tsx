@@ -340,22 +340,29 @@ export default function FuelManagement({
 
   const isSuperAdmin = user.department === 'super_admin';
 
+  // Groups entries by their (Location, Bunk Name) pair - the same bunk name
+  // can exist at multiple locations (e.g. HPCL at BLR/Chennai/Goa), and each
+  // pair is its own account/tab, matching the reference spreadsheet's
+  // "Location Bunk Diesel Summary" naming.
+  const bunkLocationKey = (l: { location?: string; bunkName?: string }) => `${l.location || ''}|||${l.bunkName || ''}`;
+
   // Computes each entry's running Pending Amount balance: partitioned by
-  // bunk, ordered by date (entry number as tiebreaker) - previous pending +
-  // this entry's amount - this entry's paidAmount. Applied to the full
-  // ledger for on-screen display, or to a period/bunk-filtered subset for
-  // the "Download Fuel Report" export (matching the reference spreadsheet,
-  // where each bunk's monthly sheet restarts its running balance from 0).
+  // (Location, Bunk Name), ordered by date (entry number as tiebreaker) -
+  // previous pending + this entry's amount - this entry's paidAmount.
+  // Applied to the full ledger for on-screen display, or to a
+  // period/bunk-filtered subset for the "Download Fuel Report" export
+  // (matching the reference spreadsheet, where each bunk's monthly sheet
+  // restarts its running balance from 0).
   const computePendingAmounts = (rows: FuelLog[]): Map<string, number> => {
     const result = new Map<string, number>();
-    const byBunk = new Map<string, FuelLog[]>();
+    const grouped = new Map<string, FuelLog[]>();
     rows.forEach(r => {
-      const key = r.bunkName || '';
-      if (!byBunk.has(key)) byBunk.set(key, []);
-      byBunk.get(key)!.push(r);
+      const key = bunkLocationKey(r);
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key)!.push(r);
     });
-    byBunk.forEach(bunkRows => {
-      const sorted = [...bunkRows].sort((a, b) => a.date === b.date ? (a.entryNumber || 0) - (b.entryNumber || 0) : a.date.localeCompare(b.date));
+    grouped.forEach(groupRows => {
+      const sorted = [...groupRows].sort((a, b) => a.date === b.date ? (a.entryNumber || 0) - (b.entryNumber || 0) : a.date.localeCompare(b.date));
       let running = 0;
       sorted.forEach(r => {
         running = parseFloat((running + (r.amount || 0) - (r.paidAmount || 0)).toFixed(2));
@@ -366,17 +373,20 @@ export default function FuelManagement({
   };
 
   // On-screen ledger's Pending Amount running balance, over the full (all
-  // time, all bunks) ledger - independent of the search filter.
+  // time, all bunks/locations) ledger - independent of the search filter.
   const pendingByLogId = computePendingAmounts(logs);
 
   // Maps fuel log rows to the flat shape used for the "Download Fuel Report"
   // Excel export, matching the reference bunk-wise diesel summary format:
-  // Date, Vehicle Number, OIL, Indent No, Ltrs, Rate, Amt, Client, (blank),
-  // Vendor Code, Vendor Name, Remarks, Paid Amount, Pending Amount.
+  // Date, Location, Bunk Name, Vehicle Number, OIL, Indent No, Ltrs, Rate,
+  // Amt, Client, (blank), Vendor Code, Vendor Name, Remarks, Paid Amount,
+  // Pending Amount - Location/Bunk Name are included on every download.
   const toFuelSheetRows = (rows: FuelLog[]) => {
     const pendingMap = computePendingAmounts(rows);
     return rows.map(l => ({
       'Date': l.date,
+      'Location': l.location,
+      'Bunk Name': l.bunkName,
       'Vehicle Number': l.vehicleNumber,
       'OIL': '',
       'Indent No': l.indentNumber,
@@ -393,6 +403,20 @@ export default function FuelManagement({
     }));
   };
 
+  // Sanitizes a (location, bunk) pair into a valid, unique-within-workbook
+  // Excel sheet name (max 31 chars; \ / ? * [ ] : are not allowed).
+  const toSheetName = (location: string, bunkName: string, used: Set<string>): string => {
+    const base = `${location || 'Unknown'}-${bunkName || 'Unknown'}`.replace(/[\\/?*[\]:]/g, '-').slice(0, 31);
+    let name = base;
+    let suffix = 2;
+    while (used.has(name.toLowerCase())) {
+      name = `${base.slice(0, 28)}~${suffix}`;
+      suffix++;
+    }
+    used.add(name.toLowerCase());
+    return name;
+  };
+
   // Resolves the [start, end] date-string window (inclusive) for the
   // dashboard's "For the Day / Monthly Till Date / Year Till Date" download.
   const getDownloadDateRange = (period: 'day' | 'month' | 'year', refDate: string): { start: string; end: string } => {
@@ -402,9 +426,11 @@ export default function FuelManagement({
   };
 
   // Fuel Entry download: Date, Period (Day/MTD/YTD), and Bunk all connect
-  // together - produces the bunk-wise diesel summary format (see
-  // toFuelSheetRows), with a TOTAL row (Litres/Amount) reflecting exactly
-  // this selection.
+  // together. When "All Bunks" is selected (or the selected bunk spans
+  // multiple locations, e.g. HPCL), the data is separated into one sheet per
+  // (Location, Bunk Name) pair - each with its own TOTAL row (Litres/Amount)
+  // and its own running Pending Amount balance, matching the reference
+  // per-bunk-per-location diesel summary workbook.
   const handleDownloadFuelEntryReport = () => {
     if (!downloadDate) {
       triggerNotif('Please pick a reference date first.');
@@ -418,15 +444,27 @@ export default function FuelManagement({
       return;
     }
 
-    const totalLitres = periodLogs.reduce((s, l) => s + (l.ltrs || 0), 0);
-    const totalAmount = periodLogs.reduce((s, l) => s + (l.amount || 0), 0);
-    const summaryRow = {
-      'Date': '', 'Vehicle Number': 'TOTAL', 'OIL': '', 'Indent No': '', 'Ltrs': totalLitres, 'Rate': '', 'Amt': totalAmount,
-      'Client': '', ' ': '', 'Vendor Code': '', 'Vendor Name': '', 'Remarks': '', 'Paid Amount': '', 'Pending Amount': ''
-    };
+    // Group into (Location, Bunk Name) pairs, preserving first-seen order.
+    const groups = new Map<string, FuelLog[]>();
+    periodLogs.forEach(l => {
+      const key = bunkLocationKey(l);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(l);
+    });
 
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...toFuelSheetRows(periodLogs), summaryRow]), 'Fuel Entries');
+    const usedSheetNames = new Set<string>();
+    groups.forEach(groupLogs => {
+      const totalLitres = groupLogs.reduce((s, l) => s + (l.ltrs || 0), 0);
+      const totalAmount = groupLogs.reduce((s, l) => s + (l.amount || 0), 0);
+      const summaryRow = {
+        'Date': '', 'Location': '', 'Bunk Name': '', 'Vehicle Number': 'TOTAL', 'OIL': '', 'Indent No': '',
+        'Ltrs': totalLitres, 'Rate': '', 'Amt': totalAmount,
+        'Client': '', ' ': '', 'Vendor Code': '', 'Vendor Name': '', 'Remarks': '', 'Paid Amount': '', 'Pending Amount': ''
+      };
+      const sheetName = toSheetName(groupLogs[0].location, groupLogs[0].bunkName, usedSheetNames);
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...toFuelSheetRows(groupLogs), summaryRow]), sheetName);
+    });
 
     const periodLabel = downloadPeriod === 'day' ? 'Daily' : downloadPeriod === 'month' ? 'MTD' : 'YTD';
     const bunkLabel = bunkFilter === 'All' ? 'AllBunks' : bunkFilter.replace(/\s+/g, '_');
