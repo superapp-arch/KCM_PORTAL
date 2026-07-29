@@ -31,7 +31,7 @@ const BUNK_NAMES = [
   'Tejashri', 'Vayuputra', 'Visalakshi'
 ];
 
-const CLIENTS = ['DHL', 'KCM', 'Market Vehicle', 'Reliance', 'Shadowfax', 'Swiggy'];
+const CLIENTS = ['KCM', 'Swiggy', 'Reliance', 'Market Vehicle', 'Shadowfax'];
 
 // Which bunks are available at each location, so selecting one filters/
 // auto-fills the other. Bunks shared across multiple locations (HPCL) are
@@ -324,7 +324,6 @@ export default function FuelManagement({
 
 
   const filteredLogs = logs.filter(log =>
-    (bunkFilter === 'All' || log.bunkName === bunkFilter) &&
     (
       (log?.vehicleNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (log?.vendorName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -359,20 +358,6 @@ export default function FuelManagement({
     ...(isSuperAdmin ? { 'Entered By': l.enteredBy || '' } : {})
   }));
 
-  // Bunk-wise (and search-filtered) download of the Fuel Entry Ledger.
-  const handleDownloadFuelEntries = () => {
-    if (filteredLogs.length === 0) {
-      triggerNotif('No fuel entries match the current filters to download.');
-      return;
-    }
-    const worksheet = XLSX.utils.json_to_sheet(toFuelSheetRows(filteredLogs));
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Fuel Entries');
-    const bunkLabel = bunkFilter === 'All' ? 'AllBunks' : bunkFilter.replace(/\s+/g, '_');
-    XLSX.writeFile(workbook, `KCM_Fuel_Entries_${bunkLabel}.xlsx`);
-    triggerNotif('Fuel entries downloaded successfully!');
-  };
-
   // Resolves the [start, end] date-string window (inclusive) for the
   // dashboard's "For the Day / Monthly Till Date / Year Till Date" download.
   const getDownloadDateRange = (period: 'day' | 'month' | 'year', refDate: string): { start: string; end: string } => {
@@ -381,26 +366,37 @@ export default function FuelManagement({
     return { start: `${refDate.slice(0, 4)}-01-01`, end: refDate };
   };
 
-  // Combined period report: pulls both Fuel Entries and Trip Details (mileage
-  // reports) dated within the selected window into one workbook, so whichever
-  // was logged for that day/month/year shows up automatically.
+  // Combined period + bunk report: Date, Bunk, and For the Day/Monthly Till
+  // Date/Year Till Date all connect together for one download - pulls both
+  // Fuel Entries (bunk-filtered) and Trip Details (mileage reports, date-only
+  // since bunk isn't a Trip Details concept) dated within the selected window
+  // into one workbook, with a totals row (Litres/Amount) on the Fuel Entries
+  // sheet reflecting exactly the selection made.
   const handleDownloadPeriodReport = () => {
     if (!downloadDate) {
       triggerNotif('Please pick a reference date first.');
       return;
     }
     const { start, end } = getDownloadDateRange(downloadPeriod, downloadDate);
-    const periodLogs = logs.filter(l => l.date >= start && l.date <= end);
+    const periodLogs = logs.filter(l => l.date >= start && l.date <= end && (bunkFilter === 'All' || l.bunkName === bunkFilter));
     const periodTrips = mileageReports.filter(r => r.date >= start && r.date <= end);
 
     if (periodLogs.length === 0 && periodTrips.length === 0) {
-      triggerNotif('No fuel entries or trip details found for the selected period.');
+      triggerNotif('No fuel entries or trip details found for the selected period/bunk.');
       return;
     }
 
     const workbook = XLSX.utils.book_new();
     if (periodLogs.length > 0) {
-      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(toFuelSheetRows(periodLogs)), 'Fuel Entries');
+      const totalLitres = periodLogs.reduce((s, l) => s + (l.ltrs || 0), 0);
+      const totalAmount = periodLogs.reduce((s, l) => s + (l.amount || 0), 0);
+      const summaryRow = {
+        'Entry #': 'TOTAL', 'Period': '', 'Date': '', 'Location': '', 'Bunk Name': '', 'Bunk/Card': '',
+        'Vehicle No': '', 'Indent No': '', 'Ltrs': totalLitres, 'Rate': '', 'Amount': totalAmount,
+        'Client': '', 'Type': '', 'Vendor Name': '', 'Vendor Code': '', 'Requested By': '', 'RQ ID': '', 'Remarks': '',
+        ...(isSuperAdmin ? { 'Entered By': '' } : {})
+      };
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...toFuelSheetRows(periodLogs), summaryRow]), 'Fuel Entries');
     }
     if (periodTrips.length > 0) {
       const tripRows = periodTrips.map(r => ({
@@ -415,7 +411,7 @@ export default function FuelManagement({
         'Diesel Amount': r.dieselAmount,
         'Mileage': r.mileage,
         'Actual Mileage': r.actualMileage || 0,
-        'Difference': r.difference ?? '',
+        'Difference (Litres)': r.difference ?? '',
         'Authorized Driver': r.driverName,
         'Location': r.location,
         'Remarks': r.remarks || '',
@@ -425,7 +421,8 @@ export default function FuelManagement({
     }
 
     const periodLabel = downloadPeriod === 'day' ? 'Daily' : downloadPeriod === 'month' ? 'MTD' : 'YTD';
-    XLSX.writeFile(workbook, `KCM_Fuel_Report_${periodLabel}_${downloadDate}.xlsx`);
+    const bunkLabel = bunkFilter === 'All' ? 'AllBunks' : bunkFilter.replace(/\s+/g, '_');
+    XLSX.writeFile(workbook, `KCM_Fuel_Report_${periodLabel}_${bunkLabel}_${downloadDate}.xlsx`);
     triggerNotif('Fuel report downloaded successfully!');
   };
 
@@ -481,30 +478,43 @@ export default function FuelManagement({
 
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Download Fuel Report</p>
-          <div className="flex items-center gap-1.5">
-            <div className="flex-1 min-w-0">
-              <DateInput
-                value={downloadDate}
-                onChange={(e) => setDownloadDate(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-mono text-slate-800"
-              />
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1.5">
+              <div className="flex-1 min-w-0">
+                <DateInput
+                  value={downloadDate}
+                  onChange={(e) => setDownloadDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-mono text-slate-800"
+                />
+              </div>
+              <select
+                value={downloadPeriod}
+                onChange={(e) => setDownloadPeriod(e.target.value as 'day' | 'month' | 'year')}
+                className="bg-slate-50 border border-slate-200 rounded-lg px-1.5 py-1.5 text-[10px] font-semibold text-slate-800 focus:outline-none"
+              >
+                <option value="day">For the Day</option>
+                <option value="month">Monthly Till Date</option>
+                <option value="year">Year Till Date</option>
+              </select>
             </div>
-            <select
-              value={downloadPeriod}
-              onChange={(e) => setDownloadPeriod(e.target.value as 'day' | 'month' | 'year')}
-              className="bg-slate-50 border border-slate-200 rounded-lg px-1.5 py-1.5 text-[10px] font-semibold text-slate-800 focus:outline-none"
-            >
-              <option value="day">For the Day</option>
-              <option value="month">Monthly Till Date</option>
-              <option value="year">Year Till Date</option>
-            </select>
-            <button
-              onClick={handleDownloadPeriodReport}
-              title="Download Fuel Entries & Trip Details for the selected period"
-              className="p-2 bg-teal-50 text-teal-600 hover:bg-teal-100 rounded-lg cursor-pointer shrink-0 transition-colors"
-            >
-              <Download className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1.5">
+              <select
+                value={bunkFilter}
+                onChange={(e) => setBunkFilter(e.target.value)}
+                title="Filter by bunk"
+                className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-700 focus:outline-none"
+              >
+                <option value="All">All Bunks</option>
+                {usedBunks.map((b, i) => <option key={i} value={b}>{b}</option>)}
+              </select>
+              <button
+                onClick={handleDownloadPeriodReport}
+                title="Download Fuel Entries & Trip Details for the selected date, period, and bunk"
+                className="p-2 bg-teal-50 text-teal-600 hover:bg-teal-100 rounded-lg cursor-pointer shrink-0 transition-colors"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+            </div>
           </div>
           <p className="text-[9px] text-slate-400 mt-1.5">{logs.length} fuel vouchers logged</p>
         </div>
@@ -555,22 +565,6 @@ export default function FuelManagement({
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-7 pr-3 py-1.5 text-[11px] focus:outline-none text-slate-800 font-semibold"
                 />
               </div>
-              <select
-                value={bunkFilter}
-                onChange={(e) => setBunkFilter(e.target.value)}
-                title="Filter by bunk"
-                className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-700 focus:outline-none"
-              >
-                <option value="All">All Bunks</option>
-                {usedBunks.map((b, i) => <option key={i} value={b}>{b}</option>)}
-              </select>
-              <button
-                onClick={handleDownloadFuelEntries}
-                title="Download fuel entries (respects search & bunk filter)"
-                className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 shadow-2xs cursor-pointer transition-all text-[11px] whitespace-nowrap"
-              >
-                <Download className="w-3.5 h-3.5 text-blue-600" /> Download
-              </button>
               <button
                 onClick={() => { resetForm(); setShowSidebar(true); }}
                 className="bg-gradient-to-r from-emerald-500 to-blue-600 hover:from-emerald-600 hover:to-blue-700 text-xs text-white font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-md whitespace-nowrap"

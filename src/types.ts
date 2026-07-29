@@ -417,8 +417,8 @@ export interface MileageReport {
   location: string;
   remarks: string;
   actualMileage: number; // FIXED per-vehicle reference, looked up from the Vehicle Mileage Master (src/db/schema.ts: vehicleMileage) by vehicleNo - not manually typed
-  difference?: number; // auto = actualMileage - mileage; positive (green, +) = achieved worse than reference, negative (red, -) = better than reference
-  fuelAuditNote?: string; // auto-generated advisory text appended to remarks when difference is positive - informational only, no payroll record created
+  difference?: number; // auto, in LITRES = (totalKm / actualMileage) - litres; positive (green, +) = fuel saved, negative (red, -) = fuel wasted
+  fuelAuditNote?: string; // auto-generated advisory text appended to remarks when difference is non-zero - informational only, no payroll record created
   extraFuel?: number;
   ratePerLitreNew?: number; // rate applied to extraFuel in the Total Amount calc
   totalAmount?: number; // auto = dieselAmount + (extraFuel * ratePerLitreNew)

@@ -11,25 +11,29 @@ const uploadsDir = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
-
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    
-    const moduleName = req.params.module;
+    const moduleName = req.params.module || "vehicles";
 
-    const folder = path.join(uploadsDir, moduleName);
+    const uploadDir = path.join(
+      process.cwd(),
+      "uploads",
+      moduleName
+    );
 
-    if (!fs.existsSync(folder)) {
-        fs.mkdirSync(folder, { recursive: true });
-    }
+    fs.mkdirSync(uploadDir, { recursive: true });
 
-    cb(null, uploadsDir);
+    cb(null, uploadDir);
   },
+
   filename: (req, file, cb) => {
-    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    const ext = path.extname(file.originalname);
-    cb(null, `${unique}${ext}`);
-  }
+    const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
+
+    cb(
+      null,
+      unique + path.extname(file.originalname)
+    );
+  },
 });
 
 const ALLOWED_MIME_TYPES = [

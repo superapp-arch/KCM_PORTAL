@@ -224,21 +224,25 @@ export default function MileageReportModule({
     return matches.length === 1 ? matches[0].name : 'the driver';
   };
 
-  // Computes the Difference (Actual Mileage - Mileage) and, when positive,
-  // the informational fuel-audit note comparing expected vs. actual litres.
-  const computeFuelAudit = (totalKmVal: number, litresVal: number, rateVal: number, actualMileageVal: number, mileageVal: number, driverNameValue: string) => {
-    const difference = parseFloat((actualMileageVal - mileageVal).toFixed(2));
-    if (difference <= 0 || actualMileageVal <= 0) return { difference, note: undefined as string | undefined };
+  // Computes the Difference in LITRES: how much fuel was wasted or saved this
+  // trip, comparing what the vehicle's fixed Actual Mileage reference says it
+  // should have needed against what was actually filled. Negative (red, -) =
+  // wasted (wcaught fuel theft/misuse/meter tampering); positive (green, +) =
+  // saved (this is what catches fuel theft/misuse/meter tampering). Example:
+  // Total KM 111, Actual Mileage 10.14 KM/L -> Expected Litres 10.95; 20
+  // Litres filled -> Difference = 10.95 - 20 = -9.05 (wasted).
+  const computeFuelAudit = (totalKmVal: number, litresVal: number, rateVal: number, actualMileageVal: number, driverNameValue: string) => {
+    if (actualMileageVal <= 0 || litresVal <= 0) return { difference: undefined as number | undefined, note: undefined as string | undefined };
 
     const expectedLitres = totalKmVal / actualMileageVal;
-    const litresDiff = parseFloat(Math.abs(expectedLitres - litresVal).toFixed(2));
-    if (litresDiff === 0) return { difference, note: undefined as string | undefined };
-    const costDelta = parseFloat((litresDiff * rateVal).toFixed(2));
-    const driverWord = resolveDriverWord(driverNameValue);
+    const difference = parseFloat((expectedLitres - litresVal).toFixed(2));
+    if (difference === 0) return { difference, note: undefined as string | undefined };
 
-    const note = expectedLitres < litresVal
-      ? `Possible fuel misuse: Rs.${costDelta} to be deducted from ${driverWord}'s salary`
-      : `Fuel efficiency credit: Rs.${costDelta} to be credited to ${driverWord}`;
+    const costDelta = parseFloat((Math.abs(difference) * rateVal).toFixed(2));
+    const driverWord = resolveDriverWord(driverNameValue);
+    const note = difference < 0
+      ? `-Rs.${costDelta} to be deducted from ${driverWord}'s salary`
+      : `+Rs.${costDelta} to be credited to ${driverWord}`;
     return { difference, note };
   };
 
@@ -269,7 +273,7 @@ export default function MileageReportModule({
       // time, so later edits to the Vehicle Mileage Master don't retroactively
       // change historical entries.
       const calculatedActualMileage = fixedMileageForVehicle || 0;
-      const { difference, note } = computeFuelAudit(calculatedTotalKm, l, rate, calculatedActualMileage, calculatedMileage, driverName);
+      const { difference, note } = computeFuelAudit(calculatedTotalKm, l, rate, calculatedActualMileage, driverName);
       const baseRemarks = stripPreviousAuditNote(remarks);
       const finalRemarks = note ? `${baseRemarks}${baseRemarks ? ' ' : ''}(Fuel Audit: ${note})` : baseRemarks;
       const extra = parseFloat(extraFuel) || 0;
@@ -504,7 +508,7 @@ export default function MileageReportModule({
       'Mileage': r.mileage,
       'Cost per KM': r.costPerKm || 0,
       'Actual Mileage': r.actualMileage || 0,
-      'Difference': r.difference ?? '',
+      'Difference (Litres)': r.difference ?? '',
       'Extra Fuel': r.extraFuel || 0,
       'Rate per Ltr (new)': r.ratePerLitreNew || 0,
       'Total Amount': r.totalAmount || 0,
@@ -703,7 +707,7 @@ export default function MileageReportModule({
                 <th className="px-3 py-2.5 text-right text-pink-400">Mileage</th>
                 <th className="px-3 py-2.5 text-right text-amber-400">Cost/KM</th>
                 <th className="px-3 py-2.5 text-right text-purple-400">Actual Mileage</th>
-                <th className="px-3 py-2.5 text-right">Difference</th>
+                <th className="px-3 py-2.5 text-right">Difference (L)</th>
                 <th className="px-3 py-2.5 text-right">Extra Fuel</th>
                 <th className="px-3 py-2.5 text-right">Rate/Ltr (new)</th>
                 <th className="px-3 py-2.5 text-right text-teal-400">Total Amount</th>
@@ -740,7 +744,7 @@ export default function MileageReportModule({
                     <td className="px-3 py-2 text-right font-mono font-bold text-amber-700 bg-amber-50/20">{r.costPerKm ? `₹${r.costPerKm.toFixed(2)}` : '-'}</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-purple-700 bg-purple-50/20">{r.actualMileage ? `${r.actualMileage.toFixed(2)} KM/L` : '-'}</td>
                     <td className={`px-3 py-2 text-right font-mono font-bold ${r.difference == null ? 'text-slate-400' : r.difference > 0 ? 'text-emerald-600' : r.difference < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
-                      {r.difference == null ? '-' : `${r.difference > 0 ? '+' : ''}${r.difference.toFixed(2)}`}
+                      {r.difference == null ? '-' : `${r.difference > 0 ? '+' : ''}${r.difference.toFixed(2)} L`}
                     </td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.extraFuel ? r.extraFuel.toFixed(2) : '-'}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.ratePerLitreNew ? `₹${r.ratePerLitreNew.toFixed(2)}` : '-'}</td>
@@ -1066,12 +1070,15 @@ export default function MileageReportModule({
                       <span className="text-xs font-black text-purple-700">{actualMileage} KM/L</span>
                     </div>
                     {(() => {
-                      const diffPreview = parseFloat((parseFloat(actualMileage || '0') - parseFloat(mileage || '0')).toFixed(2));
+                      const totalKmVal = parseFloat(totalKm) || 0;
+                      const litresVal = parseFloat(litres) || 0;
+                      const actualMileageVal = parseFloat(actualMileage) || 0;
+                      const { difference } = computeFuelAudit(totalKmVal, litresVal, 0, actualMileageVal, driverName);
                       return (
                         <div className="col-span-2 pt-2 border-t border-slate-200">
-                          <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Difference</span>
-                          <span className={`text-xs font-black ${diffPreview > 0 ? 'text-emerald-600' : diffPreview < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
-                            {diffPreview > 0 ? '+' : ''}{diffPreview} KM/L
+                          <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Difference (Litres wasted/saved)</span>
+                          <span className={`text-xs font-black ${difference == null ? 'text-slate-400' : difference > 0 ? 'text-emerald-600' : difference < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
+                            {difference == null ? '-' : `${difference > 0 ? '+' : ''}${difference} L`}
                           </span>
                         </div>
                       );
@@ -1083,8 +1090,7 @@ export default function MileageReportModule({
                     const litresVal = parseFloat(litres) || 0;
                     const rateVal = parseFloat(ratePerLitre) || 0;
                     const actualMileageVal = parseFloat(actualMileage) || 0;
-                    const mileageVal = parseFloat(mileage) || 0;
-                    const { note } = computeFuelAudit(totalKmVal, litresVal, rateVal, actualMileageVal, mileageVal, driverName);
+                    const { note } = computeFuelAudit(totalKmVal, litresVal, rateVal, actualMileageVal, driverName);
                     if (!note) return null;
                     return (
                       <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
