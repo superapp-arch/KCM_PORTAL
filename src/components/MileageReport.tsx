@@ -523,14 +523,14 @@ export default function MileageReportModule({
 
   // Filtering: "data should be based on vehicle no and location"
   const filteredReports = reports.filter(r => {
-    const matchesVehicle = selectedVehicleFilter === 'All' || r.vehicleNo.toUpperCase() === selectedVehicleFilter.toUpperCase();
-    const matchesLocation = selectedLocationFilter === 'All' || r.location.toUpperCase() === selectedLocationFilter.toUpperCase();
+    const matchesVehicle = selectedVehicleFilter === 'All' || (r.vehicleNo || '').toUpperCase() === selectedVehicleFilter.toUpperCase();
+    const matchesLocation = selectedLocationFilter === 'All' || (r.location || '').toUpperCase() === selectedLocationFilter.toUpperCase();
     const matchesKeyword =
       searchTerm === '' ||
-      r.driverName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      r.remarks.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      r.vehicleNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      r.location.toLowerCase().includes(searchTerm.toLowerCase());
+      (r.driverName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (r.remarks || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (r.vehicleNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (r.location || '').toLowerCase().includes(searchTerm.toLowerCase());
 
     return matchesVehicle && matchesLocation && matchesKeyword;
   });
@@ -732,11 +732,11 @@ export default function MileageReportModule({
                     <td className="px-3 py-2 font-bold font-mono text-slate-900 whitespace-nowrap">{r.vehicleNo}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.openingKm != null ? `${r.openingKm.toLocaleString('en-IN')} KM` : '-'}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.closingKm != null ? `${r.closingKm.toLocaleString('en-IN')} KM` : '-'}</td>
-                    <td className="px-3 py-2 text-right font-mono font-bold bg-slate-50 text-slate-900">{r.totalKm.toLocaleString('en-IN')} KM</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-600">₹{r.ratePerLitre.toFixed(2)}</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-600">{r.litres.toFixed(2)} L</td>
-                    <td className="px-3 py-2 text-right font-mono font-bold text-teal-700 bg-teal-50/20">₹{r.dieselAmount.toLocaleString('en-IN')}</td>
-                    <td className="px-3 py-2 text-right font-mono font-bold text-pink-700 bg-pink-50/20">{r.mileage.toFixed(2)} KM/L</td>
+                    <td className="px-3 py-2 text-right font-mono font-bold bg-slate-50 text-slate-900">{(r.totalKm || 0).toLocaleString('en-IN')} KM</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-600">₹{(r.ratePerLitre || 0).toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-600">{(r.litres || 0).toFixed(2)} L</td>
+                    <td className="px-3 py-2 text-right font-mono font-bold text-teal-700 bg-teal-50/20">₹{(r.dieselAmount || 0).toLocaleString('en-IN')}</td>
+                    <td className="px-3 py-2 text-right font-mono font-bold text-pink-700 bg-pink-50/20">{(r.mileage || 0).toFixed(2)} KM/L</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-amber-700 bg-amber-50/20">{r.costPerKm ? `₹${r.costPerKm.toFixed(2)}` : '-'}</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-purple-700 bg-purple-50/20">{r.actualMileage ? `${r.actualMileage.toFixed(2)} KM/L` : '-'}</td>
                     <td className={`px-3 py-2 text-right font-mono font-bold ${r.difference == null ? 'text-slate-400' : r.difference > 0 ? 'text-emerald-600' : r.difference < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
