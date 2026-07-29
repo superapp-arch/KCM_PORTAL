@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { MileageReport, Vehicle, User, VehicleMileage, StaffEmployee } from '../types';
@@ -9,7 +9,6 @@ import {
   Filter,
   FileSpreadsheet,
   Download,
-  Upload,
   X,
   Calendar,
   Car,
@@ -64,7 +63,6 @@ export default function MileageReportModule({
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
 
   // Filter conditions
-  const [selectedVehicleFilter, setSelectedVehicleFilter] = useState('All');
   const [selectedLocationFilter, setSelectedLocationFilter] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -92,9 +90,6 @@ export default function MileageReportModule({
   const [showMileageManager, setShowMileageManager] = useState(false);
   const [mileageFormVehicleNo, setMileageFormVehicleNo] = useState('');
   const [mileageFormValue, setMileageFormValue] = useState('');
-
-  // File import ref
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // The selected vehicle's fixed Actual Mileage reference, looked up from the
   // Vehicle Mileage Master (same value editable from Fleet & Vehicles).
@@ -384,110 +379,6 @@ export default function MileageReportModule({
     }
   };
 
-  // Robust CSV Line parser
-  const parseCSVLine = (line: string): string[] => {
-    const result: string[] = [];
-    let current = '';
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      if (char === '"') {
-        inQuotes = !inQuotes;
-      } else if (char === ',' && !inQuotes) {
-        result.push(current.trim().replace(/^["']|["']$/g, ''));
-        current = '';
-      } else {
-        current += char;
-      }
-    }
-    result.push(current.trim().replace(/^["']|["']$/g, ''));
-    return result;
-  };
-
-  // CSV Import Routine
-  const handleCSVImport = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const text = event.target?.result as string;
-        if (!text) return;
-
-        const lines = text.split('\n');
-        if (lines.length < 2) {
-          triggerNotif('CSV file is empty or formatted incorrectly.', 'error');
-          return;
-        }
-
-        const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
-        
-        let importCount = 0;
-        let failCount = 0;
-
-        for (let i = 1; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (!line) continue;
-
-          const values = parseCSVLine(line);
-
-          const getVal = (field: string, defaultValue = '') => {
-            const idx = headers.indexOf(field.toLowerCase().replace(/[^a-z0-9]/g, ''));
-            if (idx !== -1 && values[idx] !== undefined) return values[idx];
-            return defaultValue;
-          };
-
-          const rDate = getVal('date', new Date().toISOString().split('T')[0]);
-          const rVehicleNo = getVal('vehicleno') || getVal('vehiclenumber') || 'UNKNOWN';
-          const rOpeningKm = parseFloat(getVal('openingkm') || '0') || 0;
-          const rClosingKm = parseFloat(getVal('closingkm') || '0') || 0;
-          const rRate = parseFloat(getVal('rateperlitre') || '0') || 0;
-          const rLitres = parseFloat(getVal('litres') || '0') || 0;
-          const rDriver = getVal('drivername') || getVal('driver') || 'Staff';
-          const rLoc = getVal('location') || 'HQ';
-          const rRemarks = getVal('remarks') || '';
-          const rActMileage = parseFloat(getVal('actualmileage') || '0') || 0;
-
-          const calculatedTotalKm = rClosingKm - rOpeningKm;
-          const calculatedDieselAmt = parseFloat((rRate * rLitres).toFixed(2));
-          const calculatedMileage = rLitres > 0 ? parseFloat((calculatedTotalKm / rLitres).toFixed(2)) : 0;
-
-          const sl = reports.length + importCount + 1;
-
-          try {
-            await onAddReport({
-              slNo: sl,
-              date: rDate,
-              vehicleNo: rVehicleNo.toUpperCase(),
-              openingKm: rOpeningKm,
-              closingKm: rClosingKm,
-              totalKm: calculatedTotalKm,
-              ratePerLitre: rRate,
-              litres: rLitres,
-              dieselAmount: calculatedDieselAmt,
-              mileage: calculatedMileage,
-              driverName: rDriver,
-              location: rLoc,
-              remarks: rRemarks,
-              actualMileage: rActMileage
-            });
-            importCount++;
-          } catch (err) {
-            failCount++;
-          }
-        }
-
-        triggerNotif(`Successfully imported ${importCount} mileage records! ${failCount > 0 ? `${failCount} errors.` : ''}`, 'success');
-        if (fileInputRef.current) fileInputRef.current.value = '';
-      } catch (err) {
-        console.error(err);
-        triggerNotif('Failed to parse CSV.', 'error');
-      }
-    };
-    reader.readAsText(file);
-  };
-
   // Excel Export Routine
   const handleCSVExport = () => {
     if (filteredReports.length === 0) {
@@ -521,13 +412,12 @@ export default function MileageReportModule({
     const worksheet = XLSX.utils.json_to_sheet(data);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Mileage Reports");
-    XLSX.writeFile(workbook, `KCM_Mileage_Reports_${selectedVehicleFilter}_${selectedLocationFilter}.xlsx`);
+    XLSX.writeFile(workbook, `KCM_Mileage_Reports_${selectedLocationFilter}.xlsx`);
     triggerNotif('Mileage reports Excel exported and downloaded!', 'success');
   };
 
-  // Filtering: "data should be based on vehicle no and location"
+  // Filtering: by location and keyword search (vehicle-number filter removed)
   const filteredReports = reports.filter(r => {
-    const matchesVehicle = selectedVehicleFilter === 'All' || (r.vehicleNo || '').toUpperCase() === selectedVehicleFilter.toUpperCase();
     const matchesLocation = selectedLocationFilter === 'All' || (r.location || '').toUpperCase() === selectedLocationFilter.toUpperCase();
     const matchesKeyword =
       searchTerm === '' ||
@@ -536,7 +426,7 @@ export default function MileageReportModule({
       (r.vehicleNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (r.location || '').toLowerCase().includes(searchTerm.toLowerCase());
 
-    return matchesVehicle && matchesLocation && matchesKeyword;
+    return matchesLocation && matchesKeyword;
   });
 
   return (
@@ -597,28 +487,6 @@ export default function MileageReportModule({
             Operations Console:
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {/* Import CSV - creates entries, so hidden in read-only view */}
-            {!readOnly && (
-              <>
-                <input
-                  type="file"
-                  accept=".csv"
-                  ref={fileInputRef}
-                  onChange={handleCSVImport}
-                  className="hidden"
-                />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-medium px-3 py-1.5 rounded-lg flex items-center gap-1.5 shadow-2xs cursor-pointer transition-all"
-                  title="Import mileage data from CSV"
-                >
-                  <Upload className="w-3.5 h-3.5 text-teal-600" />
-                  Import Data
-                </button>
-              </>
-            )}
-
             {/* Export CSV */}
             <button
               type="button"
@@ -632,30 +500,15 @@ export default function MileageReportModule({
           </div>
         </div>
 
-        {/* Robust Multi-Filter Console (Segmented on Vehicle and Location as requested) */}
+        {/* Filter Console */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-3xs space-y-3">
           <div className="flex items-center justify-between pb-1 border-b border-slate-100 font-bold text-slate-700 text-[10px] uppercase tracking-wider">
             <span className="flex items-center gap-1">
-              <Filter className="w-3 h-3 text-pink-600" /> Segmented Location & Vehicle Filters
+              <Filter className="w-3 h-3 text-pink-600" /> Segmented Location Filter
             </span>
             <span>Matches: {filteredReports.length} entries</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {/* Vehicle No Selector */}
-            <div>
-              <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Filter by Vehicle No</label>
-              <select
-                value={selectedVehicleFilter}
-                onChange={(e) => setSelectedVehicleFilter(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-bold text-slate-700 text-[11px]"
-              >
-                <option value="All">All Vehicles</option>
-                {vehicleList.map((v, idx) => (
-                  <option key={idx} value={v}>{v}</option>
-                ))}
-              </select>
-            </div>
-
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {/* Location Selector */}
             <div>
               <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Filter by Location</label>

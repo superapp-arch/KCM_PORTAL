@@ -117,6 +117,8 @@ export default function FuelManagement({
   // Vouchers" KPI card) - reference date + day/month/year-till-date dropdown.
   const [downloadDate, setDownloadDate] = useState(new Date().toISOString().slice(0, 10));
   const [downloadPeriod, setDownloadPeriod] = useState<'day' | 'month' | 'year'>('day');
+  // Trip Details download only: vehicle search/dropdown, empty = All Vehicles
+  const [downloadVehicleFilter, setDownloadVehicleFilter] = useState('');
 
   // Sidebar / editing state
   const [showSidebar, setShowSidebar] = useState(false);
@@ -140,6 +142,7 @@ export default function FuelManagement({
   const [remarks, setRemarks] = useState('');
   const [requestedBy, setRequestedBy] = useState('');
   const [rqId, setRqId] = useState('');
+  const [paidAmount, setPaidAmount] = useState('');
   const [entryDocs, setEntryDocs] = useState<VehicleDocument[]>([]);
 
   const triggerNotif = (msg: string) => {
@@ -233,6 +236,7 @@ export default function FuelManagement({
     setRemarks('');
     setRequestedBy('');
     setRqId('');
+    setPaidAmount('');
     setEntryDocs([]);
     setShowSidebar(false);
   };
@@ -256,6 +260,7 @@ export default function FuelManagement({
     setRemarks(log.remarks || '');
     setRequestedBy(log.requestedBy || '');
     setRqId(log.rqId || '');
+    setPaidAmount(log.paidAmount != null ? String(log.paidAmount) : '');
     setEntryDocs(log.documents || []);
     setShowSidebar(true);
   };
@@ -293,6 +298,7 @@ export default function FuelManagement({
         remarks: remarks.trim(),
         requestedBy: requestedBy.trim(),
         rqId: rqId.trim(),
+        paidAmount: parseFloat(paidAmount) || 0,
         documents: entryDocs
       };
 
@@ -334,29 +340,58 @@ export default function FuelManagement({
 
   const isSuperAdmin = user.department === 'super_admin';
 
-  // Maps fuel log rows to the flat shape used for Excel export, shared by
-  // both the ledger's own download button and the period report below.
-  const toFuelSheetRows = (rows: FuelLog[]) => rows.map(l => ({
-    'Entry #': l.entryNumber,
-    'Period': l.period,
-    'Date': l.date,
-    'Location': l.location,
-    'Bunk Name': l.bunkName,
-    'Bunk/Card': l.bunkOrCard,
-    'Vehicle No': l.vehicleNumber,
-    'Indent No': l.indentNumber,
-    'Ltrs': l.ltrs,
-    'Rate': l.rate,
-    'Amount': l.amount,
-    'Client': l.client,
-    'Type': l.type,
-    'Vendor Name': l.vendorName || '',
-    'Vendor Code': l.vendorCode || '',
-    'Requested By': l.requestedBy || '',
-    'RQ ID': l.rqId || '',
-    'Remarks': l.remarks || '',
-    ...(isSuperAdmin ? { 'Entered By': l.enteredBy || '' } : {})
-  }));
+  // Computes each entry's running Pending Amount balance: partitioned by
+  // bunk, ordered by date (entry number as tiebreaker) - previous pending +
+  // this entry's amount - this entry's paidAmount. Applied to the full
+  // ledger for on-screen display, or to a period/bunk-filtered subset for
+  // the "Download Fuel Report" export (matching the reference spreadsheet,
+  // where each bunk's monthly sheet restarts its running balance from 0).
+  const computePendingAmounts = (rows: FuelLog[]): Map<string, number> => {
+    const result = new Map<string, number>();
+    const byBunk = new Map<string, FuelLog[]>();
+    rows.forEach(r => {
+      const key = r.bunkName || '';
+      if (!byBunk.has(key)) byBunk.set(key, []);
+      byBunk.get(key)!.push(r);
+    });
+    byBunk.forEach(bunkRows => {
+      const sorted = [...bunkRows].sort((a, b) => a.date === b.date ? (a.entryNumber || 0) - (b.entryNumber || 0) : a.date.localeCompare(b.date));
+      let running = 0;
+      sorted.forEach(r => {
+        running = parseFloat((running + (r.amount || 0) - (r.paidAmount || 0)).toFixed(2));
+        result.set(r.id, running);
+      });
+    });
+    return result;
+  };
+
+  // On-screen ledger's Pending Amount running balance, over the full (all
+  // time, all bunks) ledger - independent of the search filter.
+  const pendingByLogId = computePendingAmounts(logs);
+
+  // Maps fuel log rows to the flat shape used for the "Download Fuel Report"
+  // Excel export, matching the reference bunk-wise diesel summary format:
+  // Date, Vehicle Number, OIL, Indent No, Ltrs, Rate, Amt, Client, (blank),
+  // Vendor Code, Vendor Name, Remarks, Paid Amount, Pending Amount.
+  const toFuelSheetRows = (rows: FuelLog[]) => {
+    const pendingMap = computePendingAmounts(rows);
+    return rows.map(l => ({
+      'Date': l.date,
+      'Vehicle Number': l.vehicleNumber,
+      'OIL': '',
+      'Indent No': l.indentNumber,
+      'Ltrs': l.ltrs,
+      'Rate': l.rate,
+      'Amt': l.amount,
+      'Client': l.client,
+      ' ': '',
+      'Vendor Code': l.vendorCode || '',
+      'Vendor Name': l.vendorName || '',
+      'Remarks': l.remarks || '',
+      'Paid Amount': l.paidAmount || '',
+      'Pending Amount': pendingMap.get(l.id) ?? ''
+    }));
+  };
 
   // Resolves the [start, end] date-string window (inclusive) for the
   // dashboard's "For the Day / Monthly Till Date / Year Till Date" download.
@@ -366,64 +401,83 @@ export default function FuelManagement({
     return { start: `${refDate.slice(0, 4)}-01-01`, end: refDate };
   };
 
-  // Combined period + bunk report: Date, Bunk, and For the Day/Monthly Till
-  // Date/Year Till Date all connect together for one download - pulls both
-  // Fuel Entries (bunk-filtered) and Trip Details (mileage reports, date-only
-  // since bunk isn't a Trip Details concept) dated within the selected window
-  // into one workbook, with a totals row (Litres/Amount) on the Fuel Entries
-  // sheet reflecting exactly the selection made.
-  const handleDownloadPeriodReport = () => {
+  // Fuel Entry download: Date, Period (Day/MTD/YTD), and Bunk all connect
+  // together - produces the bunk-wise diesel summary format (see
+  // toFuelSheetRows), with a TOTAL row (Litres/Amount) reflecting exactly
+  // this selection.
+  const handleDownloadFuelEntryReport = () => {
     if (!downloadDate) {
       triggerNotif('Please pick a reference date first.');
       return;
     }
     const { start, end } = getDownloadDateRange(downloadPeriod, downloadDate);
     const periodLogs = logs.filter(l => l.date >= start && l.date <= end && (bunkFilter === 'All' || l.bunkName === bunkFilter));
-    const periodTrips = mileageReports.filter(r => r.date >= start && r.date <= end);
 
-    if (periodLogs.length === 0 && periodTrips.length === 0) {
-      triggerNotif('No fuel entries or trip details found for the selected period/bunk.');
+    if (periodLogs.length === 0) {
+      triggerNotif('No fuel entries found for the selected period/bunk.');
       return;
     }
 
+    const totalLitres = periodLogs.reduce((s, l) => s + (l.ltrs || 0), 0);
+    const totalAmount = periodLogs.reduce((s, l) => s + (l.amount || 0), 0);
+    const summaryRow = {
+      'Date': '', 'Vehicle Number': 'TOTAL', 'OIL': '', 'Indent No': '', 'Ltrs': totalLitres, 'Rate': '', 'Amt': totalAmount,
+      'Client': '', ' ': '', 'Vendor Code': '', 'Vendor Name': '', 'Remarks': '', 'Paid Amount': '', 'Pending Amount': ''
+    };
+
     const workbook = XLSX.utils.book_new();
-    if (periodLogs.length > 0) {
-      const totalLitres = periodLogs.reduce((s, l) => s + (l.ltrs || 0), 0);
-      const totalAmount = periodLogs.reduce((s, l) => s + (l.amount || 0), 0);
-      const summaryRow = {
-        'Entry #': 'TOTAL', 'Period': '', 'Date': '', 'Location': '', 'Bunk Name': '', 'Bunk/Card': '',
-        'Vehicle No': '', 'Indent No': '', 'Ltrs': totalLitres, 'Rate': '', 'Amount': totalAmount,
-        'Client': '', 'Type': '', 'Vendor Name': '', 'Vendor Code': '', 'Requested By': '', 'RQ ID': '', 'Remarks': '',
-        ...(isSuperAdmin ? { 'Entered By': '' } : {})
-      };
-      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...toFuelSheetRows(periodLogs), summaryRow]), 'Fuel Entries');
-    }
-    if (periodTrips.length > 0) {
-      const tripRows = periodTrips.map(r => ({
-        'Sl. No': r.slNo,
-        'Date': r.date,
-        'Vehicle No': r.vehicleNo,
-        'Opening KM': r.openingKm ?? '',
-        'Closing KM': r.closingKm ?? '',
-        'Total KM': r.totalKm,
-        'Rate Per Litre': r.ratePerLitre,
-        'Litres': r.litres,
-        'Diesel Amount': r.dieselAmount,
-        'Mileage': r.mileage,
-        'Actual Mileage': r.actualMileage || 0,
-        'Difference (Litres)': r.difference ?? '',
-        'Authorized Driver': r.driverName,
-        'Location': r.location,
-        'Remarks': r.remarks || '',
-        ...(isSuperAdmin ? { 'Entered By': r.enteredBy || '' } : {})
-      }));
-      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(tripRows), 'Trip Details');
-    }
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...toFuelSheetRows(periodLogs), summaryRow]), 'Fuel Entries');
 
     const periodLabel = downloadPeriod === 'day' ? 'Daily' : downloadPeriod === 'month' ? 'MTD' : 'YTD';
     const bunkLabel = bunkFilter === 'All' ? 'AllBunks' : bunkFilter.replace(/\s+/g, '_');
-    XLSX.writeFile(workbook, `KCM_Fuel_Report_${periodLabel}_${bunkLabel}_${downloadDate}.xlsx`);
-    triggerNotif('Fuel report downloaded successfully!');
+    XLSX.writeFile(workbook, `KCM_Fuel_Entries_${periodLabel}_${bunkLabel}_${downloadDate}.xlsx`);
+    triggerNotif('Fuel entries report downloaded successfully!');
+  };
+
+  // Trip Details download: Date, Period, and Vehicle Number (search/dropdown
+  // sourced from Fleet & Vehicles, or "All Vehicles") all connect together.
+  const handleDownloadTripDetailsReport = () => {
+    if (!downloadDate) {
+      triggerNotif('Please pick a reference date first.');
+      return;
+    }
+    const { start, end } = getDownloadDateRange(downloadPeriod, downloadDate);
+    const vehicleQuery = downloadVehicleFilter.trim().toUpperCase();
+    const periodTrips = mileageReports.filter(r =>
+      r.date >= start && r.date <= end && (!vehicleQuery || (r.vehicleNo || '').toUpperCase() === vehicleQuery)
+    );
+
+    if (periodTrips.length === 0) {
+      triggerNotif('No trip details found for the selected period/vehicle.');
+      return;
+    }
+
+    const tripRows = periodTrips.map(r => ({
+      'Sl. No': r.slNo,
+      'Date': r.date,
+      'Vehicle No': r.vehicleNo,
+      'Opening KM': r.openingKm ?? '',
+      'Closing KM': r.closingKm ?? '',
+      'Total KM': r.totalKm,
+      'Rate Per Litre': r.ratePerLitre,
+      'Litres': r.litres,
+      'Diesel Amount': r.dieselAmount,
+      'Mileage': r.mileage,
+      'Actual Mileage': r.actualMileage || 0,
+      'Difference (Litres)': r.difference ?? '',
+      'Authorized Driver': r.driverName,
+      'Location': r.location,
+      'Remarks': r.remarks || '',
+      ...(isSuperAdmin ? { 'Entered By': r.enteredBy || '' } : {})
+    }));
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(tripRows), 'Trip Details');
+
+    const periodLabel = downloadPeriod === 'day' ? 'Daily' : downloadPeriod === 'month' ? 'MTD' : 'YTD';
+    const vehicleLabel = downloadVehicleFilter.trim() ? downloadVehicleFilter.trim().toUpperCase() : 'AllVehicles';
+    XLSX.writeFile(workbook, `KCM_Trip_Details_${periodLabel}_${vehicleLabel}_${downloadDate}.xlsx`);
+    triggerNotif('Trip details report downloaded successfully!');
   };
 
   // KPI calculations - unchanged in label/position/layout, only field refs updated (ltrs replaces quantity)
@@ -477,7 +531,9 @@ export default function FuelManagement({
         </div>
 
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Download Fuel Report</p>
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+            Download {activeSubTab === 'trip' ? 'Trip Details' : 'Fuel'} Report
+          </p>
           <div className="space-y-1.5">
             <div className="flex items-center gap-1.5">
               <div className="flex-1 min-w-0">
@@ -497,24 +553,48 @@ export default function FuelManagement({
                 <option value="year">Year Till Date</option>
               </select>
             </div>
-            <div className="flex items-center gap-1.5">
-              <select
-                value={bunkFilter}
-                onChange={(e) => setBunkFilter(e.target.value)}
-                title="Filter by bunk"
-                className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-700 focus:outline-none"
-              >
-                <option value="All">All Bunks</option>
-                {usedBunks.map((b, i) => <option key={i} value={b}>{b}</option>)}
-              </select>
-              <button
-                onClick={handleDownloadPeriodReport}
-                title="Download Fuel Entries & Trip Details for the selected date, period, and bunk"
-                className="p-2 bg-teal-50 text-teal-600 hover:bg-teal-100 rounded-lg cursor-pointer shrink-0 transition-colors"
-              >
-                <Download className="w-4 h-4" />
-              </button>
-            </div>
+            {activeSubTab === 'trip' ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  list="download-vehicle-datalist"
+                  value={downloadVehicleFilter}
+                  onChange={(e) => setDownloadVehicleFilter(e.target.value.toUpperCase())}
+                  placeholder="All Vehicles (leave blank) or search..."
+                  autoComplete="off"
+                  className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-mono font-semibold text-slate-700 focus:outline-none"
+                />
+                <datalist id="download-vehicle-datalist">
+                  {vehicleList.map((v, i) => <option key={i} value={v} />)}
+                </datalist>
+                <button
+                  onClick={handleDownloadTripDetailsReport}
+                  title="Download Trip Details for the selected date, period, and vehicle"
+                  className="p-2 bg-teal-50 text-teal-600 hover:bg-teal-100 rounded-lg cursor-pointer shrink-0 transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={bunkFilter}
+                  onChange={(e) => setBunkFilter(e.target.value)}
+                  title="Filter by bunk"
+                  className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-700 focus:outline-none"
+                >
+                  <option value="All">All Bunks</option>
+                  {usedBunks.map((b, i) => <option key={i} value={b}>{b}</option>)}
+                </select>
+                <button
+                  onClick={handleDownloadFuelEntryReport}
+                  title="Download Fuel Entries for the selected date, period, and bunk"
+                  className="p-2 bg-teal-50 text-teal-600 hover:bg-teal-100 rounded-lg cursor-pointer shrink-0 transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                </button>
+              </div>
+            )}
           </div>
           <p className="text-[9px] text-slate-400 mt-1.5">{logs.length} fuel vouchers logged</p>
         </div>
@@ -589,6 +669,8 @@ export default function FuelManagement({
                   <th className="px-3 py-2.5 text-right">Ltrs</th>
                   <th className="px-3 py-2.5 text-right">Rate</th>
                   <th className="px-3 py-2.5 text-right">Amount</th>
+                  <th className="px-3 py-2.5 text-right">Paid Amount</th>
+                  <th className="px-3 py-2.5 text-right">Pending Amount</th>
                   <th className="px-3 py-2.5">Client</th>
                   <th className="px-3 py-2.5">Type</th>
                   <th className="px-3 py-2.5">Vendor Name</th>
@@ -604,7 +686,7 @@ export default function FuelManagement({
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {filteredLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={20 + (isSuperAdmin ? 1 : 0)} className="text-center py-10 text-slate-400 font-mono">
+                    <td colSpan={22 + (isSuperAdmin ? 1 : 0)} className="text-center py-10 text-slate-400 font-mono">
                       NO FUEL ENTRIES FOUND IN CURRENT LEDGER.
                     </td>
                   </tr>
@@ -622,6 +704,8 @@ export default function FuelManagement({
                       <td className="px-3 py-2.5 text-right font-mono text-slate-800">{(log.ltrs || 0)} L</td>
                       <td className="px-3 py-2.5 text-right font-mono text-slate-500">₹{(log.rate || 0).toFixed(2)}</td>
                       <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-900">₹{(log.amount || 0).toLocaleString('en-IN')}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-emerald-700">{log.paidAmount ? `₹${log.paidAmount.toLocaleString('en-IN')}` : '-'}</td>
+                      <td className="px-3 py-2.5 text-right font-mono font-bold text-amber-700">₹{(pendingByLogId.get(log.id) || 0).toLocaleString('en-IN')}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.client}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.type}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.vendorName || '-'}</td>
@@ -955,6 +1039,22 @@ export default function FuelManagement({
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
                       />
                     </div>
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-600 mb-1">Paid Amount</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      placeholder="e.g. 5000 (how much has been paid to this bunk against this entry)"
+                      value={paidAmount}
+                      onChange={(e) => setPaidAmount(e.target.value)}
+                      autoComplete="off"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800"
+                    />
+                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                      Pending Amount is auto-calculated as a running balance per bunk - not entered manually.
+                    </p>
                   </div>
 
                   <DocumentAttachment documents={entryDocs} onChange={setEntryDocs} label="Attach Fuel Receipt / Invoice" />

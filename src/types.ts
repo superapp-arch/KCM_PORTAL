@@ -121,6 +121,10 @@ export interface FuelLog {
   rqId?: string;
   documents?: VehicleDocument[];
   enteredBy?: string; // username, stamped server-side; visible only to super admins
+  paidAmount?: number; // manually entered - how much has been paid against this entry (defaults to 0/blank)
+  // Pending Amount is NOT stored - it's a running balance per bunk (previous
+  // pending + this entry's amount - this entry's paidAmount), computed live
+  // wherever it's shown (see computePendingAmounts in FuelManagement.tsx).
 }
 
 // Vendor Master for Fuel Entry's Vendor Name/Vendor Code fields. Starts empty;
