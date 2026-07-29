@@ -99,7 +99,7 @@ export default function MileageReportModule({
   // The selected vehicle's fixed Actual Mileage reference, looked up from the
   // Vehicle Mileage Master (same value editable from Fleet & Vehicles).
   const fixedMileageForVehicle = vehicleMileages.find(
-    v => v.vehicleNo.trim().toUpperCase() === vehicleNo.trim().toUpperCase()
+    v => (v.vehicleNo || '').trim().toUpperCase() === vehicleNo.trim().toUpperCase()
   )?.mileage;
 
   // Unique list of vehicle numbers from existing reports and fleet
@@ -130,7 +130,7 @@ export default function MileageReportModule({
 
     // Find all reports for this vehicle, sort chronologically
     const vehicleReports = reports
-      .filter(r => r.vehicleNo.trim().toUpperCase() === vehicleNo.trim().toUpperCase())
+      .filter(r => (r.vehicleNo || '').trim().toUpperCase() === vehicleNo.trim().toUpperCase())
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
     if (vehicleReports.length > 0) {
@@ -220,7 +220,7 @@ export default function MileageReportModule({
   const resolveDriverWord = (driverNameValue: string): string => {
     const names = driverNameValue.split('/').map(n => n.trim()).filter(Boolean);
     if (names.length !== 1) return 'the driver';
-    const matches = employees.filter(e => e.name.trim().toLowerCase() === names[0].toLowerCase());
+    const matches = employees.filter(e => (e.name || '').trim().toLowerCase() === names[0].toLowerCase());
     return matches.length === 1 ? matches[0].name : 'the driver';
   };
 
@@ -366,7 +366,7 @@ export default function MileageReportModule({
       // Find-existing-or-create: this is the SAME underlying value the
       // Actual Mileage field in Fleet & Vehicles edits, so re-saving here
       // updates that row in place instead of creating a duplicate.
-      const existing = vehicleMileages.find(v => v.vehicleNo.trim().toUpperCase() === vNo);
+      const existing = vehicleMileages.find(v => (v.vehicleNo || '').trim().toUpperCase() === vNo);
       if (existing && onUpdateVehicleMileage) {
         await onUpdateVehicleMileage(existing.id, { mileage: mileageValue });
       } else {

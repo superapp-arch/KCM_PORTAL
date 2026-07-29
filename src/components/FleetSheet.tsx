@@ -339,7 +339,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
   const [actualMileageInput, setActualMileageInput] = useState('');
 
   const findVehicleMileage = (regNo: string) =>
-    vehicleMileages.find(v => v.vehicleNo.trim().toUpperCase() === regNo.trim().toUpperCase());
+    vehicleMileages.find(v => (v.vehicleNo || '').trim().toUpperCase() === regNo.trim().toUpperCase());
 
   const startEdit = (vehicle: Vehicle) => {
     setEditForm({ ...vehicle });

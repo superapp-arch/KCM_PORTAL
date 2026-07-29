@@ -168,7 +168,7 @@ export default function FuelManagement({
   // Vendor Name/Code/Vehicle all come from the Vendor Management registry
   // (vendorProfiles) - there is no separate "Manage Vendors" list anymore.
   const matchedVendorProfile = vendorProfiles.find(
-    v => v.name.trim().toLowerCase() === vendorName.trim().toLowerCase()
+    v => (v.name || '').trim().toLowerCase() === vendorName.trim().toLowerCase()
   );
 
   // Vendor Code auto-fill based on the selected Vendor Name
