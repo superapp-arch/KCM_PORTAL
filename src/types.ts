@@ -497,8 +497,9 @@ export const VEHICLE_LOAN_FINANCERS = [
 
 // One record per vehicle (id = Reg. No.), shared between the Loan Management
 // module's Vehicle Loan ledger and Fleet & Vehicles' EMI Details tab - both
-// read/write the same record so there's no duplicate entry. Balance EMI
-// (Tenure - Months Completed) is always computed live, never stored.
+// read/write the same record so there's no duplicate entry. Months Completed,
+// Balance EMI, and Due Date are always computed live from emiStartDate (see
+// src/utils/loanDates.ts) - never stored, so they can never go stale.
 export interface VehicleLoan {
   id: string; // Reg. No.
   ownership?: string;
@@ -509,7 +510,6 @@ export interface VehicleLoan {
   emiStartDate?: string; // YYYY-MM-DD
   monthlyEmi?: number;
   tenure?: number; // months
-  monthsCompleted?: number;
   interest?: number; // %
   loanStatus: LoanStatus;
   remarks?: string; // e.g. closing month/year once Closed
@@ -517,17 +517,17 @@ export interface VehicleLoan {
   documents?: VehicleDocument[];
 }
 
-// Balance EMI (Tenure - EMI Paid) is always computed live, never stored.
+// EMI Paid, Balance EMI, and Due Date are always computed live from emiDate
+// (see src/utils/loanDates.ts) - never stored.
 export interface BusinessLoan {
   id: string;
   financer: string;
   loanType: string;
   loanNumber: string;
   sanctionedAmount?: number;
-  emiDate?: string;
+  emiDate?: string; // YYYY-MM-DD
   emiMonthly?: number;
   tenure?: number;
-  emiPaid?: number;
   interestRate?: number; // %
   loanStatus: LoanStatus;
   remarks?: string;

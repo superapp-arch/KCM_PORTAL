@@ -34,6 +34,7 @@ import {
   HandCoins
 } from 'lucide-react';
 import DateInput from './DateInput';
+import { computeMonthsCompleted, computeDueDate } from '../utils/loanDates';
 
 interface FleetSheetProps {
   vehicles: Vehicle[];
@@ -1771,17 +1772,20 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                   if (!loan) {
                     return <p className="text-xs text-slate-400 italic">No EMI/loan record found for {regNo}. Add one in the Loan Management module.</p>;
                   }
-                  const bal = loan.tenure != null && loan.monthsCompleted != null ? loan.tenure - loan.monthsCompleted : null;
+                  const monthsCompleted = computeMonthsCompleted(loan.emiStartDate, loan.tenure);
+                  const bal = loan.tenure != null ? loan.tenure - monthsCompleted : null;
+                  const dueDate = computeDueDate(loan.emiStartDate, monthsCompleted, loan.tenure);
                   const rows: [string, string][] = [
                     ['Ownership', loan.ownership || '-'],
                     ['Financer', loan.financer],
                     ['Finance Number', loan.financeNumber || '-'],
-                    ['Loan Amount', loan.loanAmount != null ? `Rs. ${loan.loanAmount.toLocaleString('en-IN')}` : '-'],
+                    ['Loan Amount', loan.loanAmount != null ? loan.loanAmount.toLocaleString('en-IN') : '-'],
                     ['EMI Start Date', loan.emiStartDate || '-'],
-                    ['Monthly EMI', loan.monthlyEmi != null ? `Rs. ${loan.monthlyEmi.toLocaleString('en-IN')}` : '-'],
+                    ['Monthly EMI', loan.monthlyEmi != null ? loan.monthlyEmi.toLocaleString('en-IN') : '-'],
                     ['Tenure', loan.tenure != null ? String(loan.tenure) : '-'],
-                    ['Months Completed', loan.monthsCompleted != null ? String(loan.monthsCompleted) : '-'],
+                    ['Months Completed', String(monthsCompleted)],
                     ['Balance EMI', bal != null ? String(bal) : '-'],
+                    ['Due Date', dueDate],
                     ['Interest', loan.interest != null ? `${loan.interest}%` : '-'],
                     ['Loan Status', loan.loanStatus.toUpperCase()],
                     ['NOC Status', loan.nocStatus || 'Not received'],

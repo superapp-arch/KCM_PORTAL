@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
-import { Truck, Plus, Search, Edit2, Trash2, X, Paperclip, ChevronDown, AlertTriangle } from 'lucide-react';
+import { Truck, Plus, Search, Edit2, Trash2, X, ChevronDown, AlertTriangle } from 'lucide-react';
 import { Vehicle, VehicleLoan, VehicleDocument, LoanStatus, NOCStatus, VEHICLE_LOAN_FINANCERS } from '../../types';
+import { computeMonthsCompleted, computeDueDate } from '../../utils/loanDates';
 import DateInput from '../DateInput';
 import DocumentAttachment from '../DocumentAttachment';
 import VehicleDetailsPopover from './VehicleDetailsPopover';
@@ -13,18 +14,18 @@ interface VehicleLoanSheetProps {
   onDeleteVehicleLoan: (id: string) => Promise<void>;
 }
 
+const OWNERSHIP_OPTIONS = ['KCM INSTA', 'KCM SUPPLY'];
+
 const emptyForm = {
   regNo: '', ownership: '', financer: VEHICLE_LOAN_FINANCERS[0], financeNumber: '', loanAmount: '',
-  emiStartDate: '', monthlyEmi: '', tenure: '', monthsCompleted: '', interest: '',
+  emiStartDate: '', monthlyEmi: '', tenure: '', interest: '',
   loanStatus: 'Active' as LoanStatus, remarks: '', nocStatus: 'Not received' as NOCStatus
 };
 
-const balanceEmi = (loan: VehicleLoan): number | null =>
-  loan.tenure != null && loan.monthsCompleted != null ? loan.tenure - loan.monthsCompleted : null;
-
-const isNearingCompletion = (loan: VehicleLoan): boolean => {
-  const bal = balanceEmi(loan);
-  return loan.loanStatus === 'Active' && bal != null && bal <= 2 && bal >= 0;
+const isNearingCompletion = (monthsCompleted: number, tenure: number | undefined, loanStatus: LoanStatus): boolean => {
+  if (tenure == null || loanStatus !== 'Active') return false;
+  const bal = tenure - monthsCompleted;
+  return bal <= 2 && bal >= 0;
 };
 
 function monthYearFromStart(emiStartDate: string, tenure: number): string {
@@ -38,6 +39,8 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
   const [searchTerm, setSearchTerm] = useState('');
   const [financerFilter, setFinancerFilter] = useState<string[]>([]); // empty = all
   const [showFinancerDropdown, setShowFinancerDropdown] = useState(false);
+  const [ownershipFilter, setOwnershipFilter] = useState<string[]>([]); // empty = all
+  const [showOwnershipDropdown, setShowOwnershipDropdown] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -63,7 +66,7 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
       regNo: loan.regNo, ownership: loan.ownership || '', financer: loan.financer,
       financeNumber: loan.financeNumber || '', loanAmount: loan.loanAmount != null ? String(loan.loanAmount) : '',
       emiStartDate: loan.emiStartDate || '', monthlyEmi: loan.monthlyEmi != null ? String(loan.monthlyEmi) : '',
-      tenure: loan.tenure != null ? String(loan.tenure) : '', monthsCompleted: loan.monthsCompleted != null ? String(loan.monthsCompleted) : '',
+      tenure: loan.tenure != null ? String(loan.tenure) : '',
       interest: loan.interest != null ? String(loan.interest) : '', loanStatus: loan.loanStatus,
       remarks: loan.remarks || '', nocStatus: loan.nocStatus || 'Not received'
     });
@@ -90,7 +93,6 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
         emiStartDate: form.emiStartDate,
         monthlyEmi: parseFloat(form.monthlyEmi) || undefined,
         tenure: parseInt(form.tenure) || undefined,
-        monthsCompleted: parseInt(form.monthsCompleted) || undefined,
         interest: parseFloat(form.interest) || undefined,
         loanStatus: form.loanStatus,
         remarks: form.remarks.trim(),
@@ -118,14 +120,19 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
     setFinancerFilter(prev => prev.includes(financer) ? prev.filter(f => f !== financer) : [...prev, financer]);
   };
 
+  const toggleOwnershipFilter = (ownership: string) => {
+    setOwnershipFilter(prev => prev.includes(ownership) ? prev.filter(o => o !== ownership) : [...prev, ownership]);
+  };
+
   const filtered = useMemo(() => vehicleLoans.filter(l => {
     if (financerFilter.length > 0 && !financerFilter.includes(l.financer)) return false;
+    if (ownershipFilter.length > 0 && !ownershipFilter.includes((l.ownership || '').toUpperCase())) return false;
     if (searchTerm) {
       const q = searchTerm.toLowerCase();
       if (!l.regNo.toLowerCase().includes(q) && !(l.financeNumber || '').toLowerCase().includes(q) && !l.financer.toLowerCase().includes(q)) return false;
     }
     return true;
-  }), [vehicleLoans, financerFilter, searchTerm]);
+  }), [vehicleLoans, financerFilter, ownershipFilter, searchTerm]);
 
   const suggestedClosing = form.emiStartDate && form.tenure ? monthYearFromStart(form.emiStartDate, parseInt(form.tenure) || 0) : '';
 
@@ -161,6 +168,30 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
           )}
         </div>
 
+        <div className="relative">
+          <button onClick={() => setShowOwnershipDropdown(!showOwnershipDropdown)}
+            className="flex items-center gap-1.5 border border-slate-300 rounded-lg px-3 py-1.5 bg-white text-xs font-semibold text-slate-700 cursor-pointer whitespace-nowrap">
+            Ownership {ownershipFilter.length > 0 ? `(${ownershipFilter.length})` : '(All)'} <ChevronDown className="w-3.5 h-3.5" />
+          </button>
+          {showOwnershipDropdown && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setShowOwnershipDropdown(false)} />
+              <div className="absolute right-0 mt-1 w-56 bg-white border border-slate-200 rounded-lg shadow-xl z-50 p-2 text-xs">
+                <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-50 rounded cursor-pointer font-bold border-b border-slate-100 mb-1">
+                  <input type="checkbox" checked={ownershipFilter.length === 0} onChange={() => setOwnershipFilter([])} />
+                  Select All
+                </label>
+                {OWNERSHIP_OPTIONS.map(o => (
+                  <label key={o} className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-50 rounded cursor-pointer">
+                    <input type="checkbox" checked={ownershipFilter.includes(o)} onChange={() => toggleOwnershipFilter(o)} />
+                    {o}
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
         <button onClick={() => { resetForm(); setShowModal(true); }}
           className="bg-gradient-to-r from-teal-600 to-emerald-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all whitespace-nowrap">
           <Plus className="w-3.5 h-3.5" /> Add Vehicle Loan
@@ -178,25 +209,24 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
                 <th className="px-3 py-2.5">Financer</th>
                 <th className="px-3 py-2.5">Finance Number</th>
                 <th className="px-3 py-2.5 text-right">Loan Amount</th>
-                <th className="px-3 py-2.5">EMI Start Date</th>
                 <th className="px-3 py-2.5 text-right">Monthly EMI</th>
                 <th className="px-3 py-2.5 text-right">Tenure</th>
                 <th className="px-3 py-2.5 text-right">Months Completed</th>
                 <th className="px-3 py-2.5 text-right">Balance EMI</th>
+                <th className="px-3 py-2.5">Due Date</th>
                 <th className="px-3 py-2.5 text-right">Interest</th>
                 <th className="px-3 py-2.5">Loan Status</th>
-                <th className="px-3 py-2.5 max-w-[160px]">Remarks</th>
-                <th className="px-3 py-2.5">NOC Status</th>
-                <th className="px-3 py-2.5 text-center">Docs</th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
-                <tr><td colSpan={17} className="text-center py-10 text-slate-400">No vehicle loan records found.</td></tr>
+                <tr><td colSpan={14} className="text-center py-10 text-slate-400">No vehicle loan records found.</td></tr>
               ) : filtered.map((loan, i) => {
-                const bal = balanceEmi(loan);
-                const nearing = isNearingCompletion(loan);
+                const monthsCompleted = computeMonthsCompleted(loan.emiStartDate, loan.tenure);
+                const bal = loan.tenure != null ? loan.tenure - monthsCompleted : null;
+                const dueDate = computeDueDate(loan.emiStartDate, monthsCompleted, loan.tenure);
+                const nearing = isNearingCompletion(monthsCompleted, loan.tenure, loan.loanStatus);
                 return (
                   <tr key={loan.id} className={`hover:bg-slate-50 ${nearing ? 'bg-amber-50/60' : ''}`}>
                     <td className="px-3 py-2.5 font-mono text-slate-500">{i + 1}</td>
@@ -208,11 +238,10 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap">{loan.financer}</td>
                     <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{loan.financeNumber || '-'}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-slate-700">{loan.loanAmount ? `Rs. ${loan.loanAmount.toLocaleString('en-IN')}` : '-'}</td>
-                    <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{loan.emiStartDate || '-'}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-slate-700">{loan.monthlyEmi ? `Rs. ${loan.monthlyEmi.toLocaleString('en-IN')}` : '-'}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-700">{loan.loanAmount ? loan.loanAmount.toLocaleString('en-IN') : '-'}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-700">{loan.monthlyEmi ? loan.monthlyEmi.toLocaleString('en-IN') : '-'}</td>
                     <td className="px-3 py-2.5 text-right font-mono text-slate-600">{loan.tenure ?? '-'}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-slate-600">{loan.monthsCompleted ?? '-'}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-600">{monthsCompleted}</td>
                     <td className="px-3 py-2.5 text-right font-mono font-bold">
                       {bal != null ? (
                         <span className={nearing ? 'text-amber-700 flex items-center justify-end gap-1' : 'text-slate-700'}>
@@ -220,24 +249,12 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
                         </span>
                       ) : '-'}
                     </td>
+                    <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{dueDate}</td>
                     <td className="px-3 py-2.5 text-right font-mono text-slate-600">{loan.interest != null ? `${loan.interest}%` : '-'}</td>
                     <td className="px-3 py-2.5">
                       <span className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] ${loan.loanStatus === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
                         {loan.loanStatus.toUpperCase()}
                       </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-slate-500 max-w-[160px] truncate" title={loan.remarks}>{loan.remarks || '-'}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap">
-                      <span className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] ${loan.nocStatus === 'Received' ? 'bg-sky-50 text-sky-700 border-sky-300' : 'bg-orange-50 text-orange-700 border-orange-300'}`}>
-                        {loan.nocStatus || 'Not received'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-center">
-                      {loan.documents && loan.documents.length > 0 ? (
-                        <span className="inline-flex items-center justify-center px-1.5 py-0.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-[10px] font-bold">
-                          <Paperclip className="w-2.5 h-2.5 mr-0.5" />{loan.documents.length}
-                        </span>
-                      ) : <span className="text-slate-300">-</span>}
                     </td>
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
                       <button onClick={() => startEdit(loan)} className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
@@ -317,21 +334,21 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-semibold text-slate-500 mb-1">Tenure (months)</label>
-                    <input type="number" value={form.tenure} onChange={e => setForm({ ...form, tenure: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-500 mb-1">Months Completed</label>
-                    <input type="number" value={form.monthsCompleted} onChange={e => setForm({ ...form, monthsCompleted: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
-                  </div>
+                <div>
+                  <label className="block font-semibold text-slate-500 mb-1">Tenure (months)</label>
+                  <input type="number" value={form.tenure} onChange={e => setForm({ ...form, tenure: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
 
-                {form.tenure && form.monthsCompleted && (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2">
-                    <p className="text-emerald-600 uppercase text-[9px] font-bold">Balance EMI (auto = Tenure &minus; Months Completed)</p>
-                    <p className="font-black text-emerald-700">{(parseInt(form.tenure) || 0) - (parseInt(form.monthsCompleted) || 0)}</p>
+                {form.emiStartDate && (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2 grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-emerald-600 uppercase text-[9px] font-bold">Months Completed (auto)</p>
+                      <p className="font-black text-emerald-700">{computeMonthsCompleted(form.emiStartDate, parseInt(form.tenure) || undefined)}</p>
+                    </div>
+                    <div>
+                      <p className="text-emerald-600 uppercase text-[9px] font-bold">Due Date (auto)</p>
+                      <p className="font-black text-emerald-700">{computeDueDate(form.emiStartDate, computeMonthsCompleted(form.emiStartDate, parseInt(form.tenure) || undefined), parseInt(form.tenure) || undefined)}</p>
+                    </div>
                   </div>
                 )}
 

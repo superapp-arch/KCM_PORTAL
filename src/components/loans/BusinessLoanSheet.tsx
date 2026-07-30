@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { Landmark, Plus, Search, Edit2, Trash2, X } from 'lucide-react';
 import { BusinessLoan, LoanStatus } from '../../types';
+import { computeMonthsCompleted, computeDueDate } from '../../utils/loanDates';
+import DateInput from '../DateInput';
 
 interface BusinessLoanSheetProps {
   businessLoans: BusinessLoan[];
@@ -15,11 +17,8 @@ const FINANCER_SUGGESTIONS = [
 
 const emptyForm = {
   financer: '', loanType: '', loanNumber: '', sanctionedAmount: '', emiDate: '', emiMonthly: '',
-  tenure: '', emiPaid: '', interestRate: '', loanStatus: 'Active' as LoanStatus, remarks: ''
+  tenure: '', interestRate: '', loanStatus: 'Active' as LoanStatus, remarks: ''
 };
-
-const balanceEmi = (loan: BusinessLoan): number | null =>
-  loan.tenure != null && loan.emiPaid != null ? loan.tenure - loan.emiPaid : null;
 
 export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, onUpdateBusinessLoan, onDeleteBusinessLoan }: BusinessLoanSheetProps) {
   const [searchTerm, setSearchTerm] = useState('');
@@ -40,7 +39,7 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
       financer: loan.financer, loanType: loan.loanType, loanNumber: loan.loanNumber,
       sanctionedAmount: loan.sanctionedAmount != null ? String(loan.sanctionedAmount) : '',
       emiDate: loan.emiDate || '', emiMonthly: loan.emiMonthly != null ? String(loan.emiMonthly) : '',
-      tenure: loan.tenure != null ? String(loan.tenure) : '', emiPaid: loan.emiPaid != null ? String(loan.emiPaid) : '',
+      tenure: loan.tenure != null ? String(loan.tenure) : '',
       interestRate: loan.interestRate != null ? String(loan.interestRate) : '', loanStatus: loan.loanStatus,
       remarks: loan.remarks || ''
     });
@@ -57,10 +56,9 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
         loanType: form.loanType.trim(),
         loanNumber: form.loanNumber.trim(),
         sanctionedAmount: parseFloat(form.sanctionedAmount) || undefined,
-        emiDate: form.emiDate.trim(),
+        emiDate: form.emiDate,
         emiMonthly: parseFloat(form.emiMonthly) || undefined,
         tenure: parseInt(form.tenure) || undefined,
-        emiPaid: parseInt(form.emiPaid) || undefined,
         interestRate: parseFloat(form.interestRate) || undefined,
         loanStatus: form.loanStatus,
         remarks: form.remarks.trim()
@@ -111,11 +109,11 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
                 <th className="px-3 py-2.5">Loan Type</th>
                 <th className="px-3 py-2.5">Loan Number</th>
                 <th className="px-3 py-2.5 text-right">Sanctioned Amount</th>
-                <th className="px-3 py-2.5">EMI Date</th>
                 <th className="px-3 py-2.5 text-right">EMI Monthly</th>
                 <th className="px-3 py-2.5 text-right">Tenure</th>
                 <th className="px-3 py-2.5 text-right">EMI Paid</th>
                 <th className="px-3 py-2.5 text-right">Balance EMI</th>
+                <th className="px-3 py-2.5">Due Date</th>
                 <th className="px-3 py-2.5 text-right">Interest Rate</th>
                 <th className="px-3 py-2.5">Loan Status</th>
                 <th className="px-3 py-2.5 max-w-[160px]">Remarks</th>
@@ -126,19 +124,21 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
               {filtered.length === 0 ? (
                 <tr><td colSpan={14} className="text-center py-10 text-slate-400">No business loan records found.</td></tr>
               ) : filtered.map((loan, i) => {
-                const bal = balanceEmi(loan);
+                const emiPaid = computeMonthsCompleted(loan.emiDate, loan.tenure);
+                const bal = loan.tenure != null ? loan.tenure - emiPaid : null;
+                const dueDate = computeDueDate(loan.emiDate, emiPaid, loan.tenure);
                 return (
                   <tr key={loan.id} className="hover:bg-slate-50">
                     <td className="px-3 py-2.5 font-mono text-slate-500">{i + 1}</td>
                     <td className="px-3 py-2.5 font-semibold text-slate-700 whitespace-nowrap">{loan.financer}</td>
                     <td className="px-3 py-2.5 text-slate-600 whitespace-nowrap">{loan.loanType || '-'}</td>
                     <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{loan.loanNumber}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-slate-700">{loan.sanctionedAmount ? `Rs. ${loan.sanctionedAmount.toLocaleString('en-IN')}` : '-'}</td>
-                    <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{loan.emiDate || '-'}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-slate-700">{loan.emiMonthly ? `Rs. ${loan.emiMonthly.toLocaleString('en-IN')}` : '-'}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-700">{loan.sanctionedAmount ? loan.sanctionedAmount.toLocaleString('en-IN') : '-'}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-700">{loan.emiMonthly ? loan.emiMonthly.toLocaleString('en-IN') : '-'}</td>
                     <td className="px-3 py-2.5 text-right font-mono text-slate-600">{loan.tenure ?? '-'}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-slate-600">{loan.emiPaid ?? '-'}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-600">{emiPaid}</td>
                     <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-700">{bal ?? '-'}</td>
+                    <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{dueDate}</td>
                     <td className="px-3 py-2.5 text-right font-mono text-slate-600">{loan.interestRate != null ? `${loan.interestRate}%` : '-'}</td>
                     <td className="px-3 py-2.5">
                       <span className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] ${loan.loanStatus === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
@@ -197,8 +197,8 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-semibold text-slate-500 mb-1">EMI Date <span className="text-slate-400 font-normal">(DD-MM-YYYY or day of month)</span></label>
-                    <input value={form.emiDate} onChange={e => setForm({ ...form, emiDate: e.target.value })} placeholder="e.g. 05 or 05-08-2026" autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                    <label className="block font-semibold text-slate-500 mb-1">EMI Date</label>
+                    <DateInput value={form.emiDate} onChange={e => setForm({ ...form, emiDate: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                   </div>
                   <div>
                     <label className="block font-semibold text-slate-500 mb-1">EMI Monthly</label>
@@ -206,21 +206,21 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-semibold text-slate-500 mb-1">Tenure (months)</label>
-                    <input type="number" value={form.tenure} onChange={e => setForm({ ...form, tenure: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-500 mb-1">EMI Paid</label>
-                    <input type="number" value={form.emiPaid} onChange={e => setForm({ ...form, emiPaid: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
-                  </div>
+                <div>
+                  <label className="block font-semibold text-slate-500 mb-1">Tenure (months)</label>
+                  <input type="number" value={form.tenure} onChange={e => setForm({ ...form, tenure: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
 
-                {form.tenure && form.emiPaid && (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2">
-                    <p className="text-emerald-600 uppercase text-[9px] font-bold">Balance EMI (auto = Tenure &minus; EMI Paid)</p>
-                    <p className="font-black text-emerald-700">{(parseInt(form.tenure) || 0) - (parseInt(form.emiPaid) || 0)}</p>
+                {form.emiDate && (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2 grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-emerald-600 uppercase text-[9px] font-bold">EMI Paid (auto)</p>
+                      <p className="font-black text-emerald-700">{computeMonthsCompleted(form.emiDate, parseInt(form.tenure) || undefined)}</p>
+                    </div>
+                    <div>
+                      <p className="text-emerald-600 uppercase text-[9px] font-bold">Due Date (auto)</p>
+                      <p className="font-black text-emerald-700">{computeDueDate(form.emiDate, computeMonthsCompleted(form.emiDate, parseInt(form.tenure) || undefined), parseInt(form.tenure) || undefined)}</p>
+                    </div>
                   </div>
                 )}
 
