@@ -277,9 +277,11 @@ const initialWarehouseEntries: WarehouseEntry[] = [
 export async function seedDatabase() {
   try {
     const existingUsers = await db.select().from(users);
-    if (existingUsers.length === 0) {
-      console.log('Seeding default users...');
-      for (const u of DEFAULT_USERS) {
+    const existingUsernames = new Set(existingUsers.map(u => u.username));
+    const missingUsers = DEFAULT_USERS.filter(u => !existingUsernames.has(u.username));
+    if (missingUsers.length > 0) {
+      console.log(`Seeding ${missingUsers.length} new default user(s)...`);
+      for (const u of missingUsers) {
         await db.insert(users).values(u);
       }
     }
