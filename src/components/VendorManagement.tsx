@@ -151,13 +151,17 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
     }
   };
 
+  // Sends the full vendor object (not just { active }) - the PUT route
+  // saves whatever it receives as the complete record, so a partial payload
+  // here would wipe every other field (name, code, documents, etc.) from
+  // this vendor's stored data.
   const toggleActive = async (vendor: Vendor) => {
-    await onUpdateVendor(vendor.id, { active: !isVendorActive(vendor) });
+    await onUpdateVendor(vendor.id, { ...vendor, active: !isVendorActive(vendor) });
   };
 
   const filtered = vendors.filter(v =>
-    v.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    v.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (v.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (v.code || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     (v.vehicleNumbers || []).some(n => n.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 

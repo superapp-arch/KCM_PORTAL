@@ -1603,7 +1603,11 @@ async function startServer() {
 
   app.put('/api/vendors/:id', requireVendorManagementAccess, async (req, res) => {
     try {
-      const result = await saveVendor({ ...req.body, id: req.params.id });
+      // Merges with the existing record - saveVendor overwrites the whole
+      // stored row with whatever it's given, so a partial body (e.g. just
+      // { active }) would otherwise wipe every other field.
+      const existing = (await getVendors()).find(v => v.id === req.params.id);
+      const result = await saveVendor({ ...existing, ...req.body, id: req.params.id });
       res.json({ success: true, data: result });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
