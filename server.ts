@@ -1662,12 +1662,12 @@ async function startServer() {
   app.post('/api/drivers/attendance/mark', async (req, res) => {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
-      const { driverId, date, status } = req.body;
+      const { driverId, date, status, remarks } = req.body;
       if (!(await assertDriverAccessible(driverId, sessionUser))) {
         return res.status(403).json({ success: false, error: 'You cannot mark attendance for this driver.' });
       }
       const id = `${driverId}-${date}`;
-      const record: DriverAttendance = { id, driverId, date, status };
+      const record: DriverAttendance = { id, driverId, date, status, remarks };
       await saveDriverAttendanceRecord(record);
       res.json({ success: true, data: record });
     } catch (err: any) {

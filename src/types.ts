@@ -484,6 +484,7 @@ export interface DriverAttendance {
   driverId: string;
   date: string; // YYYY-MM-DD
   status: 'Present' | 'Absent' | 'Leave';
+  remarks?: string;
 }
 
 

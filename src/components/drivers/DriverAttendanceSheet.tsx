@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import { DriverEmployee, DriverAttendance } from '../../types';
 import { authFetch } from '../../authFetch';
@@ -12,6 +13,12 @@ const CYCLE: { status: DriverAttendance['status']; label: string }[] = [
   { status: 'Present', label: 'P' },
   { status: 'Absent', label: 'A' },
   { status: 'Leave', label: 'L' },
+];
+
+const ALL_STATUSES: { status: DriverAttendance['status']; label: string }[] = [
+  { status: 'Present', label: 'Present' },
+  { status: 'Absent', label: 'Absent' },
+  { status: 'Leave', label: 'Leave' },
 ];
 
 const STATUS_STYLES: Record<DriverAttendance['status'], string> = {
@@ -46,6 +53,9 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
   const [attendance, setAttendance] = useState<DriverAttendance[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [summaryDriver, setSummaryDriver] = useState<DriverEmployee | null>(null);
+  const [popover, setPopover] = useState<{ driverId: string; day: number; top: number; left: number } | null>(null);
+  const [popoverStatus, setPopoverStatus] = useState<DriverAttendance['status']>('Present');
+  const [popoverRemarks, setPopoverRemarks] = useState('');
 
   const loadAttendance = () => authFetch('/api/drivers/attendance').then(r => r.json()).then(setAttendance).catch(() => {});
   useEffect(() => { loadAttendance(); }, []);
@@ -75,11 +85,11 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
     return monthAttendance.find(a => a.driverId === driverId && a.date === date) || null;
   };
 
-  const markCell = async (driverId: string, day: number, status: DriverAttendance['status']) => {
+  const markCell = async (driverId: string, day: number, status: DriverAttendance['status'], remarks?: string) => {
     const date = `${month}-${String(day).padStart(2, '0')}`;
     const res = await authFetch('/api/drivers/attendance/mark', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ driverId, date, status })
+      body: JSON.stringify({ driverId, date, status, remarks })
     });
     if (res.ok) {
       const { data } = await res.json();
@@ -91,7 +101,22 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
     const current = cellRecord(driverId, day);
     const idx = current ? CYCLE.findIndex(c => c.status === current.status) : -1;
     const next = CYCLE[(idx + 1) % CYCLE.length];
-    markCell(driverId, day, next.status);
+    markCell(driverId, day, next.status, current?.remarks);
+  };
+
+  const openPopover = (e: React.MouseEvent, driverId: string, day: number) => {
+    e.stopPropagation();
+    const current = cellRecord(driverId, day);
+    setPopoverStatus(current?.status || 'Present');
+    setPopoverRemarks(current?.remarks || '');
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setPopover({ driverId, day, top: rect.bottom + 4, left: rect.left });
+  };
+
+  const savePopover = async () => {
+    if (!popover) return;
+    await markCell(popover.driverId, popover.day, popoverStatus, popoverRemarks || undefined);
+    setPopover(null);
   };
 
   return (
@@ -145,10 +170,18 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
                     {Array.from({ length: totalDays }, (_, i) => i + 1).map(day => {
                       const record = cellRecord(driver.id, day);
                       return (
-                        <td key={day} className="p-0.5">
+                        <td key={day} className="p-0.5 relative group">
                           <button onClick={() => handleCellClick(driver.id, day)}
+                            title={record?.remarks || undefined}
                             className={`w-9 h-6 rounded text-[9px] font-bold border cursor-pointer ${record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}>
                             {record ? CYCLE.find(c => c.status === record.status)?.label : '-'}
+                          </button>
+                          <button
+                            onClick={e => openPopover(e, driver.id, day)}
+                            className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-slate-700 text-white text-[8px] opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer"
+                            title="More statuses & remarks"
+                          >
+                            &#8230;
                           </button>
                         </td>
                       );
@@ -166,6 +199,20 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
           </table>
         </div>
       </div>
+
+      {popover && createPortal(
+        <>
+          <div className="fixed inset-0 z-[99]" onClick={() => setPopover(null)} />
+          <div style={{ position: 'fixed', top: popover.top, left: popover.left }} className="z-[100] bg-white border border-slate-200 rounded-lg shadow-xl p-3 w-56 text-xs space-y-2">
+            <select value={popoverStatus} onChange={e => setPopoverStatus(e.target.value as DriverAttendance['status'])} className="w-full border border-slate-300 rounded-lg px-2 py-1.5">
+              {ALL_STATUSES.map(s => <option key={s.status} value={s.status}>{s.label}</option>)}
+            </select>
+            <input value={popoverRemarks} onChange={e => setPopoverRemarks(e.target.value)} placeholder="Remarks (optional)" autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+            <button onClick={savePopover} className="w-full bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white font-bold py-1.5 rounded-lg uppercase text-[10px] cursor-pointer">Save</button>
+          </div>
+        </>,
+        document.body
+      )}
 
       {summaryDriver && (
         <DriverAttendanceSummaryModal driver={summaryDriver} month={month} onClose={() => setSummaryDriver(null)} />
