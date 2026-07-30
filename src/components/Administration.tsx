@@ -944,8 +944,6 @@ export default function Administration({
               onAddVehicleMileage={onAddVehicleMileage}
               onUpdateVehicleMileage={onUpdateVehicleMileage}
               vehicleLoans={vehicleLoans}
-              onAddVehicleLoan={onAddVehicleLoan}
-              onUpdateVehicleLoan={onUpdateVehicleLoan}
             />
           )}
 
