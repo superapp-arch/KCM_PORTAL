@@ -172,9 +172,11 @@ export default function FuelManagement({
 
   // Vendor Name/Code/Vehicle all come from the Vendor Management registry
   // (vendorProfiles) - there is no separate "Manage Vendors" list anymore.
-  const matchedVendorProfile = vendorProfiles.find(
+  // Requires a non-empty vendorName so an empty/malformed vendor record
+  // (missing name) can never false-match the field's blank initial state.
+  const matchedVendorProfile = vendorName.trim() ? vendorProfiles.find(
     v => (v.name || '').trim().toLowerCase() === vendorName.trim().toLowerCase()
-  );
+  ) : undefined;
 
   // Vendor Code auto-fill based on the selected Vendor Name
   useEffect(() => {
@@ -185,7 +187,7 @@ export default function FuelManagement({
   // registered vehicle, fill it directly; if several, a picker is shown
   // below instead so the user chooses which one.
   useEffect(() => {
-    if (matchedVendorProfile && matchedVendorProfile.vehicleNumbers.length === 1) {
+    if (matchedVendorProfile && (matchedVendorProfile.vehicleNumbers || []).length === 1) {
       setVehicleNumber(matchedVendorProfile.vehicleNumbers[0]);
     }
   }, [matchedVendorProfile]);
@@ -979,7 +981,7 @@ export default function FuelManagement({
                       <datalist id="fuel-vehicles-datalist">
                         {vehicleList.map((v, i) => <option key={i} value={v} />)}
                       </datalist>
-                      {matchedVendorProfile && matchedVendorProfile.vehicleNumbers.length > 1 && (
+                      {matchedVendorProfile && (matchedVendorProfile.vehicleNumbers || []).length > 1 && (
                         <div className="mt-1.5">
                           <label className="block text-[9.5px] font-bold text-slate-500 uppercase mb-0.5">
                             {matchedVendorProfile.name} has multiple vehicles - pick one
