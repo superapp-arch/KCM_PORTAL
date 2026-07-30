@@ -150,6 +150,7 @@ export interface Vendor {
   id: string;
   name: string;
   code: string;
+  active?: boolean; // employee-toggled status; undefined/missing is treated as active
   client?: 'Swiggy' | 'Reliance'; // which client this vendor is contracted under
   vehicleNumbers: string[]; // at least one; a vendor may have multiple vehicles
   contactNumber: string; // exactly 10 digits
@@ -484,6 +485,51 @@ export interface DriverAttendance {
   driverId: string;
   date: string; // YYYY-MM-DD
   status: AttendanceStatusCode;
+  remarks?: string;
+}
+
+export type LoanStatus = 'Active' | 'Closed';
+export type NOCStatus = 'Received' | 'Not received';
+
+export const VEHICLE_LOAN_FINANCERS = [
+  'Axis Bank', 'Axis Bank-Citi', 'Free', 'HDFC Bank Ltd', 'ICICI Bank', 'Kotak Mahindra Bank', 'Sundaram Finance'
+];
+
+// One record per vehicle (id = Reg. No.), shared between the Loan Management
+// module's Vehicle Loan ledger and Fleet & Vehicles' EMI Details tab - both
+// read/write the same record so there's no duplicate entry. Balance EMI
+// (Tenure - Months Completed) is always computed live, never stored.
+export interface VehicleLoan {
+  id: string; // Reg. No.
+  ownership?: string;
+  regNo: string;
+  financer: string;
+  financeNumber?: string;
+  loanAmount?: number;
+  emiStartDate?: string; // YYYY-MM-DD
+  monthlyEmi?: number;
+  tenure?: number; // months
+  monthsCompleted?: number;
+  interest?: number; // %
+  loanStatus: LoanStatus;
+  remarks?: string; // e.g. closing month/year once Closed
+  nocStatus?: NOCStatus;
+  documents?: VehicleDocument[];
+}
+
+// Balance EMI (Tenure - EMI Paid) is always computed live, never stored.
+export interface BusinessLoan {
+  id: string;
+  financer: string;
+  loanType: string;
+  loanNumber: string;
+  sanctionedAmount?: number;
+  emiDate?: string;
+  emiMonthly?: number;
+  tenure?: number;
+  emiPaid?: number;
+  interestRate?: number; // %
+  loanStatus: LoanStatus;
   remarks?: string;
 }
 

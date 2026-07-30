@@ -18,7 +18,9 @@ import {
   FuelVendor,
   VehicleMileage,
   Vendor,
-  DriverEmployee
+  DriverEmployee,
+  VehicleLoan,
+  BusinessLoan
 } from './types';
 
 export default function App() {
@@ -42,6 +44,8 @@ export default function App() {
   const [vehicleMileages, setVehicleMileages] = useState<VehicleMileage[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [drivers, setDrivers] = useState<DriverEmployee[]>([]);
+  const [vehicleLoans, setVehicleLoans] = useState<VehicleLoan[]>([]);
+  const [businessLoans, setBusinessLoans] = useState<BusinessLoan[]>([]);
 
   // 1. Initial Session Handshake
   // Restores strictly from THIS browser's own stored token - never from a
@@ -95,7 +99,9 @@ export default function App() {
         fuelVendorsRes,
         vehicleMileagesRes,
         vendorsRes,
-        driversRes
+        driversRes,
+        vehicleLoansRes,
+        businessLoansRes
       ] = await Promise.all([
         fetch('/api/fleet'),
         authFetch('/api/fuel'),
@@ -110,7 +116,9 @@ export default function App() {
         authFetch('/api/fuel-vendors'),
         authFetch('/api/vehicle-mileage'),
         authFetch('/api/vendors'),
-        authFetch('/api/drivers/employees')
+        authFetch('/api/drivers/employees'),
+        authFetch('/api/vehicle-loans'),
+        authFetch('/api/business-loans')
       ]);
 
       if (fleetRes.ok) setVehicles(await fleetRes.json());
@@ -127,6 +135,8 @@ export default function App() {
       if (vehicleMileagesRes.ok) setVehicleMileages(await vehicleMileagesRes.json());
       if (vendorsRes.ok) setVendors(await vendorsRes.json());
       if (driversRes.ok) setDrivers(await driversRes.json());
+      if (vehicleLoansRes.ok) setVehicleLoans(await vehicleLoansRes.json());
+      if (businessLoansRes.ok) setBusinessLoans(await businessLoansRes.json());
     } catch (err) {
       console.error('Failed to populate core ledgers:', err);
     }
@@ -334,6 +344,92 @@ export default function App() {
       }
     } catch (err) {
       console.error('Error deleting driver:', err);
+    }
+  };
+
+  const handleAddVehicleLoan = async (loan: Omit<VehicleLoan, 'id'> & { id: string }) => {
+    try {
+      const res = await authFetch('/api/vehicle-loans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(loan)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error adding vehicle loan:', err);
+    }
+  };
+
+  const handleUpdateVehicleLoan = async (id: string, loan: Partial<VehicleLoan>) => {
+    try {
+      const res = await authFetch(`/api/vehicle-loans/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(loan)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error updating vehicle loan:', err);
+    }
+  };
+
+  const handleDeleteVehicleLoan = async (id: string) => {
+    try {
+      const res = await authFetch(`/api/vehicle-loans/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error deleting vehicle loan:', err);
+    }
+  };
+
+  const handleAddBusinessLoan = async (loan: Omit<BusinessLoan, 'id'>) => {
+    try {
+      const res = await authFetch('/api/business-loans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(loan)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error adding business loan:', err);
+    }
+  };
+
+  const handleUpdateBusinessLoan = async (id: string, loan: Partial<BusinessLoan>) => {
+    try {
+      const res = await authFetch(`/api/business-loans/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(loan)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error updating business loan:', err);
+    }
+  };
+
+  const handleDeleteBusinessLoan = async (id: string) => {
+    try {
+      const res = await authFetch(`/api/business-loans/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error deleting business loan:', err);
     }
   };
 
@@ -800,6 +896,14 @@ export default function App() {
         onAddDriver={handleAddDriver}
         onUpdateDriver={handleUpdateDriver}
         onDeleteDriver={handleDeleteDriver}
+        vehicleLoans={vehicleLoans}
+        onAddVehicleLoan={handleAddVehicleLoan}
+        onUpdateVehicleLoan={handleUpdateVehicleLoan}
+        onDeleteVehicleLoan={handleDeleteVehicleLoan}
+        businessLoans={businessLoans}
+        onAddBusinessLoan={handleAddBusinessLoan}
+        onUpdateBusinessLoan={handleUpdateBusinessLoan}
+        onDeleteBusinessLoan={handleDeleteBusinessLoan}
       />
     </>
   );

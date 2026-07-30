@@ -39,7 +39,9 @@ import {
   Vendor,
   DriverEmployee,
   DriverAttendance,
-  DriverLocationCategory
+  DriverLocationCategory,
+  VehicleLoan,
+  BusinessLoan
 } from './src/types.ts';
 import {
   seedDatabase,
@@ -115,7 +117,13 @@ import {
   deleteDriverEmployee,
   getDriverAttendance,
   saveDriverAttendanceRecord,
-  deleteDriverAttendanceRecord
+  deleteDriverAttendanceRecord,
+  getVehicleLoans,
+  saveVehicleLoan,
+  deleteVehicleLoan,
+  getBusinessLoans,
+  saveBusinessLoan,
+  deleteBusinessLoan
 } from './src/db/service.ts';
 
 // Parses "DD.MM.YYYY" or "YYYY-MM-DD" expiry strings used across fleet records.
@@ -297,6 +305,23 @@ function requireWarehouseAccess(req: express.Request, res: express.Response, nex
   }
   if (sessionUser.department !== 'super_admin') {
     return res.status(403).json({ error: 'You do not have access to Warehouse Details.' });
+  }
+  next();
+}
+
+// Loan Management (Vehicle Loan + Business Loan) is super-admin-only for now,
+// same as Warehouse Details - loan/financial data has no specified access
+// group, so it defaults to the strictest tier. This also gates the shared
+// VehicleLoan record surfaced in Fleet & Vehicles' EMI Details tab, so a
+// regular Fleet user (vehicle_manager, etc.) can see the tab but not read or
+// edit loan data through it unless they're also a super admin.
+function requireLoanAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (sessionUser.department !== 'super_admin') {
+    return res.status(403).json({ error: 'You do not have access to Loan Management.' });
   }
   next();
 }
@@ -1740,6 +1765,80 @@ async function startServer() {
       res.json({ success: true, data: await computeDriverMonthlyAttendanceSummary(driverId, month) });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Loan Management: Vehicle Loan (one record per vehicle, id = Reg. No.) and
+  // Business Loan - both super-admin-only (see requireLoanAccess).
+  app.use('/api/vehicle-loans', requireLoanAccess);
+
+  app.get('/api/vehicle-loans', async (req, res) => {
+    try {
+      res.json(await getVehicleLoans());
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/vehicle-loans', async (req, res) => {
+    try {
+      const result = await saveVehicleLoan(req.body as VehicleLoan);
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/vehicle-loans/:id', async (req, res) => {
+    try {
+      const result = await saveVehicleLoan({ ...req.body, id: req.params.id });
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/vehicle-loans/:id', async (req, res) => {
+    try {
+      res.json({ success: true, data: await deleteVehicleLoan(req.params.id) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.use('/api/business-loans', requireLoanAccess);
+
+  app.get('/api/business-loans', async (req, res) => {
+    try {
+      res.json(await getBusinessLoans());
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/business-loans', async (req, res) => {
+    try {
+      const result = await saveBusinessLoan(req.body as BusinessLoan);
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/business-loans/:id', async (req, res) => {
+    try {
+      const result = await saveBusinessLoan({ ...req.body, id: req.params.id });
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/business-loans/:id', async (req, res) => {
+    try {
+      res.json({ success: true, data: await deleteBusinessLoan(req.params.id) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 

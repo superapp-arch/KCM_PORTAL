@@ -24,7 +24,9 @@ import {
   vehicleMileage,
   vendors,
   driverEmployees,
-  driverAttendance
+  driverAttendance,
+  vehicleLoans,
+  businessLoans
 } from './schema.ts';
 import { eq, ne } from 'drizzle-orm';
 import { hashPassword, isHashed } from '../auth/password.ts';
@@ -53,7 +55,9 @@ import {
   VehicleMileage,
   Vendor,
   DriverEmployee,
-  DriverAttendance
+  DriverAttendance,
+  VehicleLoan,
+  BusinessLoan
 } from '../types.ts';
 
 // Default Users Seed
@@ -1366,6 +1370,84 @@ export async function deleteDriverAttendanceRecord(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteDriverAttendanceRecord:", error);
     throw new Error("Failed to delete driver attendance record.", { cause: error });
+  }
+}
+
+export async function getVehicleLoans(): Promise<VehicleLoan[]> {
+  try {
+    const rows = await db.select().from(vehicleLoans);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getVehicleLoans:", error);
+    throw new Error("Failed to retrieve vehicle loans.", { cause: error });
+  }
+}
+
+export async function saveVehicleLoan(loan: VehicleLoan) {
+  try {
+    const id = loan.id || loan.regNo || String(Date.now());
+    const complete = { ...loan, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(vehicleLoans).where(eq(vehicleLoans.id, id));
+    if (existing.length > 0) {
+      await db.update(vehicleLoans).set({ data: dataString }).where(eq(vehicleLoans.id, id));
+    } else {
+      await db.insert(vehicleLoans).values({ id, data: dataString });
+    }
+    return await getVehicleLoans();
+  } catch (error) {
+    console.error("Database action failed in saveVehicleLoan:", error);
+    throw new Error("Failed to save vehicle loan.", { cause: error });
+  }
+}
+
+export async function deleteVehicleLoan(id: string) {
+  try {
+    await db.delete(vehicleLoans).where(eq(vehicleLoans.id, id));
+    return await getVehicleLoans();
+  } catch (error) {
+    console.error("Database action failed in deleteVehicleLoan:", error);
+    throw new Error("Failed to delete vehicle loan.", { cause: error });
+  }
+}
+
+export async function getBusinessLoans(): Promise<BusinessLoan[]> {
+  try {
+    const rows = await db.select().from(businessLoans);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getBusinessLoans:", error);
+    throw new Error("Failed to retrieve business loans.", { cause: error });
+  }
+}
+
+export async function saveBusinessLoan(loan: BusinessLoan) {
+  try {
+    const id = loan.id || String(Date.now());
+    const complete = { ...loan, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(businessLoans).where(eq(businessLoans.id, id));
+    if (existing.length > 0) {
+      await db.update(businessLoans).set({ data: dataString }).where(eq(businessLoans.id, id));
+    } else {
+      await db.insert(businessLoans).values({ id, data: dataString });
+    }
+    return await getBusinessLoans();
+  } catch (error) {
+    console.error("Database action failed in saveBusinessLoan:", error);
+    throw new Error("Failed to save business loan.", { cause: error });
+  }
+}
+
+export async function deleteBusinessLoan(id: string) {
+  try {
+    await db.delete(businessLoans).where(eq(businessLoans.id, id));
+    return await getBusinessLoans();
+  } catch (error) {
+    console.error("Database action failed in deleteBusinessLoan:", error);
+    throw new Error("Failed to delete business loan.", { cause: error });
   }
 }
 

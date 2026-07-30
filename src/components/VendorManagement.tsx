@@ -3,6 +3,10 @@ import { Vendor, VehicleDocument } from '../types';
 import { Building2, Plus, Search, Edit2, Trash2, X, Car } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 
+// undefined/missing `active` is treated as active, matching Vehicle's
+// pre-existing active-status convention elsewhere in the app.
+const isVendorActive = (v: Vendor) => v.active !== false;
+
 interface VendorManagementProps {
   vendors: Vendor[];
   onAddVendor: (vendor: Omit<Vendor, 'id'>) => Promise<void>;
@@ -40,6 +44,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [form, setForm] = useState(emptyForm);
+  const [active, setActive] = useState(true);
   const [vehicleNumbers, setVehicleNumbers] = useState<string[]>([]);
   const [vehicleInput, setVehicleInput] = useState('');
   const [errors, setErrors] = useState<FormErrors>({});
@@ -51,6 +56,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
   const resetForm = () => {
     setEditingId(null);
     setForm(emptyForm);
+    setActive(true);
     setVehicleNumbers([]);
     setVehicleInput('');
     setErrors({});
@@ -70,6 +76,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
     });
     setVehicleNumbers(vendor.vehicleNumbers || []);
     setVehicleInput('');
+    setActive(isVendorActive(vendor));
     setErrors({});
     setAadharDocuments(vendor.aadharDocuments || []);
     setPanDocuments(vendor.panDocuments || []);
@@ -124,7 +131,8 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
         aadharDocuments,
         panDocuments,
         rcDocuments,
-        bankStatementDocuments
+        bankStatementDocuments,
+        active
       };
       if (editingId) {
         await onUpdateVendor(editingId, payload);
@@ -141,6 +149,10 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
     if (window.confirm(`Delete vendor "${vendor.name}"? This action is irreversible.`)) {
       await onDeleteVendor(vendor.id);
     }
+  };
+
+  const toggleActive = async (vendor: Vendor) => {
+    await onUpdateVendor(vendor.id, { active: !isVendorActive(vendor) });
   };
 
   const filtered = vendors.filter(v =>
@@ -196,12 +208,13 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
                 <th className="px-3 py-2.5">PAN</th>
                 <th className="px-3 py-2.5">Bank A/C</th>
                 <th className="px-3 py-2.5">IFSC</th>
+                <th className="px-3 py-2.5">Status</th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
-                <tr><td colSpan={10} className="text-center py-10 text-slate-400">No vendors found.</td></tr>
+                <tr><td colSpan={11} className="text-center py-10 text-slate-400">No vendors found.</td></tr>
               ) : filtered.map(v => (
                 <tr key={v.id} className="hover:bg-slate-50">
                   <td className="px-3 py-2.5 font-semibold text-slate-800">{v.name}</td>
@@ -227,6 +240,17 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
                   <td className="px-3 py-2.5 font-mono text-slate-500">{v.panNumber}</td>
                   <td className="px-3 py-2.5 font-mono text-slate-500">{v.bankAccountNumber}</td>
                   <td className="px-3 py-2.5 font-mono text-slate-500">{v.ifscCode}</td>
+                  <td className="px-3 py-2.5">
+                    <button
+                      onClick={() => toggleActive(v)}
+                      title="Click to toggle status"
+                      className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] cursor-pointer transition-colors ${
+                        isVendorActive(v) ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100' : 'bg-slate-100 text-slate-500 border-slate-300 hover:bg-slate-200'
+                      }`}
+                    >
+                      {isVendorActive(v) ? 'ACTIVE' : 'INACTIVE'}
+                    </button>
+                  </td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
                     <button onClick={() => startEdit(v)} className="p-1 text-slate-500 hover:text-indigo-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
                     <button onClick={() => handleDelete(v)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
@@ -276,6 +300,20 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
                     <option value="Reliance">Reliance</option>
                   </select>
                   {errors.client && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-500 mb-1">Status</label>
+                  <div className="flex gap-1.5 bg-slate-100 p-1 rounded-lg w-fit">
+                    <button type="button" onClick={() => setActive(true)}
+                      className={`px-3 py-1 rounded-md font-bold text-[10px] uppercase cursor-pointer transition-colors ${active ? 'bg-emerald-600 text-white' : 'text-slate-500 hover:bg-slate-200'}`}>
+                      Active
+                    </button>
+                    <button type="button" onClick={() => setActive(false)}
+                      className={`px-3 py-1 rounded-md font-bold text-[10px] uppercase cursor-pointer transition-colors ${!active ? 'bg-slate-600 text-white' : 'text-slate-500 hover:bg-slate-200'}`}>
+                      Inactive
+                    </button>
+                  </div>
                 </div>
 
                 <div>

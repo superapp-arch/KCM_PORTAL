@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx';
 import { motion } from 'motion/react';
-import { Vehicle, VehicleDocument, VehicleMileage } from '../types';
+import { Vehicle, VehicleDocument, VehicleMileage, VehicleLoan, LoanStatus, NOCStatus, VEHICLE_LOAN_FINANCERS } from '../types';
 import {
   Search,
   Filter,
@@ -30,9 +30,11 @@ import {
   ExternalLink,
   CheckCircle,
   AlertCircle,
-  HelpCircle
+  HelpCircle,
+  HandCoins
 } from 'lucide-react';
 import DateInput from './DateInput';
+import DocumentAttachment from './DocumentAttachment';
 
 interface FleetSheetProps {
   vehicles: Vehicle[];
@@ -46,6 +48,14 @@ interface FleetSheetProps {
   vehicleMileages: VehicleMileage[];
   onAddVehicleMileage: (entry: Omit<VehicleMileage, 'id'>) => Promise<void>;
   onUpdateVehicleMileage: (id: string, entry: Partial<VehicleMileage>) => Promise<void>;
+  // EMI Details tab (below) shares the same VehicleLoan record the Loan
+  // Management module's Vehicle Loan ledger edits - both read/write the same
+  // data so there's no duplicate entry. Restricted to super admins server-side
+  // (see requireLoanAccess in server.ts), so vehicleLoans may arrive empty for
+  // non-super-admin Fleet users even when a record exists.
+  vehicleLoans: VehicleLoan[];
+  onAddVehicleLoan: (loan: Omit<VehicleLoan, 'id'> & { id: string }) => Promise<void>;
+  onUpdateVehicleLoan: (id: string, loan: Partial<VehicleLoan>) => Promise<void>;
 }
 
 const VEHICLE_TYPES = [
@@ -85,7 +95,7 @@ const getExpiryAlertStatus = (dateStr?: string, minDays = 0, maxDays = 10): { is
   return { isAlert: diffDays >= minDays && diffDays <= maxDays, diffDays };
 };
 
-export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDeleteVehicle, vehicleMileages, onAddVehicleMileage, onUpdateVehicleMileage }: FleetSheetProps) {
+export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDeleteVehicle, vehicleMileages, onAddVehicleMileage, onUpdateVehicleMileage, vehicleLoans, onAddVehicleLoan, onUpdateVehicleLoan }: FleetSheetProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedType, setSelectedType] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -96,7 +106,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
   const [expandedRegNo, setExpandedRegNo] = useState<string | null>(null);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [isNewVehicle, setIsNewVehicle] = useState(false);
-  const [activeTab, setActiveTab] = useState<'general' | 'specs' | 'compliance' | 'insurance' | 'accident'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'specs' | 'compliance' | 'insurance' | 'accident' | 'emi'>('general');
   const [isUpdating, setIsUpdating] = useState(false);
 
   // Vehicle Document Management States
@@ -348,8 +358,20 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
   const [editForm, setEditForm] = useState<Vehicle | null>(null);
   const [actualMileageInput, setActualMileageInput] = useState('');
 
+  const emptyEmiForm = {
+    ownership: '', financer: VEHICLE_LOAN_FINANCERS[0], financeNumber: '', loanAmount: '',
+    emiStartDate: '', monthlyEmi: '', tenure: '', monthsCompleted: '', interest: '',
+    loanStatus: 'Active' as LoanStatus, remarks: '', nocStatus: 'Not received' as NOCStatus
+  };
+  const [emiForm, setEmiForm] = useState(emptyEmiForm);
+  const [emiDocuments, setEmiDocuments] = useState<VehicleDocument[]>([]);
+  const [emiSubmitting, setEmiSubmitting] = useState(false);
+
   const findVehicleMileage = (regNo: string) =>
     vehicleMileages.find(v => (v.vehicleNo || '').trim().toUpperCase() === regNo.trim().toUpperCase());
+
+  const findVehicleLoan = (regNo: string) =>
+    vehicleLoans.find(l => l.regNo.trim().toUpperCase() === regNo.trim().toUpperCase());
 
   const startEdit = (vehicle: Vehicle) => {
     setEditForm({ ...vehicle });
@@ -358,6 +380,22 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
     const regNo = vehicle['Reg. No.'] || vehicle.regNo || '';
     const existing = findVehicleMileage(regNo);
     setActualMileageInput(existing ? String(existing.mileage) : '');
+
+    const matchedLoan = findVehicleLoan(regNo);
+    if (matchedLoan) {
+      setEmiForm({
+        ownership: matchedLoan.ownership || '', financer: matchedLoan.financer || VEHICLE_LOAN_FINANCERS[0],
+        financeNumber: matchedLoan.financeNumber || '', loanAmount: matchedLoan.loanAmount != null ? String(matchedLoan.loanAmount) : '',
+        emiStartDate: matchedLoan.emiStartDate || '', monthlyEmi: matchedLoan.monthlyEmi != null ? String(matchedLoan.monthlyEmi) : '',
+        tenure: matchedLoan.tenure != null ? String(matchedLoan.tenure) : '', monthsCompleted: matchedLoan.monthsCompleted != null ? String(matchedLoan.monthsCompleted) : '',
+        interest: matchedLoan.interest != null ? String(matchedLoan.interest) : '', loanStatus: matchedLoan.loanStatus || 'Active',
+        remarks: matchedLoan.remarks || '', nocStatus: matchedLoan.nocStatus || 'Not received'
+      });
+      setEmiDocuments(matchedLoan.documents || []);
+    } else {
+      setEmiForm({ ...emptyEmiForm, ownership: vehicle.Ownership || vehicle.ownership || '' });
+      setEmiDocuments([]);
+    }
   };
 
   const startCreate = () => {
@@ -401,6 +439,8 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
     setIsNewVehicle(true);
     setActiveTab('general');
     setActualMileageInput('');
+    setEmiForm(emptyEmiForm);
+    setEmiDocuments([]);
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -437,6 +477,47 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
       console.error('Error saving vehicle:', err);
     } finally {
       setIsUpdating(false);
+    }
+  };
+
+  // EMI Details save is a separate action from the main vehicle Save button
+  // (unlike the Vehicle Mileage Master rating, which piggybacks on it) -
+  // Loan Management data is super-admin-only, so bundling it into the main
+  // save would silently 403 for other Fleet users editing everything else.
+  const handleSaveEmi = async () => {
+    const regNo = (editForm?.['Reg. No.'] || editForm?.regNo || '').trim().toUpperCase();
+    if (!regNo) return;
+    setEmiSubmitting(true);
+    try {
+      const payload: VehicleLoan = {
+        id: regNo,
+        regNo,
+        ownership: emiForm.ownership.trim(),
+        financer: emiForm.financer,
+        financeNumber: emiForm.financeNumber.trim(),
+        loanAmount: parseFloat(emiForm.loanAmount) || undefined,
+        emiStartDate: emiForm.emiStartDate,
+        monthlyEmi: parseFloat(emiForm.monthlyEmi) || undefined,
+        tenure: parseInt(emiForm.tenure) || undefined,
+        monthsCompleted: parseInt(emiForm.monthsCompleted) || undefined,
+        interest: parseFloat(emiForm.interest) || undefined,
+        loanStatus: emiForm.loanStatus,
+        remarks: emiForm.remarks.trim(),
+        nocStatus: emiForm.nocStatus,
+        documents: emiDocuments
+      };
+      const existing = findVehicleLoan(regNo);
+      if (existing) {
+        await onUpdateVehicleLoan(existing.id, payload);
+      } else {
+        await onAddVehicleLoan(payload);
+      }
+      triggerNotif('EMI details saved successfully!', 'success');
+    } catch (err) {
+      console.error('Error saving EMI details:', err);
+      triggerNotif('Failed to save EMI details. You may not have access to Loan Management.', 'error');
+    } finally {
+      setEmiSubmitting(false);
     }
   };
 
@@ -1283,7 +1364,8 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                 { id: 'specs', label: 'Technical Spec', icon: Activity },
                 { id: 'compliance', label: 'Compliance & Permits', icon: FileCheck },
                 { id: 'insurance', label: 'Insurance Portfolio', icon: Shield },
-                { id: 'accident', label: 'Incidents & Claims', icon: AlertTriangle }
+                { id: 'accident', label: 'Incidents & Claims', icon: AlertTriangle },
+                { id: 'emi', label: 'EMI Details', icon: HandCoins }
               ].map(tab => (
                 <button
                   key={tab.id}
@@ -1744,6 +1826,124 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                         placeholder="Describe chronological event details, damage metrics, and towing status..."
                       />
                     </div>
+                  </div>
+                )}
+
+                {/* TAB 6: EMI DETAILS - shares the same VehicleLoan record the
+                    Loan Management module's Vehicle Loan tab edits (id = Reg.
+                    No.), so both surfaces stay in sync with no duplicate entry. */}
+                {activeTab === 'emi' && (
+                  <div className="space-y-4">
+                    {isNewVehicle ? (
+                      <p className="text-xs text-slate-400 italic">Save this vehicle first, then add its EMI details.</p>
+                    ) : (
+                      <>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Ownership</label>
+                            <input type="text" value={emiForm.ownership} onChange={(e) => setEmiForm({ ...emiForm, ownership: e.target.value })}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Financer</label>
+                            <select value={emiForm.financer} onChange={(e) => setEmiForm({ ...emiForm, financer: e.target.value })}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800">
+                              {VEHICLE_LOAN_FINANCERS.map(f => <option key={f} value={f}>{f}</option>)}
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Finance Number</label>
+                            <input type="text" value={emiForm.financeNumber} onChange={(e) => setEmiForm({ ...emiForm, financeNumber: e.target.value })}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-mono text-slate-800" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Loan Amount</label>
+                            <input type="number" step="0.01" value={emiForm.loanAmount} onChange={(e) => setEmiForm({ ...emiForm, loanAmount: e.target.value })}
+                              className="no-spinner w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-mono text-slate-800" />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">EMI Start Date</label>
+                            <DateInput value={emiForm.emiStartDate} onChange={(e) => setEmiForm({ ...emiForm, emiStartDate: e.target.value })}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-mono text-slate-800" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Monthly EMI</label>
+                            <input type="number" step="0.01" value={emiForm.monthlyEmi} onChange={(e) => setEmiForm({ ...emiForm, monthlyEmi: e.target.value })}
+                              className="no-spinner w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-mono text-slate-800" />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Tenure (months)</label>
+                            <input type="number" value={emiForm.tenure} onChange={(e) => setEmiForm({ ...emiForm, tenure: e.target.value })}
+                              className="no-spinner w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-mono text-slate-800" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Months Completed</label>
+                            <input type="number" value={emiForm.monthsCompleted} onChange={(e) => setEmiForm({ ...emiForm, monthsCompleted: e.target.value })}
+                              className="no-spinner w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-mono text-slate-800" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Interest (%)</label>
+                            <input type="number" step="0.01" value={emiForm.interest} onChange={(e) => setEmiForm({ ...emiForm, interest: e.target.value })}
+                              className="no-spinner w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-mono text-slate-800" />
+                          </div>
+                        </div>
+
+                        {emiForm.tenure && emiForm.monthsCompleted && (
+                          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2.5">
+                            <p className="text-emerald-600 uppercase text-[9px] font-bold">Balance EMI (auto = Tenure &minus; Months Completed)</p>
+                            <p className="font-black text-emerald-700 text-sm">{(parseInt(emiForm.tenure) || 0) - (parseInt(emiForm.monthsCompleted) || 0)}</p>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Loan Status</label>
+                            <select value={emiForm.loanStatus} onChange={(e) => setEmiForm({ ...emiForm, loanStatus: e.target.value as LoanStatus })}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800">
+                              <option value="Active">Active</option>
+                              <option value="Closed">Closed</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">NOC Status</label>
+                            <select value={emiForm.nocStatus} onChange={(e) => setEmiForm({ ...emiForm, nocStatus: e.target.value as NOCStatus })}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800">
+                              <option value="Not received">Not received</option>
+                              <option value="Received">Received</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Remarks <span className="normal-case font-normal text-slate-400">(e.g. closing month/year)</span></label>
+                          <textarea value={emiForm.remarks} onChange={(e) => setEmiForm({ ...emiForm, remarks: e.target.value })}
+                            className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 h-16" />
+                        </div>
+
+                        <DocumentAttachment documents={emiDocuments} onChange={setEmiDocuments} label="Attach Loan Documents" />
+
+                        <div className="flex justify-end pt-2">
+                          <button
+                            type="button"
+                            onClick={handleSaveEmi}
+                            disabled={emiSubmitting}
+                            className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                          >
+                            <HandCoins className="w-3.5 h-3.5" />
+                            {emiSubmitting ? 'Saving...' : 'Save EMI Details'}
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
 

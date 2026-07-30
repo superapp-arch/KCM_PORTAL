@@ -15,7 +15,9 @@ import {
   FuelVendor,
   VehicleMileage,
   Vendor,
-  DriverEmployee
+  DriverEmployee,
+  VehicleLoan,
+  BusinessLoan
 } from '../types';
 import FleetSheet from './FleetSheet';
 import FuelManagement from './FuelManagement';
@@ -28,6 +30,7 @@ import WarehouseDetails from './WarehouseDetails';
 import MileageReportModule from './MileageReport';
 import VendorManagement from './VendorManagement';
 import DriverDetails from './DriverDetails';
+import LoanManagement from './LoanManagement';
 import kcmLogo from '../assets/images/logo.png';
 import Watermark from './Watermark';
 import companyTruck from '../assets/images/kcm_vehicle_cutout.png';
@@ -35,7 +38,7 @@ import {
   LogOut, ShieldAlert, FileSpreadsheet, Fuel, FileText, Landmark,
   Settings, DollarSign, Contact, Bell, Mail, RefreshCw, CheckCircle, Clock,
   KeyRound, Cpu, Terminal, Copy, Check, Eye, EyeOff, Warehouse, Gauge, X,
-  Truck, Building2
+  Truck, Building2, HandCoins
 } from 'lucide-react';
 
 // Driver Details module gate - mirrors server.ts's DRIVER_LOCATION_SCOPES
@@ -125,6 +128,14 @@ interface AdministrationProps {
   onAddDriver: (driver: Omit<DriverEmployee, 'id'> & { id: string }) => Promise<void>;
   onUpdateDriver: (id: string, driver: Partial<DriverEmployee>) => Promise<void>;
   onDeleteDriver: (id: string) => Promise<void>;
+  vehicleLoans: VehicleLoan[];
+  onAddVehicleLoan: (loan: Omit<VehicleLoan, 'id'> & { id: string }) => Promise<void>;
+  onUpdateVehicleLoan: (id: string, loan: Partial<VehicleLoan>) => Promise<void>;
+  onDeleteVehicleLoan: (id: string) => Promise<void>;
+  businessLoans: BusinessLoan[];
+  onAddBusinessLoan: (loan: Omit<BusinessLoan, 'id'>) => Promise<void>;
+  onUpdateBusinessLoan: (id: string, loan: Partial<BusinessLoan>) => Promise<void>;
+  onDeleteBusinessLoan: (id: string) => Promise<void>;
 }
 
 export default function Administration({
@@ -184,7 +195,15 @@ export default function Administration({
   drivers,
   onAddDriver,
   onUpdateDriver,
-  onDeleteDriver
+  onDeleteDriver,
+  vehicleLoans,
+  onAddVehicleLoan,
+  onUpdateVehicleLoan,
+  onDeleteVehicleLoan,
+  businessLoans,
+  onAddBusinessLoan,
+  onUpdateBusinessLoan,
+  onDeleteBusinessLoan
 }: AdministrationProps) {
   
   // Tab Management
@@ -287,7 +306,7 @@ export default function Administration({
     if (user.department === 'super_admin') return true;
     // Warehouse Details is super-admin-only for now; may open up to other roles later.
     if ((tabName === 'fuel' || tabName === 'mileage') && (user.email === 'chandanreddy@kcmlogistics.in' || user.email === 'praveenkumar@kcmlogistics.in')) return true;
-    if (tabName === 'fleet' && (user.department === 'vehicle_manager' || user.email === 'bhagya@kcmlogistics.in')) return true;
+    if (tabName === 'fleet' && (user.department === 'vehicle_manager' || user.email === 'bhagya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in')) return true;
     if (tabName === 'billing' && (user.department === 'billing' || user.email === 'bhagya@kcmlogistics.in')) return true;
     if (tabName === 'pettycash' && user.department === 'petty_cash') return true;
     if (tabName === 'maintenance' && user.department === 'maintenance') return true;
@@ -430,6 +449,20 @@ export default function Administration({
             >
               <Truck className="w-4 h-4 shrink-0 text-pink-400" />
               Driver Details
+            </button>
+          )}
+
+          {hasAccess('loans') && (
+            <button
+              onClick={() => setActiveTab('loans')}
+              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
+                activeTab === 'loans'
+                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
+                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <HandCoins className="w-4 h-4 shrink-0 text-emerald-400" />
+              Loan Management
             </button>
           )}
 
@@ -910,6 +943,9 @@ export default function Administration({
               vehicleMileages={vehicleMileages}
               onAddVehicleMileage={onAddVehicleMileage}
               onUpdateVehicleMileage={onUpdateVehicleMileage}
+              vehicleLoans={vehicleLoans}
+              onAddVehicleLoan={onAddVehicleLoan}
+              onUpdateVehicleLoan={onUpdateVehicleLoan}
             />
           )}
 
@@ -988,6 +1024,20 @@ export default function Administration({
               onAddDriver={onAddDriver}
               onUpdateDriver={onUpdateDriver}
               onDeleteDriver={onDeleteDriver}
+            />
+          )}
+
+          {activeTab === 'loans' && hasAccess('loans') && (
+            <LoanManagement
+              vehicles={vehicles}
+              vehicleLoans={vehicleLoans}
+              onAddVehicleLoan={onAddVehicleLoan}
+              onUpdateVehicleLoan={onUpdateVehicleLoan}
+              onDeleteVehicleLoan={onDeleteVehicleLoan}
+              businessLoans={businessLoans}
+              onAddBusinessLoan={onAddBusinessLoan}
+              onUpdateBusinessLoan={onUpdateBusinessLoan}
+              onDeleteBusinessLoan={onDeleteBusinessLoan}
             />
           )}
 

@@ -163,4 +163,14 @@ export const driverAttendance = pgTable('driver_attendance', {
   data: text('data').notNull(), // JSON string representing the full DriverAttendance object
 });
 
+export const vehicleLoans = pgTable('vehicle_loans', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full VehicleLoan object
+});
+
+export const businessLoans = pgTable('business_loans', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full BusinessLoan object
+});
+
 
