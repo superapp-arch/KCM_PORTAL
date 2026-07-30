@@ -297,6 +297,16 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
     return c;
   };
 
+  // The Category select's options are stored in their display case (e.g.
+  // 'Hybrid', 'Reefer'), but normalizeCategory lowercases everything for
+  // filtering. Using the lowercased value directly as the select's `value`
+  // never matched any <option>, so the browser silently fell back to the
+  // first option ('Dry') instead of showing the vehicle's actual category.
+  const matchCategoryOption = (cat: string | undefined) => {
+    const norm = normalizeCategory(cat);
+    return VEHICLE_CATEGORIES.find(c => normalizeCategory(c) === norm) || VEHICLE_CATEGORIES[0];
+  };
+
   const normalizeOwnership = (own: string | undefined) => {
     const o = String(own || '').toUpperCase().trim();
     if (o.includes('KCM SUPPLY')) return 'KCM SUPPLY';
@@ -1376,7 +1386,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                         Container Category
                       </label>
                       <select
-                        value={normalizeCategory(editForm.Category || editForm.category || 'dry')}
+                        value={matchCategoryOption(editForm.Category || editForm.category)}
                         onChange={(e) => setEditForm({ ...editForm, Category: e.target.value, category: e.target.value })}
                         className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 focus:ring-1 focus:ring-teal-500 capitalize"
                       >

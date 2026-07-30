@@ -398,7 +398,7 @@ export default function MileageReportModule({
       'Diesel Amount': r.dieselAmount,
       'Mileage': r.mileage,
       'Cost per KM': r.costPerKm || 0,
-      'Actual Mileage': r.actualMileage || 0,
+      'Fixed Mileage': r.actualMileage || 0,
       'Difference (Litres)': r.difference ?? '',
       'Extra Fuel': r.extraFuel || 0,
       'Rate per Ltr (new)': r.ratePerLitreNew || 0,
@@ -559,7 +559,7 @@ export default function MileageReportModule({
                 <th className="px-3 py-2.5 text-right text-teal-400">Diesel Amount</th>
                 <th className="px-3 py-2.5 text-right text-pink-400">Mileage</th>
                 <th className="px-3 py-2.5 text-right text-amber-400">Cost/KM</th>
-                <th className="px-3 py-2.5 text-right text-purple-400">Actual Mileage</th>
+                <th className="px-3 py-2.5 text-right text-purple-400">Fixed Mileage</th>
                 <th className="px-3 py-2.5 text-right">Difference (L)</th>
                 <th className="px-3 py-2.5 text-right">Extra Fuel</th>
                 <th className="px-3 py-2.5 text-right">Rate/Ltr (new)</th>
@@ -918,7 +918,7 @@ export default function MileageReportModule({
                     </div>
                     <div>
                       <span className="text-[8.5px] text-slate-400 font-bold uppercase flex items-center gap-1">
-                        <HelpCircle className="w-2.5 h-2.5 text-purple-500" /> Actual Mileage (fixed)
+                        <HelpCircle className="w-2.5 h-2.5 text-purple-500" /> Fixed Mileage
                       </span>
                       <span className="text-xs font-black text-purple-700">{actualMileage} KM/L</span>
                     </div>

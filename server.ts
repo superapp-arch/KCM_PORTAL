@@ -340,8 +340,8 @@ function canModifyEntryRow(row: { enteredBy?: string } | undefined, sessionUser?
 // Driver Details is location-scoped rather than a single fixed access group -
 // each regional handler only sees/manages drivers in their assigned
 // location(s); Super Admins see every location. Unassigned categories (HSK
-// RIL F&V Drivers, Walke's & Parking Drivers, Cold Star, Swiggy DHL, KCM
-// Service Station) stay Super-Admin-only since nobody is scoped to them yet.
+// RIL F&V Drivers, Walkes & Parking Drivers HYD, Cold Star BLR, Swiggy DHL,
+// KCM Service Station) stay Super-Admin-only since nobody is scoped to them yet.
 const DRIVER_LOCATION_SCOPES: Record<string, DriverLocationCategory[]> = {
   'rajeshwar@kcmlogistics.in': ['Hyd Swiggy', 'Swiggy - Vizag Driver'],
   'nagaraju.linga@kcmlogistics.in': ['Hyd Swiggy', 'Swiggy - Vizag Driver'],

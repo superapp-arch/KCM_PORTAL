@@ -41,7 +41,8 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
     pettyCashAdvance: driver?.pettyCashAdvance != null ? String(driver.pettyCashAdvance) : '',
     loanDeduction: driver?.loanDeduction != null ? String(driver.loanDeduction) : '',
     recoveryAmount: driver?.recoveryAmount != null ? String(driver.recoveryAmount) : '',
-    driverWelfare: driver?.driverWelfare != null ? String(driver.driverWelfare) : ''
+    driverWelfare: driver?.driverWelfare != null ? String(driver.driverWelfare) : '',
+    bata: driver?.bata != null ? String(driver.bata) : ''
   });
 
   // Attendance-derived stat cards, pulled live so they update as attendance is
@@ -87,6 +88,7 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
         loanDeduction: num(salaryForm.loanDeduction) || undefined,
         recoveryAmount: num(salaryForm.recoveryAmount) || undefined,
         driverWelfare: num(salaryForm.driverWelfare) || undefined,
+        bata: num(salaryForm.bata) || undefined,
         lopAmount: parseFloat(lopAmount.toFixed(2)) || undefined
       };
       if (isEditing) {
@@ -228,6 +230,10 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
                   <div>
                     <label className="block text-slate-400 mb-0.5">Driver Welfare</label>
                     <input type="number" value={salaryForm.driverWelfare} onChange={e => setSalaryForm({ ...salaryForm, driverWelfare: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-0.5">BATA</label>
+                    <input type="number" value={salaryForm.bata} onChange={e => setSalaryForm({ ...salaryForm, bata: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                   </div>
                 </div>
                 <div className="mt-2 pt-2 border-t border-slate-100">

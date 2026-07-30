@@ -142,8 +142,10 @@ export default function FuelManagement({
   const [remarks, setRemarks] = useState('');
   const [requestedBy, setRequestedBy] = useState('');
   const [rqId, setRqId] = useState('');
-  const [paidAmount, setPaidAmount] = useState('');
   const [entryDocs, setEntryDocs] = useState<VehicleDocument[]>([]);
+
+  // Bunk Summary panel (below the Fuel Entry ledger): Till Date vs This Month
+  const [bunkSummaryPeriod, setBunkSummaryPeriod] = useState<'all' | 'month'>('all');
 
   const triggerNotif = (msg: string) => {
     setNotif(msg);
@@ -236,7 +238,6 @@ export default function FuelManagement({
     setRemarks('');
     setRequestedBy('');
     setRqId('');
-    setPaidAmount('');
     setEntryDocs([]);
     setShowSidebar(false);
   };
@@ -260,7 +261,6 @@ export default function FuelManagement({
     setRemarks(log.remarks || '');
     setRequestedBy(log.requestedBy || '');
     setRqId(log.rqId || '');
-    setPaidAmount(log.paidAmount != null ? String(log.paidAmount) : '');
     setEntryDocs(log.documents || []);
     setShowSidebar(true);
   };
@@ -298,7 +298,6 @@ export default function FuelManagement({
         remarks: remarks.trim(),
         requestedBy: requestedBy.trim(),
         rqId: rqId.trim(),
-        paidAmount: parseFloat(paidAmount) || 0,
         documents: entryDocs
       };
 
@@ -346,43 +345,12 @@ export default function FuelManagement({
   // "Location Bunk Diesel Summary" naming.
   const bunkLocationKey = (l: { location?: string; bunkName?: string }) => `${l.location || ''}|||${l.bunkName || ''}`;
 
-  // Computes each entry's running Pending Amount balance: partitioned by
-  // (Location, Bunk Name), ordered by date (entry number as tiebreaker) -
-  // previous pending + this entry's amount - this entry's paidAmount.
-  // Applied to the full ledger for on-screen display, or to a
-  // period/bunk-filtered subset for the "Download Fuel Report" export
-  // (matching the reference spreadsheet, where each bunk's monthly sheet
-  // restarts its running balance from 0).
-  const computePendingAmounts = (rows: FuelLog[]): Map<string, number> => {
-    const result = new Map<string, number>();
-    const grouped = new Map<string, FuelLog[]>();
-    rows.forEach(r => {
-      const key = bunkLocationKey(r);
-      if (!grouped.has(key)) grouped.set(key, []);
-      grouped.get(key)!.push(r);
-    });
-    grouped.forEach(groupRows => {
-      const sorted = [...groupRows].sort((a, b) => a.date === b.date ? (a.entryNumber || 0) - (b.entryNumber || 0) : a.date.localeCompare(b.date));
-      let running = 0;
-      sorted.forEach(r => {
-        running = parseFloat((running + (r.amount || 0) - (r.paidAmount || 0)).toFixed(2));
-        result.set(r.id, running);
-      });
-    });
-    return result;
-  };
-
-  // On-screen ledger's Pending Amount running balance, over the full (all
-  // time, all bunks/locations) ledger - independent of the search filter.
-  const pendingByLogId = computePendingAmounts(logs);
-
   // Maps fuel log rows to the flat shape used for the "Download Fuel Report"
   // Excel export, matching the reference bunk-wise diesel summary format:
   // Date, Location, Bunk Name, Vehicle Number, OIL, Indent No, Ltrs, Rate,
-  // Amt, Client, (blank), Vendor Code, Vendor Name, Remarks, Paid Amount,
-  // Pending Amount - Location/Bunk Name are included on every download.
+  // Amt, Client, (blank), Vendor Code, Vendor Name, Remarks - Location/Bunk
+  // Name are included on every download.
   const toFuelSheetRows = (rows: FuelLog[]) => {
-    const pendingMap = computePendingAmounts(rows);
     return rows.map(l => ({
       'Date': l.date,
       'Location': l.location,
@@ -397,9 +365,7 @@ export default function FuelManagement({
       ' ': '',
       'Vendor Code': l.vendorCode || '',
       'Vendor Name': l.vendorName || '',
-      'Remarks': l.remarks || '',
-      'Paid Amount': l.paidAmount || '',
-      'Pending Amount': pendingMap.get(l.id) ?? ''
+      'Remarks': l.remarks || ''
     }));
   };
 
@@ -460,7 +426,7 @@ export default function FuelManagement({
       const summaryRow = {
         'Date': '', 'Location': '', 'Bunk Name': '', 'Vehicle Number': 'TOTAL', 'OIL': '', 'Indent No': '',
         'Ltrs': totalLitres, 'Rate': '', 'Amt': totalAmount,
-        'Client': '', ' ': '', 'Vendor Code': '', 'Vendor Name': '', 'Remarks': '', 'Paid Amount': '', 'Pending Amount': ''
+        'Client': '', ' ': '', 'Vendor Code': '', 'Vendor Name': '', 'Remarks': ''
       };
       const sheetName = toSheetName(groupLogs[0].location, groupLogs[0].bunkName, usedSheetNames);
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...toFuelSheetRows(groupLogs), summaryRow]), sheetName);
@@ -471,6 +437,49 @@ export default function FuelManagement({
     XLSX.writeFile(workbook, `KCM_Fuel_Entries_${periodLabel}_${bunkLabel}_${downloadDate}.xlsx`);
     triggerNotif('Fuel entries report downloaded successfully!');
   };
+
+  // Bunk Summary panel download: every entry for one (Location, Bunk Name)
+  // pair, scoped to "Till Date" (all-time) or "This Month", with a TOTAL row.
+  const handleDownloadBunkSummary = (location: string, bunkNameVal: string) => {
+    const nowMonth = new Date().toISOString().slice(0, 7);
+    const groupLogs = logs.filter(l =>
+      l.location === location && l.bunkName === bunkNameVal &&
+      (bunkSummaryPeriod === 'all' || l.date.slice(0, 7) === nowMonth)
+    );
+    if (groupLogs.length === 0) {
+      triggerNotif('No fuel entries found for this bunk in the selected period.');
+      return;
+    }
+    const totalLitres = groupLogs.reduce((s, l) => s + (l.ltrs || 0), 0);
+    const totalAmount = groupLogs.reduce((s, l) => s + (l.amount || 0), 0);
+    const summaryRow = {
+      'Date': '', 'Location': '', 'Bunk Name': '', 'Vehicle Number': 'TOTAL', 'OIL': '', 'Indent No': '',
+      'Ltrs': totalLitres, 'Rate': '', 'Amt': totalAmount,
+      'Client': '', ' ': '', 'Vendor Code': '', 'Vendor Name': '', 'Remarks': ''
+    };
+    const workbook = XLSX.utils.book_new();
+    const sheetName = toSheetName(location, bunkNameVal, new Set());
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...toFuelSheetRows(groupLogs), summaryRow]), sheetName);
+    const periodLabel = bunkSummaryPeriod === 'all' ? 'TillDate' : 'ThisMonth';
+    XLSX.writeFile(workbook, `KCM_Bunk_Summary_${sheetName}_${periodLabel}.xlsx`);
+    triggerNotif('Bunk summary downloaded successfully!');
+  };
+
+  // Bunk Summary panel data: grouped by (Location, Bunk Name), cumulative
+  // Litres/Amount either Till Date (all-time) or This Month.
+  const bunkSummaryRows = (() => {
+    const nowMonth = new Date().toISOString().slice(0, 7);
+    const scopedLogs = bunkSummaryPeriod === 'all' ? logs : logs.filter(l => l.date.slice(0, 7) === nowMonth);
+    const groups = new Map<string, { location: string; bunkName: string; litres: number; amount: number }>();
+    scopedLogs.forEach(l => {
+      const key = bunkLocationKey(l);
+      if (!groups.has(key)) groups.set(key, { location: l.location, bunkName: l.bunkName, litres: 0, amount: 0 });
+      const g = groups.get(key)!;
+      g.litres += l.ltrs || 0;
+      g.amount += l.amount || 0;
+    });
+    return Array.from(groups.values()).sort((a, b) => b.amount - a.amount);
+  })();
 
   // Trip Details download: Date, Period, and Vehicle Number (search/dropdown
   // sourced from Fleet & Vehicles, or "All Vehicles") all connect together.
@@ -501,7 +510,7 @@ export default function FuelManagement({
       'Litres': r.litres,
       'Diesel Amount': r.dieselAmount,
       'Mileage': r.mileage,
-      'Actual Mileage': r.actualMileage || 0,
+      'Fixed Mileage': r.actualMileage || 0,
       'Difference (Litres)': r.difference ?? '',
       'Authorized Driver': r.driverName,
       'Location': r.location,
@@ -707,8 +716,6 @@ export default function FuelManagement({
                   <th className="px-3 py-2.5 text-right">Ltrs</th>
                   <th className="px-3 py-2.5 text-right">Rate</th>
                   <th className="px-3 py-2.5 text-right">Amount</th>
-                  <th className="px-3 py-2.5 text-right">Paid Amount</th>
-                  <th className="px-3 py-2.5 text-right">Pending Amount</th>
                   <th className="px-3 py-2.5">Client</th>
                   <th className="px-3 py-2.5">Type</th>
                   <th className="px-3 py-2.5">Vendor Name</th>
@@ -724,7 +731,7 @@ export default function FuelManagement({
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {filteredLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={22 + (isSuperAdmin ? 1 : 0)} className="text-center py-10 text-slate-400 font-mono">
+                    <td colSpan={20 + (isSuperAdmin ? 1 : 0)} className="text-center py-10 text-slate-400 font-mono">
                       NO FUEL ENTRIES FOUND IN CURRENT LEDGER.
                     </td>
                   </tr>
@@ -742,8 +749,6 @@ export default function FuelManagement({
                       <td className="px-3 py-2.5 text-right font-mono text-slate-800">{(log.ltrs || 0)} L</td>
                       <td className="px-3 py-2.5 text-right font-mono text-slate-500">₹{(log.rate || 0).toFixed(2)}</td>
                       <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-900">₹{(log.amount || 0).toLocaleString('en-IN')}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-emerald-700">{log.paidAmount ? `₹${log.paidAmount.toLocaleString('en-IN')}` : '-'}</td>
-                      <td className="px-3 py-2.5 text-right font-mono font-bold text-amber-700">₹{(pendingByLogId.get(log.id) || 0).toLocaleString('en-IN')}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.client}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.type}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.vendorName || '-'}</td>
@@ -789,6 +794,56 @@ export default function FuelManagement({
                 )}
               </tbody>
             </table>
+          </div>
+
+          <div className="mt-5 flex justify-end">
+            <div className="w-full sm:w-96 bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+              <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-100">
+                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                  <Building2 className="w-3.5 h-3.5 text-blue-600" />
+                  Bunk-wise Summary
+                </h3>
+                <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-[10px] font-bold">
+                  <button
+                    onClick={() => setBunkSummaryPeriod('all')}
+                    className={`px-2 py-1 rounded-md cursor-pointer transition-colors ${bunkSummaryPeriod === 'all' ? 'bg-white shadow-xs text-blue-700' : 'text-slate-500'}`}
+                  >
+                    Till Date
+                  </button>
+                  <button
+                    onClick={() => setBunkSummaryPeriod('month')}
+                    className={`px-2 py-1 rounded-md cursor-pointer transition-colors ${bunkSummaryPeriod === 'month' ? 'bg-white shadow-xs text-blue-700' : 'text-slate-500'}`}
+                  >
+                    This Month
+                  </button>
+                </div>
+              </div>
+              <div className="max-h-72 overflow-y-auto space-y-1.5">
+                {bunkSummaryRows.length === 0 ? (
+                  <p className="text-center text-slate-400 text-[11px] py-4">No fuel entries recorded yet.</p>
+                ) : (
+                  bunkSummaryRows.map((b, i) => (
+                    <div key={i} className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 text-[11px]">
+                      <div className="min-w-0">
+                        <p className="font-bold text-slate-800 truncate">{b.bunkName}</p>
+                        <p className="text-slate-400 font-mono text-[9.5px]">{b.location}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="font-mono text-slate-600">{b.litres.toFixed(1)} L</p>
+                        <p className="font-mono font-bold text-emerald-700">₹{b.amount.toLocaleString('en-IN')}</p>
+                      </div>
+                      <button
+                        onClick={() => handleDownloadBunkSummary(b.location, b.bunkName)}
+                        title={`Download ${b.bunkName} (${b.location})`}
+                        className="p-1.5 bg-teal-50 text-teal-600 hover:bg-teal-100 rounded-lg cursor-pointer shrink-0 transition-colors"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1077,22 +1132,6 @@ export default function FuelManagement({
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
                       />
                     </div>
-                  </div>
-
-                  <div>
-                    <label className="block font-semibold text-slate-600 mb-1">Paid Amount</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      placeholder="e.g. 5000 (how much has been paid to this bunk against this entry)"
-                      value={paidAmount}
-                      onChange={(e) => setPaidAmount(e.target.value)}
-                      autoComplete="off"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800"
-                    />
-                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                      Pending Amount is auto-calculated as a running balance per bunk - not entered manually.
-                    </p>
                   </div>
 
                   <DocumentAttachment documents={entryDocs} onChange={setEntryDocs} label="Attach Fuel Receipt / Invoice" />

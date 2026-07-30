@@ -1,7 +1,28 @@
 import React, { useState, useMemo } from 'react';
-import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Paperclip } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Paperclip, Download } from 'lucide-react';
 import { DriverEmployee, DRIVER_LOCATION_CATEGORIES } from '../../types';
 import DriverFormModal from './DriverFormModal';
+
+const toDriverRow = (driver: DriverEmployee, i: number) => ({
+  'Sl.No': i + 1,
+  'Driver Name': driver.name,
+  'Driver ID': driver.id,
+  'Driver No': driver.driverNo,
+  'Vehicle No': driver.vehicleNo || '',
+  'A/C No': driver.accountNumber || '',
+  'IFSC Code': driver.ifscCode || '',
+  'Reporting': driver.reporting || '',
+  'Remark': driver.remark || '',
+  'LOP Amount': driver.lopAmount || '',
+  'Petty Cash/Advance': driver.pettyCashAdvance || '',
+  'Month': driver.month || '',
+  'Loan Deduction': driver.loanDeduction || '',
+  'Recovery Amount': driver.recoveryAmount || '',
+  'Driver Welfare': driver.driverWelfare || '',
+  'BATA': driver.bata || '',
+  'Location': driver.location
+});
 
 interface DriverSalarySheetProps {
   drivers: DriverEmployee[];
@@ -48,6 +69,22 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
     triggerNotif('Driver record saved.', 'success');
   };
 
+  const handleDownloadOne = (driver: DriverEmployee) => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([toDriverRow(driver, 0)]), 'Driver');
+    XLSX.writeFile(workbook, `KCM_Driver_${driver.id}.xlsx`);
+  };
+
+  const handleDownloadAll = () => {
+    if (filtered.length === 0) {
+      triggerNotif('No driver records to download.', 'error');
+      return;
+    }
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(filtered.map(toDriverRow)), 'Drivers');
+    XLSX.writeFile(workbook, `KCM_All_Drivers.xlsx`);
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between pb-4 border-b border-slate-200 gap-3">
@@ -58,9 +95,14 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
           </h1>
           <p className="text-xs text-slate-500 font-mono mt-1">Master driver record, salary and bank details</p>
         </div>
-        <button onClick={() => setModalDriver(null)} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all">
-          <Plus className="w-3.5 h-3.5" /> Add Driver
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={handleDownloadAll} className="bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all">
+            <Download className="w-3.5 h-3.5 text-teal-600" /> Download All
+          </button>
+          <button onClick={() => setModalDriver(null)} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all">
+            <Plus className="w-3.5 h-3.5" /> Add Driver
+          </button>
+        </div>
       </div>
 
       {notif && (
@@ -103,6 +145,7 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
                 <th className="px-3 py-2.5">Loan Deduction</th>
                 <th className="px-3 py-2.5">Recovery Amount</th>
                 <th className="px-3 py-2.5">Driver Welfare</th>
+                <th className="px-3 py-2.5">BATA</th>
                 <th className="px-3 py-2.5">Location</th>
                 <th className="px-3 py-2.5 text-center">Docs</th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
@@ -110,7 +153,7 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
-                <tr><td colSpan={18} className="text-center py-10 text-slate-400">No driver records found.</td></tr>
+                <tr><td colSpan={19} className="text-center py-10 text-slate-400">No driver records found.</td></tr>
               ) : filtered.map((driver, i) => (
                 <tr key={driver.id} className="hover:bg-slate-50">
                   <td className="px-3 py-2.5 font-mono text-slate-500">{i + 1}</td>
@@ -128,6 +171,7 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
                   <td className="px-3 py-2.5 font-mono text-slate-600">{driver.loanDeduction ? `Rs. ${driver.loanDeduction.toLocaleString('en-IN')}` : '-'}</td>
                   <td className="px-3 py-2.5 font-mono text-slate-600">{driver.recoveryAmount ? `Rs. ${driver.recoveryAmount.toLocaleString('en-IN')}` : '-'}</td>
                   <td className="px-3 py-2.5 font-mono text-slate-600">{driver.driverWelfare ? `Rs. ${driver.driverWelfare.toLocaleString('en-IN')}` : '-'}</td>
+                  <td className="px-3 py-2.5 font-mono text-slate-600">{driver.bata ? `Rs. ${driver.bata.toLocaleString('en-IN')}` : '-'}</td>
                   <td className="px-3 py-2.5 whitespace-nowrap">
                     <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded text-[9.5px] font-bold">{driver.location}</span>
                   </td>
@@ -139,6 +183,7 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
                     ) : <span className="text-slate-300">-</span>}
                   </td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                    <button onClick={() => handleDownloadOne(driver)} title="Download this driver" className="p-1 text-slate-400 hover:text-teal-600 hover:bg-slate-100 rounded cursor-pointer"><Download className="w-3.5 h-3.5" /></button>
                     <button onClick={() => setModalDriver(driver)} className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
                     <button onClick={() => handleDelete(driver)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
                   </td>

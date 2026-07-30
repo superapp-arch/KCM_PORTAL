@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import { DriverEmployee, DriverAttendance } from '../../types';
 import { authFetch } from '../../authFetch';
+import DriverAttendanceSummaryModal from './DriverAttendanceSummaryModal';
 
 interface DriverAttendanceSheetProps {
   drivers: DriverEmployee[];
@@ -44,6 +45,7 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
   const [month, setMonth] = useState(currentMonthKey());
   const [attendance, setAttendance] = useState<DriverAttendance[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [summaryDriver, setSummaryDriver] = useState<DriverEmployee | null>(null);
 
   const loadAttendance = () => authFetch('/api/drivers/attendance').then(r => r.json()).then(setAttendance).catch(() => {});
   useEffect(() => { loadAttendance(); }, []);
@@ -133,7 +135,11 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
                 const { lopDays, exemptionLeaveDays } = driverMonthSummary(driver.id);
                 return (
                   <tr key={driver.id} className="hover:bg-purple-50/40">
-                    <td className="px-2 py-1 font-semibold text-teal-700 sticky left-0 bg-white whitespace-nowrap">
+                    <td
+                      className="px-2 py-1 font-semibold text-teal-700 hover:underline cursor-pointer sticky left-0 bg-white whitespace-nowrap"
+                      onClick={() => setSummaryDriver(driver)}
+                      title="Click to view monthly summary"
+                    >
                       {driver.name}
                     </td>
                     {Array.from({ length: totalDays }, (_, i) => i + 1).map(day => {
@@ -160,6 +166,10 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
           </table>
         </div>
       </div>
+
+      {summaryDriver && (
+        <DriverAttendanceSummaryModal driver={summaryDriver} month={month} onClose={() => setSummaryDriver(null)} />
+      )}
     </div>
   );
 }

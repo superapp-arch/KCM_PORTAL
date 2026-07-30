@@ -121,10 +121,6 @@ export interface FuelLog {
   rqId?: string;
   documents?: VehicleDocument[];
   enteredBy?: string; // username, stamped server-side; visible only to super admins
-  paidAmount?: number; // manually entered - how much has been paid against this entry (defaults to 0/blank)
-  // Pending Amount is NOT stored - it's a running balance per bunk (previous
-  // pending + this entry's amount - this entry's paidAmount), computed live
-  // wherever it's shown (see computePendingAmounts in FuelManagement.tsx).
 }
 
 // Vendor Master for Fuel Entry's Vendor Name/Vendor Code fields. Starts empty;
@@ -441,9 +437,9 @@ export type DriverLocationCategory =
   | 'Vijayawada Drivers Details'
   | 'Swiggy - Vizag Driver'
   | 'Hyd Swiggy'
-  | "Walke's & Parking Drivers"
+  | 'Walkes & Parking Drivers HYD'
   | 'BLR Swiggy'
-  | 'Cold Star'
+  | 'Cold Star BLR'
   | 'Goa Vehicle'
   | 'Chennai Hybrid'
   | 'Nelmangala Reliance'
@@ -454,7 +450,7 @@ export type DriverLocationCategory =
 export const DRIVER_LOCATION_CATEGORIES: DriverLocationCategory[] = [
   'HSK RIL F&V Drivers', 'Market Vehicle Driver Details', 'Belgaum Drivers Details',
   'Vijayawada Drivers Details', 'Swiggy - Vizag Driver', 'Hyd Swiggy',
-  "Walke's & Parking Drivers", 'BLR Swiggy', 'Cold Star', 'Goa Vehicle',
+  'Walkes & Parking Drivers HYD', 'BLR Swiggy', 'Cold Star BLR', 'Goa Vehicle',
   'Chennai Hybrid', 'Nelmangala Reliance', 'Nidaghatta Reliance', 'Swiggy DHL', 'KCM Service Station'
 ];
 
@@ -477,6 +473,7 @@ export interface DriverEmployee {
   loanDeduction?: number;
   recoveryAmount?: number;
   driverWelfare?: number;
+  bata?: number;
   grossSalary?: number;
   location: DriverLocationCategory;
   documents?: VehicleDocument[];
