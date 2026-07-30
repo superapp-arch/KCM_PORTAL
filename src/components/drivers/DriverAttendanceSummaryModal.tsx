@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
-import { DriverEmployee, DriverAttendance } from '../../types';
+import { DriverEmployee, DriverAttendance, AttendanceStatusCode } from '../../types';
 import { authFetch } from '../../authFetch';
 
 interface DriverAttendanceSummaryModalProps {
@@ -10,14 +10,22 @@ interface DriverAttendanceSummaryModalProps {
 }
 
 interface MonthlySummary {
-  totalDays: number; workingDays: number; lopDays: number; exemptionLeaveDays: number;
-  presentDays: number; rows: DriverAttendance[];
+  totalDays: number; workingDays: number; presentDays: number; totalAbsent: number;
+  halfDays: number; paidLeaveDays: number; leaveWithPermissionDays: number;
+  medicalLeaveDays: number; lopDays: number; exemptionLeaveDays: number;
+  holidayDays: number; weekOffDays: number; attendancePercentage: number; rows: DriverAttendance[];
 }
 
-const STATUS_STYLES: Record<DriverAttendance['status'], string> = {
+const STATUS_STYLES: Record<AttendanceStatusCode, string> = {
   Present: 'bg-emerald-100 text-emerald-800 border-emerald-300',
-  Absent: 'bg-rose-100 text-rose-800 border-rose-300',
-  Leave: 'bg-sky-100 text-sky-800 border-sky-300'
+  AbsentNoInfo: 'bg-rose-100 text-rose-800 border-rose-300',
+  AbsentLOP: 'bg-orange-200 text-orange-900 border-orange-400',
+  PaidLeave: 'bg-sky-100 text-sky-800 border-sky-300',
+  LeaveWithPermission: 'bg-indigo-100 text-indigo-800 border-indigo-300',
+  HalfDay: 'bg-amber-100 text-amber-800 border-amber-300',
+  MedicalLeave: 'bg-fuchsia-100 text-fuchsia-800 border-fuchsia-300',
+  Holiday: 'bg-purple-100 text-purple-800 border-purple-300',
+  WeekOff: 'bg-slate-200 text-slate-600 border-slate-300'
 };
 
 function daysInMonth(month: string): number {
@@ -49,22 +57,42 @@ export default function DriverAttendanceSummaryModal({ driver, month, onClose }:
 
         {summary && (
           <>
-            <div className="grid grid-cols-4 gap-2 text-xs mb-4">
-              <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-center">
-                <p className="font-bold text-slate-700 text-lg">{summary.totalDays}</p>
-                <p className="text-slate-400 uppercase text-[9px] font-bold">No. of Days</p>
-              </div>
+            <div className="grid grid-cols-3 gap-2 text-xs mb-4">
               <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2.5 text-center">
                 <p className="font-bold text-emerald-700 text-lg">{summary.presentDays}</p>
                 <p className="text-emerald-600 uppercase text-[9px] font-bold">Present</p>
               </div>
-              <div className="bg-orange-50 border border-orange-200 rounded-lg p-2.5 text-center">
-                <p className="font-bold text-orange-700 text-lg">{summary.lopDays}</p>
-                <p className="text-orange-600 uppercase text-[9px] font-bold">LOP (Absent)</p>
+              <div className="bg-rose-50 border border-rose-200 rounded-lg p-2.5 text-center">
+                <p className="font-bold text-rose-700 text-lg">{summary.totalAbsent}</p>
+                <p className="text-rose-600 uppercase text-[9px] font-bold">Absent</p>
               </div>
               <div className="bg-sky-50 border border-sky-200 rounded-lg p-2.5 text-center">
-                <p className="font-bold text-sky-700 text-lg">{summary.exemptionLeaveDays}</p>
-                <p className="text-sky-600 uppercase text-[9px] font-bold">Exemption Leave</p>
+                <p className="font-bold text-sky-700 text-lg">{summary.paidLeaveDays}</p>
+                <p className="text-sky-600 uppercase text-[9px] font-bold">Paid Leave</p>
+              </div>
+              <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-2.5 text-center">
+                <p className="font-bold text-indigo-700 text-lg">{summary.exemptionLeaveDays}</p>
+                <p className="text-indigo-600 uppercase text-[9px] font-bold">Exemption Leave</p>
+              </div>
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-center">
+                <p className="font-bold text-amber-700 text-lg">{summary.halfDays}</p>
+                <p className="text-amber-600 uppercase text-[9px] font-bold">Half Day</p>
+              </div>
+              <div className="bg-orange-50 border border-orange-200 rounded-lg p-2.5 text-center">
+                <p className="font-bold text-orange-700 text-lg">{summary.lopDays}</p>
+                <p className="text-orange-600 uppercase text-[9px] font-bold">LOP</p>
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-center">
+                <p className="font-bold text-slate-700 text-lg">{summary.totalDays}</p>
+                <p className="text-slate-400 uppercase text-[9px] font-bold">No. of Days</p>
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-center">
+                <p className="font-bold text-slate-700 text-lg">{summary.workingDays}</p>
+                <p className="text-slate-400 uppercase text-[9px] font-bold">Working Days</p>
+              </div>
+              <div className="bg-purple-50 border border-purple-200 rounded-lg p-2.5 text-center">
+                <p className="font-bold text-purple-700 text-lg">{summary.attendancePercentage}%</p>
+                <p className="text-purple-600 uppercase text-[9px] font-bold">Attendance</p>
               </div>
             </div>
 

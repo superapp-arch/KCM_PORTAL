@@ -223,19 +223,35 @@ async function computeMonthlyAttendanceSummary(empId: string, month: string) {
   };
 }
 
-// Driver Details' simplified 3-status attendance model (Present/Absent/Leave)
-// - "Absent" feeds LOP, "Leave" feeds Exemption Leave, mirroring how Staff
-// Attendance feeds the HR Salary Breakup tab but without the 9-status enum.
+// Driver Details' attendance model now mirrors Staff Attendance's full
+// 9-status enum exactly (see computeMonthlyAttendanceSummary above) -
+// AbsentLOP feeds LOP, LeaveWithPermission feeds "Exemption Leave" (the
+// driver module's term for an approved absence that doesn't count as LOP).
 async function computeDriverMonthlyAttendanceSummary(driverId: string, month: string) {
   const attendanceRows = await getDriverAttendance();
   const rows = attendanceRows.filter(a => a.driverId === driverId && a.date.startsWith(month));
   const totalDays = daysInMonth(month);
-  const lopDays = rows.filter(r => r.status === 'Absent').length;
-  const exemptionLeaveDays = rows.filter(r => r.status === 'Leave').length;
-  const presentDays = rows.filter(r => r.status === 'Present').length;
-  const workingDays = totalDays - lopDays - exemptionLeaveDays;
+  const counts: Record<string, number> = {
+    Present: 0, AbsentNoInfo: 0, AbsentLOP: 0, PaidLeave: 0, LeaveWithPermission: 0,
+    HalfDay: 0, MedicalLeave: 0, Holiday: 0, WeekOff: 0
+  };
+  rows.forEach(r => { counts[r.status] = (counts[r.status] || 0) + 1; });
 
-  return { driverId, month, totalDays, workingDays, lopDays, exemptionLeaveDays, presentDays, rows };
+  const lopDays = counts.AbsentLOP;
+  const exemptionLeaveDays = counts.LeaveWithPermission;
+  const totalAbsent = counts.AbsentNoInfo + lopDays;
+  const paidDays = rows.filter(r => PAID_STATUSES.includes(r.status)).length;
+  const workingDays = totalDays - counts.Holiday - counts.WeekOff;
+  const attendancePercentage = totalDays > 0 ? Math.round((paidDays / totalDays) * 1000) / 10 : 0;
+
+  return {
+    driverId, month, totalDays, workingDays,
+    presentDays: counts.Present, totalAbsent, halfDays: counts.HalfDay,
+    paidLeaveDays: counts.PaidLeave, leaveWithPermissionDays: counts.LeaveWithPermission,
+    medicalLeaveDays: counts.MedicalLeave, lopDays, exemptionLeaveDays,
+    holidayDays: counts.Holiday, weekOffDays: counts.WeekOff,
+    attendancePercentage, rows
+  };
 }
 
 // HR & Payroll data is restricted to Bhagya and super admins - the frontend

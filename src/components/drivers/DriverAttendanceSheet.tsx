@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
-import { DriverEmployee, DriverAttendance } from '../../types';
+import { DriverEmployee, DriverAttendance, AttendanceStatusCode } from '../../types';
 import { authFetch } from '../../authFetch';
 import DriverAttendanceSummaryModal from './DriverAttendanceSummaryModal';
 
@@ -9,22 +9,39 @@ interface DriverAttendanceSheetProps {
   drivers: DriverEmployee[];
 }
 
-const CYCLE: { status: DriverAttendance['status']; label: string }[] = [
+const QUICK_CODES: { status: AttendanceStatusCode; label: string }[] = [
   { status: 'Present', label: 'P' },
-  { status: 'Absent', label: 'A' },
-  { status: 'Leave', label: 'L' },
+  { status: 'AbsentNoInfo', label: 'A' },
+  { status: 'PaidLeave', label: 'PL' },
 ];
 
-const ALL_STATUSES: { status: DriverAttendance['status']; label: string }[] = [
+const ALL_STATUSES: { status: AttendanceStatusCode; label: string }[] = [
   { status: 'Present', label: 'Present' },
-  { status: 'Absent', label: 'Absent' },
-  { status: 'Leave', label: 'Leave' },
+  { status: 'AbsentNoInfo', label: 'Absent (No Info)' },
+  { status: 'AbsentLOP', label: 'Absent - LOP' },
+  { status: 'PaidLeave', label: 'Paid Leave' },
+  { status: 'LeaveWithPermission', label: 'Leave with Permission' },
+  { status: 'HalfDay', label: 'Half Day' },
+  { status: 'MedicalLeave', label: 'Medical Leave' },
+  { status: 'Holiday', label: 'Holiday' },
+  { status: 'WeekOff', label: 'Week Off' },
 ];
 
-const STATUS_STYLES: Record<DriverAttendance['status'], string> = {
+const STATUS_STYLES: Record<AttendanceStatusCode, string> = {
   Present: 'bg-emerald-100 text-emerald-800 border-emerald-300',
-  Absent: 'bg-rose-100 text-rose-800 border-rose-300',
-  Leave: 'bg-sky-100 text-sky-800 border-sky-300'
+  AbsentNoInfo: 'bg-rose-100 text-rose-800 border-rose-300',
+  AbsentLOP: 'bg-orange-200 text-orange-900 border-orange-400',
+  PaidLeave: 'bg-sky-100 text-sky-800 border-sky-300',
+  LeaveWithPermission: 'bg-indigo-100 text-indigo-800 border-indigo-300',
+  HalfDay: 'bg-amber-100 text-amber-800 border-amber-300',
+  MedicalLeave: 'bg-fuchsia-100 text-fuchsia-800 border-fuchsia-300',
+  Holiday: 'bg-purple-100 text-purple-800 border-purple-300',
+  WeekOff: 'bg-slate-200 text-slate-600 border-slate-300'
+};
+
+const STATUS_ABBR: Record<AttendanceStatusCode, string> = {
+  Present: 'P', AbsentNoInfo: 'A', AbsentLOP: 'LOP', PaidLeave: 'PL', LeaveWithPermission: 'LWP',
+  HalfDay: 'HD', MedicalLeave: 'ML', Holiday: 'H', WeekOff: 'WO'
 };
 
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -54,7 +71,7 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
   const [searchTerm, setSearchTerm] = useState('');
   const [summaryDriver, setSummaryDriver] = useState<DriverEmployee | null>(null);
   const [popover, setPopover] = useState<{ driverId: string; day: number; top: number; left: number } | null>(null);
-  const [popoverStatus, setPopoverStatus] = useState<DriverAttendance['status']>('Present');
+  const [popoverStatus, setPopoverStatus] = useState<AttendanceStatusCode>('Present');
   const [popoverRemarks, setPopoverRemarks] = useState('');
 
   const loadAttendance = () => authFetch('/api/drivers/attendance').then(r => r.json()).then(setAttendance).catch(() => {});
@@ -71,12 +88,15 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
 
   // LOP/Exemption Leave summary columns - mirrors the server's
   // computeDriverMonthlyAttendanceSummary so this and the Salary Breakup tab
-  // always agree.
+  // always agree. LOP <- AbsentLOP, Exemption Leave <- LeaveWithPermission,
+  // Working Days excludes Holiday/WeekOff.
   const driverMonthSummary = (driverId: string) => {
     const rows = monthAttendance.filter(a => a.driverId === driverId);
-    const lopDays = rows.filter(r => r.status === 'Absent').length;
-    const exemptionLeaveDays = rows.filter(r => r.status === 'Leave').length;
-    const workingDays = totalDays - lopDays - exemptionLeaveDays;
+    const lopDays = rows.filter(r => r.status === 'AbsentLOP').length;
+    const exemptionLeaveDays = rows.filter(r => r.status === 'LeaveWithPermission').length;
+    const holidayDays = rows.filter(r => r.status === 'Holiday').length;
+    const weekOffDays = rows.filter(r => r.status === 'WeekOff').length;
+    const workingDays = totalDays - holidayDays - weekOffDays;
     return { lopDays, exemptionLeaveDays, workingDays };
   };
 
@@ -85,7 +105,7 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
     return monthAttendance.find(a => a.driverId === driverId && a.date === date) || null;
   };
 
-  const markCell = async (driverId: string, day: number, status: DriverAttendance['status'], remarks?: string) => {
+  const markCell = async (driverId: string, day: number, status: AttendanceStatusCode, remarks?: string) => {
     const date = `${month}-${String(day).padStart(2, '0')}`;
     const res = await authFetch('/api/drivers/attendance/mark', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -99,9 +119,9 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
 
   const handleCellClick = (driverId: string, day: number) => {
     const current = cellRecord(driverId, day);
-    const idx = current ? CYCLE.findIndex(c => c.status === current.status) : -1;
-    const next = CYCLE[(idx + 1) % CYCLE.length];
-    markCell(driverId, day, next.status, current?.remarks);
+    const idx = current ? QUICK_CODES.findIndex(c => c.status === current.status) : -1;
+    const next = QUICK_CODES[(idx + 1) % QUICK_CODES.length];
+    markCell(driverId, day, next.status);
   };
 
   const openPopover = (e: React.MouseEvent, driverId: string, day: number) => {
@@ -127,7 +147,7 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
             <CalendarDays className="text-blue-600 w-5 h-5" />
             Driver Attendance
           </h1>
-          <p className="text-xs text-slate-500 font-mono mt-1">Click a day to cycle Present / Absent / Leave</p>
+          <p className="text-xs text-slate-500 font-mono mt-1">Click a day to mark P/A/PL, or use the ⋯ menu for the full status set</p>
         </div>
       </div>
 
@@ -174,7 +194,7 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
                           <button onClick={() => handleCellClick(driver.id, day)}
                             title={record?.remarks || undefined}
                             className={`w-9 h-6 rounded text-[9px] font-bold border cursor-pointer ${record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}>
-                            {record ? CYCLE.find(c => c.status === record.status)?.label : '-'}
+                            {record ? STATUS_ABBR[record.status] : '-'}
                           </button>
                           <button
                             onClick={e => openPopover(e, driver.id, day)}

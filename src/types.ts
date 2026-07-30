@@ -483,7 +483,7 @@ export interface DriverAttendance {
   id: string; // deterministic: `${driverId}-${date}`
   driverId: string;
   date: string; // YYYY-MM-DD
-  status: 'Present' | 'Absent' | 'Leave';
+  status: AttendanceStatusCode;
   remarks?: string;
 }
 
