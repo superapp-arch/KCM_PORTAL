@@ -317,6 +317,8 @@ export default function Administration({
     // - this just gates the tab/module itself; which drivers each of these
     // people actually sees is filtered server-side.
     if (tabName === 'drivers' && DRIVER_ACCESS_EMAILS.includes(user.email || '')) return true;
+    // Loan Management mirrors server.ts's LOAN_ACCESS_EMAILS.
+    if (tabName === 'loans' && user.email === 'finance@kcmlogistics.in') return true;
     return false;
   };
 

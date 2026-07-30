@@ -309,18 +309,20 @@ function requireWarehouseAccess(req: express.Request, res: express.Response, nex
   next();
 }
 
-// Loan Management (Vehicle Loan + Business Loan) is super-admin-only for now,
-// same as Warehouse Details - loan/financial data has no specified access
-// group, so it defaults to the strictest tier. This also gates the shared
-// VehicleLoan record surfaced in Fleet & Vehicles' EMI Details tab, so a
-// regular Fleet user (vehicle_manager, etc.) can see the tab but not read or
-// edit loan data through it unless they're also a super admin.
+// Loan Management (Vehicle Loan + Business Loan) is restricted to super
+// admins plus Rakshina - loan/financial data has no broader specified access
+// group. This also gates the shared VehicleLoan record surfaced in Fleet &
+// Vehicles' EMI Details tab (read-only there), so a regular Fleet user
+// (vehicle_manager, etc.) can see that tab but not its data unless they're
+// also allowed here.
+const LOAN_ACCESS_EMAILS = ['finance@kcmlogistics.in'];
+
 function requireLoanAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
-  if (sessionUser.department !== 'super_admin') {
+  if (sessionUser.department !== 'super_admin' && !LOAN_ACCESS_EMAILS.includes(sessionUser.email || '')) {
     return res.status(403).json({ error: 'You do not have access to Loan Management.' });
   }
   next();
