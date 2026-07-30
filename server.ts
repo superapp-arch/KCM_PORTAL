@@ -1599,7 +1599,8 @@ async function startServer() {
         return res.status(403).json({ error: 'You cannot add a driver in this location.' });
       }
       const result = await saveDriverEmployee(entry);
-      res.json({ success: true, data: result });
+      const allowed = getAllowedDriverLocations(sessionUser);
+      res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => allowed.includes(d.location)) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1614,7 +1615,8 @@ async function startServer() {
         return res.status(403).json({ error: 'You cannot modify this driver.' });
       }
       const result = await saveDriverEmployee({ ...req.body, id: req.params.id });
-      res.json({ success: true, data: result });
+      const allowed = getAllowedDriverLocations(sessionUser);
+      res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => allowed.includes(d.location)) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1628,7 +1630,8 @@ async function startServer() {
         return res.status(403).json({ error: 'You cannot delete this driver.' });
       }
       const result = await deleteDriverEmployee(req.params.id);
-      res.json({ success: true, data: result });
+      const allowed = getAllowedDriverLocations(sessionUser);
+      res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => allowed.includes(d.location)) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1698,7 +1701,14 @@ async function startServer() {
       if (!existing || !(await assertDriverAccessible(existing.driverId, sessionUser))) {
         return res.status(403).json({ error: 'You cannot delete this attendance record.' });
       }
-      res.json({ success: true, data: await deleteDriverAttendanceRecord(req.params.id) });
+      const [rows, drivers] = await Promise.all([deleteDriverAttendanceRecord(req.params.id), getDriverEmployees()]);
+      const allowed = getAllowedDriverLocations(sessionUser);
+      if (allowed === 'ALL') {
+        res.json({ success: true, data: rows });
+      } else {
+        const allowedDriverIds = new Set(drivers.filter(d => allowed.includes(d.location)).map(d => d.id));
+        res.json({ success: true, data: rows.filter(r => allowedDriverIds.has(r.driverId)) });
+      }
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
