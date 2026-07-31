@@ -228,6 +228,9 @@ async function computeMonthlyAttendanceSummary(empId: string, month: string) {
     paidLeaveDays: counts.PaidLeave, leaveWithPermissionDays: counts.LeaveWithPermission,
     medicalLeaveDays: counts.MedicalLeave, lopDays, lopIsOverridden: override != null,
     holidayDays: counts.Holiday, weekOffDays: counts.WeekOff,
+    // Present + Paid Leave, both counted as "worked" for salary purposes -
+    // used by Salary Breakup's Working Days stat (see StaffFormModal.tsx).
+    salaryWorkingDays: counts.Present + counts.PaidLeave,
     attendancePercentage, rows
   };
 }
@@ -259,6 +262,9 @@ async function computeDriverMonthlyAttendanceSummary(driverId: string, month: st
     paidLeaveDays: counts.PaidLeave, leaveWithPermissionDays: counts.LeaveWithPermission,
     medicalLeaveDays: counts.MedicalLeave, lopDays, exemptionLeaveDays,
     holidayDays: counts.Holiday, weekOffDays: counts.WeekOff,
+    // Present + Paid Leave, both counted as "worked" for salary purposes -
+    // used by the Salary tab's Working Days stat (see DriverFormModal.tsx).
+    salaryWorkingDays: counts.Present + counts.PaidLeave,
     attendancePercentage, rows
   };
 }

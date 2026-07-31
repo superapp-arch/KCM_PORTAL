@@ -56,7 +56,8 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
     authFetch(`/api/drivers/attendance/monthly/${encodeURIComponent(driver.id)}/${salaryMonth}`)
       .then(r => r.json())
       .then(({ data }) => {
-        if (data) setAttendanceSummary({ totalDays: data.totalDays, presentDays: data.presentDays, lopDays: data.lopDays, exemptionLeaveDays: data.exemptionLeaveDays });
+        // presentDays here is Present + Paid Leave (salaryWorkingDays) - both count as "worked" for salary purposes.
+        if (data) setAttendanceSummary({ totalDays: data.totalDays, presentDays: data.salaryWorkingDays, lopDays: data.lopDays, exemptionLeaveDays: data.exemptionLeaveDays });
       })
       .catch(() => {});
   }, [driver, salaryMonth]);

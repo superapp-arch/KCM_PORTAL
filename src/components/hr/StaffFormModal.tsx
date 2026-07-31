@@ -130,8 +130,9 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
       }
     }).catch(() => {});
     // Attendance-derived totalDays/presentDays/totalAbsent/lopDays should show even before a PF record exists for this month.
+    // presentDays here is Present + Paid Leave (salaryWorkingDays) - both count as "worked" for salary purposes.
     authFetch(`/api/staff/attendance/monthly/${encodeURIComponent(employee.id)}/${pfMonth}`).then(r => r.json()).then(({ data }) => {
-      if (data) setPfAttendance({ totalDays: data.totalDays, presentDays: data.presentDays, totalAbsent: data.totalAbsent, lopDays: data.lopDays });
+      if (data) setPfAttendance({ totalDays: data.totalDays, presentDays: data.salaryWorkingDays, totalAbsent: data.totalAbsent, lopDays: data.lopDays });
     }).catch(() => {});
   }, [employee, pfMonth]);
 
