@@ -7,7 +7,8 @@ import DateInput from '../DateInput';
 
 const toLoanRow = (loan: BusinessLoan, i: number) => {
   const emiPaid = computeMonthsCompleted(loan.emiDate, loan.tenure);
-  const bal = loan.tenure != null ? loan.tenure - emiPaid : '';
+  const bal = loan.tenure != null ? loan.tenure - emiPaid : null;
+  const osAmount = bal != null && loan.emiMonthly != null ? bal * loan.emiMonthly : '';
   return {
     'SL No': i + 1,
     'Financer': loan.financer,
@@ -18,7 +19,8 @@ const toLoanRow = (loan: BusinessLoan, i: number) => {
     'EMI Monthly': loan.emiMonthly || '',
     'Tenure': loan.tenure ?? '',
     'EMI Paid': emiPaid,
-    'Balance EMI': bal,
+    'EMI Pending': bal ?? '',
+    'O/S Amount': osAmount,
     'Due Date': computeDueDate(loan.emiDate, emiPaid, loan.tenure),
     'Interest Rate': loan.interestRate ?? '',
     'Loan Status': loan.loanStatus.toUpperCase(),
@@ -152,9 +154,9 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
                 <th className="px-3 py-2.5 text-right">EMI Monthly</th>
                 <th className="px-3 py-2.5 text-right">Tenure</th>
                 <th className="px-3 py-2.5 text-right">EMI Paid</th>
-                <th className="px-3 py-2.5 text-right">Balance EMI</th>
+                <th className="px-3 py-2.5 text-right">EMI Pending</th>
+                <th className="px-3 py-2.5 text-right">O/S Amount</th>
                 <th className="px-3 py-2.5">Due Date</th>
-                <th className="px-3 py-2.5 text-right">Interest Rate</th>
                 <th className="px-3 py-2.5">Loan Status</th>
                 <th className="px-3 py-2.5 max-w-[160px]">Remarks</th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
@@ -166,6 +168,7 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
               ) : filtered.map((loan, i) => {
                 const emiPaid = computeMonthsCompleted(loan.emiDate, loan.tenure);
                 const bal = loan.tenure != null ? loan.tenure - emiPaid : null;
+                const osAmount = bal != null && loan.emiMonthly != null ? bal * loan.emiMonthly : null;
                 const dueDate = computeDueDate(loan.emiDate, emiPaid, loan.tenure);
                 return (
                   <tr key={loan.id} className="hover:bg-slate-50">
@@ -178,8 +181,8 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
                     <td className="px-3 py-2.5 text-right font-mono text-slate-600">{loan.tenure ?? '-'}</td>
                     <td className="px-3 py-2.5 text-right font-mono text-slate-600">{emiPaid}</td>
                     <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-700">{bal ?? '-'}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-700">{osAmount != null ? osAmount.toLocaleString('en-IN') : '-'}</td>
                     <td className="px-3 py-2.5 font-mono font-bold text-red-600 whitespace-nowrap">{dueDate}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-slate-600">{loan.interestRate != null ? `${loan.interestRate}%` : '-'}</td>
                     <td className="px-3 py-2.5">
                       <span className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] ${loan.loanStatus === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
                         {loan.loanStatus.toUpperCase()}

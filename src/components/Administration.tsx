@@ -941,6 +941,7 @@ export default function Administration({
             <FleetSheet
               vehicles={vehicles}
               userRole={user.department}
+              userEmail={user.email}
               onUpdateVehicle={onUpdateVehicle}
               onDeleteVehicle={onDeleteVehicle}
               vehicleMileages={vehicleMileages}

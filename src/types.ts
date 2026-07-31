@@ -494,7 +494,7 @@ export type LoanStatus = 'Active' | 'Closed';
 export type NOCStatus = 'Received' | 'Not received';
 
 export const VEHICLE_LOAN_FINANCERS = [
-  'Axis Bank', 'Axis Bank-Citi', 'Free', 'HDFC Bank Ltd', 'ICICI Bank', 'Kotak Mahindra Bank', 'Sundaram Finance'
+  'Axis Bank', 'Axis Bank-Citi', 'HDFC Bank Ltd', 'ICICI Bank', 'Kotak Mahindra Bank', 'Sundaram Finance'
 ];
 
 // One record per vehicle (id = Reg. No.), shared between the Loan Management

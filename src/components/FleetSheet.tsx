@@ -39,6 +39,10 @@ import { computeMonthsCompleted, computeDueDate } from '../utils/loanDates';
 interface FleetSheetProps {
   vehicles: Vehicle[];
   userRole: string;
+  // Edit/delete/add/import/export is restricted to Chandana (Vehicle Data
+  // Manager) and Super Admins specifically - not the whole vehicle_manager
+  // department - so this is checked by email, not just department.
+  userEmail?: string;
   onUpdateVehicle: (vehicle: Vehicle) => Promise<void>;
   onDeleteVehicle: (id: string) => Promise<void>;
   // Actual Mileage (fixed KM/L reference) is stored in the shared
@@ -93,7 +97,7 @@ const getExpiryAlertStatus = (dateStr?: string, minDays = 0, maxDays = 10): { is
   return { isAlert: diffDays >= minDays && diffDays <= maxDays, diffDays };
 };
 
-export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDeleteVehicle, vehicleMileages, onAddVehicleMileage, onUpdateVehicleMileage, vehicleLoans }: FleetSheetProps) {
+export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehicle, onDeleteVehicle, vehicleMileages, onAddVehicleMileage, onUpdateVehicleMileage, vehicleLoans }: FleetSheetProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedType, setSelectedType] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -289,11 +293,13 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
     XLSX.writeFile(workbook, "KCM_Fleet_Master_Database.xlsx");
   };
 
-  // Role-based access control for delete operations
-  const canDelete = userRole === 'super_admin' || userRole === 'vehicle_manager';
-
-  // Role-based access control for edit operations (same as delete)
-  const canEdit = userRole === 'super_admin' || userRole === 'vehicle_manager';
+  // Fleet & Vehicles is view-only for everyone except Chandana (Vehicle Data
+  // Manager) and Super Admins - other roles with module access (Bhagya,
+  // Rakshina, etc.) can see everything but cannot edit, delete, add,
+  // import, or export.
+  const canManage = userRole === 'super_admin' || userEmail === 'ln.chandana@kcmlogistics.in';
+  const canDelete = canManage;
+  const canEdit = canManage;
 
   // Helper to match input criteria perfectly
   const normalize = (val: string | undefined) => String(val || '').toLowerCase().trim();
@@ -359,8 +365,11 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
   const findVehicleMileage = (regNo: string) =>
     vehicleMileages.find(v => (v.vehicleNo || '').trim().toUpperCase() === regNo.trim().toUpperCase());
 
-  const findVehicleLoan = (regNo: string) =>
-    vehicleLoans.find(l => l.regNo.trim().toUpperCase() === regNo.trim().toUpperCase());
+  // A vehicle can have more than one loan record on rare occasions
+  // (refinanced, multiple simultaneous loans, etc.) - a new entry for an
+  // already-registered vehicle is never treated as a replacement.
+  const findVehicleLoansForRegNo = (regNo: string) =>
+    vehicleLoans.filter(l => l.regNo.trim().toUpperCase() === regNo.trim().toUpperCase());
 
   const startEdit = (vehicle: Vehicle) => {
     setEditForm({ ...vehicle });
@@ -497,31 +506,35 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap mt-4 md:mt-0">
-          <input
-            type="file"
-            accept=".csv"
-            ref={fileInputRefImport}
-            onChange={handleImportVehiclesCSV}
-            className="hidden"
-          />
+          {canEdit && (
+            <>
+              <input
+                type="file"
+                accept=".csv"
+                ref={fileInputRefImport}
+                onChange={handleImportVehiclesCSV}
+                className="hidden"
+              />
 
-          <button
-            onClick={() => fileInputRefImport.current?.click()}
-            className="px-3.5 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-bold tracking-wide flex items-center gap-1.5 transition-all shadow-3xs cursor-pointer"
-            title="Import Vehicles from CSV spreadsheet"
-          >
-            <Upload className="w-3.5 h-3.5 text-blue-600" />
-            Import CSV
-          </button>
+              <button
+                onClick={() => fileInputRefImport.current?.click()}
+                className="px-3.5 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-bold tracking-wide flex items-center gap-1.5 transition-all shadow-3xs cursor-pointer"
+                title="Import Vehicles from CSV spreadsheet"
+              >
+                <Upload className="w-3.5 h-3.5 text-blue-600" />
+                Import CSV
+              </button>
 
-          <button
-            onClick={handleExportVehiclesCSV}
-            className="px-3.5 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-bold tracking-wide flex items-center gap-1.5 transition-all shadow-3xs cursor-pointer"
-            title="Export Master Fleet to Excel (.xlsx) spreadsheet"
-          >
-            <Download className="w-3.5 h-3.5 text-slate-600" />
-            Export Excel
-          </button>
+              <button
+                onClick={handleExportVehiclesCSV}
+                className="px-3.5 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-bold tracking-wide flex items-center gap-1.5 transition-all shadow-3xs cursor-pointer"
+                title="Export Master Fleet to Excel (.xlsx) spreadsheet"
+              >
+                <Download className="w-3.5 h-3.5 text-slate-600" />
+                Export Excel
+              </button>
+            </>
+          )}
 
           {canEdit && (
             <button
@@ -632,14 +645,15 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                 <th className="px-4 py-4 text-center text-purple-100">Status</th>
                 <th className="px-4 py-4 text-purple-100">Insurance Exp</th>
                 <th className="px-4 py-4 text-purple-100">FC Expiry</th>
-                <th className="px-4 py-4 text-purple-100">EMI Due Date</th>
+                <th className="px-4 py-4 text-right text-purple-100">EMI Pending</th>
+                <th className="px-4 py-4 text-right text-purple-100">O/S Amount</th>
                 <th className="px-4 py-4 text-right text-purple-100">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
               {filteredVehicles.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-12 text-slate-400 font-mono">
+                  <td colSpan={11} className="text-center py-12 text-slate-400 font-mono">
                     NO FLEET RECORDS FOUND MATCHING THE SELECTED PARAMETERS.
                   </td>
                 </tr>
@@ -666,10 +680,19 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                   // Undefined/missing status is treated as active (default state for existing records)
                   const isActive = v.active !== false;
 
-                  const matchedLoan = findVehicleLoan(reg);
-                  const emiDueDate = matchedLoan
-                    ? computeDueDate(matchedLoan.emiStartDate, computeMonthsCompleted(matchedLoan.emiStartDate, matchedLoan.tenure), matchedLoan.tenure)
-                    : '-';
+                  // Aggregated across every Active loan on this vehicle - in
+                  // the rare multi-loan case this is the combined EMI
+                  // Pending/O/S Amount, not just one loan's figures.
+                  const vehicleLoansForReg = findVehicleLoansForRegNo(reg).filter(l => l.loanStatus === 'Active');
+                  const emiPendingTotal = vehicleLoansForReg.reduce((sum, l) => {
+                    const mc = computeMonthsCompleted(l.emiStartDate, l.tenure);
+                    return sum + (l.tenure != null ? l.tenure - mc : 0);
+                  }, 0);
+                  const osAmountTotal = vehicleLoansForReg.reduce((sum, l) => {
+                    const mc = computeMonthsCompleted(l.emiStartDate, l.tenure);
+                    const bal = l.tenure != null ? l.tenure - mc : 0;
+                    return sum + (l.monthlyEmi != null ? bal * l.monthlyEmi : 0);
+                  }, 0);
 
                   return (
                     <React.Fragment key={reg + '-' + siNo}>
@@ -730,7 +753,8 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                           )}
                         </td>
                         <td className="px-4 py-3.5 font-mono text-slate-500">{fcDate || '-'}</td>
-                        <td className="px-4 py-3.5 font-mono font-bold text-red-600 whitespace-nowrap">{emiDueDate}</td>
+                        <td className="px-4 py-3.5 text-right font-mono font-bold text-slate-700">{vehicleLoansForReg.length > 0 ? emiPendingTotal : '-'}</td>
+                        <td className="px-4 py-3.5 text-right font-mono font-bold text-slate-700">{vehicleLoansForReg.length > 0 ? osAmountTotal.toLocaleString('en-IN') : '-'}</td>
                         <td className="px-4 py-3.5 text-right whitespace-nowrap">
                           <div className="flex items-center justify-end space-x-2">
                             {canEdit && (
@@ -779,7 +803,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                       {/* Row Expansion */}
                       {expandedRegNo === reg && (
                         <tr>
-                          <td colSpan={9} className="bg-slate-50/50 p-6 border-t border-slate-100">
+                          <td colSpan={11} className="bg-slate-50/50 p-6 border-t border-slate-100">
                             <motion.div
                               initial={{ opacity: 0, y: -10 }}
                               animate={{ opacity: 1, y: 0 }}
@@ -899,6 +923,66 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                 </dl>
                               </div>
 
+                              {/* EMI / LOAN DETAILS - read-only, sourced from the Loan Management
+                                  module's Vehicle Loan ledger. Lists every loan on record for this
+                                  vehicle (usually one, occasionally more). */}
+                              <div className="col-span-1 md:col-span-3 bg-white rounded-xl p-4 border border-slate-200 shadow-xs">
+                                <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase mb-3 flex items-center gap-1.5 pb-1 border-b border-slate-100">
+                                  <HandCoins className="w-3.5 h-3.5 text-teal-600" />
+                                  EMI / Loan Details
+                                </h3>
+                                {(() => {
+                                  const loansForReg = findVehicleLoansForRegNo(reg);
+                                  if (loansForReg.length === 0) {
+                                    return <p className="text-xs text-slate-400 italic">No EMI/loan record found for {reg}.</p>;
+                                  }
+                                  return (
+                                    <div className="overflow-x-auto">
+                                      <table className="w-full text-left text-[11px]">
+                                        <thead className="text-slate-400 uppercase text-[9px] tracking-wider">
+                                          <tr>
+                                            <th className="px-2 py-1.5">Financer</th>
+                                            <th className="px-2 py-1.5">Loan Number</th>
+                                            <th className="px-2 py-1.5 text-right">Monthly EMI</th>
+                                            <th className="px-2 py-1.5 text-right">Tenure</th>
+                                            <th className="px-2 py-1.5 text-right">EMI Paid</th>
+                                            <th className="px-2 py-1.5 text-right">EMI Pending</th>
+                                            <th className="px-2 py-1.5 text-right">O/S Amount</th>
+                                            <th className="px-2 py-1.5">Due Date</th>
+                                            <th className="px-2 py-1.5">Status</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                          {loansForReg.map(loan => {
+                                            const mc = computeMonthsCompleted(loan.emiStartDate, loan.tenure);
+                                            const bal = loan.tenure != null ? loan.tenure - mc : null;
+                                            const osAmt = bal != null && loan.monthlyEmi != null ? bal * loan.monthlyEmi : null;
+                                            const due = computeDueDate(loan.emiStartDate, mc, loan.tenure);
+                                            return (
+                                              <tr key={loan.id}>
+                                                <td className="px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap">{loan.financer}</td>
+                                                <td className="px-2 py-1.5 font-mono text-slate-600 whitespace-nowrap">{loan.financeNumber || '-'}</td>
+                                                <td className="px-2 py-1.5 text-right font-mono text-slate-700">{loan.monthlyEmi ? loan.monthlyEmi.toLocaleString('en-IN') : '-'}</td>
+                                                <td className="px-2 py-1.5 text-right font-mono text-slate-600">{loan.tenure ?? '-'}</td>
+                                                <td className="px-2 py-1.5 text-right font-mono text-slate-600">{mc}</td>
+                                                <td className="px-2 py-1.5 text-right font-mono font-bold text-slate-700">{bal ?? '-'}</td>
+                                                <td className="px-2 py-1.5 text-right font-mono text-slate-700">{osAmt != null ? osAmt.toLocaleString('en-IN') : '-'}</td>
+                                                <td className="px-2 py-1.5 font-mono font-bold text-red-600 whitespace-nowrap">{due}</td>
+                                                <td className="px-2 py-1.5">
+                                                  <span className={`inline-block border rounded px-1.5 py-0.5 font-bold text-[9px] ${loan.loanStatus === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
+                                                    {loan.loanStatus.toUpperCase()}
+                                                  </span>
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+
                               {/* DOCUMENT PORTFOLIO SECTION (Pink & Purple colorful layout) */}
                               <div className="col-span-1 md:col-span-3 mt-6 border-t border-pink-100 pt-6">
                               <div className="bg-gradient-to-r from-pink-50 to-purple-50 rounded-2xl border border-pink-100 p-6 shadow-xs">
@@ -914,25 +998,18 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                   </div>
 
                                   {/* Access Status Tag */}
-                                  <div className="flex items-center gap-2 bg-emerald-100 border border-emerald-200 px-3 py-1 rounded-full text-[10px] font-bold text-emerald-800 uppercase">
+                                  <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-bold uppercase border ${
+                                    canEdit ? 'bg-emerald-100 border-emerald-200 text-emerald-800' : 'bg-slate-100 border-slate-200 text-slate-600'
+                                  }`}>
                                     <CheckCircle className="w-3.5 h-3.5" />
-                                    <span>VDM Access Granted</span>
+                                    <span>{canEdit ? 'VDM Access Granted' : 'View Only'}</span>
                                   </div>
                                 </div>
 
-                                {/* Access control check block */}
-                                {false ? (
-                                  <div className="bg-pink-50/50 border border-pink-100 rounded-xl p-5 text-center">
-                                    <Lock className="w-8 h-8 text-pink-500 mx-auto mb-2 animate-bounce" />
-                                    <h5 className="text-xs font-extrabold text-pink-800 uppercase tracking-wider">Access Restricted</h5>
-                                    <p className="text-[11px] text-purple-600 mt-1 max-w-md mx-auto leading-normal">
-                                      You are logged in under the {userRole.replace('_', ' ')} department. Secure KCM policy restricts vehicle document uploads, edits, shares, and print commands exclusively to **Vehicle Data Managers** and **Super Admins**.
-                                    </p>
-                                  </div>
-                                ) : (
-                                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                                    
-                                    {/* Upload Area */}
+                                <div className={`grid grid-cols-1 ${canEdit ? 'lg:grid-cols-3' : ''} gap-6`}>
+
+                                    {/* Upload Area - Chandana/Super Admin only; other roles only view/download/print/share below */}
+                                    {canEdit && (
                                     <div className="bg-white p-5 rounded-2xl border border-pink-100 shadow-xs space-y-4">
                                       <h5 className="text-xs font-black uppercase tracking-wider text-purple-900 flex items-center gap-1.5">
                                         <Upload className="w-4 h-4 text-pink-600" />
@@ -1011,9 +1088,10 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                         </p>
                                       </div>
                                     </div>
+                                    )}
 
                                     {/* Document List Panel */}
-                                    <div className="bg-white p-5 rounded-2xl border border-pink-100 shadow-xs lg:col-span-2 space-y-4">
+                                    <div className={`bg-white p-5 rounded-2xl border border-pink-100 shadow-xs space-y-4 ${canEdit ? 'lg:col-span-2' : ''}`}>
                                       <h5 className="text-xs font-black uppercase tracking-wider text-purple-900 flex items-center gap-1.5">
                                         <FileText className="w-4 h-4 text-pink-600" />
                                         Uploaded Document Registry
@@ -1221,7 +1299,6 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                                     </div>
                                     
                                   </div>
-                                )}
 
                               </div>
                             </div>
@@ -1772,54 +1849,60 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                     Loan Management; this is just a convenient view. */}
                 {activeTab === 'emi' && (() => {
                   const regNo = editForm['Reg. No.'] || editForm.regNo || '';
-                  const loan = findVehicleLoan(regNo);
+                  const loans = findVehicleLoansForRegNo(regNo);
                   if (isNewVehicle) {
                     return <p className="text-xs text-slate-400 italic">Save this vehicle first to see its EMI details.</p>;
                   }
-                  if (!loan) {
+                  if (loans.length === 0) {
                     return <p className="text-xs text-slate-400 italic">No EMI/loan record found for {regNo}. Add one in the Loan Management module.</p>;
                   }
-                  const monthsCompleted = computeMonthsCompleted(loan.emiStartDate, loan.tenure);
-                  const bal = loan.tenure != null ? loan.tenure - monthsCompleted : null;
-                  const dueDate = computeDueDate(loan.emiStartDate, monthsCompleted, loan.tenure);
-                  const rows: [string, string][] = [
-                    ['Ownership', loan.ownership || '-'],
-                    ['Financer', loan.financer],
-                    ['Finance Number', loan.financeNumber || '-'],
-                    ['Loan Amount', loan.loanAmount != null ? loan.loanAmount.toLocaleString('en-IN') : '-'],
-                    ['EMI Start Date', loan.emiStartDate || '-'],
-                    ['Monthly EMI', loan.monthlyEmi != null ? loan.monthlyEmi.toLocaleString('en-IN') : '-'],
-                    ['Tenure', loan.tenure != null ? String(loan.tenure) : '-'],
-                    ['Months Completed', String(monthsCompleted)],
-                    ['Balance EMI', bal != null ? String(bal) : '-'],
-                    ['Due Date', dueDate],
-                    ['Interest', loan.interest != null ? `${loan.interest}%` : '-'],
-                    ['Loan Status', loan.loanStatus.toUpperCase()],
-                    ['NOC Status', loan.nocStatus || 'Not received'],
-                    ['Remarks', loan.remarks || '-']
-                  ];
                   return (
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
-                        {rows.map(([label, value]) => (
-                          <div key={label} className="flex items-center justify-between border-b border-slate-100 py-1.5">
-                            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{label}</span>
-                            <span className="text-xs font-bold text-slate-800 text-right">{value}</span>
+                    <div className="space-y-6">
+                      {loans.map(loan => {
+                        const monthsCompleted = computeMonthsCompleted(loan.emiStartDate, loan.tenure);
+                        const bal = loan.tenure != null ? loan.tenure - monthsCompleted : null;
+                        const osAmount = bal != null && loan.monthlyEmi != null ? bal * loan.monthlyEmi : null;
+                        const dueDate = computeDueDate(loan.emiStartDate, monthsCompleted, loan.tenure);
+                        const rows: [string, string][] = [
+                          ['Financer', loan.financer],
+                          ['Loan Number', loan.financeNumber || '-'],
+                          ['Loan Amount', loan.loanAmount != null ? loan.loanAmount.toLocaleString('en-IN') : '-'],
+                          ['EMI Start Date', loan.emiStartDate || '-'],
+                          ['Monthly EMI', loan.monthlyEmi != null ? loan.monthlyEmi.toLocaleString('en-IN') : '-'],
+                          ['Tenure', loan.tenure != null ? String(loan.tenure) : '-'],
+                          ['EMI Paid', String(monthsCompleted)],
+                          ['EMI Pending', bal != null ? String(bal) : '-'],
+                          ['O/S Amount', osAmount != null ? osAmount.toLocaleString('en-IN') : '-'],
+                          ['Due Date', dueDate],
+                          ['Loan Status', loan.loanStatus.toUpperCase()],
+                          ['NOC Status', loan.nocStatus || 'Not received'],
+                          ['Remarks', loan.remarks || '-']
+                        ];
+                        return (
+                          <div key={loan.id} className="border border-slate-200 rounded-lg p-3">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
+                              {rows.map(([label, value]) => (
+                                <div key={label} className="flex items-center justify-between border-b border-slate-100 py-1.5">
+                                  <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{label}</span>
+                                  <span className="text-xs font-bold text-slate-800 text-right">{value}</span>
+                                </div>
+                              ))}
+                            </div>
+                            {loan.documents && loan.documents.length > 0 && (
+                              <div className="mt-3">
+                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Documents</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {loan.documents.map((doc: VehicleDocument, i: number) => (
+                                    <span key={i} className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 border border-blue-100 rounded-full text-[10px] font-bold">
+                                      {doc.name || `Document ${i + 1}`}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        ))}
-                      </div>
-                      {loan.documents && loan.documents.length > 0 && (
-                        <div>
-                          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Documents</p>
-                          <div className="flex flex-wrap gap-1.5">
-                            {loan.documents.map((doc, i) => (
-                              <span key={i} className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 border border-blue-100 rounded-full text-[10px] font-bold">
-                                {doc.name || `Document ${i + 1}`}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                        );
+                      })}
                     </div>
                   );
                 })()}
