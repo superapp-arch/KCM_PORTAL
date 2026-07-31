@@ -103,7 +103,8 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
   useEffect(() => {
     if (!employee) return;
     authFetch('/api/staff/provident-fund').then(r => r.json()).then((all: (StaffProvidentFund & { totalDays: number; workingDays: number; totalAbsent: number; lopDays: number })[]) => {
-      const mine = all.find(r => r.empId === employee.id && r.month === pfMonth);
+      const myRecords = all.filter(r => r.empId === employee.id);
+      const mine = myRecords.find(r => r.month === pfMonth);
       if (mine) {
         setPfForm({
           basic: String(mine.basic ?? ''), hra: String(mine.hra ?? ''), conveyance: String(mine.conveyance ?? ''),
@@ -114,7 +115,18 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
           otherDeductions: String(mine.otherDeductions ?? ''), advances: String(mine.advances ?? ''), incomeTax: String(mine.incomeTax ?? '')
         });
       } else {
-        setPfForm({ ...emptyPfForm });
+        // No entry yet for this month - carry forward the recurring, rarely-changing
+        // figures (Basic/HRA/Conveyance/Medical/LTA/CCA and Professional Tax/EPF/ESI)
+        // from the most recent earlier month so HR doesn't retype them every month.
+        // Everything else (Fuel, Other Allowances, Extra Days, F&F, Other Deductions,
+        // Advances, Income Tax) varies month to month and stays blank for manual entry.
+        const previous = myRecords.filter(r => r.month < pfMonth).sort((a, b) => b.month.localeCompare(a.month))[0];
+        setPfForm({
+          ...emptyPfForm,
+          basic: String(previous?.basic ?? ''), hra: String(previous?.hra ?? ''), conveyance: String(previous?.conveyance ?? ''),
+          medicalAllowance: String(previous?.medicalAllowance ?? ''), lta: String(previous?.lta ?? ''), cca: String(previous?.cca ?? ''),
+          professionalTax: String(previous?.professionalTax ?? ''), epf: String(previous?.epf ?? ''), esi: String(previous?.esi ?? '')
+        });
       }
     }).catch(() => {});
     // Attendance-derived totalDays/workingDays/totalAbsent/lopDays should show even before a PF record exists for this month.
