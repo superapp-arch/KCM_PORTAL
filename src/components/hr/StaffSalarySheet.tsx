@@ -12,10 +12,21 @@ interface StaffSalarySheetProps {
 }
 
 type SalaryDetailWithEffective = StaffSalaryDetail & { effectiveSalary: number; advanceBalance: number };
+// Server-enriched Provident Fund record - includes netSalary computed from
+// this record's raw earnings/deductions plus that month's attendance-driven
+// LOP, mirroring StaffFormModal's Salary Breakup tab exactly (see
+// GET /api/staff/provident-fund).
+type EnrichedPFRecord = { empId: string; month: string; netSalary: number };
+
+function currentMonthKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
 
 export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmployee, onDeleteEmployee }: StaffSalarySheetProps) {
   const [salaryDetails, setSalaryDetails] = useState<SalaryDetailWithEffective[]>([]);
   const [hikeCounts, setHikeCounts] = useState<Record<string, { count: number; total: number }>>({});
+  const [pfRecords, setPfRecords] = useState<EnrichedPFRecord[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [locationFilter, setLocationFilter] = useState(''); // '' = All Locations
   const [statusFilter, setStatusFilter] = useState<'Active' | 'Inactive' | 'All'>('Active');
@@ -42,10 +53,22 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
         });
         setHikeCounts(grouped);
       }
+      const pfRes = await authFetch('/api/staff/provident-fund');
+      if (pfRes.ok) setPfRecords(await pfRes.json());
     } catch { /* keep prior state on transient failure */ }
   };
 
   useEffect(() => { loadSalaryData(); }, [employees.length]);
+
+  // Current month's Net Salary if a Salary Breakup record exists for it,
+  // else the most recent month on record - null if there's no PF record at all.
+  const netSalaryFor = (empId: string): number | null => {
+    const empRecords = pfRecords.filter(r => r.empId === empId);
+    if (empRecords.length === 0) return null;
+    const thisMonth = currentMonthKey();
+    const match = empRecords.find(r => r.month === thisMonth) || [...empRecords].sort((a, b) => b.month.localeCompare(a.month))[0];
+    return match.netSalary;
+  };
 
   // Location options are derived from whatever locations staff have actually
   // been entered with, rather than a hardcoded list - a new location shows up
@@ -126,7 +149,6 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
               <tr>
                 <th className="px-3 py-2.5">Emp ID</th>
                 <th className="px-3 py-2.5">Name</th>
-                <th className="px-3 py-2.5">DOJ</th>
                 <th className="px-3 py-2.5">Designation</th>
                 <th className="px-3 py-2.5">Location</th>
                 <th className="px-3 py-2.5">Status</th>
@@ -135,22 +157,21 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
                 <th className="px-3 py-2.5">Annual CTC</th>
                 <th className="px-3 py-2.5">Advance Balance</th>
                 <th className="px-3 py-2.5">Hikes</th>
-                <th className="px-3 py-2.5">DOL</th>
-                <th className="px-3 py-2.5">Remarks</th>
+                <th className="px-3 py-2.5 text-right">Net Salary</th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
-                <tr><td colSpan={14} className="text-center py-10 text-slate-400">No staff records found.</td></tr>
+                <tr><td colSpan={11} className="text-center py-10 text-slate-400">No staff records found.</td></tr>
               ) : filtered.map(emp => {
                 const detail = salaryDetails.find(d => d.empId === emp.id);
                 const hikeInfo = hikeCounts[emp.id];
+                const netSalary = netSalaryFor(emp.id);
                 return (
                   <tr key={emp.id} className="hover:bg-slate-50">
                     <td className="px-3 py-2.5 font-mono font-bold text-slate-800">{emp.id}</td>
                     <td className="px-3 py-2.5 font-semibold text-slate-700">{emp.name}</td>
-                    <td className="px-3 py-2.5 font-mono text-slate-500">{emp.dateOfJoining || '-'}</td>
                     <td className="px-3 py-2.5 text-slate-500">{emp.designation || '-'}</td>
                     <td className="px-3 py-2.5 text-slate-500">{emp.location || '-'}</td>
                     <td className="px-3 py-2.5">
@@ -173,8 +194,7 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
                       ) : '-'}
                     </td>
                     <td className="px-3 py-2.5">{hikeInfo ? `${hikeInfo.count} (+Rs. ${hikeInfo.total.toLocaleString('en-IN')})` : '-'}</td>
-                    <td className="px-3 py-2.5 font-mono text-slate-500">{emp.dateOfLeaving || '-'}</td>
-                    <td className="px-3 py-2.5 text-slate-500 max-w-[150px] truncate">{emp.remarks || '-'}</td>
+                    <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{netSalary != null ? `Rs. ${netSalary.toLocaleString('en-IN')}` : '-'}</td>
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
                       <button onClick={() => setModalEmployee(emp)} className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
                       <button onClick={() => handleDelete(emp)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>

@@ -1,8 +1,17 @@
 import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Paperclip, Download } from 'lucide-react';
+import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Download } from 'lucide-react';
 import { DriverEmployee, DRIVER_LOCATION_CATEGORIES } from '../../types';
 import DriverFormModal from './DriverFormModal';
+
+// Payable Amount = Gross Salary + Other Additions - (Petty Cash/Advance +
+// Loan Deduction + Recovery Amount + Driver Welfare + BATA) - LOP Amount -
+// mirrors DriverFormModal's Salary Breakup formula exactly, computed from
+// the same stored snapshot fields so it's always in sync with the last save.
+const payableAmount = (driver: DriverEmployee): number =>
+  (driver.grossSalary || 0) + (driver.otherAdditions || 0)
+  - (driver.pettyCashAdvance || 0) - (driver.loanDeduction || 0) - (driver.recoveryAmount || 0) - (driver.driverWelfare || 0) - (driver.bata || 0)
+  - (driver.lopAmount || 0);
 
 const toDriverRow = (driver: DriverEmployee, i: number) => ({
   'Sl.No': i + 1,
@@ -21,6 +30,8 @@ const toDriverRow = (driver: DriverEmployee, i: number) => ({
   'Recovery Amount': driver.recoveryAmount || '',
   'Driver Welfare': driver.driverWelfare || '',
   'BATA': driver.bata || '',
+  'Other Additions': driver.otherAdditions || '',
+  'Payable Amount': payableAmount(driver),
   'Location': driver.location
 });
 
@@ -138,22 +149,15 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
                 <th className="px-3 py-2.5">A/C No</th>
                 <th className="px-3 py-2.5">IFSC Code</th>
                 <th className="px-3 py-2.5">Reporting</th>
-                <th className="px-3 py-2.5">Remark</th>
-                <th className="px-3 py-2.5">LOP Amount</th>
                 <th className="px-3 py-2.5">Petty Cash/Advance</th>
-                <th className="px-3 py-2.5">Month</th>
-                <th className="px-3 py-2.5">Loan Deduction</th>
-                <th className="px-3 py-2.5">Recovery Amount</th>
-                <th className="px-3 py-2.5">Driver Welfare</th>
-                <th className="px-3 py-2.5">BATA</th>
                 <th className="px-3 py-2.5">Location</th>
-                <th className="px-3 py-2.5 text-center">Docs</th>
+                <th className="px-3 py-2.5 text-right">Payable Amount</th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
-                <tr><td colSpan={19} className="text-center py-10 text-slate-400">No driver records found.</td></tr>
+                <tr><td colSpan={12} className="text-center py-10 text-slate-400">No driver records found.</td></tr>
               ) : filtered.map((driver, i) => (
                 <tr key={driver.id} className="hover:bg-slate-50">
                   <td className="px-3 py-2.5 font-mono text-slate-500">{i + 1}</td>
@@ -164,27 +168,11 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
                   <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{driver.accountNumber || '-'}</td>
                   <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{driver.ifscCode || '-'}</td>
                   <td className="px-3 py-2.5 text-slate-500">{driver.reporting || '-'}</td>
-                  <td className="px-3 py-2.5 text-slate-500 max-w-[150px] truncate" title={driver.remark}>{driver.remark || '-'}</td>
-                  <td className="px-3 py-2.5 font-mono text-rose-700">{driver.lopAmount ? `Rs. ${driver.lopAmount.toLocaleString('en-IN')}` : '-'}</td>
                   <td className="px-3 py-2.5 font-mono text-slate-600">{driver.pettyCashAdvance ? `Rs. ${driver.pettyCashAdvance.toLocaleString('en-IN')}` : '-'}</td>
-                  <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{driver.month || '-'}</td>
-                  <td className="px-3 py-2.5 font-mono text-slate-600">{driver.loanDeduction ? `Rs. ${driver.loanDeduction.toLocaleString('en-IN')}` : '-'}</td>
-                  <td className="px-3 py-2.5 font-mono text-slate-600">{driver.recoveryAmount ? `Rs. ${driver.recoveryAmount.toLocaleString('en-IN')}` : '-'}</td>
-                  <td className="px-3 py-2.5 font-mono text-slate-600">{driver.driverWelfare ? `Rs. ${driver.driverWelfare.toLocaleString('en-IN')}` : '-'}</td>
-                  <td className="px-3 py-2.5 font-mono text-slate-600">{driver.bata ? `Rs. ${driver.bata.toLocaleString('en-IN')}` : '-'}</td>
                   <td className="px-3 py-2.5 whitespace-nowrap">
                     <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded text-[9.5px] font-bold">{driver.location}</span>
                   </td>
-                  <td className="px-3 py-2.5 text-center">
-                    {(() => {
-                      const docCount = (driver.aadharDocuments?.length || 0) + (driver.drivingLicenseDocuments?.length || 0) + (driver.otherDocuments?.length || 0);
-                      return docCount > 0 ? (
-                        <span className="inline-flex items-center justify-center px-1.5 py-0.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-[10px] font-bold">
-                          <Paperclip className="w-2.5 h-2.5 mr-0.5" />{docCount}
-                        </span>
-                      ) : <span className="text-slate-300">-</span>;
-                    })()}
-                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">Rs. {payableAmount(driver).toLocaleString('en-IN')}</td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
                     <button onClick={() => handleDownloadOne(driver)} title="Download this driver" className="p-1 text-slate-400 hover:text-teal-600 hover:bg-slate-100 rounded cursor-pointer"><Download className="w-3.5 h-3.5" /></button>
                     <button onClick={() => setModalDriver(driver)} className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>

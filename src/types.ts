@@ -475,6 +475,7 @@ export interface DriverEmployee {
   recoveryAmount?: number;
   driverWelfare?: number;
   bata?: number;
+  otherAdditions?: number; // added to Gross Salary (see Payable Amount formula)
   grossSalary?: number;
   location: DriverLocationCategory;
   aadharDocuments?: VehicleDocument[]; // mandatory, at least one file

@@ -41,6 +41,7 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
   const [attendanceSummary, setAttendanceSummary] = useState({ totalDays: 0, workingDays: 0, lopDays: 0, exemptionLeaveDays: 0 });
   const [salaryForm, setSalaryForm] = useState({
     grossSalary: driver?.grossSalary != null ? String(driver.grossSalary) : '',
+    otherAdditions: driver?.otherAdditions != null ? String(driver.otherAdditions) : '',
     pettyCashAdvance: driver?.pettyCashAdvance != null ? String(driver.pettyCashAdvance) : '',
     loanDeduction: driver?.loanDeduction != null ? String(driver.loanDeduction) : '',
     recoveryAmount: driver?.recoveryAmount != null ? String(driver.recoveryAmount) : '',
@@ -63,7 +64,10 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
   const num = (v: string) => Number(v) || 0;
   const wagesPerDay = attendanceSummary.totalDays > 0 ? num(salaryForm.grossSalary) / attendanceSummary.totalDays : 0;
   const lopAmount = attendanceSummary.lopDays * wagesPerDay;
-  const total = num(salaryForm.grossSalary) - lopAmount;
+  // Payable Amount = Gross Salary + Other Additions - (Petty Cash/Advance +
+  // Loan Deduction + Recovery Amount + Driver Welfare + BATA) - LOP Amount.
+  const totalDeductions = num(salaryForm.pettyCashAdvance) + num(salaryForm.loanDeduction) + num(salaryForm.recoveryAmount) + num(salaryForm.driverWelfare) + num(salaryForm.bata);
+  const payableAmount = num(salaryForm.grossSalary) + num(salaryForm.otherAdditions) - totalDeductions - lopAmount;
 
   const handleSubmit = async () => {
     if (!basic.id.trim() || !basic.name.trim()) {
@@ -97,6 +101,7 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
         otherDocuments,
         month: salaryMonth,
         grossSalary: num(salaryForm.grossSalary) || undefined,
+        otherAdditions: num(salaryForm.otherAdditions) || undefined,
         pettyCashAdvance: num(salaryForm.pettyCashAdvance) || undefined,
         loanDeduction: num(salaryForm.loanDeduction) || undefined,
         recoveryAmount: num(salaryForm.recoveryAmount) || undefined,
@@ -244,23 +249,27 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
                     <input type="number" value={salaryForm.grossSalary} onChange={e => setSalaryForm({ ...salaryForm, grossSalary: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                   </div>
                   <div>
-                    <label className="block text-slate-400 mb-0.5">Petty Cash/Advance</label>
+                    <label className="block text-slate-400 mb-0.5">Other Additions <span className="text-emerald-500 font-normal">(+)</span></label>
+                    <input type="number" value={salaryForm.otherAdditions} onChange={e => setSalaryForm({ ...salaryForm, otherAdditions: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-0.5">Petty Cash/Advance <span className="text-rose-500 font-normal">(-)</span></label>
                     <input type="number" value={salaryForm.pettyCashAdvance} onChange={e => setSalaryForm({ ...salaryForm, pettyCashAdvance: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                   </div>
                   <div>
-                    <label className="block text-slate-400 mb-0.5">Loan Deduction</label>
+                    <label className="block text-slate-400 mb-0.5">Loan Deduction <span className="text-rose-500 font-normal">(-)</span></label>
                     <input type="number" value={salaryForm.loanDeduction} onChange={e => setSalaryForm({ ...salaryForm, loanDeduction: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                   </div>
                   <div>
-                    <label className="block text-slate-400 mb-0.5">Recovery Amount</label>
+                    <label className="block text-slate-400 mb-0.5">Recovery Amount <span className="text-rose-500 font-normal">(-)</span></label>
                     <input type="number" value={salaryForm.recoveryAmount} onChange={e => setSalaryForm({ ...salaryForm, recoveryAmount: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                   </div>
                   <div>
-                    <label className="block text-slate-400 mb-0.5">Driver Welfare</label>
+                    <label className="block text-slate-400 mb-0.5">Driver Welfare <span className="text-rose-500 font-normal">(-)</span></label>
                     <input type="number" value={salaryForm.driverWelfare} onChange={e => setSalaryForm({ ...salaryForm, driverWelfare: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                   </div>
                   <div>
-                    <label className="block text-slate-400 mb-0.5">BATA</label>
+                    <label className="block text-slate-400 mb-0.5">BATA <span className="text-rose-500 font-normal">(-)</span></label>
                     <input type="number" value={salaryForm.bata} onChange={e => setSalaryForm({ ...salaryForm, bata: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                   </div>
                 </div>
@@ -273,8 +282,9 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
               </div>
 
               <div className="border border-purple-200 bg-purple-50 rounded-lg p-3 grid grid-cols-2 gap-y-1.5">
+                <span className="text-purple-500 font-semibold">Total Deductions</span><span className="text-right font-bold">Rs. {totalDeductions.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                 <span className="text-purple-500 font-semibold">LOP Amount</span><span className="text-right font-bold">Rs. {lopAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
-                <span className="text-purple-700 font-black">Total</span><span className="text-right font-black text-purple-700">Rs. {total.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                <span className="text-purple-700 font-black">Payable Amount</span><span className="text-right font-black text-purple-700">Rs. {payableAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
               </div>
               {!isEditing && <p className="text-slate-400 italic">Save this driver first to record attendance-linked Salary Breakup details.</p>}
             </div>
