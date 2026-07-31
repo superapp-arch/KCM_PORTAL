@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { Truck, Plus, Search, Edit2, Trash2, X, ChevronDown, AlertTriangle } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { Truck, Plus, Search, Edit2, Trash2, X, ChevronDown, AlertTriangle, Download } from 'lucide-react';
 import { Vehicle, VehicleLoan, VehicleDocument, LoanStatus, NOCStatus, VEHICLE_LOAN_FINANCERS } from '../../types';
 import { computeMonthsCompleted, computeDueDate } from '../../utils/loanDates';
 import DateInput from '../DateInput';
@@ -34,6 +35,29 @@ function monthYearFromStart(emiStartDate: string, tenure: number): string {
   const d = new Date(y, m - 1 + tenure, 1);
   return d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
 }
+
+const toLoanRow = (loan: VehicleLoan, i: number) => {
+  const monthsCompleted = computeMonthsCompleted(loan.emiStartDate, loan.tenure);
+  const bal = loan.tenure != null ? loan.tenure - monthsCompleted : '';
+  return {
+    'SL No': i + 1,
+    'Ownership': loan.ownership || '',
+    'Reg. No': loan.regNo,
+    'Financer': loan.financer,
+    'Finance Number': loan.financeNumber || '',
+    'Loan Amount': loan.loanAmount || '',
+    'EMI Start Date': loan.emiStartDate || '',
+    'Monthly EMI': loan.monthlyEmi || '',
+    'Tenure': loan.tenure ?? '',
+    'Months Completed': monthsCompleted,
+    'Balance EMI': bal,
+    'Due Date': computeDueDate(loan.emiStartDate, monthsCompleted, loan.tenure),
+    'Interest': loan.interest ?? '',
+    'Loan Status': loan.loanStatus.toUpperCase(),
+    'Remarks': loan.remarks || '',
+    'NOC Status': loan.nocStatus || 'Not received'
+  };
+};
 
 export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleLoan, onUpdateVehicleLoan, onDeleteVehicleLoan }: VehicleLoanSheetProps) {
   const [searchTerm, setSearchTerm] = useState('');
@@ -116,6 +140,23 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
     }
   };
 
+  const handleDownloadOne = (loan: VehicleLoan) => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([toLoanRow(loan, 0)]), 'Vehicle Loan');
+    XLSX.writeFile(workbook, `KCM_Vehicle_Loan_${loan.regNo}.xlsx`);
+  };
+
+  // Downloads whatever is currently visible - respects the Financer and
+  // Ownership filters and search term, so "download based on financer" is
+  // just: filter by financer, then download.
+  const handleDownloadAll = () => {
+    if (filtered.length === 0) return;
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(filtered.map(toLoanRow)), 'Vehicle Loans');
+    const financerLabel = financerFilter.length === 1 ? financerFilter[0].replace(/\s+/g, '_') : financerFilter.length > 1 ? 'Selected_Financers' : 'AllFinancers';
+    XLSX.writeFile(workbook, `KCM_Vehicle_Loans_${financerLabel}.xlsx`);
+  };
+
   const toggleFinancerFilter = (financer: string) => {
     setFinancerFilter(prev => prev.includes(financer) ? prev.filter(f => f !== financer) : [...prev, financer]);
   };
@@ -192,6 +233,11 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
           )}
         </div>
 
+        <button onClick={handleDownloadAll} title="Download the currently filtered loans"
+          className="bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all whitespace-nowrap">
+          <Download className="w-3.5 h-3.5 text-teal-600" /> Download
+        </button>
+
         <button onClick={() => { resetForm(); setShowModal(true); }}
           className="bg-gradient-to-r from-teal-600 to-emerald-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all whitespace-nowrap">
           <Plus className="w-3.5 h-3.5" /> Add Vehicle Loan
@@ -249,7 +295,7 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
                         </span>
                       ) : '-'}
                     </td>
-                    <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{dueDate}</td>
+                    <td className="px-3 py-2.5 font-mono font-bold text-red-600 whitespace-nowrap">{dueDate}</td>
                     <td className="px-3 py-2.5 text-right font-mono text-slate-600">{loan.interest != null ? `${loan.interest}%` : '-'}</td>
                     <td className="px-3 py-2.5">
                       <span className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] ${loan.loanStatus === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
@@ -257,6 +303,7 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
                       </span>
                     </td>
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                      <button onClick={() => handleDownloadOne(loan)} title="Download this loan" className="p-1 text-slate-400 hover:text-teal-600 hover:bg-slate-100 rounded cursor-pointer"><Download className="w-3.5 h-3.5" /></button>
                       <button onClick={() => startEdit(loan)} className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
                       <button onClick={() => handleDelete(loan)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
                     </td>

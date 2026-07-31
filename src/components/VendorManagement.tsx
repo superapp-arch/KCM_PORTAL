@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
+import * as XLSX from 'xlsx';
 import { Vendor, VehicleDocument } from '../types';
-import { Building2, Plus, Search, Edit2, Trash2, X, Car } from 'lucide-react';
+import { Building2, Plus, Search, Edit2, Trash2, X, Car, Download } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 
 // undefined/missing `active` is treated as active, matching Vehicle's
@@ -39,6 +40,7 @@ const CLIENT_BADGE_STYLE: Record<string, string> = {
 
 export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor, onDeleteVendor }: VendorManagementProps) {
   const [searchTerm, setSearchTerm] = useState('');
+  const [clientFilter, setClientFilter] = useState(''); // '' = All clients
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -159,11 +161,35 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
     await onUpdateVendor(vendor.id, { ...vendor, active: !isVendorActive(vendor) });
   };
 
+  // Dynamically listed (not hardcoded to Swiggy/Reliance) so any other
+  // client value already present in the data shows up as a filter option too.
+  const clientOptions = useMemo(() => Array.from(new Set(vendors.map(v => v.client).filter(Boolean))) as string[], [vendors]);
+
   const filtered = vendors.filter(v =>
-    (v.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (!clientFilter || v.client === clientFilter) &&
+    ((v.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     (v.code || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (v.vehicleNumbers || []).some(n => n.toLowerCase().includes(searchTerm.toLowerCase()))
+    (v.vehicleNumbers || []).some(n => n.toLowerCase().includes(searchTerm.toLowerCase())))
   );
+
+  const handleDownload = () => {
+    if (filtered.length === 0) return;
+    const rows = filtered.map(v => ({
+      'Vendor Name': v.name,
+      'Vendor Code': v.code,
+      'Client': v.client || '',
+      'Vehicle Number(s)': (v.vehicleNumbers || []).join(', '),
+      'Contact': v.contactNumber,
+      'Aadhar': v.aadharNumber,
+      'PAN': v.panNumber,
+      'Bank A/C': v.bankAccountNumber,
+      'IFSC': v.ifscCode,
+      'Status': isVendorActive(v) ? 'ACTIVE' : 'INACTIVE'
+    }));
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), 'Vendors');
+    XLSX.writeFile(workbook, `KCM_Vendors_${clientFilter || 'All'}.xlsx`);
+  };
 
   return (
     <div className="space-y-6 text-xs text-slate-800">
@@ -187,15 +213,23 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
         </button>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex items-center gap-2">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex flex-wrap items-center gap-2">
         <Search className="w-3.5 h-3.5 text-slate-400" />
         <input
           value={searchTerm}
           onChange={e => setSearchTerm(e.target.value)}
           placeholder="Search by vendor name, code, or vehicle number..."
           autoComplete="off"
-          className="flex-1 outline-none"
+          className="flex-1 outline-none min-w-45"
         />
+        <select value={clientFilter} onChange={e => setClientFilter(e.target.value)} className="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700">
+          <option value="">All Clients</option>
+          {clientOptions.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <button onClick={handleDownload} title="Download the currently filtered vendors"
+          className="flex items-center gap-1.5 border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold px-3 py-1.5 rounded-lg uppercase text-[10px] cursor-pointer transition-all whitespace-nowrap">
+          <Download className="w-3.5 h-3.5 text-indigo-600" /> Download
+        </button>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">

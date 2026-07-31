@@ -49,7 +49,8 @@ const DRIVER_ACCESS_EMAILS = [
   'nagaraju.linga@kcmlogistics.in',
   'ramesh@kcmlogistics.in',
   'saneel@kcmlogistics.in',
-  'vinod@kcmlogistics.in'
+  'vinod@kcmlogistics.in',
+  'bhagya@kcmlogistics.in'
 ];
 
 // Displays the live header clock in Indian Standard Time regardless of the

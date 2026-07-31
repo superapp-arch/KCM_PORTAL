@@ -632,13 +632,14 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                 <th className="px-4 py-4 text-center text-purple-100">Status</th>
                 <th className="px-4 py-4 text-purple-100">Insurance Exp</th>
                 <th className="px-4 py-4 text-purple-100">FC Expiry</th>
+                <th className="px-4 py-4 text-purple-100">EMI Due Date</th>
                 <th className="px-4 py-4 text-right text-purple-100">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
               {filteredVehicles.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="text-center py-12 text-slate-400 font-mono">
+                  <td colSpan={10} className="text-center py-12 text-slate-400 font-mono">
                     NO FLEET RECORDS FOUND MATCHING THE SELECTED PARAMETERS.
                   </td>
                 </tr>
@@ -664,6 +665,11 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
 
                   // Undefined/missing status is treated as active (default state for existing records)
                   const isActive = v.active !== false;
+
+                  const matchedLoan = findVehicleLoan(reg);
+                  const emiDueDate = matchedLoan
+                    ? computeDueDate(matchedLoan.emiStartDate, computeMonthsCompleted(matchedLoan.emiStartDate, matchedLoan.tenure), matchedLoan.tenure)
+                    : '-';
 
                   return (
                     <React.Fragment key={reg + '-' + siNo}>
@@ -724,6 +730,7 @@ export default function FleetSheet({ vehicles, userRole, onUpdateVehicle, onDele
                           )}
                         </td>
                         <td className="px-4 py-3.5 font-mono text-slate-500">{fcDate || '-'}</td>
+                        <td className="px-4 py-3.5 font-mono font-bold text-red-600 whitespace-nowrap">{emiDueDate}</td>
                         <td className="px-4 py-3.5 text-right whitespace-nowrap">
                           <div className="flex items-center justify-end space-x-2">
                             {canEdit && (

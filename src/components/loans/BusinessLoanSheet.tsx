@@ -1,8 +1,30 @@
 import React, { useState, useMemo } from 'react';
-import { Landmark, Plus, Search, Edit2, Trash2, X } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { Landmark, Plus, Search, Edit2, Trash2, X, Download } from 'lucide-react';
 import { BusinessLoan, LoanStatus } from '../../types';
 import { computeMonthsCompleted, computeDueDate } from '../../utils/loanDates';
 import DateInput from '../DateInput';
+
+const toLoanRow = (loan: BusinessLoan, i: number) => {
+  const emiPaid = computeMonthsCompleted(loan.emiDate, loan.tenure);
+  const bal = loan.tenure != null ? loan.tenure - emiPaid : '';
+  return {
+    'SL No': i + 1,
+    'Financer': loan.financer,
+    'Loan Type': loan.loanType || '',
+    'Loan Number': loan.loanNumber,
+    'Sanctioned Amount': loan.sanctionedAmount || '',
+    'EMI Date': loan.emiDate || '',
+    'EMI Monthly': loan.emiMonthly || '',
+    'Tenure': loan.tenure ?? '',
+    'EMI Paid': emiPaid,
+    'Balance EMI': bal,
+    'Due Date': computeDueDate(loan.emiDate, emiPaid, loan.tenure),
+    'Interest Rate': loan.interestRate ?? '',
+    'Loan Status': loan.loanStatus.toUpperCase(),
+    'Remarks': loan.remarks || ''
+  };
+};
 
 interface BusinessLoanSheetProps {
   businessLoans: BusinessLoan[];
@@ -80,6 +102,19 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
     }
   };
 
+  const handleDownloadOne = (loan: BusinessLoan) => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([toLoanRow(loan, 0)]), 'Business Loan');
+    XLSX.writeFile(workbook, `KCM_Business_Loan_${loan.loanNumber}.xlsx`);
+  };
+
+  const handleDownloadAll = () => {
+    if (filtered.length === 0) return;
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(filtered.map(toLoanRow)), 'Business Loans');
+    XLSX.writeFile(workbook, `KCM_Business_Loans.xlsx`);
+  };
+
   const filtered = useMemo(() => businessLoans.filter(l => {
     if (!searchTerm) return true;
     const q = searchTerm.toLowerCase();
@@ -93,6 +128,11 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
           <Search className="w-3.5 h-3.5 text-slate-400" />
           <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search by Financer, Loan Number, or Loan Type..." autoComplete="off" className="flex-1 outline-none" />
         </div>
+        <button onClick={handleDownloadAll} title="Download the currently filtered loans"
+          className="bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all whitespace-nowrap">
+          <Download className="w-3.5 h-3.5 text-indigo-600" /> Download
+        </button>
+
         <button onClick={() => { resetForm(); setShowModal(true); }}
           className="bg-gradient-to-r from-indigo-600 to-sky-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all whitespace-nowrap">
           <Plus className="w-3.5 h-3.5" /> Add Business Loan
@@ -138,7 +178,7 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
                     <td className="px-3 py-2.5 text-right font-mono text-slate-600">{loan.tenure ?? '-'}</td>
                     <td className="px-3 py-2.5 text-right font-mono text-slate-600">{emiPaid}</td>
                     <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-700">{bal ?? '-'}</td>
-                    <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{dueDate}</td>
+                    <td className="px-3 py-2.5 font-mono font-bold text-red-600 whitespace-nowrap">{dueDate}</td>
                     <td className="px-3 py-2.5 text-right font-mono text-slate-600">{loan.interestRate != null ? `${loan.interestRate}%` : '-'}</td>
                     <td className="px-3 py-2.5">
                       <span className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] ${loan.loanStatus === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
@@ -147,6 +187,7 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
                     </td>
                     <td className="px-3 py-2.5 text-slate-500 max-w-[160px] truncate" title={loan.remarks}>{loan.remarks || '-'}</td>
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                      <button onClick={() => handleDownloadOne(loan)} title="Download this loan" className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded cursor-pointer"><Download className="w-3.5 h-3.5" /></button>
                       <button onClick={() => startEdit(loan)} className="p-1 text-slate-500 hover:text-indigo-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
                       <button onClick={() => handleDelete(loan)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
                     </td>

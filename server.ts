@@ -13,6 +13,7 @@ import { verifyPassword } from './src/auth/password.ts';
 import { createSession, getSessionUser, destroySession, extractBearerToken } from './src/auth/session.ts';
 import { issueOtp, verifyOtp } from './src/auth/otp.ts';
 import { istTimestamp, istDateKey } from './src/auth/time.ts';
+import { computeDueDateRaw } from './src/utils/loanDates.ts';
 import {
   User,
   Vehicle,
@@ -393,21 +394,30 @@ const DRIVER_LOCATION_SCOPES: Record<string, DriverLocationCategory[]> = {
   'vinod@kcmlogistics.in': ['BLR Swiggy', 'Vijayawada Drivers Details', 'Market Vehicle Driver Details']
 };
 
+// Bhagya gets every location (like a super admin) rather than a single
+// region - her role already spans HR/Billing/Fleet/Vendor admin duties.
+const DRIVER_ALL_LOCATIONS_EMAILS = ['bhagya@kcmlogistics.in'];
+
 function requireDriverAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
-  if (sessionUser.department !== 'super_admin' && !DRIVER_LOCATION_SCOPES[sessionUser.email || '']) {
+  if (
+    sessionUser.department !== 'super_admin' &&
+    !DRIVER_ALL_LOCATIONS_EMAILS.includes(sessionUser.email || '') &&
+    !DRIVER_LOCATION_SCOPES[sessionUser.email || '']
+  ) {
     return res.status(403).json({ error: 'You do not have access to Driver Details.' });
   }
   next();
 }
 
-// Super admins see every location; everyone else only their assigned set.
+// Super admins (and Bhagya) see every location; everyone else only their
+// assigned set.
 function getAllowedDriverLocations(sessionUser?: ReturnType<typeof getSessionUser>): DriverLocationCategory[] | 'ALL' {
   if (!sessionUser) return [];
-  if (sessionUser.department === 'super_admin') return 'ALL';
+  if (sessionUser.department === 'super_admin' || DRIVER_ALL_LOCATIONS_EMAILS.includes(sessionUser.email || '')) return 'ALL';
   return DRIVER_LOCATION_SCOPES[sessionUser.email || ''] || [];
 }
 
@@ -588,6 +598,112 @@ async function startServer() {
       await buildAndSendComplianceDigest();
     } catch (error) {
       console.error('Failed to send scheduled compliance digest:', error);
+    }
+  }
+
+  // Vehicle loans whose next EMI due date (see computeDueDateRaw) falls
+  // exactly 3 days from today, for Active loans only.
+  async function calculateEmiDueAlerts() {
+    const loans = await getVehicleLoans();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const alerts: { financer: string; regNo: string; dueDate: string }[] = [];
+    loans.forEach(loan => {
+      if (loan.loanStatus !== 'Active') return;
+      const due = computeDueDateRaw(loan.emiStartDate, loan.tenure);
+      if (!due) return;
+      const diffDays = Math.round((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays !== 3) return;
+      alerts.push({
+        financer: loan.financer,
+        regNo: loan.regNo,
+        dueDate: due.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+      });
+    });
+    return alerts;
+  }
+
+  // Emails Rakshina and every Super Admin whenever a vehicle loan's next EMI
+  // is due in exactly 3 days, grouped by Financer (financer name as heading,
+  // then Vehicle Number + Due Date underneath) - same daily-once/manual-now
+  // pattern as buildAndSendComplianceDigest above.
+  async function buildAndSendEmiDueDigest(): Promise<{ sent: boolean; count: number; recipients: string[] }> {
+    const alerts = await calculateEmiDueAlerts();
+    if (alerts.length === 0) return { sent: false, count: 0, recipients: [] };
+
+    const usersList = await getUsersWithFallback();
+    const recipients = usersList
+      .filter((u: any) => u.department === 'super_admin' || u.email === 'finance@kcmlogistics.in')
+      .map((u: any) => u.email)
+      .filter(Boolean) as string[];
+
+    if (recipients.length === 0) return { sent: false, count: 0, recipients: [] };
+
+    const grouped = new Map<string, typeof alerts>();
+    alerts.forEach(a => {
+      if (!grouped.has(a.financer)) grouped.set(a.financer, []);
+      grouped.get(a.financer)!.push(a);
+    });
+
+    const sections = Array.from(grouped.entries()).map(([financer, rows]) => `
+      <h3 style="margin:18px 0 6px;color:#0f172a;">${financer}</h3>
+      <table style="border-collapse:collapse;font-size:13px;">
+        <thead>
+          <tr>
+            <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Vehicle Number</th>
+            <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Due Date</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;">${r.regNo}</td>
+              <td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;color:#dc2626;font-weight:bold;">${r.dueDate}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `).join('');
+
+    const todayKey = istDateKey();
+
+    await resend.emails.send({
+      from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
+      to: recipients,
+      subject: 'KCM Vehicle Loan - EMI Due in 3 Days',
+      html: `
+        <div style="font-family:Arial,sans-serif;line-height:1.5;">
+          <p>Hello,</p>
+          <p>The following vehicle EMIs are due in 3 days. Please arrange payment before the due date.</p>
+          ${sections}
+        </div>
+      `,
+    });
+
+    await saveNotification({
+      id: `emi-digest-sent-${todayKey}`,
+      title: 'EMI Due Digest Sent',
+      message: `EMI due-in-3-days digest emailed to ${recipients.join(', ')} covering ${alerts.length} vehicle loan(s).`,
+      type: 'general',
+      timestamp: istTimestamp(),
+      read: true
+    });
+
+    console.log(`[EMI DUE DIGEST] Sent digest to ${recipients.join(', ')} (${alerts.length} items)`);
+    return { sent: true, count: alerts.length, recipients };
+  }
+
+  // Automatic once-per-calendar-day trigger, mirroring runScheduledComplianceDigest.
+  async function runScheduledEmiDueDigest() {
+    const digestId = `emi-digest-sent-${istDateKey()}`;
+
+    try {
+      const existingNotifs = await getNotifications();
+      if (existingNotifs.some((n: any) => n.id === digestId)) return;
+      await buildAndSendEmiDueDigest();
+    } catch (error) {
+      console.error('Failed to send scheduled EMI due digest:', error);
     }
   }
 
@@ -964,6 +1080,32 @@ async function startServer() {
         success: true,
         sent: true,
         message: `Compliance digest sent to ${result.recipients.join(', ')} covering ${result.count} item${result.count === 1 ? '' : 's'}.`
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/emi-digest/send-now', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser || sessionUser.department !== 'super_admin') {
+        return res.status(403).json({ success: false, error: 'Only Super Admin can send the EMI due digest.' });
+      }
+
+      const result = await buildAndSendEmiDueDigest();
+      if (!result.sent) {
+        return res.json({
+          success: true,
+          sent: false,
+          message: 'No vehicle loans are currently due in exactly 3 days - nothing to send.'
+        });
+      }
+
+      res.json({
+        success: true,
+        sent: true,
+        message: `EMI due digest sent to ${result.recipients.join(', ')} covering ${result.count} vehicle loan${result.count === 1 ? '' : 's'}.`
       });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -1889,6 +2031,10 @@ async function startServer() {
   // (written inside buildAndSendComplianceDigest) keeps it to once/day.
   runScheduledComplianceDigest();
   setInterval(runScheduledComplianceDigest, 60 * 60 * 1000);
+
+  // Same daily-once-hourly-checked schedule for the EMI due digest.
+  runScheduledEmiDueDigest();
+  setInterval(runScheduledEmiDueDigest, 60 * 60 * 1000);
 }
 
 startServer();
