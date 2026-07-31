@@ -31,6 +31,7 @@ const toDriverRow = (driver: DriverEmployee, i: number) => ({
   'Driver Welfare': driver.driverWelfare || '',
   'BATA': driver.bata || '',
   'Other Additions': driver.otherAdditions || '',
+  'Gross Salary': driver.grossSalary || '',
   'Payable Amount': payableAmount(driver),
   'Location': driver.location
 });
@@ -151,13 +152,14 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
                 <th className="px-3 py-2.5">Reporting</th>
                 <th className="px-3 py-2.5">Petty Cash/Advance</th>
                 <th className="px-3 py-2.5">Location</th>
+                <th className="px-3 py-2.5 text-right">Gross Salary</th>
                 <th className="px-3 py-2.5 text-right">Payable Amount</th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
-                <tr><td colSpan={12} className="text-center py-10 text-slate-400">No driver records found.</td></tr>
+                <tr><td colSpan={13} className="text-center py-10 text-slate-400">No driver records found.</td></tr>
               ) : filtered.map((driver, i) => (
                 <tr key={driver.id} className="hover:bg-slate-50">
                   <td className="px-3 py-2.5 font-mono text-slate-500">{i + 1}</td>
@@ -172,6 +174,7 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
                   <td className="px-3 py-2.5 whitespace-nowrap">
                     <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded text-[9.5px] font-bold">{driver.location}</span>
                   </td>
+                  <td className="px-3 py-2.5 text-right font-mono text-slate-700">{driver.grossSalary ? `Rs. ${driver.grossSalary.toLocaleString('en-IN')}` : '-'}</td>
                   <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">Rs. {payableAmount(driver).toLocaleString('en-IN')}</td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
                     <button onClick={() => handleDownloadOne(driver)} title="Download this driver" className="p-1 text-slate-400 hover:text-teal-600 hover:bg-slate-100 rounded cursor-pointer"><Download className="w-3.5 h-3.5" /></button>
