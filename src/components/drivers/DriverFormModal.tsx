@@ -38,7 +38,7 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
   const [documentErrors, setDocumentErrors] = useState<{ aadhar?: boolean; drivingLicense?: boolean }>({});
 
   const [salaryMonth, setSalaryMonth] = useState(driver?.month || currentMonthKey());
-  const [attendanceSummary, setAttendanceSummary] = useState({ totalDays: 0, workingDays: 0, lopDays: 0, exemptionLeaveDays: 0 });
+  const [attendanceSummary, setAttendanceSummary] = useState({ totalDays: 0, presentDays: 0, lopDays: 0, exemptionLeaveDays: 0 });
   const [salaryForm, setSalaryForm] = useState({
     grossSalary: driver?.grossSalary != null ? String(driver.grossSalary) : '',
     otherAdditions: driver?.otherAdditions != null ? String(driver.otherAdditions) : '',
@@ -56,7 +56,7 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
     authFetch(`/api/drivers/attendance/monthly/${encodeURIComponent(driver.id)}/${salaryMonth}`)
       .then(r => r.json())
       .then(({ data }) => {
-        if (data) setAttendanceSummary({ totalDays: data.totalDays, workingDays: data.workingDays, lopDays: data.lopDays, exemptionLeaveDays: data.exemptionLeaveDays });
+        if (data) setAttendanceSummary({ totalDays: data.totalDays, presentDays: data.presentDays, lopDays: data.lopDays, exemptionLeaveDays: data.exemptionLeaveDays });
       })
       .catch(() => {});
   }, [driver, salaryMonth]);
@@ -229,7 +229,7 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
                 </div>
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-center">
                   <p className="text-slate-400 uppercase text-[9px] font-bold">Working Days</p>
-                  <p className="font-black text-slate-700">{attendanceSummary.workingDays}</p>
+                  <p className="font-black text-slate-700">{attendanceSummary.presentDays}</p>
                 </div>
                 <div className="bg-orange-50 border border-orange-200 rounded-lg p-2 text-center">
                   <p className="text-orange-600 uppercase text-[9px] font-bold">LOP</p>
