@@ -62,7 +62,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
 
   const [pfMonth, setPfMonth] = useState(currentMonthKey());
   const [pfForm, setPfForm] = useState({ ...emptyPfForm });
-  const [pfAttendance, setPfAttendance] = useState({ totalDays: 0, workingDays: 0, totalAbsent: 0, lopDays: 0 });
+  const [pfAttendance, setPfAttendance] = useState({ totalDays: 0, presentDays: 0, totalAbsent: 0, lopDays: 0 });
 
   const loadAdvanceDeductions = () => {
     if (!employee) return;
@@ -129,9 +129,9 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
         });
       }
     }).catch(() => {});
-    // Attendance-derived totalDays/workingDays/totalAbsent/lopDays should show even before a PF record exists for this month.
+    // Attendance-derived totalDays/presentDays/totalAbsent/lopDays should show even before a PF record exists for this month.
     authFetch(`/api/staff/attendance/monthly/${encodeURIComponent(employee.id)}/${pfMonth}`).then(r => r.json()).then(({ data }) => {
-      if (data) setPfAttendance({ totalDays: data.totalDays, workingDays: data.workingDays, totalAbsent: data.totalAbsent, lopDays: data.lopDays });
+      if (data) setPfAttendance({ totalDays: data.totalDays, presentDays: data.presentDays, totalAbsent: data.totalAbsent, lopDays: data.lopDays });
     }).catch(() => {});
   }, [employee, pfMonth]);
 
@@ -499,7 +499,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                 </div>
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-center">
                   <p className="text-slate-400 uppercase text-[9px] font-bold">Working Days</p>
-                  <p className="font-black text-slate-700">{pfAttendance.workingDays}</p>
+                  <p className="font-black text-slate-700">{pfAttendance.presentDays}</p>
                 </div>
                 <div className="bg-rose-50 border border-rose-200 rounded-lg p-2 text-center">
                   <p className="text-rose-600 uppercase text-[9px] font-bold">Absent</p>
