@@ -477,7 +477,9 @@ export interface DriverEmployee {
   bata?: number;
   grossSalary?: number;
   location: DriverLocationCategory;
-  documents?: VehicleDocument[];
+  aadharDocuments?: VehicleDocument[]; // mandatory, at least one file
+  drivingLicenseDocuments?: VehicleDocument[]; // mandatory, at least one file
+  otherDocuments?: VehicleDocument[];
 }
 
 export interface DriverAttendance {

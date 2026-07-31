@@ -176,11 +176,14 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
                     <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded text-[9.5px] font-bold">{driver.location}</span>
                   </td>
                   <td className="px-3 py-2.5 text-center">
-                    {driver.documents && driver.documents.length > 0 ? (
-                      <span className="inline-flex items-center justify-center px-1.5 py-0.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-[10px] font-bold">
-                        <Paperclip className="w-2.5 h-2.5 mr-0.5" />{driver.documents.length}
-                      </span>
-                    ) : <span className="text-slate-300">-</span>}
+                    {(() => {
+                      const docCount = (driver.aadharDocuments?.length || 0) + (driver.drivingLicenseDocuments?.length || 0) + (driver.otherDocuments?.length || 0);
+                      return docCount > 0 ? (
+                        <span className="inline-flex items-center justify-center px-1.5 py-0.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-[10px] font-bold">
+                          <Paperclip className="w-2.5 h-2.5 mr-0.5" />{docCount}
+                        </span>
+                      ) : <span className="text-slate-300">-</span>;
+                    })()}
                   </td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
                     <button onClick={() => handleDownloadOne(driver)} title="Download this driver" className="p-1 text-slate-400 hover:text-teal-600 hover:bg-slate-100 rounded cursor-pointer"><Download className="w-3.5 h-3.5" /></button>

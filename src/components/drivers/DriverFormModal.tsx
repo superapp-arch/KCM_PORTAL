@@ -32,7 +32,10 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
     location: driver?.location || DRIVER_LOCATION_CATEGORIES[0] as DriverLocationCategory
   });
   const [basicErrors, setBasicErrors] = useState<{ driverNo?: boolean }>({});
-  const [documents, setDocuments] = useState<VehicleDocument[]>(driver?.documents || []);
+  const [aadharDocuments, setAadharDocuments] = useState<VehicleDocument[]>(driver?.aadharDocuments || []);
+  const [drivingLicenseDocuments, setDrivingLicenseDocuments] = useState<VehicleDocument[]>(driver?.drivingLicenseDocuments || []);
+  const [otherDocuments, setOtherDocuments] = useState<VehicleDocument[]>(driver?.otherDocuments || []);
+  const [documentErrors, setDocumentErrors] = useState<{ aadhar?: boolean; drivingLicense?: boolean }>({});
 
   const [salaryMonth, setSalaryMonth] = useState(driver?.month || currentMonthKey());
   const [attendanceSummary, setAttendanceSummary] = useState({ totalDays: 0, workingDays: 0, lopDays: 0, exemptionLeaveDays: 0 });
@@ -76,12 +79,22 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
       return;
     }
 
+    const nextDocumentErrors = { aadhar: aadharDocuments.length === 0, drivingLicense: drivingLicenseDocuments.length === 0 };
+    setDocumentErrors(nextDocumentErrors);
+    if (nextDocumentErrors.aadhar || nextDocumentErrors.drivingLicense) {
+      setError('Aadhar and Driving License documents are required.');
+      setTab('documents');
+      return;
+    }
+
     setIsSubmitting(true);
     setError('');
     try {
       const payload = {
         ...basic,
-        documents,
+        aadharDocuments,
+        drivingLicenseDocuments,
+        otherDocuments,
         month: salaryMonth,
         grossSalary: num(salaryForm.grossSalary) || undefined,
         pettyCashAdvance: num(salaryForm.pettyCashAdvance) || undefined,
@@ -182,7 +195,22 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
           )}
 
           {tab === 'documents' && (
-            <DocumentAttachment documents={documents} onChange={setDocuments} label="Attach Driver Documents" />
+            <div className="space-y-4">
+              <div>
+                <label className="block font-semibold text-slate-500 mb-1">Aadhar*</label>
+                <DocumentAttachment documents={aadharDocuments} onChange={setAadharDocuments} label="Attach Aadhar Card" hideDropzone maxFiles={1} />
+                {documentErrors.aadhar && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-500 mb-1">Driving License*</label>
+                <DocumentAttachment documents={drivingLicenseDocuments} onChange={setDrivingLicenseDocuments} label="Attach Driving License" hideDropzone maxFiles={1} />
+                {documentErrors.drivingLicense && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-500 mb-1">Others</label>
+                <DocumentAttachment documents={otherDocuments} onChange={setOtherDocuments} label="Attach Other Documents" />
+              </div>
+            </div>
           )}
 
           {tab === 'salary' && (
