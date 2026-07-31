@@ -104,7 +104,6 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
     if (!employee) return;
     authFetch('/api/staff/provident-fund').then(r => r.json()).then((all: (StaffProvidentFund & { totalDays: number; workingDays: number; totalAbsent: number; lopDays: number })[]) => {
       const mine = all.find(r => r.empId === employee.id && r.month === pfMonth);
-      setPfAttendance({ totalDays: mine?.totalDays || 0, workingDays: mine?.workingDays || 0, totalAbsent: mine?.totalAbsent || 0, lopDays: mine?.lopDays || 0 });
       if (mine) {
         setPfForm({
           basic: String(mine.basic ?? ''), hra: String(mine.hra ?? ''), conveyance: String(mine.conveyance ?? ''),
