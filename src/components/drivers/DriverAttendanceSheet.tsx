@@ -86,17 +86,18 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
     return drivers.filter(d => d.id.toLowerCase().includes(q) || d.name.toLowerCase().includes(q) || (d.vehicleNo || '').toLowerCase().includes(q));
   }, [drivers, searchTerm]);
 
-  // LOP/Exemption Leave summary columns - mirrors the server's
+  // LOP/Exemption Leave/Working Days summary columns - mirrors the server's
   // computeDriverMonthlyAttendanceSummary so this and the Salary Breakup tab
   // always agree. LOP <- AbsentLOP, Exemption Leave <- LeaveWithPermission,
-  // Working Days excludes Holiday/WeekOff.
+  // Working Days (salaryWorkingDays) <- Present + PaidLeave, since Paid Leave
+  // counts as a worked day for salary purposes.
   const driverMonthSummary = (driverId: string) => {
     const rows = monthAttendance.filter(a => a.driverId === driverId);
     const lopDays = rows.filter(r => r.status === 'AbsentLOP').length;
     const exemptionLeaveDays = rows.filter(r => r.status === 'LeaveWithPermission').length;
-    const holidayDays = rows.filter(r => r.status === 'Holiday').length;
-    const weekOffDays = rows.filter(r => r.status === 'WeekOff').length;
-    const workingDays = totalDays - holidayDays - weekOffDays;
+    const presentDays = rows.filter(r => r.status === 'Present').length;
+    const paidLeaveDays = rows.filter(r => r.status === 'PaidLeave').length;
+    const workingDays = presentDays + paidLeaveDays;
     return { lopDays, exemptionLeaveDays, workingDays };
   };
 
@@ -169,15 +170,16 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
                 {Array.from({ length: totalDays }, (_, i) => i + 1).map(day => (
                   <th key={day} className="px-1 py-2 text-center font-bold text-purple-200 w-9">{dayLabel(month, day)}</th>
                 ))}
+                <th className="px-2 py-2 text-center font-bold text-emerald-200 uppercase tracking-wider min-w-[70px]">Working Days</th>
                 <th className="px-2 py-2 text-center font-bold text-orange-200 uppercase tracking-wider min-w-[50px]">LOP</th>
                 <th className="px-2 py-2 text-center font-bold text-sky-200 uppercase tracking-wider min-w-[70px]">Exemption Leave</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredDrivers.length === 0 ? (
-                <tr><td colSpan={totalDays + 3} className="text-center py-10 text-slate-400">No driver records found.</td></tr>
+                <tr><td colSpan={totalDays + 4} className="text-center py-10 text-slate-400">No driver records found.</td></tr>
               ) : filteredDrivers.map(driver => {
-                const { lopDays, exemptionLeaveDays } = driverMonthSummary(driver.id);
+                const { lopDays, exemptionLeaveDays, workingDays } = driverMonthSummary(driver.id);
                 return (
                   <tr key={driver.id} className="hover:bg-purple-50/40">
                     <td
@@ -206,6 +208,9 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
                         </td>
                       );
                     })}
+                    <td className="px-2 py-1 text-center">
+                      <span className="inline-block bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-2 py-0.5 font-bold">{workingDays}</span>
+                    </td>
                     <td className="px-2 py-1 text-center">
                       <span className="inline-block bg-orange-50 text-orange-700 border border-orange-200 rounded-full px-2 py-0.5 font-bold">{lopDays}</span>
                     </td>
