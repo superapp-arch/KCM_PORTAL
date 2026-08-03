@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import {
   User as UserType,
@@ -38,7 +38,7 @@ import {
   LogOut, ShieldAlert, FileSpreadsheet, Fuel, FileText, Landmark,
   Settings, DollarSign, Contact, Bell, Mail, RefreshCw, CheckCircle, Clock,
   KeyRound, Cpu, Terminal, Copy, Check, Eye, EyeOff, Warehouse, Gauge, X,
-  Truck, Building2, HandCoins
+  Truck, Building2, HandCoins, Menu
 } from 'lucide-react';
 
 // Driver Details module gate - mirrors server.ts's DRIVER_LOCATION_SCOPES
@@ -240,11 +240,28 @@ export default function Administration({
   // Employee-toggled fleet status modal (Fleet Status box "Inactive" count)
   const [showInactiveFleetModal, setShowInactiveFleetModal] = useState(false);
 
+  // Sidebar collapse/flyout state. isPinned is the persistent "pinned open"
+  // choice from the hamburger, saved across sessions. isHovering is the
+  // purely transient hover-flyout state (desktop only, only meaningful when
+  // not pinned). isMobileOpen is the mobile drawer state, independent of
+  // both - mobile has no hover concept and behaves like a pinned drawer.
+  const SIDEBAR_PINNED_KEY = 'kcm_sidebar_pinned';
+  const [isPinned, setIsPinned] = useState<boolean>(() => localStorage.getItem(SIDEBAR_PINNED_KEY) === 'true');
+  const [isHovering, setIsHovering] = useState(false);
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const hoverCloseTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sidebarExpanded = isPinned || isHovering || isMobileOpen;
+  const unreadCount = notifications.filter(n => !n.read).length;
+
   useEffect(() => {
     const timer = setInterval(() => {
       setTime(formatISTClock(new Date()));
     }, 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => () => {
+    if (hoverCloseTimeout.current) clearTimeout(hoverCloseTimeout.current);
   }, []);
 
   const handleLogoutClick = async () => {
@@ -323,261 +340,69 @@ export default function Administration({
     return false;
   };
 
+  // Hamburger toggles a different thing depending on viewport: on desktop it
+  // flips the persistent pinned/expanded state (saved to localStorage); on
+  // mobile there's no pinning concept, it just opens/closes the drawer.
+  const handleHamburgerClick = () => {
+    const isDesktop = window.matchMedia('(min-width: 768px)').matches;
+    if (isDesktop) {
+      setIsPinned(prev => {
+        const next = !prev;
+        localStorage.setItem(SIDEBAR_PINNED_KEY, String(next));
+        return next;
+      });
+    } else {
+      setIsMobileOpen(prev => !prev);
+    }
+  };
+
+  // Only the hover-flyout collapses immediately on navigation - the pinned
+  // (desktop) and drawer (mobile) states stay open since the user opened
+  // them deliberately, not just by passing the cursor over the rail.
+  const handleNavClick = (tab: string) => {
+    setActiveTab(tab);
+    if (!isPinned) setIsHovering(false);
+  };
+
+  const handleSidebarMouseEnter = () => {
+    if (hoverCloseTimeout.current) {
+      clearTimeout(hoverCloseTimeout.current);
+      hoverCloseTimeout.current = null;
+    }
+    setIsHovering(true);
+  };
+
+  const handleSidebarMouseLeave = () => {
+    // Small delay so a cursor briefly leaving and re-entering the rail
+    // doesn't flicker the flyout closed and back open.
+    hoverCloseTimeout.current = setTimeout(() => setIsHovering(false), 180);
+  };
+
+  const PINK_ACTIVE = 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500';
+  const navItems: Array<{ id: string; label: string; icon: React.ComponentType<{ className?: string }>; iconColor: string; active: string; visible: boolean; badge?: number }> = [
+    { id: 'admin-overview', label: 'Super Admin Terminal', icon: ShieldAlert, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: user.department === 'super_admin', badge: unreadCount },
+    { id: 'fleet', label: 'Fleet & Vehicles', icon: FileSpreadsheet, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fleet') },
+    { id: 'fuel', label: 'Fuel Management', icon: Fuel, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fuel') },
+    { id: 'mileage', label: 'Mileage Report', icon: Gauge, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('mileage') },
+    { id: 'vendors', label: 'Vendor Management', icon: Building2, iconColor: 'text-indigo-400', active: 'bg-gradient-to-r from-indigo-500/20 to-sky-500/20 text-indigo-300 border-l-4 border-indigo-500', visible: hasAccess('vendors') },
+    { id: 'hr', label: 'HR & Payroll', icon: Contact, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('hr') },
+    { id: 'drivers', label: 'Driver Details', icon: Truck, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('drivers') },
+    { id: 'loans', label: 'Loan Management', icon: HandCoins, iconColor: 'text-emerald-400', active: PINK_ACTIVE, visible: hasAccess('loans') },
+    { id: 'billing', label: 'Customer Billings', icon: FileText, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('billing') },
+    { id: 'pettycash', label: 'Petty cash', icon: Landmark, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('pettycash') },
+    { id: 'maintenance', label: 'Fleet Maintenance', icon: Settings, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('maintenance') },
+    { id: 'accounts', label: 'Accounts and Finance', icon: DollarSign, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('accounts') },
+    { id: 'warehouse', label: 'Warehouse Details', icon: Warehouse, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('warehouse') }
+  ];
+
   return (
     <>
-      <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans text-slate-900 overflow-hidden relative z-10" id="admin-main-stage">
+      <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900 overflow-hidden relative z-10" id="admin-main-stage">
 
-      {/* Vibrant Pink & Purple Bento Sidebar */}
-      <aside className="w-full md:w-64 bg-gradient-to-b from-purple-950 via-indigo-950 to-pink-950 text-slate-100 flex flex-col border-r border-pink-900/30 shrink-0" id="admin-sidebar">
-        
-        {/* Sidebar Brand Header */}
-        <div className="p-4 bg-purple-900/40 text-white flex items-center gap-3 border-b border-pink-500/20">
-          <div className="w-10 h-10 bg-emerald-500/20 text-emerald-400 rounded-xl flex items-center justify-center shadow-md shrink-0">
-            <Truck className="w-5 h-5" />
-          </div>
-          <div>
-            <span className="font-extrabold tracking-tight text-sm text-white block leading-tight">KCM Logistics</span>
-            <span className="text-[9px] text-pink-300 font-bold uppercase tracking-widest block mt-0.5">Official Portal</span>
-          </div>
-        </div>
-
-        {/* Navigation Section */}
-        <nav className="flex-1 p-4 space-y-1.5 overflow-y-auto">
-          <div className="text-pink-300/60 text-[10px] uppercase tracking-widest font-black mb-3 px-2">Workspace Modules</div>
-          
-          {/* Super Admin Dashboard tab */}
-          {user.department === 'super_admin' && (
-            <button
-              onClick={() => setActiveTab('admin-overview')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center justify-between transition-all rounded-xl cursor-pointer ${
-                activeTab === 'admin-overview' 
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500' 
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <span className="flex items-center gap-2.5">
-                <ShieldAlert className="w-4 h-4 shrink-0 text-pink-400" />
-                Super Admin Terminal
-              </span>
-              {notifications.filter(n => !n.read).length > 0 && (
-                <span className="bg-pink-600 text-white font-black text-[9px] px-2 py-0.5 rounded-full animate-bounce">
-                  {notifications.filter(n => !n.read).length}
-                </span>
-              )}
-            </button>
-          )}
-
-          {/* Department tabs with access control checks - ordered per the
-              requested workspace arrangement: Super Admin Terminal, Fleet &
-              Vehicles, Fuel Management, Mileage Report, Vendor Management,
-              HR & Payroll, then the remaining modules. */}
-          {hasAccess('fleet') && (
-            <button
-              onClick={() => setActiveTab('fleet')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'fleet'
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <FileSpreadsheet className="w-4 h-4 shrink-0 text-pink-400" />
-              Fleet & Vehicles
-            </button>
-          )}
-
-          {hasAccess('fuel') && (
-            <button
-              onClick={() => setActiveTab('fuel')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'fuel'
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <Fuel className="w-4 h-4 shrink-0 text-pink-400" />
-              Fuel Management
-            </button>
-          )}
-
-          {hasAccess('mileage') && (
-            <button
-              onClick={() => setActiveTab('mileage')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'mileage'
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <Gauge className="w-4 h-4 shrink-0 text-pink-400" />
-              Mileage Report
-            </button>
-          )}
-
-          {hasAccess('vendors') && (
-            <button
-              onClick={() => setActiveTab('vendors')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'vendors'
-                  ? 'bg-gradient-to-r from-indigo-500/20 to-sky-500/20 text-indigo-300 border-l-4 border-indigo-500'
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <Building2 className="w-4 h-4 shrink-0 text-indigo-400" />
-              Vendor Management
-            </button>
-          )}
-
-          {hasAccess('hr') && (
-            <button
-              onClick={() => setActiveTab('hr')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'hr'
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <Contact className="w-4 h-4 shrink-0 text-pink-400" />
-              HR & Payroll
-            </button>
-          )}
-
-          {hasAccess('drivers') && (
-            <button
-              onClick={() => setActiveTab('drivers')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'drivers'
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <Truck className="w-4 h-4 shrink-0 text-pink-400" />
-              Driver Details
-            </button>
-          )}
-
-          {hasAccess('loans') && (
-            <button
-              onClick={() => setActiveTab('loans')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'loans'
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <HandCoins className="w-4 h-4 shrink-0 text-emerald-400" />
-              Loan Management
-            </button>
-          )}
-
-          {hasAccess('billing') && (
-            <button
-              onClick={() => setActiveTab('billing')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'billing'
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <FileText className="w-4 h-4 shrink-0 text-pink-400" />
-              Customer Billings
-            </button>
-          )}
-
-          {hasAccess('pettycash') && (
-            <button
-              onClick={() => setActiveTab('pettycash')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'pettycash'
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <Landmark className="w-4 h-4 shrink-0 text-pink-400" />
-              Petty cash
-            </button>
-          )}
-
-          {hasAccess('maintenance') && (
-            <button
-              onClick={() => setActiveTab('maintenance')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'maintenance'
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <Settings className="w-4 h-4 shrink-0 text-pink-400" />
-              Fleet Maintenance
-            </button>
-          )}
-
-          {hasAccess('accounts') && (
-            <button
-              onClick={() => setActiveTab('accounts')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'accounts'
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <DollarSign className="w-4 h-4 shrink-0 text-pink-400" />
-              Accounts and Finance
-            </button>
-          )}
-
-          {hasAccess('warehouse') && (
-            <button
-              onClick={() => setActiveTab('warehouse')}
-              className={`w-full text-left text-xs font-bold px-3 py-2.5 flex items-center gap-2.5 transition-all rounded-xl cursor-pointer ${
-                activeTab === 'warehouse'
-                  ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500'
-                  : 'text-purple-200 hover:bg-white/5 hover:text-white'
-              }`}
-            >
-              <Warehouse className="w-4 h-4 shrink-0 text-pink-400" />
-              Warehouse Details
-            </button>
-          )}
-
-        </nav>
-
-
-
-        {/* User profile footer in sidebar */}
-        <div className="p-4 border-t border-purple-500/20 bg-purple-950/50">
-          <div className="flex items-center gap-3 px-2 mb-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-pink-500 to-purple-600 border border-pink-400/40 flex items-center justify-center text-xs text-white font-black shrink-0 shadow-sm">
-              {user.name.substring(0, 2).toUpperCase()}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-bold text-white truncate">{user.name}</p>
-              <p className="text-[9.5px] text-pink-300 capitalize truncate font-semibold">{user.departmentLabel || user.department.replace('_', ' ')}</p>
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => {
-                setIsChangingPassword(true);
-                setPasswordError(null);
-                setPasswordSuccess(null);
-              }}
-              className="bg-white/5 hover:bg-white/10 text-[10px] font-bold text-pink-200 py-1.5 px-2 rounded-lg border border-pink-500/20 transition-all flex items-center justify-center gap-1 cursor-pointer"
-            >
-              <KeyRound className="w-3 h-3" />
-              Password
-            </button>
-            <button
-              onClick={handleLogoutClick}
-              disabled={isLoggingOut}
-              className="bg-pink-600/10 hover:bg-pink-600/20 text-[10px] font-bold text-pink-300 py-1.5 px-2 rounded-lg border border-pink-500/30 transition-all flex items-center justify-center gap-1 cursor-pointer"
-            >
-              <LogOut className="w-3 h-3 text-pink-400" />
-              Exit
-            </button>
-          </div>
-        </div>
-      </aside>
+      {/* Desktop-only layout placeholder - this (not the actual <aside>) is
+          what reserves flex space, so hover-expanding the sidebar never
+          reflows the main content. Width only reacts to the pinned state. */}
+      <div className={`hidden md:block shrink-0 transition-all duration-200 ease-in-out ${isPinned ? 'w-60' : 'w-16'}`} aria-hidden="true" />
 
       {/* Main Workspace Frame */}
       <main className="flex-1 flex flex-col overflow-hidden bg-slate-50 relative" id="admin-workspace-grid">
@@ -588,6 +413,16 @@ export default function Administration({
         {/* Sticky Sub-Header Bar */}
         <header className="h-16 bg-white border-b border-pink-100 flex items-center justify-between px-6 shrink-0 shadow-xs" id="admin-global-header">
           <div className="flex items-center gap-3 text-xs sm:text-sm font-semibold text-slate-600">
+            {/* Mobile-only trigger - the sidebar's own hamburger lives inside
+                the drawer, which is off-screen until opened, so mobile needs
+                a second always-visible entry point to open it. */}
+            <button
+              onClick={handleHamburgerClick}
+              title="Open menu"
+              className="md:hidden w-8 h-8 shrink-0 flex items-center justify-center rounded-lg hover:bg-slate-100 text-purple-700 transition-all cursor-pointer"
+            >
+              <Menu className="w-4 h-4" />
+            </button>
             <span className="capitalize text-purple-800 font-extrabold">{activeTab.replace('-', ' ').replace('pettycash', 'petty cash')}</span>
             <span className="text-slate-300">/</span>
             <span className="text-slate-900 font-black">KCM Enterprise Dashboard</span>
@@ -1082,6 +917,145 @@ export default function Administration({
 
         </div>
       </main>
+
+      {/* Mobile-only backdrop - dims the workspace while the drawer is open,
+          tapping it closes the drawer same as the hamburger. */}
+      {isMobileOpen && (
+        <div
+          className="fixed inset-0 bg-slate-950/50 z-30 md:hidden"
+          onClick={() => setIsMobileOpen(false)}
+        />
+      )}
+
+      {/* Vibrant Pink & Purple Bento Sidebar - always position:fixed/absolute
+          (never in normal flex flow) so its width can change on hover
+          without ever reflowing the placeholder/main content next to it. */}
+      <aside
+        className={`fixed md:absolute top-0 left-0 h-full z-40 flex flex-col bg-gradient-to-b from-purple-950 via-indigo-950 to-pink-950 text-slate-100 border-r border-pink-900/30 transition-all duration-200 ease-in-out ${sidebarExpanded ? 'w-60' : 'w-16'} ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 ${(isMobileOpen || (isHovering && !isPinned)) ? 'shadow-[6px_0_24px_rgba(0,0,0,0.35)]' : ''}`}
+        id="admin-sidebar"
+        onMouseEnter={handleSidebarMouseEnter}
+        onMouseLeave={handleSidebarMouseLeave}
+      >
+
+        {/* Sidebar Brand Header */}
+        <div className={`bg-purple-900/40 text-white border-b border-pink-500/20 flex shrink-0 ${sidebarExpanded ? 'flex-row items-center gap-3 p-4' : 'flex-col items-center gap-2 py-3'}`}>
+          <button
+            onClick={handleHamburgerClick}
+            title={isPinned ? 'Unpin sidebar' : 'Pin sidebar open'}
+            className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg hover:bg-white/10 text-pink-200 hover:text-white transition-all cursor-pointer"
+          >
+            <Menu className="w-4 h-4" />
+          </button>
+          <div className="w-10 h-10 bg-emerald-500/20 text-emerald-400 rounded-xl flex items-center justify-center shadow-md shrink-0">
+            <Truck className="w-5 h-5" />
+          </div>
+          {sidebarExpanded && (
+            <div className="whitespace-nowrap overflow-hidden">
+              <span className="font-extrabold tracking-tight text-sm text-white block leading-tight">KCM Logistics</span>
+              <span className="text-[9px] text-pink-300 font-bold uppercase tracking-widest block mt-0.5">Official Portal</span>
+            </div>
+          )}
+        </div>
+
+        {/* Navigation Section */}
+        <nav className={`flex-1 space-y-1.5 overflow-y-auto overflow-x-hidden ${sidebarExpanded ? 'p-4' : 'p-2'}`}>
+          {sidebarExpanded && (
+            <div className="text-pink-300/60 text-[10px] uppercase tracking-widest font-black mb-3 px-2 whitespace-nowrap">Workspace Modules</div>
+          )}
+
+          {navItems.filter(item => item.visible).map(item => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => handleNavClick(item.id)}
+                title={!sidebarExpanded ? item.label : undefined}
+                className={`w-full text-xs font-bold py-2.5 flex items-center transition-all rounded-xl cursor-pointer ${sidebarExpanded ? 'text-left px-3 gap-2.5' : 'justify-center px-0'} ${isActive ? item.active : 'text-purple-200 hover:bg-white/5 hover:text-white'}`}
+              >
+                <span className="relative shrink-0">
+                  <Icon className={`w-4 h-4 ${item.iconColor}`} />
+                  {!sidebarExpanded && !!item.badge && item.badge > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 bg-pink-600 text-white font-black text-[8px] min-w-[14px] h-[14px] px-0.5 rounded-full flex items-center justify-center animate-bounce">
+                      {item.badge}
+                    </span>
+                  )}
+                </span>
+                {sidebarExpanded && <span className="flex-1 truncate whitespace-nowrap">{item.label}</span>}
+                {sidebarExpanded && !!item.badge && item.badge > 0 && (
+                  <span className="bg-pink-600 text-white font-black text-[9px] px-2 py-0.5 rounded-full animate-bounce shrink-0">
+                    {item.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* User profile footer in sidebar */}
+        <div className={`border-t border-purple-500/20 bg-purple-950/50 shrink-0 ${sidebarExpanded ? 'p-4' : 'p-2 flex flex-col items-center gap-2'}`}>
+          {sidebarExpanded ? (
+            <>
+              <div className="flex items-center gap-3 px-2 mb-3">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-pink-500 to-purple-600 border border-pink-400/40 flex items-center justify-center text-xs text-white font-black shrink-0 shadow-sm">
+                  {user.name.substring(0, 2).toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold text-white truncate">{user.name}</p>
+                  <p className="text-[9.5px] text-pink-300 capitalize truncate font-semibold">{user.departmentLabel || user.department.replace('_', ' ')}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => {
+                    setIsChangingPassword(true);
+                    setPasswordError(null);
+                    setPasswordSuccess(null);
+                  }}
+                  className="bg-white/5 hover:bg-white/10 text-[10px] font-bold text-pink-200 py-1.5 px-2 rounded-lg border border-pink-500/20 transition-all flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  <KeyRound className="w-3 h-3" />
+                  Password
+                </button>
+                <button
+                  onClick={handleLogoutClick}
+                  disabled={isLoggingOut}
+                  className="bg-pink-600/10 hover:bg-pink-600/20 text-[10px] font-bold text-pink-300 py-1.5 px-2 rounded-lg border border-pink-500/30 transition-all flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  <LogOut className="w-3 h-3 text-pink-400" />
+                  Exit
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-pink-500 to-purple-600 border border-pink-400/40 flex items-center justify-center text-xs text-white font-black shrink-0 shadow-sm" title={user.name}>
+                {user.name.substring(0, 2).toUpperCase()}
+              </div>
+              <button
+                onClick={() => {
+                  setIsChangingPassword(true);
+                  setPasswordError(null);
+                  setPasswordSuccess(null);
+                }}
+                title="Change Password"
+                className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/10 border border-pink-500/20 text-pink-200 transition-all cursor-pointer"
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={handleLogoutClick}
+                disabled={isLoggingOut}
+                title="Exit"
+                className="w-8 h-8 flex items-center justify-center rounded-lg bg-pink-600/10 hover:bg-pink-600/20 border border-pink-500/30 text-pink-300 transition-all cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5 text-pink-400" />
+              </button>
+            </>
+          )}
+        </div>
+      </aside>
     </div>
     </>
   );
