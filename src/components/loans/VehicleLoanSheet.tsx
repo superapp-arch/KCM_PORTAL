@@ -7,6 +7,8 @@ import DateInput from '../DateInput';
 import DocumentAttachment from '../DocumentAttachment';
 import VehicleDetailsPopover from './VehicleDetailsPopover';
 import LoanDetailsPopover from './LoanDetailsPopover';
+import SortHeader from '../SortHeader';
+import { SortState, nextSortState, compareText, compareNumber } from '../../utils/sort';
 
 interface VehicleLoanSheetProps {
   vehicles: Vehicle[];
@@ -68,6 +70,8 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
   const [ownershipFilter, setOwnershipFilter] = useState<string[]>([]); // empty = all
   const [showOwnershipDropdown, setShowOwnershipDropdown] = useState(false);
   const [dueDateFilter, setDueDateFilter] = useState(''); // '' = no date filter
+  const [sort, setSort] = useState<SortState | null>(null);
+  const handleSort = (key: string) => setSort(prev => nextSortState(prev, key));
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -197,6 +201,31 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
     return true;
   }), [vehicleLoans, financerFilter, ownershipFilter, dueDateFilter, searchTerm]);
 
+  // EMI Pending isn't a stored field - it's always computed live from
+  // emiStartDate/tenure (see types.ts), so sorting by it must recompute this
+  // per row rather than reading a column value.
+  const emiPendingOf = (loan: VehicleLoan): number | null => {
+    const monthsCompleted = computeMonthsCompleted(loan.emiStartDate, loan.tenure);
+    return loan.tenure != null ? loan.tenure - monthsCompleted : null;
+  };
+
+  const sorted = useMemo(() => {
+    if (!sort) return filtered;
+    const arr = [...filtered];
+    arr.sort((a, b) => {
+      let cmp = 0;
+      switch (sort.key) {
+        case 'regNo': cmp = compareText(a.regNo, b.regNo); break;
+        case 'financer': cmp = compareText(a.financer, b.financer); break;
+        case 'loanAmount': cmp = compareNumber(a.loanAmount, b.loanAmount); break;
+        case 'monthlyEmi': cmp = compareNumber(a.monthlyEmi, b.monthlyEmi); break;
+        case 'emiPending': cmp = compareNumber(emiPendingOf(a), emiPendingOf(b)); break;
+      }
+      return sort.direction === 'asc' ? cmp : -cmp;
+    });
+    return arr;
+  }, [filtered, sort]);
+
   const suggestedClosing = form.emiStartDate && form.tenure ? monthYearFromStart(form.emiStartDate, parseInt(form.tenure) || 0) : '';
 
   return (
@@ -282,14 +311,14 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
             <thead className="bg-gradient-to-r from-teal-900 via-slate-900 to-emerald-900 text-teal-100 uppercase text-[10px] tracking-wider">
               <tr>
                 <th className="px-3 py-2.5">SL No</th>
-                <th className="px-3 py-2.5">Reg. No</th>
-                <th className="px-3 py-2.5">Financer</th>
+                <th className="px-3 py-2.5"><SortHeader label="Reg. No" sortKey="regNo" sort={sort} onSort={handleSort} /></th>
+                <th className="px-3 py-2.5"><SortHeader label="Financer" sortKey="financer" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5">Loan Number</th>
-                <th className="px-3 py-2.5 text-right">Loan Amount</th>
-                <th className="px-3 py-2.5 text-right">Monthly EMI</th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="Loan Amount" sortKey="loanAmount" sort={sort} onSort={handleSort} align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="Monthly EMI" sortKey="monthlyEmi" sort={sort} onSort={handleSort} align="right" /></th>
                 <th className="px-3 py-2.5 text-right">Tenure</th>
                 <th className="px-3 py-2.5 text-right">EMI Paid</th>
-                <th className="px-3 py-2.5 text-right">EMI Pending</th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="EMI Pending" sortKey="emiPending" sort={sort} onSort={handleSort} align="right" /></th>
                 <th className="px-3 py-2.5 text-right">O/S Amount</th>
                 <th className="px-3 py-2.5">Due Date</th>
                 <th className="px-3 py-2.5">Loan Status</th>
@@ -297,9 +326,9 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.length === 0 ? (
+              {sorted.length === 0 ? (
                 <tr><td colSpan={13} className="text-center py-10 text-slate-400">No vehicle loan records found.</td></tr>
-              ) : filtered.map((loan, i) => {
+              ) : sorted.map((loan, i) => {
                 const monthsCompleted = computeMonthsCompleted(loan.emiStartDate, loan.tenure);
                 const bal = loan.tenure != null ? loan.tenure - monthsCompleted : null;
                 const osAmount = bal != null && loan.monthlyEmi != null ? bal * loan.monthlyEmi : null;

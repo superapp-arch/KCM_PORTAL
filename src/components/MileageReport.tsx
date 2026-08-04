@@ -24,6 +24,8 @@ import {
   Edit2
 } from 'lucide-react';
 import DateInput from './DateInput';
+import SortHeader from './SortHeader';
+import { SortState, nextSortState, compareText } from '../utils/sort';
 
 interface MileageReportModuleProps {
   user: User;
@@ -65,6 +67,8 @@ export default function MileageReportModule({
   // Filter conditions
   const [selectedLocationFilter, setSelectedLocationFilter] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
+  const [sort, setSort] = useState<SortState | null>(null);
+  const handleSort = (key: string) => setSort(prev => nextSortState(prev, key));
 
   // Form inputs
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -429,6 +433,13 @@ export default function MileageReportModule({
     return matchesLocation && matchesKeyword;
   });
 
+  const sortedReports = sort
+    ? [...filteredReports].sort((a, b) => {
+        const cmp = sort.key === 'driverName' ? compareText(a.driverName, b.driverName) : compareText(a.vehicleNo, b.vehicleNo);
+        return sort.direction === 'asc' ? cmp : -cmp;
+      })
+    : filteredReports;
+
   return (
     <div className="space-y-6 text-xs text-slate-800 relative min-h-screen">
       {/* Top Banner & Header */}
@@ -550,7 +561,7 @@ export default function MileageReportModule({
               <tr>
                 <th className="px-3 py-2.5">Sl. No</th>
                 <th className="px-3 py-2.5">Date</th>
-                <th className="px-3 py-2.5">Vehicle No</th>
+                <th className="px-3 py-2.5"><SortHeader label="Vehicle No" sortKey="vehicleNo" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5 text-right">Opening KM</th>
                 <th className="px-3 py-2.5 text-right">Closing KM</th>
                 <th className="px-3 py-2.5 text-right bg-slate-800">Total KM</th>
@@ -564,7 +575,7 @@ export default function MileageReportModule({
                 <th className="px-3 py-2.5 text-right">Extra Fuel</th>
                 <th className="px-3 py-2.5 text-right">Rate/Ltr (new)</th>
                 <th className="px-3 py-2.5 text-right text-teal-400">Total Amount</th>
-                <th className="px-3 py-2.5">Authorized Driver</th>
+                <th className="px-3 py-2.5"><SortHeader label="Authorized Driver" sortKey="driverName" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5">Location</th>
                 <th className="px-3 py-2.5 max-w-xs">Remarks</th>
                 {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
@@ -582,7 +593,7 @@ export default function MileageReportModule({
                   </td>
                 </tr>
               ) : (
-                filteredReports.map((r, i) => (
+                sortedReports.map((r, i) => (
                   <tr key={r.id} className="hover:bg-slate-50/70 transition-colors text-[11px]">
                     <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{r.slNo || (i + 1)}</td>
                     <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">{r.date}</td>
@@ -769,7 +780,13 @@ export default function MileageReportModule({
                       </span>
                       <button
                         type="button"
-                        onClick={() => setShowMileageManager(!showMileageManager)}
+                        onClick={() => {
+                          // Opening the manager defaults the rating form to
+                          // whichever vehicle is selected for this trip, since
+                          // that's the one the list below is now scoped to.
+                          if (!showMileageManager && vehicleNo) setMileageFormVehicleNo(vehicleNo);
+                          setShowMileageManager(!showMileageManager);
+                        }}
                         className="text-[10px] font-bold text-pink-600 hover:text-pink-800 cursor-pointer"
                       >
                         {showMileageManager ? 'Hide' : 'Manage Ratings'}
@@ -811,9 +828,16 @@ export default function MileageReportModule({
                         >
                           Save Rating
                         </button>
-                        {vehicleMileages.length > 0 && (
+                        {/* Scoped to the vehicle selected for this trip only -
+                            other vehicles' saved ratings are never shown here,
+                            they'd only cause confusion about which one applies. */}
+                        {(() => {
+                          const visibleMileages = vehicleNo
+                            ? vehicleMileages.filter(v => (v.vehicleNo || '').trim().toUpperCase() === vehicleNo.trim().toUpperCase())
+                            : [];
+                          return visibleMileages.length > 0 && (
                           <div className="max-h-28 overflow-y-auto space-y-1 pt-1">
-                            {vehicleMileages.map(v => (
+                            {visibleMileages.map(v => (
                               <div key={v.id} className="flex items-center justify-between bg-white border border-slate-100 rounded-md px-2 py-1">
                                 <span className="text-[10px] font-semibold text-slate-700">{v.vehicleNo} <span className="text-slate-400 font-mono">({v.mileage} KM/L)</span></span>
                                 <button type="button" onClick={() => onDeleteVehicleMileage?.(v.id)} className="text-rose-400 hover:text-rose-600 cursor-pointer">
@@ -822,7 +846,8 @@ export default function MileageReportModule({
                               </div>
                             ))}
                           </div>
-                        )}
+                          );
+                        })()}
                       </div>
                     )}
                   </div>

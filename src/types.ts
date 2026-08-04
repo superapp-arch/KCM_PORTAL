@@ -151,7 +151,11 @@ export interface Vendor {
   name: string;
   code: string;
   active?: boolean; // employee-toggled status; undefined/missing is treated as active
-  client?: 'Swiggy' | 'Reliance'; // which client this vendor is contracted under
+  // A vendor can now be contracted under more than one client. Stored as an
+  // array going forward; `string` is kept in the union only because older
+  // saved records still hold a single legacy value - always read this via
+  // getVendorClients() in VendorManagement.tsx rather than directly.
+  client?: ('Swiggy' | 'Reliance')[] | 'Swiggy' | 'Reliance';
   vehicleNumbers: string[]; // at least one; a vendor may have multiple vehicles
   contactNumber: string; // exactly 10 digits
   aadharNumber: string; // exactly 12 digits

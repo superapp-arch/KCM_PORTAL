@@ -3,6 +3,8 @@ import * as XLSX from 'xlsx';
 import { Vendor, VehicleDocument } from '../types';
 import { Building2, Plus, Search, Edit2, Trash2, X, Car, Download } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
+import SortHeader from './SortHeader';
+import { SortState, nextSortState, compareText } from '../utils/sort';
 
 // undefined/missing `active` is treated as active, matching Vehicle's
 // pre-existing active-status convention elsewhere in the app.
@@ -28,7 +30,7 @@ interface FormErrors {
 }
 
 const emptyForm = {
-  name: '', code: '', client: '', contactNumber: '', aadharNumber: '', panNumber: '',
+  name: '', code: '', contactNumber: '', aadharNumber: '', panNumber: '',
   bankAccountNumber: '', ifscCode: ''
 };
 
@@ -38,15 +40,26 @@ const CLIENT_BADGE_STYLE: Record<string, string> = {
   Reliance: 'bg-red-100 text-red-700 border-red-300'
 };
 
+// A vendor's `client` field may still hold a legacy single string from
+// before multi-client support - normalize both shapes to an array so every
+// read site (filter, badges, export) only has to handle one case.
+const getVendorClients = (v: Vendor): string[] => {
+  if (!v.client) return [];
+  return Array.isArray(v.client) ? v.client : [v.client];
+};
+
 export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor, onDeleteVendor }: VendorManagementProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [clientFilter, setClientFilter] = useState(''); // '' = All clients
+  const [sort, setSort] = useState<SortState | null>(null);
+  const handleSort = (key: string) => setSort(prev => nextSortState(prev, key));
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [form, setForm] = useState(emptyForm);
   const [active, setActive] = useState(true);
+  const [selectedClients, setSelectedClients] = useState<string[]>([]);
   const [vehicleNumbers, setVehicleNumbers] = useState<string[]>([]);
   const [vehicleInput, setVehicleInput] = useState('');
   const [errors, setErrors] = useState<FormErrors>({});
@@ -59,6 +72,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
     setEditingId(null);
     setForm(emptyForm);
     setActive(true);
+    setSelectedClients([]);
     setVehicleNumbers([]);
     setVehicleInput('');
     setErrors({});
@@ -72,10 +86,11 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
   const startEdit = (vendor: Vendor) => {
     setEditingId(vendor.id);
     setForm({
-      name: vendor.name, code: vendor.code, client: vendor.client || '', contactNumber: vendor.contactNumber,
+      name: vendor.name, code: vendor.code, contactNumber: vendor.contactNumber,
       aadharNumber: vendor.aadharNumber, panNumber: vendor.panNumber,
       bankAccountNumber: vendor.bankAccountNumber, ifscCode: vendor.ifscCode
     });
+    setSelectedClients(getVendorClients(vendor));
     setVehicleNumbers(vendor.vehicleNumbers || []);
     setVehicleInput('');
     setActive(isVendorActive(vendor));
@@ -85,6 +100,10 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
     setRcDocuments(vendor.rcDocuments || []);
     setBankStatementDocuments(vendor.bankStatementDocuments || []);
     setShowModal(true);
+  };
+
+  const toggleClient = (c: 'Swiggy' | 'Reliance') => {
+    setSelectedClients(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
   };
 
   const addVehicleNumber = () => {
@@ -104,7 +123,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
     const nextErrors: FormErrors = {
       name: !form.name.trim(),
       code: !form.code.trim(),
-      client: !form.client,
+      client: selectedClients.length === 0,
       vehicleNumbers: vehicleNumbers.length === 0,
       contactNumber: form.contactNumber.length !== 10,
       aadharNumber: form.aadharNumber.length !== 12,
@@ -123,7 +142,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
       const payload = {
         name: form.name.trim(),
         code: form.code.trim(),
-        client: form.client as 'Swiggy' | 'Reliance',
+        client: selectedClients as ('Swiggy' | 'Reliance')[],
         vehicleNumbers,
         contactNumber: form.contactNumber,
         aadharNumber: form.aadharNumber,
@@ -163,21 +182,33 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
 
   // Dynamically listed (not hardcoded to Swiggy/Reliance) so any other
   // client value already present in the data shows up as a filter option too.
-  const clientOptions = useMemo(() => Array.from(new Set(vendors.map(v => v.client).filter(Boolean))) as string[], [vendors]);
+  // Vendors can now carry more than one client, so this flattens across all
+  // of them rather than deduping a single value per vendor.
+  const clientOptions = useMemo(() => Array.from(new Set(vendors.flatMap(getVendorClients))), [vendors]);
 
-  const filtered = vendors.filter(v =>
-    (!clientFilter || v.client === clientFilter) &&
-    ((v.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (v.code || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (v.vehicleNumbers || []).some(n => n.toLowerCase().includes(searchTerm.toLowerCase())))
-  );
+  const filtered = useMemo(() => {
+    const base = vendors.filter(v =>
+      (!clientFilter || getVendorClients(v).includes(clientFilter)) &&
+      ((v.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (v.code || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (v.vehicleNumbers || []).some(n => n.toLowerCase().includes(searchTerm.toLowerCase())))
+    );
+    if (!sort) return base;
+    const sorted = [...base].sort((a, b) => {
+      const cmp = sort.key === 'vehicleNumbers'
+        ? compareText((a.vehicleNumbers || []).join(', '), (b.vehicleNumbers || []).join(', '))
+        : compareText(a.name, b.name);
+      return sort.direction === 'asc' ? cmp : -cmp;
+    });
+    return sorted;
+  }, [vendors, clientFilter, searchTerm, sort]);
 
   const handleDownload = () => {
     if (filtered.length === 0) return;
     const rows = filtered.map(v => ({
       'Vendor Name': v.name,
       'Vendor Code': v.code,
-      'Client': v.client || '',
+      'Client': getVendorClients(v).join(', '),
       'Vehicle Number(s)': (v.vehicleNumbers || []).join(', '),
       'Contact': v.contactNumber,
       'Aadhar': v.aadharNumber,
@@ -237,10 +268,10 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
           <table className="w-full text-left text-xs">
             <thead className="bg-gradient-to-r from-indigo-900 via-slate-900 to-sky-900 text-indigo-100 uppercase text-[10px] tracking-wider">
               <tr>
-                <th className="px-3 py-2.5">Vendor Name</th>
+                <th className="px-3 py-2.5"><SortHeader label="Vendor Name" sortKey="name" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5">Vendor Code</th>
                 <th className="px-3 py-2.5">Client</th>
-                <th className="px-3 py-2.5">Vehicle Number(s)</th>
+                <th className="px-3 py-2.5"><SortHeader label="Vehicle Number(s)" sortKey="vehicleNumbers" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5">Contact</th>
                 <th className="px-3 py-2.5">Aadhar</th>
                 <th className="px-3 py-2.5">PAN</th>
@@ -258,10 +289,14 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
                   <td className="px-3 py-2.5 font-semibold text-slate-800">{v.name}</td>
                   <td className="px-3 py-2.5 font-mono text-slate-600">{v.code}</td>
                   <td className="px-3 py-2.5">
-                    {v.client ? (
-                      <span className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] ${CLIENT_BADGE_STYLE[v.client] || 'bg-slate-100 text-slate-600 border-slate-300'}`}>
-                        {v.client}
-                      </span>
+                    {getVendorClients(v).length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {getVendorClients(v).map(c => (
+                          <span key={c} className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] ${CLIENT_BADGE_STYLE[c] || 'bg-slate-100 text-slate-600 border-slate-300'}`}>
+                            {c}
+                          </span>
+                        ))}
+                      </div>
                     ) : (
                       <span className="text-slate-300">-</span>
                     )}
@@ -330,13 +365,15 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-slate-500 mb-1">Client*</label>
-                  <select value={form.client} onChange={e => setForm({ ...form, client: e.target.value })}
-                    className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5">
-                    <option value="">Select client</option>
-                    <option value="Swiggy">Swiggy</option>
-                    <option value="Reliance">Reliance</option>
-                  </select>
+                  <label className="block font-semibold text-slate-500 mb-1">Client(s)* <span className="text-slate-400 font-normal">(select one or more)</span></label>
+                  <div className="flex gap-4 border border-slate-300 rounded-lg px-2.5 py-2">
+                    {(['Swiggy', 'Reliance'] as const).map(c => (
+                      <label key={c} className="flex items-center gap-1.5 cursor-pointer font-semibold text-slate-700">
+                        <input type="checkbox" checked={selectedClients.includes(c)} onChange={() => toggleClient(c)} className="cursor-pointer" />
+                        {c}
+                      </label>
+                    ))}
+                  </div>
                   {errors.client && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
                 </div>
 

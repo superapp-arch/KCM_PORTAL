@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx';
 import { motion } from 'motion/react';
 import { Vehicle, VehicleDocument, VehicleMileage, VehicleLoan } from '../types';
+import SortHeader from './SortHeader';
+import { SortState, nextSortState, compareText } from '../utils/sort';
 import {
   Search,
   Filter,
@@ -104,6 +106,8 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
   const [selectedOwnership, setSelectedOwnership] = useState<string>('all');
   const [itemsPerPage, setItemsPerPage] = useState<string>('ALL');
   const [currentPage, setCurrentPage] = useState<number>(1);
+  const [sort, setSort] = useState<SortState | null>(null);
+  const handleSort = (key: string) => setSort(prev => nextSortState(prev, key));
   
   const [expandedRegNo, setExpandedRegNo] = useState<string | null>(null);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
@@ -351,6 +355,13 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
     return matchesSearch && matchesType && matchesCategory && matchesOwnership;
   });
 
+  const sortedVehicles = sort
+    ? [...filteredVehicles].sort((a, b) => {
+        const cmp = compareText(a['Reg. No.'] || a.regNo, b['Reg. No.'] || b.regNo);
+        return sort.direction === 'asc' ? cmp : -cmp;
+      })
+    : filteredVehicles;
+
   const toggleExpand = (regNo: string) => {
     if (expandedRegNo === regNo) {
       setExpandedRegNo(null);
@@ -469,11 +480,11 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
 
   const paginatedVehicles = (() => {
     if (itemsPerPage === 'ALL') {
-      return filteredVehicles;
+      return sortedVehicles;
     }
     const limit = parseInt(itemsPerPage, 10);
     const startIdx = (currentPage - 1) * limit;
-    return filteredVehicles.slice(startIdx, startIdx + limit);
+    return sortedVehicles.slice(startIdx, startIdx + limit);
   })();
 
   const totalPages = itemsPerPage === 'ALL' ? 1 : Math.ceil(totalFilteredCount / parseInt(itemsPerPage, 10));
@@ -638,7 +649,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
             <thead className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 border-b-2 border-purple-500 font-bold text-white uppercase text-[10px] tracking-wider font-mono">
               <tr>
                 <th className="px-4 py-4 text-center w-12 text-purple-200 font-extrabold">SI No</th>
-                <th className="px-4 py-4 text-purple-100">Reg. No.</th>
+                <th className="px-4 py-4 text-purple-100"><SortHeader label="Reg. No." sortKey="regNo" sort={sort} onSort={handleSort} /></th>
                 <th className="px-4 py-4 text-purple-100">Type</th>
                 <th className="px-4 py-4 text-purple-100">Category</th>
                 <th className="px-4 py-4 text-purple-100">Ownership</th>
