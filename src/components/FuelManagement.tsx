@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { FuelLog, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage, Vendor, StaffEmployee } from '../types';
 import SortHeader from './SortHeader';
-import { SortState, nextSortState, compareText } from '../utils/sort';
+import { SortState, SortDirection, extractLeadingNumber } from '../utils/sort';
 import {
   Fuel,
   Plus,
@@ -113,7 +113,7 @@ export default function FuelManagement({
   const [searchTerm, setSearchTerm] = useState('');
   const [bunkFilter, setBunkFilter] = useState('All');
   const [sort, setSort] = useState<SortState | null>(null);
-  const handleSort = (key: string) => setSort(prev => nextSortState(prev, key));
+  const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<string | null>(null);
 
@@ -345,7 +345,7 @@ export default function FuelManagement({
 
   const filteredLogs = sort
     ? [...filteredLogsUnsorted].sort((a, b) => {
-        const cmp = compareText(a.vehicleNumber, b.vehicleNumber);
+        const cmp = extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber);
         return sort.direction === 'asc' ? cmp : -cmp;
       })
     : filteredLogsUnsorted;
@@ -724,7 +724,7 @@ export default function FuelManagement({
                   <th className="px-3 py-2.5">Location</th>
                   <th className="px-3 py-2.5">Bunk Name</th>
                   <th className="px-3 py-2.5">Bunk/Card</th>
-                  <th className="px-3 py-2.5"><SortHeader label="Vehicle No" sortKey="vehicleNumber" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><SortHeader label="Vehicle No" sortKey="vehicleNumber" sort={sort} onSort={handleSort} type="numeric" /></th>
                   <th className="px-3 py-2.5">Indent No</th>
                   <th className="px-3 py-2.5 text-right">Ltrs</th>
                   <th className="px-3 py-2.5 text-right">Rate</th>

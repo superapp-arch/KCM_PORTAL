@@ -3,6 +3,8 @@ import * as XLSX from 'xlsx';
 import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Download } from 'lucide-react';
 import { DriverEmployee, DRIVER_LOCATION_CATEGORIES } from '../../types';
 import DriverFormModal from './DriverFormModal';
+import SortHeader from '../SortHeader';
+import { SortState, SortDirection, compareText } from '../../utils/sort';
 
 // Payable Amount = Gross Salary + Other Additions - (Petty Cash/Advance +
 // Loan Deduction + Recovery Amount + Driver Welfare + BATA) - LOP Amount -
@@ -46,6 +48,8 @@ interface DriverSalarySheetProps {
 export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver, onDeleteDriver }: DriverSalarySheetProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [locationFilter, setLocationFilter] = useState(''); // '' = All Locations
+  const [sort, setSort] = useState<SortState | null>(null);
+  const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
   const [modalDriver, setModalDriver] = useState<DriverEmployee | null | undefined>(undefined); // undefined = closed
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -62,14 +66,22 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
     return DRIVER_LOCATION_CATEGORIES.filter(c => distinct.includes(c));
   }, [drivers]);
 
-  const filtered = useMemo(() => drivers.filter(d => {
-    if (locationFilter && d.location !== locationFilter) return false;
-    if (searchTerm) {
-      const q = searchTerm.toLowerCase();
-      if (!d.id.toLowerCase().includes(q) && !d.name.toLowerCase().includes(q) && !(d.vehicleNo || '').toLowerCase().includes(q)) return false;
-    }
-    return true;
-  }), [drivers, locationFilter, searchTerm]);
+  const filtered = useMemo(() => {
+    const base = drivers.filter(d => {
+      if (locationFilter && d.location !== locationFilter) return false;
+      if (searchTerm) {
+        const q = searchTerm.toLowerCase();
+        if (!d.id.toLowerCase().includes(q) && !d.name.toLowerCase().includes(q) && !(d.vehicleNo || '').toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+    if (!sort) return base;
+    const sorted = [...base].sort((a, b) => {
+      const cmp = compareText(a.name, b.name);
+      return sort.direction === 'asc' ? cmp : -cmp;
+    });
+    return sorted;
+  }, [drivers, locationFilter, searchTerm, sort]);
 
   const handleDelete = async (driver: DriverEmployee) => {
     if (!confirm(`Delete driver ${driver.id} - ${driver.name}? This cannot be undone.`)) return;
@@ -143,7 +155,7 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
             <thead className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 text-purple-100 uppercase text-[10px] tracking-wider">
               <tr>
                 <th className="px-3 py-2.5">Sl.No</th>
-                <th className="px-3 py-2.5">Driver Name</th>
+                <th className="px-3 py-2.5"><SortHeader label="Driver Name" sortKey="name" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5">Driver ID</th>
                 <th className="px-3 py-2.5">Driver No</th>
                 <th className="px-3 py-2.5">Vehicle No</th>

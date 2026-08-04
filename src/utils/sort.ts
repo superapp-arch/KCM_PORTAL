@@ -6,10 +6,13 @@ export const compareText = (a?: string | null, b?: string | null): number =>
 
 export const compareNumber = (a?: number | null, b?: number | null): number => (a ?? 0) - (b ?? 0);
 
-// Clicking a column header: first click sorts ascending, second click flips
-// to descending, third click clears back to the table's natural order.
-export function nextSortState(current: SortState | null, key: string): SortState | null {
-  if (!current || current.key !== key) return { key, direction: 'asc' };
-  if (current.direction === 'asc') return { key, direction: 'desc' };
-  return null;
-}
+// Reg./Vehicle numbers mix letters and digits (e.g. "KA05AB1234"). "Numeric
+// sort" on these means sort by the first digit run in the string (05), not
+// plain alphabetical order and not every digit run concatenated together.
+export const extractLeadingNumber = (value?: string | null): number => {
+  const match = (value || '').match(/\d+/);
+  return match ? parseInt(match[0], 10) : 0;
+};
+
+export const compareLeadingNumber = (a?: string | null, b?: string | null): number =>
+  extractLeadingNumber(a) - extractLeadingNumber(b);

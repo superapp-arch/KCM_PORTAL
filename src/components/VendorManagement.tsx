@@ -4,7 +4,7 @@ import { Vendor, VehicleDocument } from '../types';
 import { Building2, Plus, Search, Edit2, Trash2, X, Car, Download } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import SortHeader from './SortHeader';
-import { SortState, nextSortState, compareText } from '../utils/sort';
+import { SortState, SortDirection, compareText, extractLeadingNumber } from '../utils/sort';
 
 // undefined/missing `active` is treated as active, matching Vehicle's
 // pre-existing active-status convention elsewhere in the app.
@@ -52,7 +52,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
   const [searchTerm, setSearchTerm] = useState('');
   const [clientFilter, setClientFilter] = useState(''); // '' = All clients
   const [sort, setSort] = useState<SortState | null>(null);
-  const handleSort = (key: string) => setSort(prev => nextSortState(prev, key));
+  const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -60,6 +60,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
   const [form, setForm] = useState(emptyForm);
   const [active, setActive] = useState(true);
   const [selectedClients, setSelectedClients] = useState<string[]>([]);
+  const [clientInput, setClientInput] = useState('');
   const [vehicleNumbers, setVehicleNumbers] = useState<string[]>([]);
   const [vehicleInput, setVehicleInput] = useState('');
   const [errors, setErrors] = useState<FormErrors>({});
@@ -73,6 +74,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
     setForm(emptyForm);
     setActive(true);
     setSelectedClients([]);
+    setClientInput('');
     setVehicleNumbers([]);
     setVehicleInput('');
     setErrors({});
@@ -91,6 +93,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
       bankAccountNumber: vendor.bankAccountNumber, ifscCode: vendor.ifscCode
     });
     setSelectedClients(getVendorClients(vendor));
+    setClientInput('');
     setVehicleNumbers(vendor.vehicleNumbers || []);
     setVehicleInput('');
     setActive(isVendorActive(vendor));
@@ -102,8 +105,15 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
     setShowModal(true);
   };
 
-  const toggleClient = (c: 'Swiggy' | 'Reliance') => {
-    setSelectedClients(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]);
+  const addClient = () => {
+    const c = clientInput.trim();
+    if (!c || selectedClients.includes(c)) return;
+    setSelectedClients([...selectedClients, c]);
+    setClientInput('');
+  };
+
+  const removeClient = (c: string) => {
+    setSelectedClients(selectedClients.filter(x => x !== c));
   };
 
   const addVehicleNumber = () => {
@@ -142,7 +152,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
       const payload = {
         name: form.name.trim(),
         code: form.code.trim(),
-        client: selectedClients as ('Swiggy' | 'Reliance')[],
+        client: selectedClients,
         vehicleNumbers,
         contactNumber: form.contactNumber,
         aadharNumber: form.aadharNumber,
@@ -196,7 +206,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
     if (!sort) return base;
     const sorted = [...base].sort((a, b) => {
       const cmp = sort.key === 'vehicleNumbers'
-        ? compareText((a.vehicleNumbers || []).join(', '), (b.vehicleNumbers || []).join(', '))
+        ? extractLeadingNumber((a.vehicleNumbers || [])[0]) - extractLeadingNumber((b.vehicleNumbers || [])[0])
         : compareText(a.name, b.name);
       return sort.direction === 'asc' ? cmp : -cmp;
     });
@@ -271,7 +281,7 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
                 <th className="px-3 py-2.5"><SortHeader label="Vendor Name" sortKey="name" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5">Vendor Code</th>
                 <th className="px-3 py-2.5">Client</th>
-                <th className="px-3 py-2.5"><SortHeader label="Vehicle Number(s)" sortKey="vehicleNumbers" sort={sort} onSort={handleSort} /></th>
+                <th className="px-3 py-2.5"><SortHeader label="Vehicle Number(s)" sortKey="vehicleNumbers" sort={sort} onSort={handleSort} type="numeric" /></th>
                 <th className="px-3 py-2.5">Contact</th>
                 <th className="px-3 py-2.5">Aadhar</th>
                 <th className="px-3 py-2.5">PAN</th>
@@ -365,15 +375,33 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-slate-500 mb-1">Client(s)* <span className="text-slate-400 font-normal">(select one or more)</span></label>
-                  <div className="flex gap-4 border border-slate-300 rounded-lg px-2.5 py-2">
-                    {(['Swiggy', 'Reliance'] as const).map(c => (
-                      <label key={c} className="flex items-center gap-1.5 cursor-pointer font-semibold text-slate-700">
-                        <input type="checkbox" checked={selectedClients.includes(c)} onChange={() => toggleClient(c)} className="cursor-pointer" />
-                        {c}
-                      </label>
-                    ))}
+                  <label className="block font-semibold text-slate-500 mb-1">Client(s)* <span className="text-slate-400 font-normal">(type any client name, any number)</span></label>
+                  <div className="flex gap-2">
+                    <input
+                      value={clientInput}
+                      onChange={e => setClientInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addClient(); } }}
+                      list="vendor-client-suggestions"
+                      placeholder="e.g. Swiggy, Reliance, or any new client"
+                      autoComplete="off"
+                      className="flex-1 border border-slate-300 rounded-lg px-2.5 py-1.5"
+                    />
+                    <datalist id="vendor-client-suggestions">
+                      <option value="Swiggy" />
+                      <option value="Reliance" />
+                    </datalist>
+                    <button type="button" onClick={addClient} className="bg-slate-800 hover:bg-slate-900 text-white rounded-lg px-3 font-semibold text-[10px] uppercase cursor-pointer">Add</button>
                   </div>
+                  {selectedClients.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {selectedClients.map(c => (
+                        <span key={c} className={`inline-flex items-center gap-1 border rounded px-2 py-0.5 font-bold text-[10px] ${CLIENT_BADGE_STYLE[c] || 'bg-indigo-50 text-indigo-700 border-indigo-200'}`}>
+                          {c}
+                          <button type="button" onClick={() => removeClient(c)} className="hover:text-rose-600 cursor-pointer"><X className="w-2.5 h-2.5" /></button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   {errors.client && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
                 </div>
 

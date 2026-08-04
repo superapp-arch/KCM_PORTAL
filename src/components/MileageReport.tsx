@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import DateInput from './DateInput';
 import SortHeader from './SortHeader';
-import { SortState, nextSortState, compareText } from '../utils/sort';
+import { SortState, SortDirection, compareText, extractLeadingNumber } from '../utils/sort';
 
 interface MileageReportModuleProps {
   user: User;
@@ -68,7 +68,7 @@ export default function MileageReportModule({
   const [selectedLocationFilter, setSelectedLocationFilter] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
   const [sort, setSort] = useState<SortState | null>(null);
-  const handleSort = (key: string) => setSort(prev => nextSortState(prev, key));
+  const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
 
   // Form inputs
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -435,7 +435,9 @@ export default function MileageReportModule({
 
   const sortedReports = sort
     ? [...filteredReports].sort((a, b) => {
-        const cmp = sort.key === 'driverName' ? compareText(a.driverName, b.driverName) : compareText(a.vehicleNo, b.vehicleNo);
+        const cmp = sort.key === 'driverName'
+          ? compareText(a.driverName, b.driverName)
+          : extractLeadingNumber(a.vehicleNo) - extractLeadingNumber(b.vehicleNo);
         return sort.direction === 'asc' ? cmp : -cmp;
       })
     : filteredReports;
@@ -561,7 +563,7 @@ export default function MileageReportModule({
               <tr>
                 <th className="px-3 py-2.5">Sl. No</th>
                 <th className="px-3 py-2.5">Date</th>
-                <th className="px-3 py-2.5"><SortHeader label="Vehicle No" sortKey="vehicleNo" sort={sort} onSort={handleSort} /></th>
+                <th className="px-3 py-2.5"><SortHeader label="Vehicle No" sortKey="vehicleNo" sort={sort} onSort={handleSort} type="numeric" /></th>
                 <th className="px-3 py-2.5 text-right">Opening KM</th>
                 <th className="px-3 py-2.5 text-right">Closing KM</th>
                 <th className="px-3 py-2.5 text-right bg-slate-800">Total KM</th>

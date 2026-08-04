@@ -8,7 +8,7 @@ import DocumentAttachment from '../DocumentAttachment';
 import VehicleDetailsPopover from './VehicleDetailsPopover';
 import LoanDetailsPopover from './LoanDetailsPopover';
 import SortHeader from '../SortHeader';
-import { SortState, nextSortState, compareText, compareNumber } from '../../utils/sort';
+import { SortState, SortDirection, compareText, compareNumber, extractLeadingNumber } from '../../utils/sort';
 
 interface VehicleLoanSheetProps {
   vehicles: Vehicle[];
@@ -71,7 +71,7 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
   const [showOwnershipDropdown, setShowOwnershipDropdown] = useState(false);
   const [dueDateFilter, setDueDateFilter] = useState(''); // '' = no date filter
   const [sort, setSort] = useState<SortState | null>(null);
-  const handleSort = (key: string) => setSort(prev => nextSortState(prev, key));
+  const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -201,12 +201,20 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
     return true;
   }), [vehicleLoans, financerFilter, ownershipFilter, dueDateFilter, searchTerm]);
 
-  // EMI Pending isn't a stored field - it's always computed live from
-  // emiStartDate/tenure (see types.ts), so sorting by it must recompute this
-  // per row rather than reading a column value.
+  // EMI Paid, EMI Pending, and O/S Amount aren't stored fields - they're
+  // always computed live from emiStartDate/tenure/monthlyEmi (see types.ts),
+  // so sorting by any of them must recompute per row rather than reading a
+  // column value.
+  const emiPaidOf = (loan: VehicleLoan): number => computeMonthsCompleted(loan.emiStartDate, loan.tenure);
+
   const emiPendingOf = (loan: VehicleLoan): number | null => {
-    const monthsCompleted = computeMonthsCompleted(loan.emiStartDate, loan.tenure);
+    const monthsCompleted = emiPaidOf(loan);
     return loan.tenure != null ? loan.tenure - monthsCompleted : null;
+  };
+
+  const osAmountOf = (loan: VehicleLoan): number | null => {
+    const bal = emiPendingOf(loan);
+    return bal != null && loan.monthlyEmi != null ? bal * loan.monthlyEmi : null;
   };
 
   const sorted = useMemo(() => {
@@ -215,11 +223,13 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
     arr.sort((a, b) => {
       let cmp = 0;
       switch (sort.key) {
-        case 'regNo': cmp = compareText(a.regNo, b.regNo); break;
+        case 'regNo': cmp = extractLeadingNumber(a.regNo) - extractLeadingNumber(b.regNo); break;
         case 'financer': cmp = compareText(a.financer, b.financer); break;
         case 'loanAmount': cmp = compareNumber(a.loanAmount, b.loanAmount); break;
         case 'monthlyEmi': cmp = compareNumber(a.monthlyEmi, b.monthlyEmi); break;
+        case 'emiPaid': cmp = compareNumber(emiPaidOf(a), emiPaidOf(b)); break;
         case 'emiPending': cmp = compareNumber(emiPendingOf(a), emiPendingOf(b)); break;
+        case 'osAmount': cmp = compareNumber(osAmountOf(a), osAmountOf(b)); break;
       }
       return sort.direction === 'asc' ? cmp : -cmp;
     });
@@ -311,15 +321,15 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
             <thead className="bg-gradient-to-r from-teal-900 via-slate-900 to-emerald-900 text-teal-100 uppercase text-[10px] tracking-wider">
               <tr>
                 <th className="px-3 py-2.5">SL No</th>
-                <th className="px-3 py-2.5"><SortHeader label="Reg. No" sortKey="regNo" sort={sort} onSort={handleSort} /></th>
+                <th className="px-3 py-2.5"><SortHeader label="Reg. No" sortKey="regNo" sort={sort} onSort={handleSort} type="numeric" /></th>
                 <th className="px-3 py-2.5"><SortHeader label="Financer" sortKey="financer" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5">Loan Number</th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="Loan Amount" sortKey="loanAmount" sort={sort} onSort={handleSort} align="right" /></th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="Monthly EMI" sortKey="monthlyEmi" sort={sort} onSort={handleSort} align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="Loan Amount" sortKey="loanAmount" sort={sort} onSort={handleSort} align="right" type="numeric" /></th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="Monthly EMI" sortKey="monthlyEmi" sort={sort} onSort={handleSort} align="right" type="numeric" /></th>
                 <th className="px-3 py-2.5 text-right">Tenure</th>
-                <th className="px-3 py-2.5 text-right">EMI Paid</th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="EMI Pending" sortKey="emiPending" sort={sort} onSort={handleSort} align="right" /></th>
-                <th className="px-3 py-2.5 text-right">O/S Amount</th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="EMI Paid" sortKey="emiPaid" sort={sort} onSort={handleSort} align="right" type="numeric" /></th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="EMI Pending" sortKey="emiPending" sort={sort} onSort={handleSort} align="right" type="numeric" /></th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="O/S Amount" sortKey="osAmount" sort={sort} onSort={handleSort} align="right" type="numeric" /></th>
                 <th className="px-3 py-2.5">Due Date</th>
                 <th className="px-3 py-2.5">Loan Status</th>
                 <th className="px-3 py-2.5 text-right">Actions</th>

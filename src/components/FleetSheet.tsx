@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx';
 import { motion } from 'motion/react';
 import { Vehicle, VehicleDocument, VehicleMileage, VehicleLoan } from '../types';
 import SortHeader from './SortHeader';
-import { SortState, nextSortState, compareText } from '../utils/sort';
+import { SortState, SortDirection, extractLeadingNumber } from '../utils/sort';
 import {
   Search,
   Filter,
@@ -107,7 +107,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
   const [itemsPerPage, setItemsPerPage] = useState<string>('ALL');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [sort, setSort] = useState<SortState | null>(null);
-  const handleSort = (key: string) => setSort(prev => nextSortState(prev, key));
+  const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
   
   const [expandedRegNo, setExpandedRegNo] = useState<string | null>(null);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
@@ -357,7 +357,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
 
   const sortedVehicles = sort
     ? [...filteredVehicles].sort((a, b) => {
-        const cmp = compareText(a['Reg. No.'] || a.regNo, b['Reg. No.'] || b.regNo);
+        const cmp = extractLeadingNumber(a['Reg. No.'] || a.regNo) - extractLeadingNumber(b['Reg. No.'] || b.regNo);
         return sort.direction === 'asc' ? cmp : -cmp;
       })
     : filteredVehicles;
@@ -649,7 +649,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
             <thead className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 border-b-2 border-purple-500 font-bold text-white uppercase text-[10px] tracking-wider font-mono">
               <tr>
                 <th className="px-4 py-4 text-center w-12 text-purple-200 font-extrabold">SI No</th>
-                <th className="px-4 py-4 text-purple-100"><SortHeader label="Reg. No." sortKey="regNo" sort={sort} onSort={handleSort} /></th>
+                <th className="px-4 py-4 text-purple-100"><SortHeader label="Reg. No." sortKey="regNo" sort={sort} onSort={handleSort} type="numeric" /></th>
                 <th className="px-4 py-4 text-purple-100">Type</th>
                 <th className="px-4 py-4 text-purple-100">Category</th>
                 <th className="px-4 py-4 text-purple-100">Ownership</th>

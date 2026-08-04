@@ -32,6 +32,8 @@ import {
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
+import SortHeader from './SortHeader';
+import { SortState, SortDirection, extractLeadingNumber } from '../utils/sort';
 
 interface PettyCashProps {
   vouchers: PettyCashVoucher[];
@@ -101,7 +103,9 @@ export default function PettyCash({
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('All');
   const [selectedVendorFilter, setSelectedVendorFilter] = useState('All');
-  
+  const [sort, setSort] = useState<SortState | null>(null);
+  const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
+
   // Date range filter for staff to access historical data
   const [filterYear, setFilterYear] = useState('2026');
   const [filterMonth, setFilterMonth] = useState('All'); // All, 01, 02... 12
@@ -291,7 +295,7 @@ export default function PettyCash({
   };
 
   // Filter vouchers based on search, vendor, category, year and month
-  const filteredVouchers = vouchers.filter(v => {
+  const filteredVouchersUnsorted = vouchers.filter(v => {
     // Search Term matching (EntryNo, Category, Location, Receiver, VehicleNumber, ClientName)
     const matchesSearch =
       (v.entryNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -313,6 +317,13 @@ export default function PettyCash({
 
     return matchesSearch && matchesVendor && matchesCategory && matchesYear && matchesMonth;
   });
+
+  const filteredVouchers = sort
+    ? [...filteredVouchersUnsorted].sort((a, b) => {
+        const cmp = extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber);
+        return sort.direction === 'asc' ? cmp : -cmp;
+      })
+    : filteredVouchersUnsorted;
 
   // Unique years list from existing vouchers to populate filter
   const availableYears = Array.from(new Set(vouchers.map(v => getYearFromDate(v.date)))).filter(Boolean).sort().reverse();
@@ -1316,7 +1327,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <th className="px-3 py-2.5">Location</th>
                     <th className="px-3 py-2.5">Client</th>
                     <th className="px-3 py-2.5">Vendor</th>
-                    <th className="px-3 py-2.5">Vehicle #</th>
+                    <th className="px-3 py-2.5"><SortHeader label="Vehicle #" sortKey="vehicleNumber" sort={sort} onSort={handleSort} type="numeric" /></th>
                     <th className="px-3 py-2.5">Receiver</th>
                     <th className="px-3 py-2.5">Vendor ID</th>
                     <th className="px-3 py-2.5 text-right">Amt Rec</th>
