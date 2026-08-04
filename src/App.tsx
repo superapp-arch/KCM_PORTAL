@@ -20,7 +20,8 @@ import {
   Vendor,
   DriverEmployee,
   VehicleLoan,
-  BusinessLoan
+  BusinessLoan,
+  MarketPodEntry
 } from './types';
 
 export default function App() {
@@ -34,6 +35,7 @@ export default function App() {
   const [fuelLogs, setFuelLogs] = useState<FuelLog[]>([]);
   const [invoices, setInvoices] = useState<BillingInvoice[]>([]);
   const [vouchers, setVouchers] = useState<PettyCashVoucher[]>([]);
+  const [marketPodEntries, setMarketPodEntries] = useState<MarketPodEntry[]>([]);
   const [records, setRecords] = useState<MaintenanceRecord[]>([]);
   const [entries, setEntries] = useState<AccountsEntry[]>([]);
   const [employees, setEmployees] = useState<StaffEmployee[]>([]);
@@ -90,6 +92,7 @@ export default function App() {
         fuelRes,
         billingRes,
         pettyRes,
+        marketPodRes,
         maintRes,
         acctRes,
         hrRes,
@@ -107,6 +110,7 @@ export default function App() {
         authFetch('/api/fuel'),
         fetch('/api/billing'),
         fetch('/api/petty-cash'),
+        fetch('/api/market-pod'),
         fetch('/api/maintenance'),
         fetch('/api/accounts'),
         authFetch('/api/staff/employees'),
@@ -125,6 +129,7 @@ export default function App() {
       if (fuelRes.ok) setFuelLogs(await fuelRes.json());
       if (billingRes.ok) setInvoices(await billingRes.json());
       if (pettyRes.ok) setVouchers(await pettyRes.json());
+      if (marketPodRes.ok) setMarketPodEntries(await marketPodRes.json());
       if (maintRes.ok) setRecords(await maintRes.json());
       if (acctRes.ok) setEntries(await acctRes.json());
       if (hrRes.ok) setEmployees(await hrRes.json());
@@ -221,6 +226,49 @@ export default function App() {
   const handleDeleteVoucher = async (id: string) => {
     try {
       const res = await fetch(`/api/petty-cash/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleAddMarketPodEntry = async (entry: Omit<MarketPodEntry, 'id'>) => {
+    try {
+      const res = await fetch('/api/market-pod', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleUpdateMarketPodEntry = async (id: string, entry: Partial<MarketPodEntry>) => {
+    try {
+      const res = await fetch(`/api/market-pod/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteMarketPodEntry = async (id: string) => {
+    try {
+      const res = await fetch(`/api/market-pod/${id}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -633,19 +681,6 @@ export default function App() {
     }
   };
 
-  const handleClearImportedPettyCash = async () => {
-    try {
-      const res = await fetch('/api/petty-cash/clear-imported', {
-        method: 'POST'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error clearing imported petty cash:', err);
-    }
-  };
-
   const handleAddMileageReport = async (report: Omit<MileageReport, 'id'>) => {
     try {
       const res = await authFetch('/api/mileage', {
@@ -863,7 +898,10 @@ export default function App() {
         onAddVoucher={handleAddVoucher}
         onUpdateVoucher={handleUpdateVoucher}
         onDeleteVoucher={handleDeleteVoucher}
-        onClearImportedPettyCash={handleClearImportedPettyCash}
+        marketPodEntries={marketPodEntries}
+        onAddMarketPodEntry={handleAddMarketPodEntry}
+        onUpdateMarketPodEntry={handleUpdateMarketPodEntry}
+        onDeleteMarketPodEntry={handleDeleteMarketPodEntry}
         onAddMaintenanceRecord={handleAddMaintenanceRecord}
         onUpdateMaintenanceRecord={handleUpdateMaintenanceRecord}
         onDeleteMaintenanceRecord={handleDeleteMaintenanceRecord}

@@ -199,6 +199,29 @@ export interface PettyCashVoucher {
   documents?: VehicleDocument[];
 }
 
+export type MarketPodStatus = 'Planned' | 'In Transit' | 'Completed' | 'Closed' | 'Cancelled';
+
+// A freight trip ledger nested inside the Petty Cash module ("Market POD"
+// tab). Entry No is auto-generated/sequential (see nextMarketPodEntryNo in
+// PettyCash.tsx) and never user-editable. Balance is always derived -
+// totalFreight - receivedAdvance - otherExpenses - never entered manually.
+export interface MarketPodEntry {
+  id: string;
+  entryNo: string; // auto e.g. "TRIP-000001", not editable
+  vehicleNumber: string; // from Fleet & Vehicles master
+  date: string; // YYYY-MM-DD
+  from: string;
+  to: string;
+  customer: string; // manual entry
+  totalFreight: number;
+  receivedAdvance: number;
+  otherExpenses: number;
+  balance: number; // auto = totalFreight - receivedAdvance - otherExpenses
+  coordinator: string; // manual text entry, no dropdown
+  status: MarketPodStatus;
+  remarks: string;
+}
+
 export interface MaintenanceRecord {
   id: string;
   regNo: string;

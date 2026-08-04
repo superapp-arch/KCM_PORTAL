@@ -26,7 +26,8 @@ import {
   driverEmployees,
   driverAttendance,
   vehicleLoans,
-  businessLoans
+  businessLoans,
+  marketPodEntries
 } from './schema.ts';
 import { eq, ne } from 'drizzle-orm';
 import { hashPassword, isHashed } from '../auth/password.ts';
@@ -57,7 +58,8 @@ import {
   DriverEmployee,
   DriverAttendance,
   VehicleLoan,
-  BusinessLoan
+  BusinessLoan,
+  MarketPodEntry
 } from '../types.ts';
 
 // Default Users Seed
@@ -563,6 +565,46 @@ export async function deletePettyCashVoucher(id: string) {
   } catch (error) {
     console.error("Database action failed in deletePettyCashVoucher:", error);
     throw new Error("Failed to delete petty cash voucher.", { cause: error });
+  }
+}
+
+// --- MARKET POD OPERATIONS ---
+export async function getMarketPodEntries(): Promise<MarketPodEntry[]> {
+  try {
+    const rows = await db.select().from(marketPodEntries);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getMarketPodEntries:", error);
+    throw new Error("Failed to retrieve Market POD entries.", { cause: error });
+  }
+}
+
+export async function saveMarketPodEntry(entry: MarketPodEntry) {
+  try {
+    const id = entry.id || String(Date.now());
+    const completeEntry = { ...entry, id };
+    const dataString = JSON.stringify(completeEntry);
+
+    const existing = await db.select().from(marketPodEntries).where(eq(marketPodEntries.id, id));
+    if (existing.length > 0) {
+      await db.update(marketPodEntries).set({ data: dataString }).where(eq(marketPodEntries.id, id));
+    } else {
+      await db.insert(marketPodEntries).values({ id, data: dataString });
+    }
+    return await getMarketPodEntries();
+  } catch (error) {
+    console.error("Database action failed in saveMarketPodEntry:", error);
+    throw new Error("Failed to save Market POD entry.", { cause: error });
+  }
+}
+
+export async function deleteMarketPodEntry(id: string) {
+  try {
+    await db.delete(marketPodEntries).where(eq(marketPodEntries.id, id));
+    return await getMarketPodEntries();
+  } catch (error) {
+    console.error("Database action failed in deleteMarketPodEntry:", error);
+    throw new Error("Failed to delete Market POD entry.", { cause: error });
   }
 }
 
@@ -1100,37 +1142,6 @@ export async function deleteWarehouseEntry(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteWarehouseEntry:", error);
     throw new Error("Failed to delete warehouse entry.", { cause: error });
-  }
-}
-
-export async function clearImportedPettyCashVouchers() {
-  try {
-    const allRows = await db.select().from(pettyCashVouchers);
-    for (const r of allRows) {
-      if (r.id === '1') continue; // Always preserve seed data
-      try {
-        const voucher = JSON.parse(r.data);
-        const isImported = 
-          voucher.isImported === true ||
-          (voucher.entryNo && (voucher.entryNo.startsWith('SUM-') || voucher.entryNo.includes('IMP'))) ||
-          (voucher.location === 'Consolidated Import') ||
-          (voucher.tripSheet && voucher.tripSheet.startsWith('AUTO-SUM-')) ||
-          (voucher.remarks && voucher.remarks.includes('Consolidated import for'));
-
-        if (isImported) {
-          await db.delete(pettyCashVouchers).where(eq(pettyCashVouchers.id, r.id));
-        }
-      } catch (e) {
-        // If JSON parsing fails, check if the ID itself has IMP or SUM patterns
-        if (r.id.startsWith('SUM-') || r.id.includes('IMP')) {
-          await db.delete(pettyCashVouchers).where(eq(pettyCashVouchers.id, r.id));
-        }
-      }
-    }
-    return await getPettyCashVouchers();
-  } catch (error) {
-    console.error("Database action failed in clearImportedPettyCashVouchers:", error);
-    throw new Error("Failed to clear imported petty cash vouchers.", { cause: error });
   }
 }
 

@@ -173,4 +173,10 @@ export const businessLoans = pgTable('business_loans', {
   data: text('data').notNull(), // JSON string representing the full BusinessLoan object
 });
 
+// Market POD freight trip ledger (a tab inside Petty Cash)
+export const marketPodEntries = pgTable('market_pod_entries', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full MarketPodEntry object
+});
+
 

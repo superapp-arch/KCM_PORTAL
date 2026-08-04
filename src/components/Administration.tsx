@@ -17,7 +17,8 @@ import {
   Vendor,
   DriverEmployee,
   VehicleLoan,
-  BusinessLoan
+  BusinessLoan,
+  MarketPodEntry
 } from '../types';
 import FleetSheet from './FleetSheet';
 import FuelManagement from './FuelManagement';
@@ -113,7 +114,10 @@ interface AdministrationProps {
   onAddMileageReport: (report: Omit<MileageReport, 'id'>) => Promise<void>;
   onUpdateMileageReport: (id: string, report: Partial<MileageReport>) => Promise<void>;
   onDeleteMileageReport: (id: string) => Promise<void>;
-  onClearImportedPettyCash: () => Promise<void>;
+  marketPodEntries: MarketPodEntry[];
+  onAddMarketPodEntry: (entry: Omit<MarketPodEntry, 'id'>) => Promise<void>;
+  onUpdateMarketPodEntry: (id: string, entry: Partial<MarketPodEntry>) => Promise<void>;
+  onDeleteMarketPodEntry: (id: string) => Promise<void>;
   fuelVendors: FuelVendor[];
   onAddFuelVendor: (vendor: Omit<FuelVendor, 'id'>) => Promise<void>;
   onDeleteFuelVendor: (id: string) => Promise<void>;
@@ -181,7 +185,10 @@ export default function Administration({
   onAddMileageReport,
   onUpdateMileageReport,
   onDeleteMileageReport,
-  onClearImportedPettyCash,
+  marketPodEntries,
+  onAddMarketPodEntry,
+  onUpdateMarketPodEntry,
+  onDeleteMarketPodEntry,
   fuelVendors,
   onAddFuelVendor,
   onDeleteFuelVendor,
@@ -817,12 +824,16 @@ export default function Administration({
           )}
 
           {activeTab === 'pettycash' && hasAccess('pettycash') && (
-            <PettyCash 
-              vouchers={vouchers} 
-              onAddVoucher={onAddVoucher} 
-              onUpdateVoucher={onUpdateVoucher} 
-              onDeleteVoucher={onDeleteVoucher} 
-              onClearImportedPettyCash={onClearImportedPettyCash}
+            <PettyCash
+              vouchers={vouchers}
+              onAddVoucher={onAddVoucher}
+              onUpdateVoucher={onUpdateVoucher}
+              onDeleteVoucher={onDeleteVoucher}
+              vehicles={vehicles}
+              marketPodEntries={marketPodEntries}
+              onAddMarketPodEntry={onAddMarketPodEntry}
+              onUpdateMarketPodEntry={onUpdateMarketPodEntry}
+              onDeleteMarketPodEntry={onDeleteMarketPodEntry}
             />
           )}
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
-import { PettyCashVoucher, VehicleDocument } from '../types';
+import { PettyCashVoucher, VehicleDocument, Vehicle, MarketPodEntry, MarketPodStatus } from '../types';
 import {
   Landmark,
   Plus,
@@ -8,40 +9,38 @@ import {
   CheckCircle2,
   Calendar,
   Download,
-  Upload,
   Share2,
   Filter,
   FileSpreadsheet,
-  Printer,
   ChevronDown,
   Info,
-  ChevronRight,
-  Clipboard,
   Check,
   Maximize2,
   Minimize2,
-  Eye,
-  EyeOff,
-  Edit2,
-  Trash2,
   Paperclip,
-  RefreshCw,
   X,
   Mail,
-  Phone
+  Phone,
+  Truck
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
 import SortHeader from './SortHeader';
-import { SortState, SortDirection, extractLeadingNumber } from '../utils/sort';
+import { SortState, SortDirection, extractLeadingNumber, compareText } from '../utils/sort';
 
 interface PettyCashProps {
   vouchers: PettyCashVoucher[];
   onAddVoucher: (voucher: Omit<PettyCashVoucher, 'id'>) => Promise<void>;
   onUpdateVoucher: (id: string, voucher: Partial<PettyCashVoucher>) => Promise<void>;
   onDeleteVoucher: (id: string) => Promise<void>;
-  onClearImportedPettyCash?: () => Promise<void>;
+  vehicles: Vehicle[];
+  marketPodEntries: MarketPodEntry[];
+  onAddMarketPodEntry: (entry: Omit<MarketPodEntry, 'id'>) => Promise<void>;
+  onUpdateMarketPodEntry: (id: string, entry: Partial<MarketPodEntry>) => Promise<void>;
+  onDeleteMarketPodEntry: (id: string) => Promise<void>;
 }
+
+const MARKET_POD_STATUSES: MarketPodStatus[] = ['Planned', 'In Transit', 'Completed', 'Closed', 'Cancelled'];
 
 const EXPENSE_CATEGORIES = [
   "ACCIDENT AND SETTELMENT",
@@ -78,26 +77,29 @@ const EXPENSE_CATEGORIES = [
 const CLIENT_NAMES = ["swiggy", "RIL F&V", "market load", "Other"];
 const VENDORS = ["kcm insta", "kcm supply"];
 
-export default function PettyCash({ 
-  vouchers, 
+export default function PettyCash({
+  vouchers,
   onAddVoucher,
   onUpdateVoucher,
   onDeleteVoucher,
-  onClearImportedPettyCash
+  vehicles,
+  marketPodEntries,
+  onAddMarketPodEntry,
+  onUpdateMarketPodEntry,
+  onDeleteMarketPodEntry
 }: PettyCashProps) {
-  const [activeTab, setActiveTab] = useState<'ledger' | 'summary'>('ledger');
-  const cancelImportRef = useRef(false);
+  const [activeTab, setActiveTab] = useState<'ledger' | 'summary' | 'marketpod'>('ledger');
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
 
-  // Fullscreen and collapsible states
+  // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [showForm, setShowForm] = useState(true);
-  const summaryFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Import loading & progress states
-  const [isImportingSummary, setIsImportingSummary] = useState(false);
-  const [isImportingLedger, setIsImportingLedger] = useState(false);
-  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
+  // Add/Edit Petty Cash Entry slide-out sidebar (mirrors Fuel Entry's pattern)
+  const [showSidebar, setShowSidebar] = useState(false);
+
+  // Download (replaces Export): a reference date + preset period
+  const [downloadDate, setDownloadDate] = useState(new Date().toISOString().slice(0, 10));
+  const [downloadPeriod, setDownloadPeriod] = useState<'day' | 'month' | 'year'>('day');
 
   // Search & Filters state
   const [searchTerm, setSearchTerm] = useState('');
@@ -144,8 +146,132 @@ export default function PettyCash({
     setSelectedVoucherForDocs(v);
   };
 
+  // --- Market POD (freight trip ledger) state ---
+  const [showMarketPodSidebar, setShowMarketPodSidebar] = useState(false);
+  const [mpEditingId, setMpEditingId] = useState<string | null>(null);
+  const [mpVehicleNumber, setMpVehicleNumber] = useState('');
+  const [mpDate, setMpDate] = useState(new Date().toISOString().slice(0, 10));
+  const [mpFrom, setMpFrom] = useState('');
+  const [mpTo, setMpTo] = useState('');
+  const [mpCustomer, setMpCustomer] = useState('');
+  const [mpTotalFreight, setMpTotalFreight] = useState('');
+  const [mpReceivedAdvance, setMpReceivedAdvance] = useState('');
+  const [mpOtherExpenses, setMpOtherExpenses] = useState('');
+  const [mpCoordinator, setMpCoordinator] = useState('');
+  const [mpStatus, setMpStatus] = useState<MarketPodStatus>('Planned');
+  const [mpRemarks, setMpRemarks] = useState('');
+  const [mpIsSubmitting, setMpIsSubmitting] = useState(false);
+  const [mpSearchTerm, setMpSearchTerm] = useState('');
+  const [mpSort, setMpSort] = useState<SortState | null>(null);
+  const handleMpSort = (key: string, direction: SortDirection) => setMpSort({ key, direction });
+
+  const mpBalance = (parseFloat(mpTotalFreight) || 0) - (parseFloat(mpReceivedAdvance) || 0) - (parseFloat(mpOtherExpenses) || 0);
+
+  const mpVehicleList = Array.from(new Set(vehicles.map(v => v.regNo || v['Reg. No.'] || '').filter(Boolean))).sort();
+
+  // Entry No is auto-generated and never user-editable, e.g. "TRIP-000001" -
+  // same live-max-plus-one convention as Fuel Entry's own auto-numbering.
+  const nextMarketPodEntryNo = () => {
+    const maxNum = marketPodEntries.reduce((max, e) => {
+      const match = (e.entryNo || '').match(/(\d+)$/);
+      const n = match ? parseInt(match[1], 10) : 0;
+      return n > max ? n : max;
+    }, 0);
+    return `TRIP-${String(maxNum + 1).padStart(6, '0')}`;
+  };
+
+  const resetMarketPodForm = () => {
+    setMpEditingId(null);
+    setMpVehicleNumber('');
+    setMpDate(new Date().toISOString().slice(0, 10));
+    setMpFrom('');
+    setMpTo('');
+    setMpCustomer('');
+    setMpTotalFreight('');
+    setMpReceivedAdvance('');
+    setMpOtherExpenses('');
+    setMpCoordinator('');
+    setMpStatus('Planned');
+    setMpRemarks('');
+    setShowMarketPodSidebar(false);
+  };
+
+  const handleStartEditMarketPod = (entry: MarketPodEntry) => {
+    setMpEditingId(entry.id);
+    setMpVehicleNumber(entry.vehicleNumber);
+    setMpDate(entry.date);
+    setMpFrom(entry.from);
+    setMpTo(entry.to);
+    setMpCustomer(entry.customer);
+    setMpTotalFreight(entry.totalFreight != null ? String(entry.totalFreight) : '');
+    setMpReceivedAdvance(entry.receivedAdvance != null ? String(entry.receivedAdvance) : '');
+    setMpOtherExpenses(entry.otherExpenses != null ? String(entry.otherExpenses) : '');
+    setMpCoordinator(entry.coordinator);
+    setMpStatus(entry.status);
+    setMpRemarks(entry.remarks);
+    setShowMarketPodSidebar(true);
+  };
+
+  const handleMarketPodSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mpVehicleNumber.trim() || !mpDate) {
+      triggerNotif('Please select a Vehicle Number and Date.', 'error');
+      return;
+    }
+    setMpIsSubmitting(true);
+    try {
+      const payload = {
+        entryNo: mpEditingId ? marketPodEntries.find(e => e.id === mpEditingId)?.entryNo || nextMarketPodEntryNo() : nextMarketPodEntryNo(),
+        vehicleNumber: mpVehicleNumber.toUpperCase().trim(),
+        date: mpDate,
+        from: mpFrom.trim(),
+        to: mpTo.trim(),
+        customer: mpCustomer.trim(),
+        totalFreight: parseFloat(mpTotalFreight) || 0,
+        receivedAdvance: parseFloat(mpReceivedAdvance) || 0,
+        otherExpenses: parseFloat(mpOtherExpenses) || 0,
+        balance: mpBalance,
+        coordinator: mpCoordinator.trim(),
+        status: mpStatus,
+        remarks: mpRemarks.trim()
+      };
+      if (mpEditingId) {
+        await onUpdateMarketPodEntry(mpEditingId, payload);
+        triggerNotif('Market POD trip entry updated successfully!', 'success');
+      } else {
+        await onAddMarketPodEntry(payload);
+        triggerNotif('Market POD trip entry logged successfully!', 'success');
+      }
+      resetMarketPodForm();
+    } catch (err) {
+      console.error(err);
+      triggerNotif('Failed to save Market POD entry.', 'error');
+    } finally {
+      setMpIsSubmitting(false);
+    }
+  };
+
+  const filteredMarketPodUnsorted = marketPodEntries.filter(e => {
+    if (!mpSearchTerm) return true;
+    const q = mpSearchTerm.toLowerCase();
+    return (e.entryNo || '').toLowerCase().includes(q) ||
+      (e.vehicleNumber || '').toLowerCase().includes(q) ||
+      (e.from || '').toLowerCase().includes(q) ||
+      (e.to || '').toLowerCase().includes(q) ||
+      (e.customer || '').toLowerCase().includes(q) ||
+      (e.coordinator || '').toLowerCase().includes(q);
+  });
+
+  const filteredMarketPod = mpSort
+    ? [...filteredMarketPodUnsorted].sort((a, b) => {
+        const cmp = mpSort.key === 'vehicleNumber'
+          ? extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber)
+          : compareText(a.customer, b.customer);
+        return mpSort.direction === 'asc' ? cmp : -cmp;
+      })
+    : filteredMarketPodUnsorted;
+
   // Refs
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const categoryDropdownRef = useRef<HTMLDivElement>(null);
 
   // Auto calculate balance from amountReceived and cashPaid
@@ -194,16 +320,10 @@ export default function PettyCash({
     setBalance(v.balance ? String(v.balance) : '');
     setTripSheet(v.tripSheet);
     setRemarks(v.remarks);
-    setShowForm(true); // make sure the sidebar is open!
-    
-    // Scroll to form smoothly
-    const formEl = document.getElementById('petty-cash-form-container');
-    if (formEl) {
-      formEl.scrollIntoView({ behavior: 'smooth' });
-    }
+    setShowSidebar(true);
   };
 
-  const handleCancelEdit = () => {
+  const resetVoucherForm = () => {
     setEditingId(null);
     setEntryNo('');
     setCategoryInput('');
@@ -217,6 +337,16 @@ export default function PettyCash({
     setTripSheet('');
     setRemarks('');
     setCustomClientName('');
+  };
+
+  const handleCancelEdit = () => {
+    resetVoucherForm();
+    setShowSidebar(false);
+  };
+
+  const handleOpenAddVoucher = () => {
+    resetVoucherForm();
+    setShowSidebar(true);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -255,19 +385,8 @@ export default function PettyCash({
         triggerNotif('💸 Petty cash voucher successfully logged and synced with Cloud DB!', 'success');
       }
 
-      // Clear form (except date & vendor)
-      setEntryNo('');
-      setCategoryInput('');
-      setLocation('');
-      setVehicleNumber('');
-      setReceiver('');
-      setVendorId('');
-      setAmountReceived('');
-      setCashPaid('');
-      setBalance('');
-      setTripSheet('');
-      setRemarks('');
-      setCustomClientName('');
+      resetVoucherForm();
+      setShowSidebar(false);
     } catch (err) {
       console.error(err);
       triggerNotif('Failed to write voucher to ledger.', 'error');
@@ -350,278 +469,24 @@ export default function PettyCash({
     cat.toLowerCase().includes(categoryInput.toLowerCase())
   );
 
-  // Robust CSV Line parser that correctly handles double quotes and consecutive commas
-  const parseCSVLine = (line: string): string[] => {
-    const result: string[] = [];
-    let current = '';
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      if (char === '"') {
-        inQuotes = !inQuotes;
-      } else if (char === ',' && !inQuotes) {
-        result.push(current.trim().replace(/^["']|["']$/g, ''));
-        current = '';
-      } else {
-        current += char;
-      }
-    }
-    result.push(current.trim().replace(/^["']|["']$/g, ''));
-    return result;
+  // Download replaces the old CSV export: a reference date plus a preset
+  // period (Day / Monthly Till Date / Yearly Till Date) computes the actual
+  // date range to include, on top of whatever ledger filters are active.
+  const getDownloadDateRange = (period: 'day' | 'month' | 'year', refDate: string): { start: string; end: string } => {
+    if (period === 'day') return { start: refDate, end: refDate };
+    if (period === 'month') return { start: `${refDate.slice(0, 7)}-01`, end: refDate };
+    return { start: `${refDate.slice(0, 4)}-01-01`, end: refDate };
   };
 
-  // CSV Import function
-  const handleCSVImport = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const text = event.target?.result as string;
-        if (!text) return;
-
-        const lines = text.split('\n');
-        if (lines.length < 2) {
-          triggerNotif('CSV file is empty or formatted incorrectly.', 'error');
-          return;
-        }
-
-        // Parse CSV Rows
-        let headers = parseCSVLine(lines[0]).map(h => h.toLowerCase());
-        
-        const itemsToImport: any[] = [];
-
-        for (let i = 1; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (!line) continue;
-          
-          const values = parseCSVLine(line);
-
-          const getVal = (field: string, defaultValue = '') => {
-            const idx = headers.indexOf(field.toLowerCase());
-            if (idx !== -1 && values[idx] !== undefined) return values[idx];
-            return defaultValue;
-          };
-
-          // Map CSV attributes
-          const rDate = getVal('date', new Date().toISOString().split('T')[0]);
-          const rEntryNo = getVal('entryno') || getVal('entry number') || getVal('entry_number') || `ENT-IMP-${Date.now()}-${i}`;
-          const rCategory = getVal('category') || getVal('expense category') || 'MISC EXPENSES';
-          const rLocation = getVal('location') || 'Office';
-          const rClientName = getVal('clientname') || getVal('client name') || 'swiggy';
-          const rVendor = (getVal('vendor') || 'kcm supply').toLowerCase().includes('insta') ? 'kcm insta' : 'kcm supply';
-          const rVehicleNo = getVal('vehiclenumber') || getVal('vehicle number') || getVal('vehicle_number') || '';
-          const rReceiver = getVal('receiver') || getVal('recipient') || 'Staff';
-          const rVendorId = getVal('vendorid') || getVal('vendor id') || '';
-          const rAmtRec = parseFloat(getVal('amountreceived') || getVal('amount received') || '0') || 0;
-          const rPaid = parseFloat(getVal('cashpaid') || getVal('cash paid') || '0') || 0;
-          const rBal = parseFloat(getVal('balance') || '0') || (rAmtRec - rPaid);
-          const rTrip = getVal('tripsheet') || getVal('trip sheet') || '';
-          const rRemarks = getVal('remarks') || '';
-
-          itemsToImport.push({
-            date: rDate,
-            entryNo: rEntryNo.toUpperCase(),
-            category: rCategory,
-            location: rLocation,
-            clientName: rClientName,
-            vendor: rVendor,
-            vehicleNumber: rVehicleNo.toUpperCase(),
-            receiver: rReceiver,
-            vendorId: rVendorId,
-            amountReceived: rAmtRec,
-            cashPaid: rPaid,
-            balance: rBal,
-            tripSheet: rTrip,
-            remarks: rRemarks,
-            isImported: true
-          });
-        }
-
-        if (itemsToImport.length === 0) {
-          triggerNotif('No entries found in CSV to import.', 'info');
-          return;
-        }
-
-        setIsImportingLedger(true);
-        cancelImportRef.current = false;
-        setImportProgress({ current: 0, total: itemsToImport.length });
-
-        let importCount = 0;
-        let failCount = 0;
-
-        for (let idx = 0; idx < itemsToImport.length; idx++) {
-          if (cancelImportRef.current) {
-            triggerNotif(`Import stopped. Loaded ${importCount} entries.`, 'info');
-            break;
-          }
-          try {
-            await onAddVoucher(itemsToImport[idx]);
-            importCount++;
-          } catch (err) {
-            failCount++;
-          }
-          setImportProgress(prev => ({ ...prev, current: idx + 1 }));
-        }
-
-        setIsImportingLedger(false);
-        triggerNotif(`Imported ${importCount} vouchers successfully! ${failCount > 0 ? `${failCount} errors.` : ''}`, 'success');
-        if (fileInputRef.current) fileInputRef.current.value = '';
-      } catch (err) {
-        console.error(err);
-        setIsImportingLedger(false);
-        triggerNotif('Failed to parse CSV file.', 'error');
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  // CSV Import function for consolidated summary matrix
-  const handleSummaryCSVImport = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const text = event.target?.result as string;
-        if (!text) return;
-
-        const lines = text.split('\n');
-        if (lines.length < 2) {
-          triggerNotif('CSV file is empty or formatted incorrectly.', 'error');
-          return;
-        }
-
-        // Find the line containing the actual header (starts with "expense category" or "category")
-        let headerLineIdx = -1;
-        for (let i = 0; i < lines.length; i++) {
-          if (lines[i].toLowerCase().includes('expense category') || lines[i].toLowerCase().includes('category')) {
-            headerLineIdx = i;
-            break;
-          }
-        }
-
-        if (headerLineIdx === -1) {
-          triggerNotif('Could not find Expense Category header in CSV. Please ensure it is a valid KCM Summary Report.', 'error');
-          return;
-        }
-
-        const headers = parseCSVLine(lines[headerLineIdx]);
-        
-        const itemsToImport: any[] = [];
-
-        // Process data rows starting after the header line
-        for (let i = headerLineIdx + 1; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (!line) continue;
-          
-          const values = parseCSVLine(line);
-
-          const category = values[0];
-          if (!category || category.toLowerCase() === 'grand totals' || category.toUpperCase().includes('TOTAL')) {
-            continue; // Skip totals or empty rows
-          }
-
-          // Loop through each column of headers to find month data
-          for (let colIdx = 1; colIdx < headers.length; colIdx++) {
-            const header = headers[colIdx];
-            const valStr = values[colIdx];
-            if (!header || !valStr) continue;
-
-            const val = parseFloat(valStr) || 0;
-            if (val <= 0) continue; // Skip zero/negative values
-
-            // Header format example: "January (kcm insta)" or "January (kcm supply)" or "January (Total)"
-            // Skip (Total) column because we don't want to double count
-            if (header.toLowerCase().includes('(total)')) {
-              continue;
-            }
-
-            // Extract month name and vendor name from header
-            const match = header.match(/^"?([^(\n"]+)\s*\(([^)]+)\)"?$/);
-            if (!match) continue;
-
-            const monthLabel = match[1].trim();
-            const vendorStr = match[2].trim().toLowerCase();
-
-            // Find month index
-            const foundMonth = MONTHS.find(m => m.label.toLowerCase() === monthLabel.toLowerCase());
-            if (!foundMonth) continue;
-
-            const finalVendor = vendorStr.includes('insta') ? 'kcm insta' : 'kcm supply';
-
-            // Generate an entry number for the imported summary row
-            const entryNoSuffix = category.substring(0, 4).toUpperCase().replace(/[^A-Z]/g, 'X');
-            const rEntryNo = `SUM-${summaryYear}-${foundMonth.value}-${entryNoSuffix}`;
-
-            itemsToImport.push({
-              date: `${summaryYear}-${foundMonth.value}-15`, // Mid-month date
-              entryNo: rEntryNo,
-              category: category,
-              location: 'Consolidated Import',
-              clientName: 'swiggy', // Default client
-              vendor: finalVendor,
-              vehicleNumber: 'CONSOLIDATED',
-              receiver: 'HQ FINANCE',
-              vendorId: 'AUTO-SUM',
-              amountReceived: 0,
-              cashPaid: val,
-              balance: -val,
-              tripSheet: `AUTO-SUM-${summaryYear}`,
-              remarks: `Consolidated import for ${category} (${monthLabel} ${summaryYear})`,
-              isImported: true
-            });
-          }
-        }
-
-        if (itemsToImport.length === 0) {
-          triggerNotif('No valid non-zero consolidated records found in the CSV to import.', 'info');
-          return;
-        }
-
-        setIsImportingSummary(true);
-        cancelImportRef.current = false;
-        setImportProgress({ current: 0, total: itemsToImport.length });
-
-        let importCount = 0;
-        let failCount = 0;
-
-        for (let idx = 0; idx < itemsToImport.length; idx++) {
-          if (cancelImportRef.current) {
-            triggerNotif(`Import stopped. Loaded ${importCount} consolidated entries.`, 'info');
-            break;
-          }
-          try { 
-            await onAddVoucher(itemsToImport[idx]);
-            importCount++;
-          } catch (err) {
-            failCount++;
-          }
-          setImportProgress(prev => ({ ...prev, current: idx + 1 }));
-        }
-
-        setIsImportingSummary(false);
-        triggerNotif(`Successfully imported ${importCount} consolidated monthly summary records as active cash ledger vouchers! ${failCount > 0 ? `${failCount} errors.` : ''}`, 'success');
-        if (summaryFileInputRef.current) summaryFileInputRef.current.value = '';
-      } catch (err) {
-        console.error(err);
-        setIsImportingSummary(false);
-        triggerNotif('Failed to parse Consolidated Summary CSV.', 'error');
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  // Excel Export function for filtered ledger data
-  const handleCSVExport = () => {
-    if (filteredVouchers.length === 0) {
-      triggerNotif('No data available to export.', 'info');
+  const handleDownload = () => {
+    const { start, end } = getDownloadDateRange(downloadPeriod, downloadDate);
+    const rangeFiltered = filteredVouchersUnsorted.filter(v => v.date >= start && v.date <= end);
+    if (rangeFiltered.length === 0) {
+      triggerNotif('No data available to download for the selected period.', 'info');
       return;
     }
 
-    const data = filteredVouchers.map(v => ({
+    const data = rangeFiltered.map(v => ({
       'Date': v.date,
       'Entry No': v.entryNo,
       'Category': v.category,
@@ -641,8 +506,9 @@ export default function PettyCash({
     const worksheet = XLSX.utils.json_to_sheet(data);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Petty Cash Ledger");
-    XLSX.writeFile(workbook, `KCM_Petty_Cash_Ledger_${filterYear}_${filterMonth}.xlsx`);
-    triggerNotif('Ledger Excel exported and downloaded successfully!', 'success');
+    const periodLabel = downloadPeriod === 'day' ? downloadDate : downloadPeriod === 'month' ? downloadDate.slice(0, 7) : downloadDate.slice(0, 4);
+    XLSX.writeFile(workbook, `KCM_Petty_Cash_Ledger_${periodLabel}.xlsx`);
+    triggerNotif('Ledger Excel downloaded successfully!', 'success');
   };
 
   // Share text builder
@@ -828,17 +694,17 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
             >
               Consolidated Summary
             </button>
-          </div>
-
-          {activeTab === 'ledger' && (
             <button
-              onClick={() => setShowForm(prev => !prev)}
-              className="bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold p-2 rounded-xl shadow-2xs transition-all cursor-pointer"
-              title={showForm ? "Hide Entry Form (Expand Table to Full Width)" : "Show Entry Form Sidebar"}
+              onClick={() => setActiveTab('marketpod')}
+              className={`px-4 py-1.5 rounded-lg transition-all cursor-pointer ${
+                activeTab === 'marketpod'
+                  ? 'bg-white text-teal-700 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
             >
-              {showForm ? <EyeOff className="w-4 h-4 text-slate-600" /> : <Eye className="w-4 h-4 text-teal-600" />}
+              Market POD
             </button>
-          )}
+          </div>
 
           <button
             onClick={() => setIsFullscreen(prev => !prev)}
@@ -853,6 +719,31 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
           </button>
         </div>
       </div>
+
+      {/* Mini KPIs totals - kept at the top so they're visible without
+          scrolling past the table; figures respect the active ledger filters. */}
+      {activeTab === 'ledger' && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+            <span className="text-[10px] text-slate-400 font-bold uppercase">Total Received Float</span>
+            <div className="text-sm font-black text-slate-800 font-mono mt-0.5">
+              ₹{filteredVouchers.reduce((s,v)=>s+(v.amountReceived || 0), 0).toLocaleString('en-IN')}
+            </div>
+          </div>
+          <div className="bg-rose-50/30 p-3 rounded-xl border border-rose-100">
+            <span className="text-[10px] text-rose-500 font-bold uppercase">Total Disbursed Expenses</span>
+            <div className="text-sm font-black text-rose-700 font-mono mt-0.5">
+              ₹{filteredVouchers.reduce((s,v)=>s+(v.cashPaid || 0), 0).toLocaleString('en-IN')}
+            </div>
+          </div>
+          <div className="bg-emerald-50/30 p-3 rounded-xl border border-emerald-100">
+            <span className="text-[10px] text-emerald-600 font-bold uppercase">Net Remaining Balance</span>
+            <div className="text-sm font-black text-emerald-700 font-mono mt-0.5">
+              ₹{filteredVouchers.reduce((s,v)=>s+(v.balance || 0), 0).toLocaleString('en-IN')}
+            </div>
+          </div>
+        </div>
+      )}
 
       {notif && (
         <div
@@ -870,351 +761,53 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
       )}
 
       {activeTab === 'ledger' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6" id="petty-cash-form-container">
-          {/* Section 1 Left: record petty cash voucher form */}
-          {showForm && (
-            <div className="bg-white rounded-2xl shadow-xs border border-slate-200 p-5 lg:col-span-4 h-fit text-xs">
-            <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-100">
-              <h2 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                {editingId ? <CheckCircle2 className="w-4 h-4 text-amber-500 font-bold" /> : <Plus className="w-4 h-4 text-teal-600 font-bold" />}
-                {editingId ? 'Edit Petty Cash Entry' : 'Add Petty Cash Entry'}
-              </h2>
-              <span className="text-[10px] font-mono font-bold bg-teal-50 text-teal-700 px-2 py-0.5 rounded border border-teal-100">
-                STAFF USE ONLY
-              </span>
-            </div>
-
-            <form onSubmit={handleSubmit} className="space-y-3">
-              {/* Date Input with helper text */}
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Date *</label>
-                <div className="relative">
-                  <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400 pointer-events-none">
-                    <Calendar className="w-3.5 h-3.5" />
-                  </span>
-                  <DateInput
-                    required
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-8 pr-2.5 py-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                  />
-                </div>
-                <p className="text-[9px] text-slate-400 font-mono mt-0.5">Select year, month & day calendar</p>
-              </div>
-
-              {/* Entry Number */}
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Entry Number *</label>
-                <input
-                  type="text"
-                  required
-                  value={entryNo}
-                  onChange={(e) => setEntryNo(e.target.value)}
-                  placeholder="e.g. ENT-2026-1049"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold tracking-wider text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-teal-500"
-                />
-              </div>
-
-              {/* Searchable Expense Category Dropdown */}
-              <div className="relative" ref={categoryDropdownRef}>
-                <label className="block font-semibold text-slate-700 mb-1">Expense Category *</label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    required
-                    placeholder="Type to search and select category..."
-                    value={categoryInput}
-                    onChange={(e) => {
-                      setCategoryInput(e.target.value);
-                      setShowCategoryDropdown(true);
-                    }}
-                    onFocus={() => setShowCategoryDropdown(true)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium"
-                  />
-                  <span className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 pointer-events-none">
-                    <ChevronDown className="w-3.5 h-3.5" />
-                  </span>
-                </div>
-                
-                {showCategoryDropdown && suggestedCategories.length > 0 && (
-                  <div className="absolute z-30 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-48 overflow-y-auto divide-y divide-slate-50">
-                    {suggestedCategories.map((cat, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => {
-                          setCategoryInput(cat);
-                          setShowCategoryDropdown(false);
-                        }}
-                        className="w-full text-left px-3 py-2 text-slate-700 hover:bg-slate-50 hover:text-teal-600 font-medium transition-colors text-xs flex items-center justify-between"
-                      >
-                        <span>{cat}</span>
-                        {categoryInput === cat && <Check className="w-3 h-3 text-teal-600" />}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Location */}
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Location *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Manual branch or location"
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                />
-              </div>
-
-              {/* Client Name (swiggy, RIL F&V, market load, other) */}
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Client Name *</label>
-                  <select
-                    value={clientName}
-                    onChange={(e) => setClientName(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium"
-                  >
-                    {CLIENT_NAMES.map((client, idx) => (
-                      <option key={idx} value={client}>{client}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Vendor Entity *</label>
-                  <select
-                    value={vendor}
-                    onChange={(e) => setVendor(e.target.value as any)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 font-bold uppercase text-[10px]"
-                  >
-                    <option value="kcm supply">KCM SUPPLY</option>
-                    <option value="kcm insta">KCM INSTA</option>
-                  </select>
-                </div>
-              </div>
-
-              {clientName === 'Other' && (
-                <div>
-                  <label className="block font-semibold text-teal-700 mb-1">Specify Other Client Name *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Enter custom client"
-                    value={customClientName}
-                    onChange={(e) => setCustomClientName(e.target.value)}
-                    className="w-full bg-teal-50/50 border border-teal-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium"
-                  />
-                </div>
-              )}
-
-              {/* Vehicle Number & Receiver */}
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Vehicle Number</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. KA53AA0069"
-                    value={vehicleNumber}
-                    onChange={(e) => setVehicleNumber(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 uppercase font-bold"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Receiver Name *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Cash recipient"
-                    value={receiver}
-                    onChange={(e) => setReceiver(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                  />
-                </div>
-              </div>
-
-              {/* Vendor ID & Trip Sheet */}
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Vendor ID</label>
-                  <input
-                    type="text"
-                    placeholder="Vendor Identification"
-                    value={vendorId}
-                    onChange={(e) => setVendorId(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Trip Sheet #</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. TRIP-9121"
-                    value={tripSheet}
-                    onChange={(e) => setTripSheet(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                  />
-                </div>
-              </div>
-
-              {/* Numeric Financial Fields: Amount Received, Cash Paid, Balance (Auto Calculated but editable) */}
-              <div className="grid grid-cols-3 gap-1.5 pt-1.5 border-t border-slate-100">
-                <div>
-                  <label className="block font-bold text-slate-600 mb-0.5 text-[9px] uppercase">Amt Received</label>
-                  <input
-                    type="number"
-                    placeholder="₹ Rec"
-                    value={amountReceived}
-                    onChange={(e) => setAmountReceived(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-slate-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-teal-700 mb-0.5 text-[9px] uppercase">Cash Paid (Exp)</label>
-                  <input
-                    type="number"
-                    placeholder="₹ Paid"
-                    value={cashPaid}
-                    onChange={(e) => setCashPaid(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-teal-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-amber-700 mb-0.5 text-[9px] uppercase">Balance Net</label>
-                  <input
-                    type="number"
-                    placeholder="₹ Bal"
-                    value={balance}
-                    onChange={(e) => setBalance(e.target.value)}
-                    className="w-full bg-amber-50/50 border border-amber-200 rounded-lg p-1.5 font-mono font-bold text-amber-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
-                  />
-                </div>
-              </div>
-
-              {/* Remarks */}
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Remarks & Descriptions</label>
-                <textarea
-                  value={remarks}
-                  onChange={(e) => setRemarks(e.target.value)}
-                  placeholder="Specify brief notes or details for ledger auditing..."
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 h-14 focus:outline-none text-slate-800"
-                />
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="flex-1 bg-slate-900 hover:bg-slate-800 text-white rounded-xl py-2.5 font-semibold tracking-wide uppercase transition-colors shadow-xs mt-2 cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      Saving...
-                    </>
-                  ) : editingId ? (
-                    <>
-                      <Check className="w-3.5 h-3.5 text-amber-400 font-bold" />
-                      Update Voucher
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="w-3.5 h-3.5" />
-                      Commit Voucher Entry
-                    </>
-                  )}
-                </button>
-                {editingId && (
-                  <button
-                    type="button"
-                    onClick={handleCancelEdit}
-                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl px-4 py-2.5 font-semibold tracking-wide uppercase transition-colors mt-2 cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                )}
-              </div>
-            </form>
-          </div>
-          )}
-
-          {/* Section 1 Right: Ledgers, Filters, Search, Actions (Export, Import, Download, Share) */}
-          <div className={`bg-white rounded-2xl shadow-xs border border-slate-200 p-5 ${showForm ? 'lg:col-span-8' : 'lg:col-span-12'} flex flex-col space-y-4`}>
+        <div className="space-y-4">
+          {/* Ledger: Filters, Search, Actions (Add Entry, Download, Share) */}
+          <div className="bg-white rounded-2xl shadow-xs border border-slate-200 p-5 flex flex-col space-y-4">
             
-            {/* Action Bar (Import, Export, Download, Share) */}
+            {/* Action Bar (Add Entry, Download, Share) */}
             <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs">
               <div className="font-semibold text-slate-800 flex items-center gap-1">
                 <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
                 Ledger Operations:
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                {/* Import CSV */}
-                <input
-                  type="file"
-                  accept=".csv,.json"
-                  ref={fileInputRef}
-                  onChange={handleCSVImport}
-                  className="hidden"
-                  disabled={isImportingLedger}
-                />
+                {/* Add Petty Cash Entry - opens the slide-out sidebar, mirrors Fuel Entry's "+ Add Entry" */}
                 <button
                   type="button"
-                  disabled={isImportingLedger}
-                  onClick={() => fileInputRef.current?.click()}
-                  className={`bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-medium px-3 py-1.5 rounded-lg flex items-center gap-1.5 shadow-2xs cursor-pointer transition-all ${isImportingLedger ? 'opacity-60 cursor-not-allowed bg-slate-50' : ''}`}
-                  title="Import petty cash ledger data from CSV/JSON files"
+                  onClick={handleOpenAddVoucher}
+                  className="bg-gradient-to-r from-teal-600 to-emerald-700 hover:shadow-md text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs"
                 >
-                  {isImportingLedger ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 text-teal-600 animate-spin" />
-                      <span>Importing ({importProgress.current}/{importProgress.total})...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="w-3.5 h-3.5 text-teal-600" />
-                      Import
-                    </>
-                  )}
+                  <Plus className="w-3.5 h-3.5" />
+                  Add Petty Cash Entry
                 </button>
 
-                {isImportingLedger && (
-                  <button
-                    type="button"
-                    onClick={() => { cancelImportRef.current = true; }}
-                    className="bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-medium px-3 py-1.5 rounded-lg flex items-center gap-1.5 shadow-2xs cursor-pointer transition-all animate-pulse"
-                    title="Stop ongoing import"
+                {/* Download - reference date + preset period */}
+                <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 py-1 shadow-2xs">
+                  <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <DateInput
+                    value={downloadDate}
+                    onChange={(e) => setDownloadDate(e.target.value)}
+                    className="border-none p-0.5 font-mono text-slate-700 focus:outline-none w-28"
+                  />
+                  <select
+                    value={downloadPeriod}
+                    onChange={(e) => setDownloadPeriod(e.target.value as 'day' | 'month' | 'year')}
+                    className="border-l border-slate-200 pl-1.5 font-semibold text-slate-700 focus:outline-none bg-transparent"
                   >
-                    <X className="w-3.5 h-3.5" />
-                    Stop Import
-                  </button>
-                )}
-
-
-
-                {/* Export CSV */}
+                    <option value="day">For the Day</option>
+                    <option value="month">Monthly Till Date</option>
+                    <option value="year">Yearly Till Date</option>
+                  </select>
+                </div>
                 <button
                   type="button"
-                  onClick={handleCSVExport}
+                  onClick={handleDownload}
                   className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-medium px-3 py-1.5 rounded-lg flex items-center gap-1.5 shadow-2xs cursor-pointer transition-all"
-                  title="Export filtered records as spreadsheet Excel (.xlsx)"
+                  title="Download records for the selected period as Excel (.xlsx)"
                 >
                   <Download className="w-3.5 h-3.5 text-blue-600" />
-                  Export
-                </button>
-
-                {/* Download / Print */}
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-medium px-3 py-1.5 rounded-lg flex items-center gap-1.5 shadow-2xs cursor-pointer transition-all"
-                  title="Trigger system print formatting layout"
-                >
-                  <Printer className="w-3.5 h-3.5 text-slate-600" />
-                  Print
+                  Download
                 </button>
 
                 {/* Share summary */}
@@ -1343,7 +936,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <tr>
                       <td colSpan={15} className="text-center py-16 text-slate-400 font-mono text-xs">
                         NO RECORDED PETTY CASH VOUCHERS MATCH THE SELECTION.
-                        <div className="text-[10px] text-slate-400 font-sans mt-1">Use the left form to authorize new cash disbursements.</div>
+                        <div className="text-[10px] text-slate-400 font-sans mt-1">Use "Add Petty Cash Entry" above to authorize new cash disbursements.</div>
                       </td>
                     </tr>
                   ) : (
@@ -1412,31 +1005,9 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 </tbody>
               </table>
             </div>
-
-            {/* Mini KPIs totals */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs">
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                <span className="text-[10px] text-slate-400 font-bold uppercase">Total Received Float</span>
-                <div className="text-sm font-black text-slate-800 font-mono mt-0.5">
-                  ₹{filteredVouchers.reduce((s,v)=>s+(v.amountReceived || 0), 0).toLocaleString('en-IN')}
-                </div>
-              </div>
-              <div className="bg-rose-50/30 p-3 rounded-xl border border-rose-100">
-                <span className="text-[10px] text-rose-500 font-bold uppercase">Total Disbursed Expenses</span>
-                <div className="text-sm font-black text-rose-700 font-mono mt-0.5">
-                  ₹{filteredVouchers.reduce((s,v)=>s+(v.cashPaid || 0), 0).toLocaleString('en-IN')}
-                </div>
-              </div>
-              <div className="bg-emerald-50/30 p-3 rounded-xl border border-emerald-100">
-                <span className="text-[10px] text-emerald-600 font-bold uppercase">Net Remaining Balance</span>
-                <div className="text-sm font-black text-emerald-700 font-mono mt-0.5">
-                  ₹{filteredVouchers.reduce((s,v)=>s+(v.balance || 0), 0).toLocaleString('en-IN')}
-                </div>
-              </div>
-            </div>
           </div>
         </div>
-      ) : (
+      ) : activeTab === 'summary' ? (
         /* Section 2 Summary: Monthly reporting matrix layout with download option */
         <div className="bg-white rounded-2xl shadow-xs border border-slate-200 p-5 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 text-xs">
@@ -1463,67 +1034,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   <option value="2026">2026</option>
                 </select>
               </div>
-
-              <input
-                type="file"
-                accept=".csv"
-                ref={summaryFileInputRef}
-                onChange={handleSummaryCSVImport}
-                className="hidden"
-                disabled={isImportingSummary}
-              />
-
-              <button
-                disabled={isImportingSummary}
-                onClick={() => summaryFileInputRef.current?.click()}
-                className={`bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs ${isImportingSummary ? 'opacity-60 cursor-not-allowed bg-slate-50' : ''}`}
-                title="Upload/Import a completed Monthly Summary Matrix CSV"
-              >
-                {isImportingSummary ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 text-teal-600 animate-spin" />
-                    <span>Importing ({importProgress.current}/{importProgress.total})...</span>
-                  </>
-                ) : (
-                  <>
-                    <Upload className="w-3.5 h-3.5 text-teal-600" />
-                    Import Summary
-                  </>
-                )}
-              </button>
-
-              {isImportingSummary && (
-                <button
-                  type="button"
-                  onClick={() => { cancelImportRef.current = true; }}
-                  className="bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs animate-pulse"
-                  title="Stop ongoing import"
-                >
-                  <X className="w-3.5 h-3.5" />
-                  Stop Import
-                </button>
-              )}
-
-              {onClearImportedPettyCash && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (window.confirm("Are you sure you want to remove all imported consolidated summary vouchers? This will delete all imported records but preserve manually logged vouchers.")) {
-                      try {
-                        await onClearImportedPettyCash();
-                        triggerNotif("Imported consolidated summary vouchers successfully removed!", "success");
-                      } catch (err) {
-                        triggerNotif("Failed to clear imported summary.", "error");
-                      }
-                    }
-                  }}
-                  className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
-                  title="Remove all imported summary vouchers"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  Clear Imported
-                </button>
-              )}
 
               <button
                 onClick={handleExportSummaryCSV}
@@ -1635,6 +1145,129 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 <li><span className="font-bold text-teal-700">Total Expenses</span>: Dynamically calculated mathematically as <code className="bg-slate-100 px-1 rounded">KCM INSTA + KCM SUPPLY</code> expenses for that category.</li>
               </ul>
             </div>
+          </div>
+        </div>
+      ) : (
+        /* Section 3 Market POD: freight trip ledger */
+        <div className="bg-white rounded-2xl shadow-xs border border-slate-200 p-5 flex flex-col space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs">
+            <div className="font-semibold text-slate-800 flex items-center gap-1">
+              <Truck className="w-4 h-4 text-emerald-600" />
+              Market POD Trip Ledger:
+            </div>
+            <button
+              type="button"
+              onClick={() => { resetMarketPodForm(); setShowMarketPodSidebar(true); }}
+              className="bg-gradient-to-r from-teal-600 to-emerald-700 hover:shadow-md text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Add Trip Entry
+            </button>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-3xs text-xs space-y-2">
+            <div className="flex items-center justify-between pb-1 border-b border-slate-100 font-bold text-slate-700 text-[10px] uppercase tracking-wider">
+              <span className="flex items-center gap-1"><Filter className="w-3 h-3 text-teal-600" /> Search</span>
+              <span>Matches: {filteredMarketPod.length} entries</span>
+            </div>
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="e.g. entry no, vehicle, customer, coordinator"
+                value={mpSearchTerm}
+                onChange={(e) => setMpSearchTerm(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-7 pr-2 py-1.5 font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500"
+              />
+              <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400">
+                <Search className="w-3 h-3" />
+              </span>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-2xs flex-1 min-h-[300px]">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
+                <tr>
+                  <th className="px-3 py-2.5">Entry No</th>
+                  <th className="px-3 py-2.5"><SortHeader label="Vehicle Number" sortKey="vehicleNumber" sort={mpSort} onSort={handleMpSort} type="numeric" /></th>
+                  <th className="px-3 py-2.5">Date</th>
+                  <th className="px-3 py-2.5">From</th>
+                  <th className="px-3 py-2.5">To</th>
+                  <th className="px-3 py-2.5"><SortHeader label="Customer" sortKey="customer" sort={mpSort} onSort={handleMpSort} /></th>
+                  <th className="px-3 py-2.5 text-right">Total Freight</th>
+                  <th className="px-3 py-2.5 text-right">Received Advance</th>
+                  <th className="px-3 py-2.5 text-right">Other Expenses</th>
+                  <th className="px-3 py-2.5 text-right">Balance</th>
+                  <th className="px-3 py-2.5">Co-Ordinator</th>
+                  <th className="px-3 py-2.5">Status</th>
+                  <th className="px-3 py-2.5">Remarks</th>
+                  <th className="px-3 py-2.5 text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
+                {filteredMarketPod.length === 0 ? (
+                  <tr>
+                    <td colSpan={14} className="text-center py-16 text-slate-400 font-mono text-xs">
+                      NO MARKET POD TRIP ENTRIES MATCH THE SELECTION.
+                      <div className="text-[10px] text-slate-400 font-sans mt-1">Use "Add Trip Entry" above to log a new freight trip.</div>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredMarketPod.map((entry) => (
+                    <tr key={entry.id} className="hover:bg-slate-50/70 transition-colors text-[11px]">
+                      <td className="px-3 py-2 font-bold font-mono text-slate-900 whitespace-nowrap">{entry.entryNo}</td>
+                      <td className="px-3 py-2 font-mono font-bold text-slate-800 whitespace-nowrap">{entry.vehicleNumber}</td>
+                      <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{entry.date}</td>
+                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap max-w-[100px] truncate" title={entry.from}>{entry.from || '-'}</td>
+                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap max-w-[100px] truncate" title={entry.to}>{entry.to || '-'}</td>
+                      <td className="px-3 py-2 text-slate-800 font-semibold whitespace-nowrap">{entry.customer || '-'}</td>
+                      <td className="px-3 py-2 text-right font-mono text-slate-600">₹{(entry.totalFreight || 0).toLocaleString('en-IN')}</td>
+                      <td className="px-3 py-2 text-right font-mono text-slate-600">₹{(entry.receivedAdvance || 0).toLocaleString('en-IN')}</td>
+                      <td className="px-3 py-2 text-right font-mono text-slate-600">₹{(entry.otherExpenses || 0).toLocaleString('en-IN')}</td>
+                      <td className={`px-3 py-2 text-right font-mono font-bold ${entry.balance < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`}>
+                        ₹{(entry.balance || 0).toLocaleString('en-IN')}
+                      </td>
+                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{entry.coordinator || '-'}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border ${
+                          entry.status === 'Completed' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                          entry.status === 'In Transit' ? 'bg-sky-50 text-sky-700 border-sky-200' :
+                          entry.status === 'Cancelled' ? 'bg-rose-50 text-rose-700 border-rose-200' :
+                          entry.status === 'Closed' ? 'bg-slate-100 text-slate-600 border-slate-300' :
+                          'bg-amber-50 text-amber-700 border-amber-200'
+                        }`}>
+                          {entry.status}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-slate-500 max-w-[120px] truncate" title={entry.remarks}>{entry.remarks || '-'}</td>
+                      <td className="px-3 py-2 whitespace-nowrap text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => handleStartEditMarketPod(entry)}
+                            className="text-teal-600 hover:text-teal-800 bg-teal-50 hover:bg-teal-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+                            title="Edit this entry"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (window.confirm(`Are you sure you want to delete trip entry ${entry.entryNo}?`)) {
+                                onDeleteMarketPodEntry(entry.id);
+                                triggerNotif(`Deleted trip entry ${entry.entryNo} successfully!`, 'success');
+                              }
+                            }}
+                            className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+                            title="Delete this entry"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
@@ -1877,6 +1510,508 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
           </div>
         </div>
       )}
+
+      {/* Add/Edit Petty Cash Entry slide-out sidebar */}
+      <AnimatePresence>
+        {showSidebar && (
+          <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex justify-end z-50">
+            <div className="absolute inset-0" onClick={handleCancelEdit} />
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="relative w-full max-w-md bg-white h-full shadow-2xl flex flex-col z-10 border-l border-teal-100"
+            >
+              <div className="p-4 bg-gradient-to-r from-slate-900 to-teal-950 text-white flex items-center justify-between">
+                <h3 className="font-extrabold text-sm flex items-center gap-2">
+                  {editingId ? <CheckCircle2 className="w-4 h-4 text-amber-400" /> : <Plus className="w-4 h-4 text-teal-400" />}
+                  {editingId ? 'Edit Petty Cash Entry' : 'Add Petty Cash Entry'}
+                </h3>
+                <button onClick={handleCancelEdit} className="p-1.5 rounded-lg hover:bg-white/10 text-slate-200 hover:text-white cursor-pointer">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-5 text-xs">
+                <form id="petty-cash-entry-form" onSubmit={handleSubmit} className="space-y-3">
+                  {/* Date Input with helper text */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Date *</label>
+                    <div className="relative">
+                      <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400 pointer-events-none">
+                        <Calendar className="w-3.5 h-3.5" />
+                      </span>
+                      <DateInput
+                        required
+                        value={date}
+                        onChange={(e) => setDate(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-8 pr-2.5 py-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">Select year, month & day calendar</p>
+                  </div>
+
+                  {/* Entry Number */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Entry Number *</label>
+                    <input
+                      type="text"
+                      required
+                      value={entryNo}
+                      onChange={(e) => setEntryNo(e.target.value)}
+                      placeholder="e.g. ENT-2026-1049"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold tracking-wider text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    />
+                  </div>
+
+                  {/* Searchable Expense Category Dropdown */}
+                  <div className="relative" ref={categoryDropdownRef}>
+                    <label className="block font-semibold text-slate-700 mb-1">Expense Category *</label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        required
+                        placeholder="Type to search and select category..."
+                        value={categoryInput}
+                        onChange={(e) => {
+                          setCategoryInput(e.target.value);
+                          setShowCategoryDropdown(true);
+                        }}
+                        onFocus={() => setShowCategoryDropdown(true)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium"
+                      />
+                      <span className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 pointer-events-none">
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      </span>
+                    </div>
+
+                    {showCategoryDropdown && suggestedCategories.length > 0 && (
+                      <div className="absolute z-30 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-48 overflow-y-auto divide-y divide-slate-50">
+                        {suggestedCategories.map((cat, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => {
+                              setCategoryInput(cat);
+                              setShowCategoryDropdown(false);
+                            }}
+                            className="w-full text-left px-3 py-2 text-slate-700 hover:bg-slate-50 hover:text-teal-600 font-medium transition-colors text-xs flex items-center justify-between"
+                          >
+                            <span>{cat}</span>
+                            {categoryInput === cat && <Check className="w-3 h-3 text-teal-600" />}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Location */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Location *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Manual branch or location"
+                      value={location}
+                      onChange={(e) => setLocation(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    />
+                  </div>
+
+                  {/* Client Name (swiggy, RIL F&V, market load, other) */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Client Name *</label>
+                      <select
+                        value={clientName}
+                        onChange={(e) => setClientName(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium"
+                      >
+                        {CLIENT_NAMES.map((client, idx) => (
+                          <option key={idx} value={client}>{client}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Vendor Entity *</label>
+                      <select
+                        value={vendor}
+                        onChange={(e) => setVendor(e.target.value as any)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 font-bold uppercase text-[10px]"
+                      >
+                        <option value="kcm supply">KCM SUPPLY</option>
+                        <option value="kcm insta">KCM INSTA</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {clientName === 'Other' && (
+                    <div>
+                      <label className="block font-semibold text-teal-700 mb-1">Specify Other Client Name *</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Enter custom client"
+                        value={customClientName}
+                        onChange={(e) => setCustomClientName(e.target.value)}
+                        className="w-full bg-teal-50/50 border border-teal-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium"
+                      />
+                    </div>
+                  )}
+
+                  {/* Vehicle Number & Receiver */}
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Vehicle Number</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. KA53AA0069"
+                        value={vehicleNumber}
+                        onChange={(e) => setVehicleNumber(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 uppercase font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Receiver Name *</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Cash recipient"
+                        value={receiver}
+                        onChange={(e) => setReceiver(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Vendor ID & Trip Sheet */}
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Vendor ID</label>
+                      <input
+                        type="text"
+                        placeholder="Vendor Identification"
+                        value={vendorId}
+                        onChange={(e) => setVendorId(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Trip Sheet #</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. TRIP-9121"
+                        value={tripSheet}
+                        onChange={(e) => setTripSheet(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Numeric Financial Fields: Amount Received, Cash Paid, Balance (Auto Calculated but editable) */}
+                  <div className="grid grid-cols-3 gap-1.5 pt-1.5 border-t border-slate-100">
+                    <div>
+                      <label className="block font-bold text-slate-600 mb-0.5 text-[9px] uppercase">Amt Received</label>
+                      <input
+                        type="number"
+                        placeholder="₹ Rec"
+                        value={amountReceived}
+                        onChange={(e) => setAmountReceived(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-slate-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-teal-700 mb-0.5 text-[9px] uppercase">Cash Paid (Exp)</label>
+                      <input
+                        type="number"
+                        placeholder="₹ Paid"
+                        value={cashPaid}
+                        onChange={(e) => setCashPaid(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-teal-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-amber-700 mb-0.5 text-[9px] uppercase">Balance Net</label>
+                      <input
+                        type="number"
+                        placeholder="₹ Bal"
+                        value={balance}
+                        onChange={(e) => setBalance(e.target.value)}
+                        className="w-full bg-amber-50/50 border border-amber-200 rounded-lg p-1.5 font-mono font-bold text-amber-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Remarks */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Remarks & Descriptions</label>
+                    <textarea
+                      value={remarks}
+                      onChange={(e) => setRemarks(e.target.value)}
+                      placeholder="Specify brief notes or details for ledger auditing..."
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 h-14 focus:outline-none text-slate-800"
+                    />
+                  </div>
+                </form>
+              </div>
+
+              <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 transition-colors uppercase text-[10px] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  form="petty-cash-entry-form"
+                  disabled={isSubmitting}
+                  className="flex-1 bg-gradient-to-r from-teal-600 to-emerald-700 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md transition-all uppercase text-[10px] flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Saving...
+                    </>
+                  ) : editingId ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      Update Voucher
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-3.5 h-3.5" />
+                      Commit Voucher Entry
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Add/Edit Market POD Trip Entry slide-out sidebar */}
+      <AnimatePresence>
+        {showMarketPodSidebar && (
+          <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex justify-end z-50">
+            <div className="absolute inset-0" onClick={resetMarketPodForm} />
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="relative w-full max-w-md bg-white h-full shadow-2xl flex flex-col z-10 border-l border-teal-100"
+            >
+              <div className="p-4 bg-gradient-to-r from-slate-900 to-teal-950 text-white flex items-center justify-between">
+                <h3 className="font-extrabold text-sm flex items-center gap-2">
+                  {mpEditingId ? <CheckCircle2 className="w-4 h-4 text-amber-400" /> : <Plus className="w-4 h-4 text-teal-400" />}
+                  {mpEditingId ? 'Edit Market POD Trip' : 'Add Market POD Trip'}
+                </h3>
+                <button onClick={resetMarketPodForm} className="p-1.5 rounded-lg hover:bg-white/10 text-slate-200 hover:text-white cursor-pointer">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-5 text-xs">
+                <form id="market-pod-entry-form" onSubmit={handleMarketPodSubmit} className="space-y-3">
+                  {/* Entry No - auto-generated, not editable */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Entry No</label>
+                    <input
+                      type="text"
+                      readOnly
+                      disabled
+                      value={mpEditingId ? marketPodEntries.find(e => e.id === mpEditingId)?.entryNo || '' : nextMarketPodEntryNo()}
+                      className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono font-bold tracking-wider text-slate-500 cursor-not-allowed"
+                    />
+                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-generated, not editable</p>
+                  </div>
+
+                  {/* Vehicle Number - from Fleet Master */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1 flex items-center gap-1">
+                      <Truck className="w-3.5 h-3.5 text-teal-600" /> Vehicle Number *
+                    </label>
+                    <select
+                      required
+                      value={mpVehicleNumber}
+                      onChange={(e) => setMpVehicleNumber(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    >
+                      <option value="">Select vehicle...</option>
+                      {mpVehicleList.map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Date */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Date *</label>
+                    <div className="relative">
+                      <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400 pointer-events-none">
+                        <Calendar className="w-3.5 h-3.5" />
+                      </span>
+                      <DateInput
+                        required
+                        value={mpDate}
+                        onChange={(e) => setMpDate(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-8 pr-2.5 py-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* From / To */}
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">From</label>
+                      <input
+                        type="text"
+                        placeholder="Origin location"
+                        value={mpFrom}
+                        onChange={(e) => setMpFrom(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">To</label>
+                      <input
+                        type="text"
+                        placeholder="Destination location"
+                        value={mpTo}
+                        onChange={(e) => setMpTo(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Customer */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Customer</label>
+                    <input
+                      type="text"
+                      placeholder="Customer / client name"
+                      value={mpCustomer}
+                      onChange={(e) => setMpCustomer(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    />
+                  </div>
+
+                  {/* Financials */}
+                  <div className="grid grid-cols-3 gap-1.5 pt-1.5 border-t border-slate-100">
+                    <div>
+                      <label className="block font-bold text-slate-600 mb-0.5 text-[9px] uppercase">Total Freight</label>
+                      <input
+                        type="number"
+                        placeholder="₹"
+                        value={mpTotalFreight}
+                        onChange={(e) => setMpTotalFreight(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-slate-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-teal-700 mb-0.5 text-[9px] uppercase">Received Advance</label>
+                      <input
+                        type="number"
+                        placeholder="₹"
+                        value={mpReceivedAdvance}
+                        onChange={(e) => setMpReceivedAdvance(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-teal-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-rose-700 mb-0.5 text-[9px] uppercase">Other Expenses</label>
+                      <input
+                        type="number"
+                        placeholder="₹"
+                        value={mpOtherExpenses}
+                        onChange={(e) => setMpOtherExpenses(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-rose-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Balance - auto computed */}
+                  <div className="p-3 bg-amber-50/50 border border-amber-200 rounded-lg flex items-center justify-between">
+                    <span className="text-amber-600 uppercase text-[9px] font-bold">Balance (auto = Freight - Advance - Expenses)</span>
+                    <span className="font-black text-amber-800 font-mono">₹{mpBalance.toLocaleString('en-IN')}</span>
+                  </div>
+
+                  {/* Co-Ordinator - manual text entry */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Co-Ordinator</label>
+                    <input
+                      type="text"
+                      placeholder="Employee managing this trip"
+                      value={mpCoordinator}
+                      onChange={(e) => setMpCoordinator(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    />
+                  </div>
+
+                  {/* Status */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Status</label>
+                    <select
+                      value={mpStatus}
+                      onChange={(e) => setMpStatus(e.target.value as MarketPodStatus)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 font-semibold"
+                    >
+                      {MARKET_POD_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Remarks */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Remarks</label>
+                    <textarea
+                      value={mpRemarks}
+                      onChange={(e) => setMpRemarks(e.target.value)}
+                      placeholder="Additional notes or comments about the trip..."
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 h-14 focus:outline-none text-slate-800"
+                    />
+                  </div>
+                </form>
+              </div>
+
+              <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-2">
+                <button
+                  type="button"
+                  onClick={resetMarketPodForm}
+                  className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 transition-colors uppercase text-[10px] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  form="market-pod-entry-form"
+                  disabled={mpIsSubmitting}
+                  className="flex-1 bg-gradient-to-r from-teal-600 to-emerald-700 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md transition-all uppercase text-[10px] flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  {mpIsSubmitting ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Saving...
+                    </>
+                  ) : mpEditingId ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      Update Trip
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-3.5 h-3.5" />
+                      Commit Trip Entry
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 

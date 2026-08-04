@@ -62,6 +62,9 @@ import {
   getPettyCashVouchers,
   savePettyCashVoucher,
   deletePettyCashVoucher,
+  getMarketPodEntries,
+  saveMarketPodEntry,
+  deleteMarketPodEntry,
   getMaintenanceRecords,
   saveMaintenanceRecord,
   deleteMaintenanceRecord,
@@ -100,7 +103,6 @@ import {
   getWarehouseEntries,
   saveWarehouseEntry,
   deleteWarehouseEntry,
-  clearImportedPettyCashVouchers,
   getMileageReports,
   saveMileageReport,
   deleteMileageReport,
@@ -472,14 +474,25 @@ async function startServer() {
 
     for (const check of COMPLIANCE_CHECKS) {
       const raw = (vehicle as any)[check.key] || (vehicle as any)[check.mixedCaseKey];
-      const expDate = parseFlexibleDate(raw);
-      if (!expDate || isNaN(expDate.getTime())) continue;
-
-      const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-      if (diffDays < check.minDays || diffDays > check.maxDays) continue;
-
       const notifId = `${check.idPrefix}-${regNo}`;
       const existing = existingNotifs.find((n: any) => n.id === notifId);
+
+      const expDate = parseFlexibleDate(raw);
+      const diffDays = expDate && !isNaN(expDate.getTime())
+        ? Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+        : null;
+      const inAlertWindow = diffDays != null && diffDays >= check.minDays && diffDays <= check.maxDays;
+
+      if (!inAlertWindow) {
+        // The date was updated (renewed/corrected) and no longer falls in the
+        // imminent-expiry window - auto-resolve any stale unresolved alert
+        // instead of leaving it stuck showing the old expiry forever.
+        if (existing && !existing.read && (existing as any).status !== 'Resolved') {
+          await resolveNotification(notifId);
+        }
+        continue;
+      }
+
       if (existing && (existing.read || (existing as any).status === 'Resolved')) continue; // stays resolved until it re-enters a fresh alert window
 
       await saveNotification({
@@ -604,112 +617,6 @@ async function startServer() {
       await buildAndSendComplianceDigest();
     } catch (error) {
       console.error('Failed to send scheduled compliance digest:', error);
-    }
-  }
-
-  // Vehicle loans whose next EMI due date (see computeDueDateRaw) falls
-  // exactly 3 days from today, for Active loans only.
-  async function calculateEmiDueAlerts() {
-    const loans = await getVehicleLoans();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const alerts: { financer: string; regNo: string; dueDate: string }[] = [];
-    loans.forEach(loan => {
-      if (loan.loanStatus !== 'Active') return;
-      const due = computeDueDateRaw(loan.emiStartDate, loan.tenure);
-      if (!due) return;
-      const diffDays = Math.round((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-      if (diffDays !== 3) return;
-      alerts.push({
-        financer: loan.financer,
-        regNo: loan.regNo,
-        dueDate: due.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-      });
-    });
-    return alerts;
-  }
-
-  // Emails Rakshina and every Super Admin whenever a vehicle loan's next EMI
-  // is due in exactly 3 days, grouped by Financer (financer name as heading,
-  // then Vehicle Number + Due Date underneath) - same daily-once/manual-now
-  // pattern as buildAndSendComplianceDigest above.
-  async function buildAndSendEmiDueDigest(): Promise<{ sent: boolean; count: number; recipients: string[] }> {
-    const alerts = await calculateEmiDueAlerts();
-    if (alerts.length === 0) return { sent: false, count: 0, recipients: [] };
-
-    const usersList = await getUsersWithFallback();
-    const recipients = usersList
-      .filter((u: any) => u.department === 'super_admin' || u.email === 'finance@kcmlogistics.in')
-      .map((u: any) => u.email)
-      .filter(Boolean) as string[];
-
-    if (recipients.length === 0) return { sent: false, count: 0, recipients: [] };
-
-    const grouped = new Map<string, typeof alerts>();
-    alerts.forEach(a => {
-      if (!grouped.has(a.financer)) grouped.set(a.financer, []);
-      grouped.get(a.financer)!.push(a);
-    });
-
-    const sections = Array.from(grouped.entries()).map(([financer, rows]) => `
-      <h3 style="margin:18px 0 6px;color:#0f172a;">${financer}</h3>
-      <table style="border-collapse:collapse;font-size:13px;">
-        <thead>
-          <tr>
-            <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Vehicle Number</th>
-            <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Due Date</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.map(r => `
-            <tr>
-              <td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;">${r.regNo}</td>
-              <td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;color:#dc2626;font-weight:bold;">${r.dueDate}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    `).join('');
-
-    const todayKey = istDateKey();
-
-    await resend.emails.send({
-      from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
-      to: recipients,
-      subject: 'KCM Vehicle Loan - EMI Due in 3 Days',
-      html: `
-        <div style="font-family:Arial,sans-serif;line-height:1.5;">
-          <p>Hello,</p>
-          <p>The following vehicle EMIs are due in 3 days. Please arrange payment before the due date.</p>
-          ${sections}
-        </div>
-      `,
-    });
-
-    await saveNotification({
-      id: `emi-digest-sent-${todayKey}`,
-      title: 'EMI Due Digest Sent',
-      message: `EMI due-in-3-days digest emailed to ${recipients.join(', ')} covering ${alerts.length} vehicle loan(s).`,
-      type: 'general',
-      timestamp: istTimestamp(),
-      read: true
-    });
-
-    console.log(`[EMI DUE DIGEST] Sent digest to ${recipients.join(', ')} (${alerts.length} items)`);
-    return { sent: true, count: alerts.length, recipients };
-  }
-
-  // Automatic once-per-calendar-day trigger, mirroring runScheduledComplianceDigest.
-  async function runScheduledEmiDueDigest() {
-    const digestId = `emi-digest-sent-${istDateKey()}`;
-
-    try {
-      const existingNotifs = await getNotifications();
-      if (existingNotifs.some((n: any) => n.id === digestId)) return;
-      await buildAndSendEmiDueDigest();
-    } catch (error) {
-      console.error('Failed to send scheduled EMI due digest:', error);
     }
   }
 
@@ -1092,32 +999,6 @@ async function startServer() {
     }
   });
 
-  app.post('/api/emi-digest/send-now', async (req, res) => {
-    try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
-      if (!sessionUser || sessionUser.department !== 'super_admin') {
-        return res.status(403).json({ success: false, error: 'Only Super Admin can send the EMI due digest.' });
-      }
-
-      const result = await buildAndSendEmiDueDigest();
-      if (!result.sent) {
-        return res.json({
-          success: true,
-          sent: false,
-          message: 'No vehicle loans are currently due in exactly 3 days - nothing to send.'
-        });
-      }
-
-      res.json({
-        success: true,
-        sent: true,
-        message: `EMI due digest sent to ${result.recipients.join(', ')} covering ${result.count} vehicle loan${result.count === 1 ? '' : 's'}.`
-      });
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message });
-    }
-  });
-
   // Fetch alerts for Super Admin
   app.get('/api/alerts', async (req, res) => {
     try {
@@ -1231,6 +1112,19 @@ async function startServer() {
   });
   app.delete('/api/petty-cash/:id', async (req, res) => {
     try { res.json({ success: true, data: await deletePettyCashVoucher(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/market-pod', async (req, res) => {
+    try { res.json(await getMarketPodEntries()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/market-pod', async (req, res) => {
+    try { res.json({ success: true, data: await saveMarketPodEntry(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/market-pod/:id', async (req, res) => {
+    try { res.json({ success: true, data: await saveMarketPodEntry({ ...req.body, id: req.params.id }) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/market-pod/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteMarketPodEntry(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.get('/api/maintenance', async (req, res) => {
@@ -1597,15 +1491,6 @@ async function startServer() {
     }
   });
 
-  // Clear Imported Petty Cash Vouchers
-  app.post('/api/petty-cash/clear-imported', async (req, res) => {
-    try {
-      const result = await clearImportedPettyCashVouchers();
-      res.json({ success: true, data: result });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
 
   // Mileage Reports (Trip Details) endpoints - same restricted-access +
   // row-filtering pattern as /api/fuel above. Note there is no PUT route:
@@ -2037,10 +1922,6 @@ async function startServer() {
   // (written inside buildAndSendComplianceDigest) keeps it to once/day.
   runScheduledComplianceDigest();
   setInterval(runScheduledComplianceDigest, 60 * 60 * 1000);
-
-  // Same daily-once-hourly-checked schedule for the EMI due digest.
-  runScheduledEmiDueDigest();
-  setInterval(runScheduledEmiDueDigest, 60 * 60 * 1000);
 }
 
 startServer();
