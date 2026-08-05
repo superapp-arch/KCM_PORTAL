@@ -202,9 +202,21 @@ export interface PettyCashVoucher {
   tripSheet: string; // Trip sheet info
   remarks: string; // Remarks
   documents?: VehicleDocument[];
+  enteredBy?: string; // username, stamped server-side; row-level-filtered to the 3 Petty Cash logins, visible only to super admins
 }
 
-export type MarketPodStatus = 'Planned' | 'In Transit' | 'Completed' | 'Closed' | 'Cancelled';
+// One-off (or top-up) cash-advance entry for a Petty Cash user's running
+// Balance Net ledger (see PettyCash.tsx). Never overwritten - a later
+// top-up for the same user is a new row, not an edit of the old one.
+export interface PettyCashAdvance {
+  id: string;
+  username: string; // the Petty Cash login this advance belongs to
+  amount: number;
+  date: string; // YYYY-MM-DD
+  remarks?: string;
+}
+
+export type MarketPodStatus = 'Pending' | 'Closed';
 
 // A freight trip ledger nested inside the Petty Cash module ("Market POD"
 // tab). Entry No is auto-generated/sequential (see nextMarketPodEntryNo in
@@ -213,7 +225,7 @@ export type MarketPodStatus = 'Planned' | 'In Transit' | 'Completed' | 'Closed' 
 export interface MarketPodEntry {
   id: string;
   entryNo: string; // auto e.g. "TRIP-000001", not editable
-  vehicleNumber: string; // from Fleet & Vehicles master
+  vehicleNumber: string; // from Fleet & Vehicles master; unmatched numbers are auto-registered there on save
   date: string; // YYYY-MM-DD
   from: string;
   to: string;
@@ -225,6 +237,8 @@ export interface MarketPodEntry {
   coordinator: string; // manual text entry, no dropdown
   status: MarketPodStatus;
   remarks: string;
+  driverId?: string; // auto-fetched from Driver Details (DriverEmployee.id) by matching vehicleNumber; read-only except for super admin override
+  enteredBy?: string; // username, stamped server-side; row-level-filtered to the 3 Petty Cash logins, visible only to super admins
 }
 
 export interface MaintenanceRecord {

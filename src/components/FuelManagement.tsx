@@ -128,6 +128,11 @@ export default function FuelManagement({
   // Sidebar / editing state
   const [showSidebar, setShowSidebar] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Add/Edit sidebar tab: fuel details are entered first, then the user
+  // switches to the Mileage tab - keeps the form from showing every mileage
+  // field stacked above the fuel fields at once. Both tabs stay inside the
+  // one <form>, so a single Save still submits everything together.
+  const [entrySection, setEntrySection] = useState<'details' | 'mileage'>('details');
 
   // Fuel Entry form fields
   const [period, setPeriod] = useState(new Date().toISOString().slice(0, 7));
@@ -386,6 +391,7 @@ export default function FuelManagement({
     setShowMileageManager(false);
     setMileageFormVehicleNo('');
     setMileageFormValue('');
+    setEntrySection('details');
     setShowSidebar(false);
   };
 
@@ -429,6 +435,7 @@ export default function FuelManagement({
       setMRatePerLitreNew('');
     }
 
+    setEntrySection('details');
     setShowSidebar(true);
   };
 
@@ -1015,10 +1022,32 @@ export default function FuelManagement({
 
               <div className="flex-1 overflow-y-auto p-5 space-y-3.5 text-xs">
                 <form id="fuel-entry-form" onSubmit={handleSubmit} className="space-y-3.5" autoComplete="off">
+                  {/* Details / Mileage tab switcher - fuel details are filled
+                      first, then this flips to the Mileage sub-module instead
+                      of showing every mileage field stacked above the fuel
+                      fields at once. Both stay inside this one form, so a
+                      single Save/Update in the footer submits everything
+                      together regardless of which tab is currently visible. */}
+                  <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-lg border border-slate-200 text-xs font-semibold w-fit">
+                    {([['details', 'Fuel Entry Details'], ['mileage', 'Mileage']] as const).map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setEntrySection(key)}
+                        className={`px-3.5 py-1.5 rounded-md transition-all cursor-pointer flex items-center gap-1.5 ${
+                          entrySection === key ? 'bg-gradient-to-r from-emerald-500 to-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                        }`}
+                      >
+                        {key === 'mileage' && <Gauge className="w-3.5 h-3.5" />}
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
                   {/* Mileage section - creates/updates a linked Fleet Mileage
                       Tracker entry from this same submission. None of this
                       shows up in the Fuel Entry ledger above. */}
-                  <div className="p-3 bg-pink-50/40 rounded-xl border border-pink-200 space-y-3">
+                  <div className={`p-3 bg-pink-50/40 rounded-xl border border-pink-200 space-y-3 ${entrySection === 'mileage' ? '' : 'hidden'}`}>
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-black text-pink-700 uppercase tracking-wider flex items-center gap-1">
                         <Gauge className="w-3.5 h-3.5" /> Mileage
@@ -1258,6 +1287,9 @@ export default function FuelManagement({
                     </div>
                   </div>
 
+                  {/* Fuel Entry Details tab - everything except the Mileage
+                      sub-module above. */}
+                  <div className={`space-y-3.5 ${entrySection === 'details' ? '' : 'hidden'}`}>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1">Period (Month) *</label>
@@ -1500,6 +1532,7 @@ export default function FuelManagement({
                   </div>
 
                   <DocumentAttachment documents={entryDocs} onChange={setEntryDocs} label="Attach Fuel Receipt / Invoice" />
+                  </div>
                 </form>
               </div>
 

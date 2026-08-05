@@ -179,4 +179,13 @@ export const marketPodEntries = pgTable('market_pod_entries', {
   data: text('data').notNull(), // JSON string representing the full MarketPodEntry object
 });
 
+// Petty Cash "Amount Received" advances - one row per funding/top-up event,
+// per user (see PettyCashAdvance in types.ts). Feeds each Petty Cash login's
+// running Balance Net ledger.
+export const pettyCashAdvances = pgTable('petty_cash_advances', {
+  id: text('id').primaryKey(),
+  username: text('username'),
+  data: text('data').notNull(), // JSON string representing the full PettyCashAdvance object
+});
+
 

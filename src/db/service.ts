@@ -27,7 +27,8 @@ import {
   driverAttendance,
   vehicleLoans,
   businessLoans,
-  marketPodEntries
+  marketPodEntries,
+  pettyCashAdvances
 } from './schema.ts';
 import { eq, ne } from 'drizzle-orm';
 import { hashPassword, isHashed } from '../auth/password.ts';
@@ -59,7 +60,8 @@ import {
   DriverAttendance,
   VehicleLoan,
   BusinessLoan,
-  MarketPodEntry
+  MarketPodEntry,
+  PettyCashAdvance
 } from '../types.ts';
 
 // Default Users Seed
@@ -605,6 +607,46 @@ export async function deleteMarketPodEntry(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteMarketPodEntry:", error);
     throw new Error("Failed to delete Market POD entry.", { cause: error });
+  }
+}
+
+// --- PETTY CASH ADVANCE ("Amount Received") OPERATIONS ---
+export async function getPettyCashAdvances(): Promise<PettyCashAdvance[]> {
+  try {
+    const rows = await db.select().from(pettyCashAdvances);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getPettyCashAdvances:", error);
+    throw new Error("Failed to retrieve petty cash advances.", { cause: error });
+  }
+}
+
+export async function savePettyCashAdvance(advance: PettyCashAdvance) {
+  try {
+    const id = advance.id || String(Date.now());
+    const completeAdvance = { ...advance, id };
+    const dataString = JSON.stringify(completeAdvance);
+
+    const existing = await db.select().from(pettyCashAdvances).where(eq(pettyCashAdvances.id, id));
+    if (existing.length > 0) {
+      await db.update(pettyCashAdvances).set({ data: dataString, username: advance.username }).where(eq(pettyCashAdvances.id, id));
+    } else {
+      await db.insert(pettyCashAdvances).values({ id, username: advance.username, data: dataString });
+    }
+    return await getPettyCashAdvances();
+  } catch (error) {
+    console.error("Database action failed in savePettyCashAdvance:", error);
+    throw new Error("Failed to save petty cash advance.", { cause: error });
+  }
+}
+
+export async function deletePettyCashAdvance(id: string) {
+  try {
+    await db.delete(pettyCashAdvances).where(eq(pettyCashAdvances.id, id));
+    return await getPettyCashAdvances();
+  } catch (error) {
+    console.error("Database action failed in deletePettyCashAdvance:", error);
+    throw new Error("Failed to delete petty cash advance.", { cause: error });
   }
 }
 

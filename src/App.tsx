@@ -21,7 +21,8 @@ import {
   DriverEmployee,
   VehicleLoan,
   BusinessLoan,
-  MarketPodEntry
+  MarketPodEntry,
+  PettyCashAdvance
 } from './types';
 
 export default function App() {
@@ -36,6 +37,7 @@ export default function App() {
   const [invoices, setInvoices] = useState<BillingInvoice[]>([]);
   const [vouchers, setVouchers] = useState<PettyCashVoucher[]>([]);
   const [marketPodEntries, setMarketPodEntries] = useState<MarketPodEntry[]>([]);
+  const [pettyCashAdvances, setPettyCashAdvances] = useState<PettyCashAdvance[]>([]);
   const [records, setRecords] = useState<MaintenanceRecord[]>([]);
   const [entries, setEntries] = useState<AccountsEntry[]>([]);
   const [employees, setEmployees] = useState<StaffEmployee[]>([]);
@@ -93,6 +95,7 @@ export default function App() {
         billingRes,
         pettyRes,
         marketPodRes,
+        pettyCashAdvancesRes,
         maintRes,
         acctRes,
         hrRes,
@@ -109,8 +112,9 @@ export default function App() {
         fetch('/api/fleet'),
         authFetch('/api/fuel'),
         fetch('/api/billing'),
-        fetch('/api/petty-cash'),
-        fetch('/api/market-pod'),
+        authFetch('/api/petty-cash'),
+        authFetch('/api/market-pod'),
+        authFetch('/api/petty-cash-advances'),
         fetch('/api/maintenance'),
         fetch('/api/accounts'),
         authFetch('/api/staff/employees'),
@@ -130,6 +134,7 @@ export default function App() {
       if (billingRes.ok) setInvoices(await billingRes.json());
       if (pettyRes.ok) setVouchers(await pettyRes.json());
       if (marketPodRes.ok) setMarketPodEntries(await marketPodRes.json());
+      if (pettyCashAdvancesRes.ok) setPettyCashAdvances(await pettyCashAdvancesRes.json());
       if (maintRes.ok) setRecords(await maintRes.json());
       if (acctRes.ok) setEntries(await acctRes.json());
       if (hrRes.ok) setEmployees(await hrRes.json());
@@ -195,7 +200,7 @@ export default function App() {
 
   const handleAddVoucher = async (voucher: Omit<PettyCashVoucher, 'id'>) => {
     try {
-      const res = await fetch('/api/petty-cash', {
+      const res = await authFetch('/api/petty-cash', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(voucher)
@@ -210,7 +215,7 @@ export default function App() {
 
   const handleUpdateVoucher = async (id: string, voucher: Partial<PettyCashVoucher>) => {
     try {
-      const res = await fetch(`/api/petty-cash/${id}`, {
+      const res = await authFetch(`/api/petty-cash/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(voucher)
@@ -225,7 +230,7 @@ export default function App() {
 
   const handleDeleteVoucher = async (id: string) => {
     try {
-      const res = await fetch(`/api/petty-cash/${id}`, {
+      const res = await authFetch(`/api/petty-cash/${id}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -238,7 +243,7 @@ export default function App() {
 
   const handleAddMarketPodEntry = async (entry: Omit<MarketPodEntry, 'id'>) => {
     try {
-      const res = await fetch('/api/market-pod', {
+      const res = await authFetch('/api/market-pod', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(entry)
@@ -253,7 +258,7 @@ export default function App() {
 
   const handleUpdateMarketPodEntry = async (id: string, entry: Partial<MarketPodEntry>) => {
     try {
-      const res = await fetch(`/api/market-pod/${id}`, {
+      const res = await authFetch(`/api/market-pod/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(entry)
@@ -268,7 +273,35 @@ export default function App() {
 
   const handleDeleteMarketPodEntry = async (id: string) => {
     try {
-      const res = await fetch(`/api/market-pod/${id}`, {
+      const res = await authFetch(`/api/market-pod/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleAddPettyCashAdvance = async (advance: Omit<PettyCashAdvance, 'id'>) => {
+    try {
+      const res = await authFetch('/api/petty-cash-advances', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(advance)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeletePettyCashAdvance = async (id: string) => {
+    try {
+      const res = await authFetch(`/api/petty-cash-advances/${id}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -908,6 +941,9 @@ export default function App() {
         onAddMarketPodEntry={handleAddMarketPodEntry}
         onUpdateMarketPodEntry={handleUpdateMarketPodEntry}
         onDeleteMarketPodEntry={handleDeleteMarketPodEntry}
+        pettyCashAdvances={pettyCashAdvances}
+        onAddPettyCashAdvance={handleAddPettyCashAdvance}
+        onDeletePettyCashAdvance={handleDeletePettyCashAdvance}
         onAddMaintenanceRecord={handleAddMaintenanceRecord}
         onUpdateMaintenanceRecord={handleUpdateMaintenanceRecord}
         onDeleteMaintenanceRecord={handleDeleteMaintenanceRecord}

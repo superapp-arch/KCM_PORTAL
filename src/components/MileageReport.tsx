@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import DateInput from './DateInput';
 import SortHeader from './SortHeader';
-import { SortState, SortDirection, compareText, extractLeadingNumber } from '../utils/sort';
+import { SortState, SortDirection, compareText, compareNumber, extractLeadingNumber } from '../utils/sort';
 
 interface MileageReportModuleProps {
   user: User;
@@ -435,9 +435,12 @@ export default function MileageReportModule({
 
   const sortedReports = sort
     ? [...filteredReports].sort((a, b) => {
-        const cmp = sort.key === 'driverName'
-          ? compareText(a.driverName, b.driverName)
-          : extractLeadingNumber(a.vehicleNo) - extractLeadingNumber(b.vehicleNo);
+        let cmp = 0;
+        switch (sort.key) {
+          case 'driverName': cmp = compareText(a.driverName, b.driverName); break;
+          case 'difference': cmp = compareNumber(a.difference, b.difference); break;
+          default: cmp = extractLeadingNumber(a.vehicleNo) - extractLeadingNumber(b.vehicleNo);
+        }
         return sort.direction === 'asc' ? cmp : -cmp;
       })
     : filteredReports;
@@ -573,7 +576,7 @@ export default function MileageReportModule({
                 <th className="px-3 py-2.5 text-right text-pink-400">Mileage</th>
                 <th className="px-3 py-2.5 text-right text-amber-400">Cost/KM</th>
                 <th className="px-3 py-2.5 text-right text-purple-400">Fixed Mileage</th>
-                <th className="px-3 py-2.5 text-right">Difference (L)</th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="Difference (L)" sortKey="difference" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right">Extra Fuel</th>
                 <th className="px-3 py-2.5 text-right">Rate/Ltr (new)</th>
                 <th className="px-3 py-2.5 text-right text-teal-400">Total Amount</th>

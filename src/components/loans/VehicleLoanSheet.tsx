@@ -1,8 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { Truck, Plus, Search, Edit2, Trash2, X, ChevronDown, AlertTriangle, Download } from 'lucide-react';
 import { Vehicle, VehicleLoan, VehicleDocument, LoanStatus, NOCStatus, VEHICLE_LOAN_FINANCERS } from '../../types';
-import { computeMonthsCompleted, computeDueDate, computeDueDateRaw } from '../../utils/loanDates';
+import { computeMonthsCompleted, computeDueDate, computeDueDateRaw, computeLoanStatus } from '../../utils/loanDates';
 import DateInput from '../DateInput';
 import DocumentAttachment from '../DocumentAttachment';
 import VehicleDetailsPopover from './VehicleDetailsPopover';
@@ -77,6 +77,15 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [documents, setDocuments] = useState<VehicleDocument[]>([]);
+
+  // Loan Status auto-fill: recomputed from EMI Start Date + Tenure whenever
+  // either changes, same "auto, editable" convention as Fuel Entry's Amount
+  // field (ltrs/rate auto-fill Amount, still user-editable afterward) - an
+  // admin can still manually override the dropdown below after this runs.
+  useEffect(() => {
+    const monthsCompleted = computeMonthsCompleted(form.emiStartDate, parseInt(form.tenure) || undefined);
+    setForm(f => ({ ...f, loanStatus: computeLoanStatus(monthsCompleted, parseInt(form.tenure) || undefined) }));
+  }, [form.emiStartDate, form.tenure]);
   const [viewVehicleRegNo, setViewVehicleRegNo] = useState<string | null>(null);
   const [viewLoan, setViewLoan] = useState<VehicleLoan | null>(null);
 
@@ -483,7 +492,7 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-semibold text-slate-500 mb-1">Loan Status</label>
+                    <label className="block font-semibold text-slate-500 mb-1">Loan Status (auto, editable)</label>
                     <select value={form.loanStatus} onChange={e => setForm({ ...form, loanStatus: e.target.value as LoanStatus })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5">
                       <option value="Active">Active</option>
                       <option value="Closed">Closed</option>

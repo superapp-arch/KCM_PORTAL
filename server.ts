@@ -42,7 +42,9 @@ import {
   DriverAttendance,
   DriverLocationCategory,
   VehicleLoan,
-  BusinessLoan
+  BusinessLoan,
+  MarketPodEntry,
+  PettyCashAdvance
 } from './src/types.ts';
 import {
   seedDatabase,
@@ -65,6 +67,9 @@ import {
   getMarketPodEntries,
   saveMarketPodEntry,
   deleteMarketPodEntry,
+  getPettyCashAdvances,
+  savePettyCashAdvance,
+  deletePettyCashAdvance,
   getMaintenanceRecords,
   saveMaintenanceRecord,
   deleteMaintenanceRecord,
@@ -287,11 +292,15 @@ function requireHrAccess(req: express.Request, res: express.Response, next: expr
   next();
 }
 
-const FUEL_ENTRY_USER_EMAILS = ['chandanreddy@kcmlogistics.in', 'praveenkumar@kcmlogistics.in'];
+// Ramesh was added alongside Chandan/Praveen so he can log/see his own fuel
+// and mileage entries (see requireFuelAccess + filterEntryRowsForViewer below
+// for the row-level "only your own entries" behavior every one of these three
+// gets).
+const FUEL_ENTRY_USER_EMAILS = ['chandanreddy@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'ramesh@kcmlogistics.in'];
 
-// Fuel Management + Mileage Report are restricted to Chandan, Praveen, and
-// super admins - nobody else may access or see this data at all. Within that,
-// see the row-level enteredBy filtering applied inside the /api/fuel and
+// Fuel Management + Mileage Report are restricted to Chandan, Praveen, Ramesh,
+// and super admins - nobody else may access or see this data at all. Within
+// that, see the row-level enteredBy filtering applied inside the /api/fuel and
 // /api/mileage handlers themselves (this middleware only gates the module as
 // a whole, the same two-layer pattern as requireHrAccess above).
 function requireFuelAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -301,6 +310,27 @@ function requireFuelAccess(req: express.Request, res: express.Response, next: ex
   }
   if (sessionUser.department !== 'super_admin' && !FUEL_ENTRY_USER_EMAILS.includes(sessionUser.email || '')) {
     return res.status(403).json({ error: 'You do not have access to Fuel Management.' });
+  }
+  next();
+}
+
+// Petty Cash's 3 logins - Vinod and Ramesh are already department
+// 'petty_cash', Saneel is department 'maintenance' but also gets Petty Cash
+// access, so this is an explicit email allowlist (mirrors FUEL_ENTRY_USER_EMAILS
+// above) rather than relying on department alone.
+const PETTY_CASH_ACCESS_EMAILS = ['vinod@kcmlogistics.in', 'ramesh@kcmlogistics.in', 'saneel@kcmlogistics.in'];
+
+// Petty Cash (vouchers, Market POD, and the Amount Received advances ledger)
+// is restricted to the 3 Petty Cash logins and super admins. Within that, each
+// of the 3 only ever sees/modifies their own rows - see filterEntryRowsForViewer/
+// canModifyEntryRow and their PettyCashAdvance-specific counterparts below.
+function requirePettyCashAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (sessionUser.department !== 'super_admin' && sessionUser.department !== 'petty_cash' && !PETTY_CASH_ACCESS_EMAILS.includes(sessionUser.email || '')) {
+    return res.status(403).json({ error: 'You do not have access to Petty Cash.' });
   }
   next();
 }
@@ -387,6 +417,23 @@ function canModifyEntryRow(row: { enteredBy?: string } | undefined, sessionUser?
   if (!sessionUser) return false;
   if (sessionUser.department === 'super_admin') return true;
   return !!row && row.enteredBy === sessionUser.username;
+}
+
+// Same two rules as above, but for PettyCashAdvance rows, which are keyed by
+// `username` (whose ledger the advance belongs to) rather than `enteredBy`
+// (who happened to log the row) - the two normally coincide for Petty Cash's
+// 3 logins, but `username` is what actually matters for whose balance an
+// advance counts toward.
+function filterAdvancesForViewer(rows: PettyCashAdvance[], sessionUser?: ReturnType<typeof getSessionUser>): PettyCashAdvance[] {
+  if (!sessionUser) return [];
+  if (sessionUser.department === 'super_admin') return rows;
+  return rows.filter(r => r.username === sessionUser.username);
+}
+
+function canModifyAdvance(row: PettyCashAdvance | undefined, sessionUser?: ReturnType<typeof getSessionUser>): boolean {
+  if (!sessionUser) return false;
+  if (sessionUser.department === 'super_admin') return true;
+  return !!row && row.username === sessionUser.username;
 }
 
 // Driver Details is location-scoped rather than a single fixed access group -
@@ -1101,30 +1148,106 @@ async function startServer() {
     try { res.json({ success: true, data: await deleteBillingInvoice(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
+  // Petty Cash (vouchers, Market POD, Amount Received advances) is restricted
+  // to the 3 Petty Cash logins and super admins, with each of the 3 only ever
+  // seeing/modifying their own rows - see requirePettyCashAccess and
+  // filterEntryRowsForViewer/canModifyEntryRow above.
+  app.use('/api/petty-cash', requirePettyCashAccess);
+  app.use('/api/market-pod', requirePettyCashAccess);
+  app.use('/api/petty-cash-advances', requirePettyCashAccess);
+
   app.get('/api/petty-cash', async (req, res) => {
-    try { res.json(await getPettyCashVouchers()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      res.json(filterEntryRowsForViewer(await getPettyCashVouchers(), sessionUser));
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/petty-cash', async (req, res) => {
-    try { res.json({ success: true, data: await savePettyCashVoucher(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const result = await savePettyCashVoucher({ ...req.body, enteredBy: sessionUser?.username });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/petty-cash/:id', async (req, res) => {
-    try { res.json({ success: true, data: await savePettyCashVoucher({ ...req.body, id: req.params.id }) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getPettyCashVouchers()).find(v => v.id === req.params.id);
+      if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
+      const result = await savePettyCashVoucher({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/petty-cash/:id', async (req, res) => {
-    try { res.json({ success: true, data: await deletePettyCashVoucher(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getPettyCashVouchers()).find(v => v.id === req.params.id);
+      if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
+      const result = await deletePettyCashVoucher(req.params.id);
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.get('/api/market-pod', async (req, res) => {
-    try { res.json(await getMarketPodEntries()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      res.json(filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser));
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/market-pod', async (req, res) => {
-    try { res.json({ success: true, data: await saveMarketPodEntry(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const result = await saveMarketPodEntry({ ...req.body, enteredBy: sessionUser?.username } as MarketPodEntry);
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/market-pod/:id', async (req, res) => {
-    try { res.json({ success: true, data: await saveMarketPodEntry({ ...req.body, id: req.params.id }) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getMarketPodEntries()).find(e => e.id === req.params.id);
+      if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
+      const result = await saveMarketPodEntry({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy } as MarketPodEntry);
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/market-pod/:id', async (req, res) => {
-    try { res.json({ success: true, data: await deleteMarketPodEntry(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getMarketPodEntries()).find(e => e.id === req.params.id);
+      if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
+      const result = await deleteMarketPodEntry(req.params.id);
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Petty Cash "Amount Received" advances - each of the 3 logins' running
+  // Balance Net ledger opening/top-up entries. Row-scoped by `username`
+  // (whose ledger it belongs to) via filterAdvancesForViewer/canModifyAdvance.
+  app.get('/api/petty-cash-advances', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      res.json(filterAdvancesForViewer(await getPettyCashAdvances(), sessionUser));
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/petty-cash-advances', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      // A regular Petty Cash user can only ever add an advance to their own
+      // ledger; only a super admin may specify a different `username` (e.g.
+      // logging a top-up on someone else's behalf).
+      const username = sessionUser?.department === 'super_admin' && req.body.username ? req.body.username : sessionUser?.username;
+      const result = await savePettyCashAdvance({ ...req.body, username } as PettyCashAdvance);
+      res.json({ success: true, data: filterAdvancesForViewer(result, sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/petty-cash-advances/:id', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getPettyCashAdvances()).find(a => a.id === req.params.id);
+      if (!canModifyAdvance(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
+      const result = await deletePettyCashAdvance(req.params.id);
+      res.json({ success: true, data: filterAdvancesForViewer(result, sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.get('/api/maintenance', async (req, res) => {

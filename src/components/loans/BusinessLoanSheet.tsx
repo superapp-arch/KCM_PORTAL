@@ -1,8 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { Landmark, Plus, Search, Edit2, Trash2, X, Download } from 'lucide-react';
 import { BusinessLoan, LoanStatus } from '../../types';
-import { computeMonthsCompleted, computeDueDate } from '../../utils/loanDates';
+import { computeMonthsCompleted, computeDueDate, computeLoanStatus } from '../../utils/loanDates';
 import DateInput from '../DateInput';
 
 const toLoanRow = (loan: BusinessLoan, i: number) => {
@@ -50,6 +50,14 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [form, setForm] = useState(emptyForm);
+
+  // Loan Status auto-fill: recomputed from EMI Date + Tenure whenever either
+  // changes, same "auto, editable" convention as Fuel Entry's Amount field -
+  // an admin can still manually override the dropdown below after this runs.
+  useEffect(() => {
+    const emiPaid = computeMonthsCompleted(form.emiDate, parseInt(form.tenure) || undefined);
+    setForm(f => ({ ...f, loanStatus: computeLoanStatus(emiPaid, parseInt(form.tenure) || undefined) }));
+  }, [form.emiDate, form.tenure]);
 
   const resetForm = () => {
     setEditingId(null);
@@ -274,7 +282,7 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
                     <input type="number" step="0.01" value={form.interestRate} onChange={e => setForm({ ...form, interestRate: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                   </div>
                   <div>
-                    <label className="block font-semibold text-slate-500 mb-1">Loan Status</label>
+                    <label className="block font-semibold text-slate-500 mb-1">Loan Status (auto, editable)</label>
                     <select value={form.loanStatus} onChange={e => setForm({ ...form, loanStatus: e.target.value as LoanStatus })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5">
                       <option value="Active">Active</option>
                       <option value="Closed">Closed</option>

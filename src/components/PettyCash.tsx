@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
-import { PettyCashVoucher, VehicleDocument, Vehicle, MarketPodEntry, MarketPodStatus } from '../types';
+import { PettyCashVoucher, VehicleDocument, Vehicle, MarketPodEntry, MarketPodStatus, User, DriverEmployee, PettyCashAdvance } from '../types';
 import {
   Landmark,
   Plus,
@@ -21,7 +21,12 @@ import {
   X,
   Mail,
   Phone,
-  Truck
+  Truck,
+  Wallet,
+  AlertTriangle,
+  Lock,
+  Unlock,
+  Trash2
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
@@ -29,18 +34,35 @@ import SortHeader from './SortHeader';
 import { SortState, SortDirection, extractLeadingNumber, compareText } from '../utils/sort';
 
 interface PettyCashProps {
+  user: User;
   vouchers: PettyCashVoucher[];
   onAddVoucher: (voucher: Omit<PettyCashVoucher, 'id'>) => Promise<void>;
   onUpdateVoucher: (id: string, voucher: Partial<PettyCashVoucher>) => Promise<void>;
   onDeleteVoucher: (id: string) => Promise<void>;
   vehicles: Vehicle[];
+  onUpdateVehicle: (vehicle: Vehicle) => Promise<void>;
+  drivers: DriverEmployee[];
   marketPodEntries: MarketPodEntry[];
   onAddMarketPodEntry: (entry: Omit<MarketPodEntry, 'id'>) => Promise<void>;
   onUpdateMarketPodEntry: (id: string, entry: Partial<MarketPodEntry>) => Promise<void>;
   onDeleteMarketPodEntry: (id: string) => Promise<void>;
+  pettyCashAdvances: PettyCashAdvance[];
+  onAddPettyCashAdvance: (advance: Omit<PettyCashAdvance, 'id'>) => Promise<void>;
+  onDeletePettyCashAdvance: (id: string) => Promise<void>;
 }
 
-const MARKET_POD_STATUSES: MarketPodStatus[] = ['Planned', 'In Transit', 'Completed', 'Closed', 'Cancelled'];
+const MARKET_POD_STATUSES: MarketPodStatus[] = ['Pending', 'Closed'];
+
+// The 3 Petty Cash logins - mirrors PETTY_CASH_ACCESS_EMAILS in
+// Administration.tsx/server.ts. Used to label/select whose ledger a Super
+// Admin/Principal is viewing, since vouchers/advances arrive unfiltered (with
+// `enteredBy`/`username` intact) for them but per-user-filtered for everyone
+// else.
+const PETTY_CASH_USERS: { username: string; label: string }[] = [
+  { username: 'vinoda', label: 'Vinod' },
+  { username: 'ramesh', label: 'Ramesh' },
+  { username: 'saneel', label: 'Saneel' }
+];
 
 const EXPENSE_CATEGORIES = [
   "ACCIDENT AND SETTELMENT",
@@ -78,16 +100,23 @@ const CLIENT_NAMES = ["swiggy", "RIL F&V", "market load", "Other"];
 const VENDORS = ["kcm insta", "kcm supply"];
 
 export default function PettyCash({
+  user,
   vouchers,
   onAddVoucher,
   onUpdateVoucher,
   onDeleteVoucher,
   vehicles,
+  onUpdateVehicle,
+  drivers,
   marketPodEntries,
   onAddMarketPodEntry,
   onUpdateMarketPodEntry,
-  onDeleteMarketPodEntry
+  onDeleteMarketPodEntry,
+  pettyCashAdvances,
+  onAddPettyCashAdvance,
+  onDeletePettyCashAdvance
 }: PettyCashProps) {
+  const isSuperAdmin = user.department === 'super_admin';
   const [activeTab, setActiveTab] = useState<'ledger' | 'summary' | 'marketpod'>('ledger');
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
 
@@ -158,16 +187,47 @@ export default function PettyCash({
   const [mpReceivedAdvance, setMpReceivedAdvance] = useState('');
   const [mpOtherExpenses, setMpOtherExpenses] = useState('');
   const [mpCoordinator, setMpCoordinator] = useState('');
-  const [mpStatus, setMpStatus] = useState<MarketPodStatus>('Planned');
+  const [mpStatus, setMpStatus] = useState<MarketPodStatus>('Pending');
   const [mpRemarks, setMpRemarks] = useState('');
+  const [mpDriverId, setMpDriverId] = useState('');
+  // Read-only by default (auto-fetched from Driver Details); only a super
+  // admin can flip this to manually override it.
+  const [mpDriverOverride, setMpDriverOverride] = useState(false);
   const [mpIsSubmitting, setMpIsSubmitting] = useState(false);
   const [mpSearchTerm, setMpSearchTerm] = useState('');
   const [mpSort, setMpSort] = useState<SortState | null>(null);
   const handleMpSort = (key: string, direction: SortDirection) => setMpSort({ key, direction });
 
+  // --- Petty Cash Balance Net / Amount Received state ---
+  const [showAdvanceModal, setShowAdvanceModal] = useState(false);
+  const [advanceAmount, setAdvanceAmount] = useState('');
+  const [advanceDate, setAdvanceDate] = useState(new Date().toISOString().slice(0, 10));
+  const [advanceRemarks, setAdvanceRemarks] = useState('');
+  const [advanceIsSubmitting, setAdvanceIsSubmitting] = useState(false);
+  // Which user's ledger the balance card/modal is scoped to - only meaningful
+  // for a Super Admin/Principal (everyone else only ever sees their own rows,
+  // so there's nothing to pick).
+  const [balanceUserFilter, setBalanceUserFilter] = useState<string>(user.username);
+
   const mpBalance = (parseFloat(mpTotalFreight) || 0) - (parseFloat(mpReceivedAdvance) || 0) - (parseFloat(mpOtherExpenses) || 0);
 
   const mpVehicleList = Array.from(new Set(vehicles.map(v => v.regNo || v['Reg. No.'] || '').filter(Boolean))).sort();
+
+  const vehicleByRegNo = (regNo: string): Vehicle | undefined =>
+    vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === regNo.trim().toUpperCase());
+
+  // Auto-fetch Driver ID: matches Market POD's Vehicle Number against Driver
+  // Details (DriverEmployee.vehicleNo), same source Fuel Entry/Mileage Report
+  // read their own vehicle lists from. Read-only unless a super admin flips
+  // the override toggle.
+  const matchedDriver = mpVehicleNumber.trim()
+    ? drivers.find(d => (d.vehicleNo || '').trim().toUpperCase() === mpVehicleNumber.trim().toUpperCase())
+    : undefined;
+
+  useEffect(() => {
+    if (mpDriverOverride) return;
+    setMpDriverId(matchedDriver ? matchedDriver.id : '');
+  }, [matchedDriver, mpDriverOverride]);
 
   // Entry No is auto-generated and never user-editable, e.g. "TRIP-000001" -
   // same live-max-plus-one convention as Fuel Entry's own auto-numbering.
@@ -191,8 +251,10 @@ export default function PettyCash({
     setMpReceivedAdvance('');
     setMpOtherExpenses('');
     setMpCoordinator('');
-    setMpStatus('Planned');
+    setMpStatus('Pending');
     setMpRemarks('');
+    setMpDriverId('');
+    setMpDriverOverride(false);
     setShowMarketPodSidebar(false);
   };
 
@@ -209,6 +271,12 @@ export default function PettyCash({
     setMpCoordinator(entry.coordinator);
     setMpStatus(entry.status);
     setMpRemarks(entry.remarks);
+    setMpDriverId(entry.driverId || '');
+    // If the saved driverId doesn't match what auto-fetch would now produce,
+    // treat it as a standing override so re-opening this entry doesn't
+    // silently discard it.
+    const autoMatch = drivers.find(d => (d.vehicleNo || '').trim().toUpperCase() === entry.vehicleNumber.trim().toUpperCase());
+    setMpDriverOverride(!!entry.driverId && entry.driverId !== (autoMatch?.id || ''));
     setShowMarketPodSidebar(true);
   };
 
@@ -220,9 +288,16 @@ export default function PettyCash({
     }
     setMpIsSubmitting(true);
     try {
+      const regNo = mpVehicleNumber.toUpperCase().trim();
+      // Vehicle Number auto-register: if this vehicle isn't in Fleet &
+      // Vehicles yet, register it now so it appears in every vehicle
+      // dropdown/datalist across the portal from here on.
+      if (!vehicleByRegNo(regNo)) {
+        await onUpdateVehicle({ id: regNo, regNo, 'Reg. No.': regNo } as Vehicle);
+      }
       const payload = {
         entryNo: mpEditingId ? marketPodEntries.find(e => e.id === mpEditingId)?.entryNo || nextMarketPodEntryNo() : nextMarketPodEntryNo(),
-        vehicleNumber: mpVehicleNumber.toUpperCase().trim(),
+        vehicleNumber: regNo,
         date: mpDate,
         from: mpFrom.trim(),
         to: mpTo.trim(),
@@ -233,7 +308,8 @@ export default function PettyCash({
         balance: mpBalance,
         coordinator: mpCoordinator.trim(),
         status: mpStatus,
-        remarks: mpRemarks.trim()
+        remarks: mpRemarks.trim(),
+        driverId: mpDriverId.trim() || undefined
       };
       if (mpEditingId) {
         await onUpdateMarketPodEntry(mpEditingId, payload);
@@ -411,6 +487,70 @@ export default function PettyCash({
       if (parts[2].length === 4) return parts[1].padStart(2, '0');
     }
     return '';
+  };
+
+  // --- Balance Net Tracking helpers ---
+  // Regular Petty Cash users only ever receive their own rows from the
+  // server (enteredBy/username stripped, see filterEntryRowsForViewer in
+  // server.ts) - for them `vouchers`/`pettyCashAdvances` already *is* "my
+  // data". A Super Admin/Principal receives every user's rows with
+  // enteredBy/username intact, so their view needs to scope by username.
+  const vouchersFor = (username: string): PettyCashVoucher[] =>
+    isSuperAdmin ? vouchers.filter(v => v.enteredBy === username) : vouchers;
+  const advancesFor = (username: string): PettyCashAdvance[] =>
+    isSuperAdmin ? pettyCashAdvances.filter(a => a.username === username) : pettyCashAdvances;
+
+  // Current running balance for a user = total Amount Received - total Cash
+  // Paid across all of their petty cash entries (computed live, not stored -
+  // mathematically equivalent to an incremental running-balance chain, but
+  // self-correcting if a past entry/advance is later edited or deleted).
+  const currentBalanceFor = (username: string): number => {
+    const totalAdvances = advancesFor(username).reduce((s, a) => s + (a.amount || 0), 0);
+    const totalSpent = vouchersFor(username).reduce((s, v) => s + (v.cashPaid || 0), 0);
+    return totalAdvances - totalSpent;
+  };
+
+  // Balance Net as of one specific voucher (for the table's "Balance Net"
+  // column) - same formula, but only summing that user's cash paid up to and
+  // including this entry, in chronological order.
+  const balanceNetAt = (voucher: PettyCashVoucher): number => {
+    const owner = voucher.enteredBy || user.username;
+    const totalAdvances = advancesFor(owner).reduce((s, a) => s + (a.amount || 0), 0);
+    const ordered = [...vouchersFor(owner)].sort((a, b) => {
+      if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+      return (a.entryNo || a.id).localeCompare(b.entryNo || b.id);
+    });
+    let spent = 0;
+    for (const v of ordered) {
+      spent += v.cashPaid || 0;
+      if (v.id === voucher.id) break;
+    }
+    return totalAdvances - spent;
+  };
+
+  const handleAddAdvance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!advanceAmount || parseFloat(advanceAmount) <= 0 || !advanceDate) {
+      triggerNotif('Enter a valid amount and date.', 'error');
+      return;
+    }
+    setAdvanceIsSubmitting(true);
+    try {
+      await onAddPettyCashAdvance({
+        username: isSuperAdmin ? balanceUserFilter : user.username,
+        amount: parseFloat(advanceAmount),
+        date: advanceDate,
+        remarks: advanceRemarks.trim()
+      });
+      setAdvanceAmount('');
+      setAdvanceRemarks('');
+      triggerNotif('Amount Received logged successfully!', 'success');
+    } catch (err) {
+      console.error(err);
+      triggerNotif('Failed to log Amount Received.', 'error');
+    } finally {
+      setAdvanceIsSubmitting(false);
+    }
   };
 
   // Filter vouchers based on search, vendor, category, year and month
@@ -745,6 +885,38 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
         </div>
       )}
 
+      {/* Balance Net Tracking: regular users see their own running balance;
+          Super Admin/Principal sees one card per Petty Cash login since they
+          see all 3 logins' rows at once. */}
+      {activeTab === 'ledger' && (
+        <div className="flex flex-wrap gap-3 text-xs">
+          {(isSuperAdmin ? PETTY_CASH_USERS : [{ username: user.username, label: user.name }]).map(u => {
+            const bal = currentBalanceFor(u.username);
+            return (
+              <div key={u.username} className={`flex-1 min-w-[180px] p-3 rounded-xl border flex items-center justify-between gap-2 ${bal < 0 ? 'bg-rose-50 border-rose-200' : 'bg-amber-50/50 border-amber-200'}`}>
+                <div>
+                  <span className={`text-[10px] font-bold uppercase flex items-center gap-1 ${bal < 0 ? 'text-rose-600' : 'text-amber-600'}`}>
+                    <Wallet className="w-3 h-3" /> {u.label}'s Balance Net
+                  </span>
+                  <div className={`text-sm font-black font-mono mt-0.5 flex items-center gap-1 ${bal < 0 ? 'text-rose-700' : 'text-amber-800'}`}>
+                    {bal < 0 && <AlertTriangle className="w-3.5 h-3.5" />}
+                    ₹{bal.toLocaleString('en-IN')}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setBalanceUserFilter(u.username); setShowAdvanceModal(true); }}
+                  title={`Log Amount Received for ${u.label}`}
+                  className="p-1.5 bg-white border border-amber-200 text-amber-700 hover:bg-amber-100 rounded-lg cursor-pointer shrink-0 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {notif && (
         <div
           className={`p-3 border rounded-xl text-xs font-medium flex items-center gap-2.5 shadow-sm transition-all animate-fade-in ${
@@ -780,6 +952,16 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 >
                   <Plus className="w-3.5 h-3.5" />
                   Add Petty Cash Entry
+                </button>
+
+                {/* Amount Received - opening/top-up advance for this user's (or, for Super Admin, the selected user's) Balance Net ledger */}
+                <button
+                  type="button"
+                  onClick={() => { setBalanceUserFilter(isSuperAdmin ? balanceUserFilter || PETTY_CASH_USERS[0].username : user.username); setShowAdvanceModal(true); }}
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs"
+                >
+                  <Wallet className="w-3.5 h-3.5" />
+                  Add Amount Received
                 </button>
 
                 {/* Download - reference date + preset period */}
@@ -926,15 +1108,17 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <th className="px-3 py-2.5 text-right">Amt Rec</th>
                     <th className="px-3 py-2.5 text-right">Cash Paid</th>
                     <th className="px-3 py-2.5 text-right">Balance</th>
+                    <th className="px-3 py-2.5 text-right">Balance Net</th>
                     <th className="px-3 py-2.5">Trip Sheet</th>
                     <th className="px-3 py-2.5">Remarks</th>
+                    {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
                     <th className="px-3 py-2.5 text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
                   {filteredVouchers.length === 0 ? (
                     <tr>
-                      <td colSpan={15} className="text-center py-16 text-slate-400 font-mono text-xs">
+                      <td colSpan={16 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
                         NO RECORDED PETTY CASH VOUCHERS MATCH THE SELECTION.
                         <div className="text-[10px] text-slate-400 font-sans mt-1">Use "Add Petty Cash Entry" above to authorize new cash disbursements.</div>
                       </td>
@@ -966,8 +1150,22 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         <td className={`px-3 py-2 text-right font-mono font-bold ${v.balance < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`}>
                           ₹{(v.balance || 0).toLocaleString('en-IN')}
                         </td>
+                        {(() => {
+                          const net = balanceNetAt(v);
+                          return (
+                            <td className={`px-3 py-2 text-right font-mono font-black ${net < 0 ? 'text-rose-700 bg-rose-50/40' : 'text-slate-800'}`} title="Running balance for this user: total Amount Received minus cash paid up to this entry">
+                              {net < 0 && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
+                              ₹{net.toLocaleString('en-IN')}
+                            </td>
+                          );
+                        })()}
                         <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{v.tripSheet || '-'}</td>
                         <td className="px-3 py-2 text-slate-500 max-w-[120px] truncate" title={v.remarks}>{v.remarks || '-'}</td>
+                        {isSuperAdmin && (
+                          <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">
+                            {v.enteredBy || '-'}
+                          </td>
+                        )}
                         <td className="px-3 py-2 whitespace-nowrap text-center">
                           <div className="flex items-center justify-center gap-1.5">
                             <button
@@ -1201,13 +1399,15 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   <th className="px-3 py-2.5">Co-Ordinator</th>
                   <th className="px-3 py-2.5">Status</th>
                   <th className="px-3 py-2.5">Remarks</th>
+                  <th className="px-3 py-2.5">Driver</th>
+                  {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
                   <th className="px-3 py-2.5 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
                 {filteredMarketPod.length === 0 ? (
                   <tr>
-                    <td colSpan={14} className="text-center py-16 text-slate-400 font-mono text-xs">
+                    <td colSpan={15 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
                       NO MARKET POD TRIP ENTRIES MATCH THE SELECTION.
                       <div className="text-[10px] text-slate-400 font-sans mt-1">Use "Add Trip Entry" above to log a new freight trip.</div>
                     </td>
@@ -1230,16 +1430,32 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{entry.coordinator || '-'}</td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border ${
-                          entry.status === 'Completed' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-                          entry.status === 'In Transit' ? 'bg-sky-50 text-sky-700 border-sky-200' :
-                          entry.status === 'Cancelled' ? 'bg-rose-50 text-rose-700 border-rose-200' :
+                          entry.status === 'Pending' ? 'bg-amber-50 text-amber-700 border-amber-200' :
                           entry.status === 'Closed' ? 'bg-slate-100 text-slate-600 border-slate-300' :
-                          'bg-amber-50 text-amber-700 border-amber-200'
+                          'bg-slate-50 text-slate-500 border-slate-200'
                         }`}>
                           {entry.status}
                         </span>
                       </td>
                       <td className="px-3 py-2 text-slate-500 max-w-[120px] truncate" title={entry.remarks}>{entry.remarks || '-'}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {entry.driverId ? (
+                          <span className="font-mono font-bold text-slate-700">
+                            {entry.driverId}
+                            {(() => {
+                              const d = drivers.find(dr => dr.id === entry.driverId);
+                              return d ? <span className="text-slate-400 font-sans font-normal"> ({d.name})</span> : null;
+                            })()}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 italic">No driver mapped</span>
+                        )}
+                      </td>
+                      {isSuperAdmin && (
+                        <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">
+                          {entry.enteredBy || '-'}
+                        </td>
+                      )}
                       <td className="px-3 py-2 whitespace-nowrap text-center">
                         <div className="flex items-center justify-center gap-1.5">
                           <button
@@ -1502,6 +1718,114 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
             <div className="bg-slate-50 border-t border-slate-100 p-3 flex justify-end">
               <button
                 onClick={() => setSelectedVoucherForDocs(null)}
+                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold rounded-lg transition-colors cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Amount Received modal - opening/top-up entries for a Petty Cash
+          user's Balance Net ledger. Regular users only ever log their own;
+          Super Admin/Principal picks which of the 3 logins it's for. */}
+      {showAdvanceModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-fade-in font-sans text-xs">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full max-h-[85vh] overflow-hidden flex flex-col">
+            <div className="bg-gradient-to-r from-slate-900 to-amber-950 text-white p-4 flex items-center justify-between">
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <Wallet className="w-4 h-4 text-amber-400" /> Amount Received
+              </h3>
+              <button onClick={() => setShowAdvanceModal(false)} className="text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 p-1.5 rounded-lg transition-colors cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4">
+              {isSuperAdmin && (
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Petty Cash User</label>
+                  <select
+                    value={balanceUserFilter}
+                    onChange={(e) => setBalanceUserFilter(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-semibold text-slate-800"
+                  >
+                    {PETTY_CASH_USERS.map(u => <option key={u.username} value={u.username}>{u.label}</option>)}
+                  </select>
+                </div>
+              )}
+
+              <form onSubmit={handleAddAdvance} className="space-y-3">
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Amount *</label>
+                    <input
+                      type="number" step="0.01" required min="0.01"
+                      value={advanceAmount}
+                      onChange={(e) => setAdvanceAmount(e.target.value)}
+                      placeholder="₹ Received"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Date *</label>
+                    <DateInput required value={advanceDate} onChange={(e) => setAdvanceDate(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Remarks</label>
+                  <input
+                    type="text"
+                    value={advanceRemarks}
+                    onChange={(e) => setAdvanceRemarks(e.target.value)}
+                    placeholder="e.g. Advance for August"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={advanceIsSubmitting}
+                  className="w-full bg-gradient-to-r from-amber-500 to-orange-600 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md transition-all uppercase text-[10px] cursor-pointer"
+                >
+                  {advanceIsSubmitting ? 'Saving...' : 'Log Amount Received'}
+                </button>
+              </form>
+
+              {/* History for whichever user is selected above */}
+              <div className="pt-3 border-t border-slate-100 space-y-1.5">
+                <span className="text-[10px] font-bold text-slate-500 uppercase">Amount Received History</span>
+                {advancesFor(isSuperAdmin ? balanceUserFilter : user.username).length === 0 ? (
+                  <p className="text-slate-400 text-[11px] py-2">No Amount Received entries logged yet.</p>
+                ) : (
+                  <div className="max-h-40 overflow-y-auto space-y-1">
+                    {advancesFor(isSuperAdmin ? balanceUserFilter : user.username)
+                      .slice().sort((a, b) => (a.date < b.date ? 1 : -1))
+                      .map(a => (
+                        <div key={a.id} className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-100 rounded-lg px-2.5 py-1.5">
+                          <div className="min-w-0">
+                            <span className="font-mono font-bold text-slate-800">₹{a.amount.toLocaleString('en-IN')}</span>
+                            <span className="text-slate-400 font-mono ml-1.5">{a.date}</span>
+                            {a.remarks && <p className="text-slate-500 truncate">{a.remarks}</p>}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => onDeletePettyCashAdvance(a.id)}
+                            title="Delete this entry"
+                            className="text-rose-400 hover:text-rose-600 cursor-pointer shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border-t border-slate-100 p-3 flex justify-end">
+              <button
+                onClick={() => setShowAdvanceModal(false)}
                 className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold rounded-lg transition-colors cursor-pointer"
               >
                 Done
@@ -1831,20 +2155,65 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-generated, not editable</p>
                   </div>
 
-                  {/* Vehicle Number - from Fleet Master */}
+                  {/* Vehicle Number - autocomplete against Fleet & Vehicles,
+                      but free-text entry is allowed; an unmatched number gets
+                      auto-registered into Fleet & Vehicles on save (see
+                      handleMarketPodSubmit) so it's available everywhere
+                      afterward. */}
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1 flex items-center gap-1">
                       <Truck className="w-3.5 h-3.5 text-teal-600" /> Vehicle Number *
                     </label>
-                    <select
+                    <input
+                      type="text"
                       required
+                      list="market-pod-vehicles-datalist"
+                      placeholder="e.g. KA53AA0069"
                       value={mpVehicleNumber}
-                      onChange={(e) => setMpVehicleNumber(e.target.value)}
+                      onChange={(e) => setMpVehicleNumber(e.target.value.toUpperCase())}
+                      autoComplete="off"
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-teal-500"
-                    >
-                      <option value="">Select vehicle...</option>
-                      {mpVehicleList.map(v => <option key={v} value={v}>{v}</option>)}
-                    </select>
+                    />
+                    <datalist id="market-pod-vehicles-datalist">
+                      {mpVehicleList.map(v => <option key={v} value={v} />)}
+                    </datalist>
+                    {mpVehicleNumber.trim() && !vehicleByRegNo(mpVehicleNumber) && (
+                      <p className="text-[9px] text-amber-600 font-semibold mt-1">Not in Fleet &amp; Vehicles yet - saving will auto-register it.</p>
+                    )}
+                  </div>
+
+                  {/* Vendor / Driver ID - auto-fetched from Driver Details by
+                      matching Vehicle Number, read-only to prevent mismatches;
+                      only a super admin can override it. */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                      <span>Vendor / Driver ID (auto)</span>
+                      {isSuperAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => setMpDriverOverride(o => !o)}
+                          className="text-[9px] font-bold text-teal-600 hover:text-teal-800 cursor-pointer flex items-center gap-1"
+                          title={mpDriverOverride ? 'Lock back to auto-fetched value' : 'Override auto-fetched value'}
+                        >
+                          {mpDriverOverride ? <Unlock className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
+                          {mpDriverOverride ? 'Overriding' : 'Override'}
+                        </button>
+                      )}
+                    </label>
+                    <input
+                      type="text"
+                      readOnly={!mpDriverOverride}
+                      disabled={!mpDriverOverride}
+                      value={mpDriverId}
+                      onChange={(e) => setMpDriverId(e.target.value)}
+                      placeholder={matchedDriver ? undefined : 'No driver mapped'}
+                      className={`w-full border rounded-lg p-2 font-mono font-bold focus:outline-none focus:ring-1 focus:ring-teal-500 ${
+                        mpDriverOverride ? 'bg-white border-teal-300 text-slate-800' : 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed'
+                      }`}
+                    />
+                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                      {matchedDriver ? `Matched: ${matchedDriver.name}` : 'No driver mapped to this vehicle in Driver Details.'}
+                    </p>
                   </div>
 
                   {/* Date */}

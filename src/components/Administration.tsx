@@ -18,7 +18,8 @@ import {
   DriverEmployee,
   VehicleLoan,
   BusinessLoan,
-  MarketPodEntry
+  MarketPodEntry,
+  PettyCashAdvance
 } from '../types';
 import FleetSheet from './FleetSheet';
 import FuelManagement from './FuelManagement';
@@ -53,6 +54,16 @@ const DRIVER_ACCESS_EMAILS = [
   'vinod@kcmlogistics.in',
   'bhagya@kcmlogistics.in'
 ];
+
+// Petty Cash's 3 logins - mirrors server.ts's PETTY_CASH_ACCESS_EMAILS
+// exactly. Vinod and Ramesh are already department 'petty_cash'; Saneel is
+// department 'maintenance' but also gets Petty Cash access, hence the
+// explicit email allowlist rather than relying on department alone.
+const PETTY_CASH_ACCESS_EMAILS = ['vinod@kcmlogistics.in', 'ramesh@kcmlogistics.in', 'saneel@kcmlogistics.in'];
+
+// Fuel Management + Mileage Report gate - mirrors server.ts's
+// FUEL_ENTRY_USER_EMAILS exactly.
+const FUEL_ACCESS_EMAILS = ['chandanreddy@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'ramesh@kcmlogistics.in'];
 
 // Displays the live header clock in Indian Standard Time regardless of the
 // device/browser's own timezone, so the portal reads consistently for an
@@ -120,6 +131,9 @@ interface AdministrationProps {
   onAddMarketPodEntry: (entry: Omit<MarketPodEntry, 'id'>) => Promise<void>;
   onUpdateMarketPodEntry: (id: string, entry: Partial<MarketPodEntry>) => Promise<void>;
   onDeleteMarketPodEntry: (id: string) => Promise<void>;
+  pettyCashAdvances: PettyCashAdvance[];
+  onAddPettyCashAdvance: (advance: Omit<PettyCashAdvance, 'id'>) => Promise<void>;
+  onDeletePettyCashAdvance: (id: string) => Promise<void>;
   fuelVendors: FuelVendor[];
   onAddFuelVendor: (vendor: Omit<FuelVendor, 'id'>) => Promise<void>;
   onDeleteFuelVendor: (id: string) => Promise<void>;
@@ -191,6 +205,9 @@ export default function Administration({
   onAddMarketPodEntry,
   onUpdateMarketPodEntry,
   onDeleteMarketPodEntry,
+  pettyCashAdvances,
+  onAddPettyCashAdvance,
+  onDeletePettyCashAdvance,
   fuelVendors,
   onAddFuelVendor,
   onDeleteFuelVendor,
@@ -332,10 +349,10 @@ export default function Administration({
   const hasAccess = (tabName: string): boolean => {
     if (user.department === 'super_admin') return true;
     // Warehouse Details is super-admin-only for now; may open up to other roles later.
-    if ((tabName === 'fuel' || tabName === 'mileage') && (user.email === 'chandanreddy@kcmlogistics.in' || user.email === 'praveenkumar@kcmlogistics.in')) return true;
+    if ((tabName === 'fuel' || tabName === 'mileage') && FUEL_ACCESS_EMAILS.includes(user.email || '')) return true;
     if (tabName === 'fleet' && (user.department === 'vehicle_manager' || user.email === 'bhagya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in')) return true;
     if (tabName === 'billing' && (user.department === 'billing' || user.email === 'bhagya@kcmlogistics.in')) return true;
-    if (tabName === 'pettycash' && user.department === 'petty_cash') return true;
+    if (tabName === 'pettycash' && (user.department === 'petty_cash' || PETTY_CASH_ACCESS_EMAILS.includes(user.email || ''))) return true;
     if (tabName === 'maintenance' && user.department === 'maintenance') return true;
     if (tabName === 'accounts' && user.department === 'accounts_finance') return true;
     if (tabName === 'hr' && user.email === 'bhagya@kcmlogistics.in') return true;
@@ -827,15 +844,21 @@ export default function Administration({
 
           {activeTab === 'pettycash' && hasAccess('pettycash') && (
             <PettyCash
+              user={user}
               vouchers={vouchers}
               onAddVoucher={onAddVoucher}
               onUpdateVoucher={onUpdateVoucher}
               onDeleteVoucher={onDeleteVoucher}
               vehicles={vehicles}
+              onUpdateVehicle={onUpdateVehicle}
+              drivers={drivers}
               marketPodEntries={marketPodEntries}
               onAddMarketPodEntry={onAddMarketPodEntry}
               onUpdateMarketPodEntry={onUpdateMarketPodEntry}
               onDeleteMarketPodEntry={onDeleteMarketPodEntry}
+              pettyCashAdvances={pettyCashAdvances}
+              onAddPettyCashAdvance={onAddPettyCashAdvance}
+              onDeletePettyCashAdvance={onDeletePettyCashAdvance}
             />
           )}
 

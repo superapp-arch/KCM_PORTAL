@@ -41,6 +41,16 @@ export function computeDueDate(startDate: string | undefined, monthsCompleted: n
   return due.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+// Auto-computed Loan Status: Closed once every EMI period has elapsed
+// (Months Completed reaches Tenure), Active otherwise. Used to default/
+// auto-fill the Loan Status field in the Vehicle/Business Loan forms
+// whenever EMI Start Date or Tenure change - like Fuel Entry's Amount field,
+// it's an editable auto-fill, not a forced read-only value, so an admin can
+// still deliberately override it afterward.
+export function computeLoanStatus(monthsCompleted: number, tenure: number | undefined): 'Active' | 'Closed' {
+  return tenure != null && monthsCompleted >= tenure ? 'Closed' : 'Active';
+}
+
 // Raw next due date as a Date (or null), for alerting logic (e.g. "3 days
 // before due") that needs to compare actual dates rather than a label.
 export function computeDueDateRaw(startDate: string | undefined, tenure: number | undefined): Date | null {
