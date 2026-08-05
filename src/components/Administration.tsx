@@ -852,6 +852,7 @@ export default function Administration({
               vehicles={vehicles}
               onUpdateVehicle={onUpdateVehicle}
               drivers={drivers}
+              vendors={vendors}
               marketPodEntries={marketPodEntries}
               onAddMarketPodEntry={onAddMarketPodEntry}
               onUpdateMarketPodEntry={onUpdateMarketPodEntry}

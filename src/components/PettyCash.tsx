@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
-import { PettyCashVoucher, VehicleDocument, Vehicle, MarketPodEntry, MarketPodStatus, User, DriverEmployee, PettyCashAdvance } from '../types';
+import { PettyCashVoucher, VehicleDocument, Vehicle, MarketPodEntry, MarketPodStatus, User, DriverEmployee, Vendor, PettyCashAdvance } from '../types';
 import {
   Landmark,
   Plus,
@@ -22,11 +22,8 @@ import {
   Mail,
   Phone,
   Truck,
-  Wallet,
-  AlertTriangle,
   Lock,
-  Unlock,
-  Trash2
+  Unlock
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
@@ -42,27 +39,20 @@ interface PettyCashProps {
   vehicles: Vehicle[];
   onUpdateVehicle: (vehicle: Vehicle) => Promise<void>;
   drivers: DriverEmployee[];
+  vendors: Vendor[];
   marketPodEntries: MarketPodEntry[];
   onAddMarketPodEntry: (entry: Omit<MarketPodEntry, 'id'>) => Promise<void>;
   onUpdateMarketPodEntry: (id: string, entry: Partial<MarketPodEntry>) => Promise<void>;
   onDeleteMarketPodEntry: (id: string) => Promise<void>;
+  // Amount Received / Balance Net tracking was removed from the UI (see
+  // handleSubmit et al below) but these stay in the prop contract so
+  // Administration.tsx doesn't need to change what it passes down.
   pettyCashAdvances: PettyCashAdvance[];
   onAddPettyCashAdvance: (advance: Omit<PettyCashAdvance, 'id'>) => Promise<void>;
   onDeletePettyCashAdvance: (id: string) => Promise<void>;
 }
 
 const MARKET_POD_STATUSES: MarketPodStatus[] = ['Pending', 'Closed'];
-
-// The 3 Petty Cash logins - mirrors PETTY_CASH_ACCESS_EMAILS in
-// Administration.tsx/server.ts. Used to label/select whose ledger a Super
-// Admin/Principal is viewing, since vouchers/advances arrive unfiltered (with
-// `enteredBy`/`username` intact) for them but per-user-filtered for everyone
-// else.
-const PETTY_CASH_USERS: { username: string; label: string }[] = [
-  { username: 'vinoda', label: 'Vinod' },
-  { username: 'ramesh', label: 'Ramesh' },
-  { username: 'saneel', label: 'Saneel' }
-];
 
 const EXPENSE_CATEGORIES = [
   "ACCIDENT AND SETTELMENT",
@@ -108,13 +98,11 @@ export default function PettyCash({
   vehicles,
   onUpdateVehicle,
   drivers,
+  vendors,
   marketPodEntries,
   onAddMarketPodEntry,
   onUpdateMarketPodEntry,
-  onDeleteMarketPodEntry,
-  pettyCashAdvances,
-  onAddPettyCashAdvance,
-  onDeletePettyCashAdvance
+  onDeleteMarketPodEntry
 }: PettyCashProps) {
   const isSuperAdmin = user.department === 'super_admin';
   const [activeTab, setActiveTab] = useState<'ledger' | 'summary' | 'marketpod'>('ledger');
@@ -197,17 +185,6 @@ export default function PettyCash({
   const [mpSearchTerm, setMpSearchTerm] = useState('');
   const [mpSort, setMpSort] = useState<SortState | null>(null);
   const handleMpSort = (key: string, direction: SortDirection) => setMpSort({ key, direction });
-
-  // --- Petty Cash Balance Net / Amount Received state ---
-  const [showAdvanceModal, setShowAdvanceModal] = useState(false);
-  const [advanceAmount, setAdvanceAmount] = useState('');
-  const [advanceDate, setAdvanceDate] = useState(new Date().toISOString().slice(0, 10));
-  const [advanceRemarks, setAdvanceRemarks] = useState('');
-  const [advanceIsSubmitting, setAdvanceIsSubmitting] = useState(false);
-  // Which user's ledger the balance card/modal is scoped to - only meaningful
-  // for a Super Admin/Principal (everyone else only ever sees their own rows,
-  // so there's nothing to pick).
-  const [balanceUserFilter, setBalanceUserFilter] = useState<string>(user.username);
 
   const mpBalance = (parseFloat(mpTotalFreight) || 0) - (parseFloat(mpReceivedAdvance) || 0) - (parseFloat(mpOtherExpenses) || 0);
 
@@ -350,12 +327,32 @@ export default function PettyCash({
   // Refs
   const categoryDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Auto calculate balance from amountReceived and cashPaid
+  // Auto calculate balance from amountReceived and cashPaid (both fields are
+  // no longer collected via the Add form, but the underlying computation is
+  // left in place since PettyCashVoucher.balance is still a required field
+  // sent on save).
   useEffect(() => {
     const r = parseFloat(amountReceived) || 0;
     const p = parseFloat(cashPaid) || 0;
     setBalance(String(r - p));
   }, [amountReceived, cashPaid]);
+
+  // Auto-fetch Vendor ID / Driver ID: on Vehicle Number match, checks Vendor
+  // Management first (by registered vehicleNumbers), then falls back to
+  // Driver Details (by vehicleNo) - whichever matches first wins. Leaves the
+  // field blank (still manually editable) when neither module has this
+  // vehicle mapped.
+  useEffect(() => {
+    if (!vehicleNumber.trim()) return;
+    const vNo = vehicleNumber.trim().toUpperCase();
+    const matchedVendor = vendors.find(v => (v.vehicleNumbers || []).some(num => (num || '').trim().toUpperCase() === vNo));
+    if (matchedVendor) {
+      setVendorId(matchedVendor.code);
+      return;
+    }
+    const matchedDriverRecord = drivers.find(d => (d.vehicleNo || '').trim().toUpperCase() === vNo);
+    setVendorId(matchedDriverRecord ? matchedDriverRecord.id : '');
+  }, [vehicleNumber]);
 
   // Handle clicking outside of category dropdown to close it
   useEffect(() => {
@@ -487,70 +484,6 @@ export default function PettyCash({
       if (parts[2].length === 4) return parts[1].padStart(2, '0');
     }
     return '';
-  };
-
-  // --- Balance Net Tracking helpers ---
-  // Regular Petty Cash users only ever receive their own rows from the
-  // server (enteredBy/username stripped, see filterEntryRowsForViewer in
-  // server.ts) - for them `vouchers`/`pettyCashAdvances` already *is* "my
-  // data". A Super Admin/Principal receives every user's rows with
-  // enteredBy/username intact, so their view needs to scope by username.
-  const vouchersFor = (username: string): PettyCashVoucher[] =>
-    isSuperAdmin ? vouchers.filter(v => v.enteredBy === username) : vouchers;
-  const advancesFor = (username: string): PettyCashAdvance[] =>
-    isSuperAdmin ? pettyCashAdvances.filter(a => a.username === username) : pettyCashAdvances;
-
-  // Current running balance for a user = total Amount Received - total Cash
-  // Paid across all of their petty cash entries (computed live, not stored -
-  // mathematically equivalent to an incremental running-balance chain, but
-  // self-correcting if a past entry/advance is later edited or deleted).
-  const currentBalanceFor = (username: string): number => {
-    const totalAdvances = advancesFor(username).reduce((s, a) => s + (a.amount || 0), 0);
-    const totalSpent = vouchersFor(username).reduce((s, v) => s + (v.cashPaid || 0), 0);
-    return totalAdvances - totalSpent;
-  };
-
-  // Balance Net as of one specific voucher (for the table's "Balance Net"
-  // column) - same formula, but only summing that user's cash paid up to and
-  // including this entry, in chronological order.
-  const balanceNetAt = (voucher: PettyCashVoucher): number => {
-    const owner = voucher.enteredBy || user.username;
-    const totalAdvances = advancesFor(owner).reduce((s, a) => s + (a.amount || 0), 0);
-    const ordered = [...vouchersFor(owner)].sort((a, b) => {
-      if (a.date !== b.date) return a.date < b.date ? -1 : 1;
-      return (a.entryNo || a.id).localeCompare(b.entryNo || b.id);
-    });
-    let spent = 0;
-    for (const v of ordered) {
-      spent += v.cashPaid || 0;
-      if (v.id === voucher.id) break;
-    }
-    return totalAdvances - spent;
-  };
-
-  const handleAddAdvance = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!advanceAmount || parseFloat(advanceAmount) <= 0 || !advanceDate) {
-      triggerNotif('Enter a valid amount and date.', 'error');
-      return;
-    }
-    setAdvanceIsSubmitting(true);
-    try {
-      await onAddPettyCashAdvance({
-        username: isSuperAdmin ? balanceUserFilter : user.username,
-        amount: parseFloat(advanceAmount),
-        date: advanceDate,
-        remarks: advanceRemarks.trim()
-      });
-      setAdvanceAmount('');
-      setAdvanceRemarks('');
-      triggerNotif('Amount Received logged successfully!', 'success');
-    } catch (err) {
-      console.error(err);
-      triggerNotif('Failed to log Amount Received.', 'error');
-    } finally {
-      setAdvanceIsSubmitting(false);
-    }
   };
 
   // Filter vouchers based on search, vendor, category, year and month
@@ -885,38 +818,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
         </div>
       )}
 
-      {/* Balance Net Tracking: regular users see their own running balance;
-          Super Admin/Principal sees one card per Petty Cash login since they
-          see all 3 logins' rows at once. */}
-      {activeTab === 'ledger' && (
-        <div className="flex flex-wrap gap-3 text-xs">
-          {(isSuperAdmin ? PETTY_CASH_USERS : [{ username: user.username, label: user.name }]).map(u => {
-            const bal = currentBalanceFor(u.username);
-            return (
-              <div key={u.username} className={`flex-1 min-w-[180px] p-3 rounded-xl border flex items-center justify-between gap-2 ${bal < 0 ? 'bg-rose-50 border-rose-200' : 'bg-amber-50/50 border-amber-200'}`}>
-                <div>
-                  <span className={`text-[10px] font-bold uppercase flex items-center gap-1 ${bal < 0 ? 'text-rose-600' : 'text-amber-600'}`}>
-                    <Wallet className="w-3 h-3" /> {u.label}'s Balance Net
-                  </span>
-                  <div className={`text-sm font-black font-mono mt-0.5 flex items-center gap-1 ${bal < 0 ? 'text-rose-700' : 'text-amber-800'}`}>
-                    {bal < 0 && <AlertTriangle className="w-3.5 h-3.5" />}
-                    ₹{bal.toLocaleString('en-IN')}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => { setBalanceUserFilter(u.username); setShowAdvanceModal(true); }}
-                  title={`Log Amount Received for ${u.label}`}
-                  className="p-1.5 bg-white border border-amber-200 text-amber-700 hover:bg-amber-100 rounded-lg cursor-pointer shrink-0 transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
       {notif && (
         <div
           className={`p-3 border rounded-xl text-xs font-medium flex items-center gap-2.5 shadow-sm transition-all animate-fade-in ${
@@ -952,16 +853,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 >
                   <Plus className="w-3.5 h-3.5" />
                   Add Petty Cash Entry
-                </button>
-
-                {/* Amount Received - opening/top-up advance for this user's (or, for Super Admin, the selected user's) Balance Net ledger */}
-                <button
-                  type="button"
-                  onClick={() => { setBalanceUserFilter(isSuperAdmin ? balanceUserFilter || PETTY_CASH_USERS[0].username : user.username); setShowAdvanceModal(true); }}
-                  className="bg-amber-600 hover:bg-amber-700 text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs"
-                >
-                  <Wallet className="w-3.5 h-3.5" />
-                  Add Amount Received
                 </button>
 
                 {/* Download - reference date + preset period */}
@@ -1107,8 +998,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <th className="px-3 py-2.5">Vendor ID</th>
                     <th className="px-3 py-2.5 text-right">Amt Rec</th>
                     <th className="px-3 py-2.5 text-right">Cash Paid</th>
-                    <th className="px-3 py-2.5 text-right">Balance</th>
-                    <th className="px-3 py-2.5 text-right">Balance Net</th>
                     <th className="px-3 py-2.5">Trip Sheet</th>
                     <th className="px-3 py-2.5">Remarks</th>
                     {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
@@ -1118,7 +1007,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
                   {filteredVouchers.length === 0 ? (
                     <tr>
-                      <td colSpan={16 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
+                      <td colSpan={14 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
                         NO RECORDED PETTY CASH VOUCHERS MATCH THE SELECTION.
                         <div className="text-[10px] text-slate-400 font-sans mt-1">Use "Add Petty Cash Entry" above to authorize new cash disbursements.</div>
                       </td>
@@ -1147,18 +1036,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{v.vendorId || '-'}</td>
                         <td className="px-3 py-2 text-right font-mono text-slate-600">₹{(v.amountReceived || 0).toLocaleString('en-IN')}</td>
                         <td className="px-3 py-2 text-right font-mono font-bold text-red-700 bg-red-50/20">₹{(v.cashPaid || 0).toLocaleString('en-IN')}</td>
-                        <td className={`px-3 py-2 text-right font-mono font-bold ${v.balance < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`}>
-                          ₹{(v.balance || 0).toLocaleString('en-IN')}
-                        </td>
-                        {(() => {
-                          const net = balanceNetAt(v);
-                          return (
-                            <td className={`px-3 py-2 text-right font-mono font-black ${net < 0 ? 'text-rose-700 bg-rose-50/40' : 'text-slate-800'}`} title="Running balance for this user: total Amount Received minus cash paid up to this entry">
-                              {net < 0 && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
-                              ₹{net.toLocaleString('en-IN')}
-                            </td>
-                          );
-                        })()}
                         <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{v.tripSheet || '-'}</td>
                         <td className="px-3 py-2 text-slate-500 max-w-[120px] truncate" title={v.remarks}>{v.remarks || '-'}</td>
                         {isSuperAdmin && (
@@ -1727,114 +1604,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
         </div>
       )}
 
-      {/* Amount Received modal - opening/top-up entries for a Petty Cash
-          user's Balance Net ledger. Regular users only ever log their own;
-          Super Admin/Principal picks which of the 3 logins it's for. */}
-      {showAdvanceModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-fade-in font-sans text-xs">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full max-h-[85vh] overflow-hidden flex flex-col">
-            <div className="bg-gradient-to-r from-slate-900 to-amber-950 text-white p-4 flex items-center justify-between">
-              <h3 className="text-sm font-bold flex items-center gap-2">
-                <Wallet className="w-4 h-4 text-amber-400" /> Amount Received
-              </h3>
-              <button onClick={() => setShowAdvanceModal(false)} className="text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 p-1.5 rounded-lg transition-colors cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-5 overflow-y-auto space-y-4">
-              {isSuperAdmin && (
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Petty Cash User</label>
-                  <select
-                    value={balanceUserFilter}
-                    onChange={(e) => setBalanceUserFilter(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-semibold text-slate-800"
-                  >
-                    {PETTY_CASH_USERS.map(u => <option key={u.username} value={u.username}>{u.label}</option>)}
-                  </select>
-                </div>
-              )}
-
-              <form onSubmit={handleAddAdvance} className="space-y-3">
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Amount *</label>
-                    <input
-                      type="number" step="0.01" required min="0.01"
-                      value={advanceAmount}
-                      onChange={(e) => setAdvanceAmount(e.target.value)}
-                      placeholder="₹ Received"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Date *</label>
-                    <DateInput required value={advanceDate} onChange={(e) => setAdvanceDate(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
-                  </div>
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Remarks</label>
-                  <input
-                    type="text"
-                    value={advanceRemarks}
-                    onChange={(e) => setAdvanceRemarks(e.target.value)}
-                    placeholder="e.g. Advance for August"
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={advanceIsSubmitting}
-                  className="w-full bg-gradient-to-r from-amber-500 to-orange-600 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md transition-all uppercase text-[10px] cursor-pointer"
-                >
-                  {advanceIsSubmitting ? 'Saving...' : 'Log Amount Received'}
-                </button>
-              </form>
-
-              {/* History for whichever user is selected above */}
-              <div className="pt-3 border-t border-slate-100 space-y-1.5">
-                <span className="text-[10px] font-bold text-slate-500 uppercase">Amount Received History</span>
-                {advancesFor(isSuperAdmin ? balanceUserFilter : user.username).length === 0 ? (
-                  <p className="text-slate-400 text-[11px] py-2">No Amount Received entries logged yet.</p>
-                ) : (
-                  <div className="max-h-40 overflow-y-auto space-y-1">
-                    {advancesFor(isSuperAdmin ? balanceUserFilter : user.username)
-                      .slice().sort((a, b) => (a.date < b.date ? 1 : -1))
-                      .map(a => (
-                        <div key={a.id} className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-100 rounded-lg px-2.5 py-1.5">
-                          <div className="min-w-0">
-                            <span className="font-mono font-bold text-slate-800">₹{a.amount.toLocaleString('en-IN')}</span>
-                            <span className="text-slate-400 font-mono ml-1.5">{a.date}</span>
-                            {a.remarks && <p className="text-slate-500 truncate">{a.remarks}</p>}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => onDeletePettyCashAdvance(a.id)}
-                            title="Delete this entry"
-                            className="text-rose-400 hover:text-rose-600 cursor-pointer shrink-0"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="bg-slate-50 border-t border-slate-100 p-3 flex justify-end">
-              <button
-                onClick={() => setShowAdvanceModal(false)}
-                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold rounded-lg transition-colors cursor-pointer"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Add/Edit Petty Cash Entry slide-out sidebar */}
       <AnimatePresence>
         {showSidebar && (
@@ -1991,11 +1760,17 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       <label className="block font-semibold text-slate-700 mb-1">Vehicle Number</label>
                       <input
                         type="text"
-                        placeholder="e.g. KA53AA0069"
+                        list="petty-cash-vehicles-datalist"
+                        placeholder="Search or select a vehicle"
                         value={vehicleNumber}
-                        onChange={(e) => setVehicleNumber(e.target.value)}
+                        onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
+                        autoComplete="off"
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 uppercase font-bold"
                       />
+                      <datalist id="petty-cash-vehicles-datalist">
+                        {mpVehicleList.map(v => <option key={v} value={v} />)}
+                      </datalist>
+                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">Live from Fleet &amp; Vehicles - type to search.</p>
                     </div>
                     <div>
                       <label className="block font-semibold text-slate-700 mb-1">Receiver Name *</label>
@@ -2010,10 +1785,10 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     </div>
                   </div>
 
-                  {/* Vendor ID & Trip Sheet */}
+                  {/* Vendor ID / Driver ID & Trip Sheet */}
                   <div className="grid grid-cols-2 gap-2.5">
                     <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Vendor ID</label>
+                      <label className="block font-semibold text-slate-700 mb-1">Vendor ID / Driver ID</label>
                       <input
                         type="text"
                         placeholder="Vendor Identification"
@@ -2021,6 +1796,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         onChange={(e) => setVendorId(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                       />
+                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-fetched from Vendor Management or Driver Details by Vehicle Number - editable if neither matches.</p>
                     </div>
                     <div>
                       <label className="block font-semibold text-slate-700 mb-1">Trip Sheet #</label>
@@ -2034,38 +1810,17 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     </div>
                   </div>
 
-                  {/* Numeric Financial Fields: Amount Received, Cash Paid, Balance (Auto Calculated but editable) */}
-                  <div className="grid grid-cols-3 gap-1.5 pt-1.5 border-t border-slate-100">
-                    <div>
-                      <label className="block font-bold text-slate-600 mb-0.5 text-[9px] uppercase">Amt Received</label>
-                      <input
-                        type="number"
-                        placeholder="₹ Rec"
-                        value={amountReceived}
-                        onChange={(e) => setAmountReceived(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-slate-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-teal-700 mb-0.5 text-[9px] uppercase">Cash Paid (Exp)</label>
-                      <input
-                        type="number"
-                        placeholder="₹ Paid"
-                        value={cashPaid}
-                        onChange={(e) => setCashPaid(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-teal-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-amber-700 mb-0.5 text-[9px] uppercase">Balance Net</label>
-                      <input
-                        type="number"
-                        placeholder="₹ Bal"
-                        value={balance}
-                        onChange={(e) => setBalance(e.target.value)}
-                        className="w-full bg-amber-50/50 border border-amber-200 rounded-lg p-1.5 font-mono font-bold text-amber-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
-                      />
-                    </div>
+                  {/* Cash Paid (Amount Received/Balance were removed - that
+                      information now only lives on the module dashboard) */}
+                  <div className="pt-1.5 border-t border-slate-100">
+                    <label className="block font-bold text-teal-700 mb-0.5 text-[9px] uppercase">Cash Paid (Exp)</label>
+                    <input
+                      type="number"
+                      placeholder="₹ Paid"
+                      value={cashPaid}
+                      onChange={(e) => setCashPaid(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-teal-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    />
                   </div>
 
                   {/* Remarks */}
