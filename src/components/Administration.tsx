@@ -111,7 +111,9 @@ interface AdministrationProps {
   onUpdateWarehouseEntry: (id: string, entry: Partial<WarehouseEntry>) => Promise<void>;
   onDeleteWarehouseEntry: (id: string) => Promise<void>;
   mileageReports: MileageReport[];
-  onAddMileageReport: (report: Omit<MileageReport, 'id'>) => Promise<void>;
+  // Returns the new report's id - Fuel Entry's Mileage section needs it back
+  // to link the fuel log it saves alongside (see FuelLog.mileageReportId).
+  onAddMileageReport: (report: Omit<MileageReport, 'id'>) => Promise<string | undefined>;
   onUpdateMileageReport: (id: string, report: Partial<MileageReport>) => Promise<void>;
   onDeleteMileageReport: (id: string) => Promise<void>;
   marketPodEntries: MarketPodEntry[];

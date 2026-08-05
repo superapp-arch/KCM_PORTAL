@@ -1519,8 +1519,13 @@ async function startServer() {
         const result = await saveMileageReport({ ...entry, enteredBy: existing?.enteredBy });
         return res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
       }
-      const result = await saveMileageReport({ ...entry, enteredBy: sessionUser?.username });
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+      // New entry: generate the id here (rather than leaving it to
+      // saveMileageReport's own fallback) so it can be returned to the
+      // caller - Fuel Entry's combined form needs it back immediately to
+      // link the fuel log it's being saved alongside (see FuelLog.mileageReportId).
+      const newId = String(Date.now());
+      const result = await saveMileageReport({ ...entry, id: newId, enteredBy: sessionUser?.username });
+      res.json({ success: true, id: newId, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

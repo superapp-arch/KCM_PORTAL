@@ -121,6 +121,11 @@ export interface FuelLog {
   rqId?: string;
   documents?: VehicleDocument[];
   enteredBy?: string; // username, stamped server-side; visible only to super admins
+  // Links this fuel purchase to the mileage/trip entry it was combined with
+  // in the Fuel Entry form's "Mileage" section (see MileageReport) - lets
+  // editing/deleting a fuel entry also update/cascade-delete its linked
+  // mileage report. Absent on fuel entries that never had mileage data.
+  mileageReportId?: string;
 }
 
 // Vendor Master for Fuel Entry's Vendor Name/Vendor Code fields. Starts empty;

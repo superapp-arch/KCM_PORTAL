@@ -14,13 +14,16 @@ import {
   Trash2,
   Paperclip,
   X,
-  Route,
   Building2,
-  Download
+  Download,
+  Gauge,
+  HelpCircle,
+  ArrowRightLeft,
+  DollarSign,
+  User as UserIcon
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
-import MileageReportModule from './MileageReport';
 
 const LOCATIONS = [
   'AP', 'Nelmangala', 'Belagaum', 'BLR', 'Chennai', 'Goa', 'Hyderabad', 'Hassan',
@@ -77,7 +80,9 @@ interface FuelManagementProps {
   onDeleteLog: (id: string) => Promise<void>;
   vehicles: Vehicle[];
   mileageReports: MileageReport[];
-  onAddMileageReport: (report: Omit<MileageReport, 'id'>) => Promise<void>;
+  // Returns the new report's id so the fuel log being saved alongside it can
+  // link to it (FuelLog.mileageReportId).
+  onAddMileageReport: (report: Omit<MileageReport, 'id'>) => Promise<string | undefined>;
   onUpdateMileageReport: (id: string, report: Partial<MileageReport>) => Promise<void>;
   onDeleteMileageReport: (id: string) => Promise<void>;
   vehicleMileages: VehicleMileage[];
@@ -109,7 +114,6 @@ export default function FuelManagement({
   vendorProfiles,
   employees
 }: FuelManagementProps) {
-  const [activeSubTab, setActiveSubTab] = useState<'entry' | 'trip'>('entry');
   const [searchTerm, setSearchTerm] = useState('');
   const [bunkFilter, setBunkFilter] = useState('All');
   const [sort, setSort] = useState<SortState | null>(null);
@@ -117,12 +121,9 @@ export default function FuelManagement({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<string | null>(null);
 
-  // Period-based report download (replaces the old "Total Active Fuel
-  // Vouchers" KPI card) - reference date + day/month/year-till-date dropdown.
+  // Period-based report download - reference date + day/month/year-till-date dropdown.
   const [downloadDate, setDownloadDate] = useState(new Date().toISOString().slice(0, 10));
   const [downloadPeriod, setDownloadPeriod] = useState<'day' | 'month' | 'year'>('day');
-  // Trip Details download only: vehicle search/dropdown, empty = All Vehicles
-  const [downloadVehicleFilter, setDownloadVehicleFilter] = useState('');
 
   // Sidebar / editing state
   const [showSidebar, setShowSidebar] = useState(false);
@@ -147,6 +148,25 @@ export default function FuelManagement({
   const [requestedBy, setRequestedBy] = useState('');
   const [rqId, setRqId] = useState('');
   const [entryDocs, setEntryDocs] = useState<VehicleDocument[]>([]);
+
+  // --- Mileage section (top of the Fuel Entry form) - creates/updates a
+  // linked MileageReport (Fleet Mileage Tracker) alongside this fuel entry,
+  // mirroring the same fields/rules the old standalone Trip Details form used.
+  const [linkedMileageReportId, setLinkedMileageReportId] = useState<string | null>(null);
+  const [mOpeningKm, setMOpeningKm] = useState('');
+  const [mClosingKm, setMClosingKm] = useState('');
+  const [mTotalKm, setMTotalKm] = useState('');
+  const [mMileage, setMMileage] = useState('');
+  const [mCostPerKm, setMCostPerKm] = useState('');
+  const [mActualMileage, setMActualMileage] = useState('');
+  const [mDriverName, setMDriverName] = useState('');
+  const [mRemarks, setMRemarks] = useState('');
+  const [mExtraFuel, setMExtraFuel] = useState('');
+  const [mRatePerLitreNew, setMRatePerLitreNew] = useState('');
+  const [mTotalAmount, setMTotalAmount] = useState('');
+  const [showMileageManager, setShowMileageManager] = useState(false);
+  const [mileageFormVehicleNo, setMileageFormVehicleNo] = useState('');
+  const [mileageFormValue, setMileageFormValue] = useState('');
 
   // Bunk Summary panel (below the Fuel Entry ledger): Till Date vs This Month
   const [bunkSummaryPeriod, setBunkSummaryPeriod] = useState<'all' | 'month'>('all');
@@ -225,6 +245,117 @@ export default function FuelManagement({
     }
   }, [bunkName, date, logs, editingId]);
 
+  // --- Mileage section calculations - identical rules to the old standalone
+  // Trip Details form (see MileageReport.tsx), just keyed off this form's own
+  // Vehicle Number/Date/Rate/Ltrs/Amount instead of re-entering them. ---
+
+  // The selected vehicle's fixed Actual Mileage reference from the Vehicle
+  // Mileage Master (same value editable from Fleet & Vehicles).
+  const fixedMileageForVehicle = vehicleMileages.find(
+    v => (v.vehicleNo || '').trim().toUpperCase() === vehicleNumber.trim().toUpperCase()
+  )?.mileage;
+
+  // Opening KM: auto-fill from this vehicle's last mileage report's Closing
+  // KM; first-ever entry for a vehicle is entered manually.
+  useEffect(() => {
+    if (!vehicleNumber) return;
+    const vehicleReports = mileageReports
+      .filter(r => (r.vehicleNo || '').trim().toUpperCase() === vehicleNumber.trim().toUpperCase())
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    if (vehicleReports.length > 0) {
+      const lastReport = vehicleReports[vehicleReports.length - 1];
+      if (!editingId || (editingId && logs.find(l => l.id === editingId)?.vehicleNumber !== vehicleNumber)) {
+        setMOpeningKm(String(lastReport.closingKm));
+      }
+    } else if (!editingId) {
+      setMOpeningKm('');
+    }
+  }, [vehicleNumber, mileageReports, editingId, logs]);
+
+  // Actual Mileage = the vehicle's fixed reference rating (per-vehicle
+  // constant), not computed per trip.
+  useEffect(() => {
+    setMActualMileage(fixedMileageForVehicle != null ? String(fixedMileageForVehicle) : '0');
+  }, [fixedMileageForVehicle]);
+
+  // Total KM = Closing KM - Opening KM
+  useEffect(() => {
+    const o = parseFloat(mOpeningKm) || 0;
+    const c = parseFloat(mClosingKm) || 0;
+    setMTotalKm(c >= o ? String(c - o) : '0');
+  }, [mOpeningKm, mClosingKm]);
+
+  // Mileage (this trip, real achieved efficiency) = Total KM / Ltrs (from
+  // the Fuel Entry section above, not re-entered here).
+  useEffect(() => {
+    const tKm = parseFloat(mTotalKm) || 0;
+    const l = parseFloat(ltrs) || 0;
+    setMMileage(l > 0 ? String(parseFloat((tKm / l).toFixed(2))) : '0');
+  }, [mTotalKm, ltrs]);
+
+  // Cost per KM = Rate per Litre (from Fuel Entry) / Mileage (this trip)
+  useEffect(() => {
+    const r = parseFloat(rate) || 0;
+    const m = parseFloat(mMileage) || 0;
+    setMCostPerKm(m > 0 ? String(parseFloat((r / m).toFixed(2))) : '0');
+  }, [rate, mMileage]);
+
+  // Total Amount = Diesel Amount (from Fuel Entry) + (Extra Fuel * new Rate)
+  useEffect(() => {
+    const diesel = parseFloat(amount) || 0;
+    const extra = parseFloat(mExtraFuel) || 0;
+    const rateNew = parseFloat(mRatePerLitreNew) || 0;
+    setMTotalAmount(String(parseFloat((diesel + extra * rateNew).toFixed(2))));
+  }, [amount, mExtraFuel, mRatePerLitreNew]);
+
+  const AUDIT_NOTE_PATTERN = /\s*\(Fuel Audit:[^)]*\)\s*$/;
+  const stripPreviousAuditNote = (text: string) => text.replace(AUDIT_NOTE_PATTERN, '').trim();
+
+  // Resolves "the driver" wording for the audit note - only names a specific
+  // employee when Authorized Driver contains exactly one name that exactly
+  // matches exactly one Staff Employee, otherwise stays generic.
+  const resolveDriverWord = (driverNameValue: string): string => {
+    const names = driverNameValue.split('/').map(n => n.trim()).filter(Boolean);
+    if (names.length !== 1) return 'the driver';
+    const matches = employees.filter(e => (e.name || '').trim().toLowerCase() === names[0].toLowerCase());
+    return matches.length === 1 ? matches[0].name : 'the driver';
+  };
+
+  // Difference (Litres): compares what the fixed Actual Mileage says this
+  // trip should have needed against what was actually filled - catches fuel
+  // theft/misuse/meter tampering. Negative = wasted, positive = saved.
+  const computeFuelAudit = (totalKmVal: number, litresVal: number, rateVal: number, actualMileageVal: number, driverNameValue: string) => {
+    if (actualMileageVal <= 0 || litresVal <= 0) return { difference: undefined as number | undefined, note: undefined as string | undefined };
+    const expectedLitres = totalKmVal / actualMileageVal;
+    const difference = parseFloat((expectedLitres - litresVal).toFixed(2));
+    if (difference === 0) return { difference, note: undefined as string | undefined };
+    const costDelta = parseFloat((Math.abs(difference) * rateVal).toFixed(2));
+    const driverWord = resolveDriverWord(driverNameValue);
+    const note = difference < 0
+      ? `-Rs.${costDelta} to be deducted from ${driverWord}'s salary`
+      : `+Rs.${costDelta} to be credited to ${driverWord}`;
+    return { difference, note };
+  };
+
+  const handleAddVehicleMileage = async () => {
+    if (!mileageFormVehicleNo.trim() || !mileageFormValue.trim()) return;
+    try {
+      const vNo = mileageFormVehicleNo.trim().toUpperCase();
+      const mileageValue = parseFloat(mileageFormValue);
+      const existing = vehicleMileages.find(v => (v.vehicleNo || '').trim().toUpperCase() === vNo);
+      if (existing) {
+        await onUpdateVehicleMileage(existing.id, { mileage: mileageValue });
+      } else {
+        await onAddVehicleMileage({ vehicleNo: vNo, mileage: mileageValue });
+      }
+      setMileageFormVehicleNo('');
+      setMileageFormValue('');
+      triggerNotif('Vehicle mileage rating saved.');
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const resetForm = () => {
     setEditingId(null);
     setPeriod(new Date().toISOString().slice(0, 7));
@@ -245,6 +376,16 @@ export default function FuelManagement({
     setRequestedBy('');
     setRqId('');
     setEntryDocs([]);
+    setLinkedMileageReportId(null);
+    setMOpeningKm('');
+    setMClosingKm('');
+    setMDriverName('');
+    setMRemarks('');
+    setMExtraFuel('');
+    setMRatePerLitreNew('');
+    setShowMileageManager(false);
+    setMileageFormVehicleNo('');
+    setMileageFormValue('');
     setShowSidebar(false);
   };
 
@@ -268,6 +409,26 @@ export default function FuelManagement({
     setRequestedBy(log.requestedBy || '');
     setRqId(log.rqId || '');
     setEntryDocs(log.documents || []);
+
+    const linkedReport = log.mileageReportId ? mileageReports.find(r => r.id === log.mileageReportId) : undefined;
+    if (linkedReport) {
+      setLinkedMileageReportId(linkedReport.id);
+      setMOpeningKm(linkedReport.openingKm != null ? String(linkedReport.openingKm) : '');
+      setMClosingKm(linkedReport.closingKm != null ? String(linkedReport.closingKm) : '');
+      setMDriverName(linkedReport.driverName || '');
+      setMRemarks(stripPreviousAuditNote(linkedReport.remarks || ''));
+      setMExtraFuel(String(linkedReport.extraFuel || ''));
+      setMRatePerLitreNew(String(linkedReport.ratePerLitreNew || ''));
+    } else {
+      setLinkedMileageReportId(null);
+      setMOpeningKm('');
+      setMClosingKm('');
+      setMDriverName('');
+      setMRemarks('');
+      setMExtraFuel('');
+      setMRatePerLitreNew('');
+    }
+
     setShowSidebar(true);
   };
 
@@ -277,6 +438,16 @@ export default function FuelManagement({
       triggerNotif('Please complete all required fields (*)');
       return;
     }
+    if (!mOpeningKm || !mClosingKm || !mDriverName) {
+      triggerNotif('Please complete the Mileage section (Opening KM, Closing KM, Authorized Driver).');
+      return;
+    }
+    const oKm = parseFloat(mOpeningKm);
+    const cKm = parseFloat(mClosingKm);
+    if (cKm < oKm) {
+      triggerNotif('Closing KM cannot be less than Opening KM.');
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -284,6 +455,51 @@ export default function FuelManagement({
       const r = parseFloat(rate);
       const a = parseFloat(amount) || parseFloat((l * r).toFixed(2));
       const nextEntryNumber = logs.length > 0 ? Math.max(...logs.map(lg => lg.entryNumber || 0)) + 1 : 1;
+
+      // Mileage/fuel-audit calculations, mirroring MileageReport.tsx's own
+      // handleSubmit exactly, using this form's rate/litres/amount/date/
+      // vehicle/location instead of separately-entered values.
+      const calculatedTotalKm = cKm - oKm;
+      const calculatedMileage = l > 0 ? parseFloat((calculatedTotalKm / l).toFixed(2)) : 0;
+      const calculatedCostPerKm = calculatedMileage > 0 ? parseFloat((r / calculatedMileage).toFixed(2)) : 0;
+      const calculatedActualMileage = fixedMileageForVehicle || 0;
+      const { difference, note } = computeFuelAudit(calculatedTotalKm, l, r, calculatedActualMileage, mDriverName);
+      const baseMileageRemarks = stripPreviousAuditNote(mRemarks);
+      const finalMileageRemarks = note ? `${baseMileageRemarks}${baseMileageRemarks ? ' ' : ''}(Fuel Audit: ${note})` : baseMileageRemarks;
+      const extra = parseFloat(mExtraFuel) || 0;
+      const rateNew = parseFloat(mRatePerLitreNew) || 0;
+      const calculatedTotalAmount = parseFloat((a + extra * rateNew).toFixed(2));
+      const nextSlNo = mileageReports.length > 0 ? Math.max(...mileageReports.map(rep => rep.slNo || 0)) + 1 : 1;
+
+      const mileagePayload = {
+        slNo: linkedMileageReportId ? mileageReports.find(rep => rep.id === linkedMileageReportId)?.slNo || nextSlNo : nextSlNo,
+        date,
+        vehicleNo: vehicleNumber.trim().toUpperCase(),
+        openingKm: oKm,
+        closingKm: cKm,
+        totalKm: calculatedTotalKm,
+        ratePerLitre: r,
+        litres: l,
+        dieselAmount: a,
+        mileage: calculatedMileage,
+        costPerKm: calculatedCostPerKm,
+        driverName: mDriverName.trim(),
+        location: location.trim(),
+        remarks: finalMileageRemarks,
+        actualMileage: calculatedActualMileage,
+        difference,
+        fuelAuditNote: note,
+        extraFuel: extra,
+        ratePerLitreNew: rateNew,
+        totalAmount: calculatedTotalAmount
+      };
+
+      let mileageReportId = linkedMileageReportId;
+      if (linkedMileageReportId) {
+        await onUpdateMileageReport(linkedMileageReportId, mileagePayload);
+      } else {
+        mileageReportId = (await onAddMileageReport(mileagePayload)) || null;
+      }
 
       const payload = {
         entryNumber: editingId ? logs.find(lg => lg.id === editingId)?.entryNumber || nextEntryNumber : nextEntryNumber,
@@ -304,7 +520,8 @@ export default function FuelManagement({
         remarks: remarks.trim(),
         requestedBy: requestedBy.trim(),
         rqId: rqId.trim(),
-        documents: entryDocs
+        documents: entryDocs,
+        mileageReportId: mileageReportId || undefined
       };
 
       if (editingId) {
@@ -323,10 +540,13 @@ export default function FuelManagement({
     }
   };
 
-  const handleDeleteLog = async (id: string, entryNumber: number) => {
-    if (!confirm(`Are you sure you want to delete fuel entry #${entryNumber}? This action is irreversible.`)) return;
+  const handleDeleteLog = async (log: FuelLog) => {
+    if (!confirm('Are you sure you want to delete this fuel entry? This also removes its linked mileage report entry. This action is irreversible.')) return;
     try {
-      await onDeleteLog(id);
+      await onDeleteLog(log.id);
+      if (log.mileageReportId) {
+        await onDeleteMileageReport(log.mileageReportId);
+      }
       triggerNotif('Fuel entry deleted successfully.');
     } catch (err) {
       console.error(err);
@@ -494,51 +714,6 @@ export default function FuelManagement({
     return Array.from(groups.values()).sort((a, b) => b.amount - a.amount);
   })();
 
-  // Trip Details download: Date, Period, and Vehicle Number (search/dropdown
-  // sourced from Fleet & Vehicles, or "All Vehicles") all connect together.
-  const handleDownloadTripDetailsReport = () => {
-    if (!downloadDate) {
-      triggerNotif('Please pick a reference date first.');
-      return;
-    }
-    const { start, end } = getDownloadDateRange(downloadPeriod, downloadDate);
-    const vehicleQuery = downloadVehicleFilter.trim().toUpperCase();
-    const periodTrips = mileageReports.filter(r =>
-      r.date >= start && r.date <= end && (!vehicleQuery || (r.vehicleNo || '').toUpperCase() === vehicleQuery)
-    );
-
-    if (periodTrips.length === 0) {
-      triggerNotif('No trip details found for the selected period/vehicle.');
-      return;
-    }
-
-    const tripRows = periodTrips.map(r => ({
-      'Sl. No': r.slNo,
-      'Date': r.date,
-      'Vehicle No': r.vehicleNo,
-      'Opening KM': r.openingKm ?? '',
-      'Closing KM': r.closingKm ?? '',
-      'Total KM': r.totalKm,
-      'Rate Per Litre': r.ratePerLitre,
-      'Litres': r.litres,
-      'Diesel Amount': r.dieselAmount,
-      'Mileage': r.mileage,
-      'Fixed Mileage': r.actualMileage || 0,
-      'Difference (Litres)': r.difference ?? '',
-      'Authorized Driver': r.driverName,
-      'Location': r.location,
-      'Remarks': r.remarks || '',
-      ...(isSuperAdmin ? { 'Entered By': r.enteredBy || '' } : {})
-    }));
-
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(tripRows), 'Trip Details');
-
-    const periodLabel = downloadPeriod === 'day' ? 'Daily' : downloadPeriod === 'month' ? 'MTD' : 'YTD';
-    const vehicleLabel = downloadVehicleFilter.trim() ? downloadVehicleFilter.trim().toUpperCase() : 'AllVehicles';
-    XLSX.writeFile(workbook, `KCM_Trip_Details_${periodLabel}_${vehicleLabel}_${downloadDate}.xlsx`);
-    triggerNotif('Trip details report downloaded successfully!');
-  };
 
   // KPI calculations - unchanged in label/position/layout, only field refs updated (ltrs replaces quantity)
   const totalFuelAmt = logs.reduce((sum, log) => sum + (log.amount || 0), 0);
@@ -554,7 +729,7 @@ export default function FuelManagement({
             KCM Fuel Management Desk
           </h1>
           <p className="text-xs text-slate-500 font-mono mt-1">
-            Fuel Entry &amp; Trip Details - connected to Fleet and Mileage Report
+            Fuel Entry - Mileage &amp; trip details are logged together and feed the Fleet Mileage Tracker
           </p>
         </div>
       </div>
@@ -592,7 +767,7 @@ export default function FuelManagement({
 
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
-            Download {activeSubTab === 'trip' ? 'Trip Details' : 'Fuel'} Report
+            Download Fuel Report
           </p>
           <div className="space-y-1.5">
             <div className="flex items-center gap-1.5">
@@ -613,79 +788,30 @@ export default function FuelManagement({
                 <option value="year">Year Till Date</option>
               </select>
             </div>
-            {activeSubTab === 'trip' ? (
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="text"
-                  list="download-vehicle-datalist"
-                  value={downloadVehicleFilter}
-                  onChange={(e) => setDownloadVehicleFilter(e.target.value.toUpperCase())}
-                  placeholder="All Vehicles (leave blank) or search..."
-                  autoComplete="off"
-                  className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-mono font-semibold text-slate-700 focus:outline-none"
-                />
-                <datalist id="download-vehicle-datalist">
-                  {vehicleList.map((v, i) => <option key={i} value={v} />)}
-                </datalist>
-                <button
-                  onClick={handleDownloadTripDetailsReport}
-                  title="Download Trip Details for the selected date, period, and vehicle"
-                  className="p-2 bg-teal-50 text-teal-600 hover:bg-teal-100 rounded-lg cursor-pointer shrink-0 transition-colors"
-                >
-                  <Download className="w-4 h-4" />
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5">
-                <select
-                  value={bunkFilter}
-                  onChange={(e) => setBunkFilter(e.target.value)}
-                  title="Filter by bunk"
-                  className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-700 focus:outline-none"
-                >
-                  <option value="All">All Bunks</option>
-                  {usedBunks.map((b, i) => <option key={i} value={b}>{b}</option>)}
-                </select>
-                <button
-                  onClick={handleDownloadFuelEntryReport}
-                  title="Download Fuel Entries for the selected date, period, and bunk"
-                  className="p-2 bg-teal-50 text-teal-600 hover:bg-teal-100 rounded-lg cursor-pointer shrink-0 transition-colors"
-                >
-                  <Download className="w-4 h-4" />
-                </button>
-              </div>
-            )}
+            <div className="flex items-center gap-1.5">
+              <select
+                value={bunkFilter}
+                onChange={(e) => setBunkFilter(e.target.value)}
+                title="Filter by bunk"
+                className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-700 focus:outline-none"
+              >
+                <option value="All">All Bunks</option>
+                {usedBunks.map((b, i) => <option key={i} value={b}>{b}</option>)}
+              </select>
+              <button
+                onClick={handleDownloadFuelEntryReport}
+                title="Download Fuel Entries for the selected date, period, and bunk"
+                className="p-2 bg-teal-50 text-teal-600 hover:bg-teal-100 rounded-lg cursor-pointer shrink-0 transition-colors"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+            </div>
           </div>
           <p className="text-[9px] text-slate-400 mt-1.5">{logs.length} fuel vouchers logged</p>
         </div>
       </div>
 
-      {/* Sub-module tab switcher */}
-      <div className="flex items-center gap-2 border-b border-slate-200 pb-0">
-        <button
-          onClick={() => setActiveSubTab('entry')}
-          className={`px-4 py-2.5 text-xs font-bold uppercase tracking-wide rounded-t-lg flex items-center gap-1.5 cursor-pointer transition-colors ${
-            activeSubTab === 'entry'
-              ? 'bg-white border border-b-0 border-slate-200 text-blue-700'
-              : 'text-slate-400 hover:text-slate-600'
-          }`}
-        >
-          <Fuel className="w-3.5 h-3.5" /> Fuel Entry
-        </button>
-        <button
-          onClick={() => setActiveSubTab('trip')}
-          className={`px-4 py-2.5 text-xs font-bold uppercase tracking-wide rounded-t-lg flex items-center gap-1.5 cursor-pointer transition-colors ${
-            activeSubTab === 'trip'
-              ? 'bg-white border border-b-0 border-slate-200 text-pink-700'
-              : 'text-slate-400 hover:text-slate-600'
-          }`}
-        >
-          <Route className="w-3.5 h-3.5" /> Trip Details
-        </button>
-      </div>
-
-      {activeSubTab === 'entry' && (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-2 border-b border-slate-100">
             <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
               <Fuel className="w-4 h-4 text-emerald-600" />
@@ -749,9 +875,9 @@ export default function FuelManagement({
                     </td>
                   </tr>
                 ) : (
-                  filteredLogs.map((log) => (
+                  filteredLogs.map((log, i) => (
                     <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{log.entryNumber}</td>
+                      <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{i + 1}</td>
                       <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{log.period}</td>
                       <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{log.date}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.location}</td>
@@ -794,7 +920,7 @@ export default function FuelManagement({
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => handleDeleteLog(log.id, log.entryNumber)}
+                            onClick={() => handleDeleteLog(log)}
                             className="p-1 text-slate-400 hover:text-pink-600 hover:bg-slate-100 rounded cursor-pointer"
                             title="Delete entry"
                           >
@@ -859,23 +985,6 @@ export default function FuelManagement({
             </div>
           </div>
         </div>
-      )}
-
-      {activeSubTab === 'trip' && (
-        <MileageReportModule
-          user={user}
-          reports={mileageReports}
-          vehicles={vehicles}
-          onAddReport={onAddMileageReport}
-          onUpdateReport={onUpdateMileageReport}
-          onDeleteReport={onDeleteMileageReport}
-          vehicleMileages={vehicleMileages}
-          onAddVehicleMileage={onAddVehicleMileage}
-          onUpdateVehicleMileage={onUpdateVehicleMileage}
-          onDeleteVehicleMileage={onDeleteVehicleMileage}
-          employees={employees}
-        />
-      )}
 
       {/* Slide-out Sidebar for Add/Edit Fuel Entry */}
       <AnimatePresence>
@@ -906,6 +1015,249 @@ export default function FuelManagement({
 
               <div className="flex-1 overflow-y-auto p-5 space-y-3.5 text-xs">
                 <form id="fuel-entry-form" onSubmit={handleSubmit} className="space-y-3.5" autoComplete="off">
+                  {/* Mileage section - creates/updates a linked Fleet Mileage
+                      Tracker entry from this same submission. None of this
+                      shows up in the Fuel Entry ledger above. */}
+                  <div className="p-3 bg-pink-50/40 rounded-xl border border-pink-200 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-black text-pink-700 uppercase tracking-wider flex items-center gap-1">
+                        <Gauge className="w-3.5 h-3.5" /> Mileage
+                      </span>
+                      <span className="text-[9px] text-pink-400 font-mono">
+                        {vehicleNumber ? `for ${vehicleNumber}` : 'select Vehicle Number below'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block font-semibold text-slate-600 mb-1">Opening KM *</label>
+                        <input
+                          type="number"
+                          required
+                          placeholder="Automatic/Manual"
+                          value={mOpeningKm}
+                          onChange={(e) => setMOpeningKm(e.target.value)}
+                          className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
+                        />
+                        <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                          {mOpeningKm ? '✓ Autoloaded previous' : 'Enter manually first time'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block font-semibold text-slate-600 mb-1">Closing KM *</label>
+                        <input
+                          type="number"
+                          required
+                          placeholder="Current reading"
+                          value={mClosingKm}
+                          onChange={(e) => setMClosingKm(e.target.value)}
+                          className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 bg-white rounded-lg border border-pink-100 flex items-center justify-between font-mono">
+                      <div>
+                        <span className="text-[9px] text-slate-400 uppercase font-bold block">Total KM (auto)</span>
+                        <span className="text-xs font-black text-pink-700">{mTotalKm || 0} Kilometers</span>
+                      </div>
+                      <ArrowRightLeft className="w-4 h-4 text-pink-300" />
+                    </div>
+
+                    {/* Vehicle Mileage Master mini-manager */}
+                    <div className="p-2.5 bg-white rounded-lg border border-pink-100 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9.5px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                          <Gauge className="w-3 h-3" /> Vehicle Mileage Master
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!showMileageManager && vehicleNumber) setMileageFormVehicleNo(vehicleNumber);
+                            setShowMileageManager(!showMileageManager);
+                          }}
+                          className="text-[10px] font-bold text-pink-600 hover:text-pink-800 cursor-pointer"
+                        >
+                          {showMileageManager ? 'Hide' : 'Manage Ratings'}
+                        </button>
+                      </div>
+                      <p className="text-[9.5px] font-mono text-slate-500">
+                        {vehicleNumber
+                          ? fixedMileageForVehicle != null
+                            ? `Fixed rating for ${vehicleNumber}: ${fixedMileageForVehicle} KM/L`
+                            : `No fixed mileage set yet for ${vehicleNumber} - add one below.`
+                          : 'Select a vehicle below to see its fixed mileage rating.'}
+                      </p>
+                      {showMileageManager && (
+                        <div className="pt-2 border-t border-slate-100 space-y-2">
+                          <div className="grid grid-cols-2 gap-2">
+                            <input
+                              type="text"
+                              placeholder="Vehicle No"
+                              value={mileageFormVehicleNo}
+                              onChange={(e) => setMileageFormVehicleNo(e.target.value.toUpperCase())}
+                              autoComplete="off"
+                              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 text-slate-800 text-[11px] font-mono"
+                            />
+                            <input
+                              type="number"
+                              step="0.01"
+                              placeholder="Mileage (KM/L)"
+                              value={mileageFormValue}
+                              onChange={(e) => setMileageFormValue(e.target.value)}
+                              autoComplete="off"
+                              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 text-slate-800 text-[11px] font-mono"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleAddVehicleMileage}
+                            className="w-full bg-slate-800 hover:bg-slate-900 text-white rounded-lg py-1.5 font-semibold text-[10px] uppercase cursor-pointer"
+                          >
+                            Save Rating
+                          </button>
+                          {(() => {
+                            const visibleMileages = vehicleNumber
+                              ? vehicleMileages.filter(v => (v.vehicleNo || '').trim().toUpperCase() === vehicleNumber.trim().toUpperCase())
+                              : [];
+                            return visibleMileages.length > 0 && (
+                              <div className="max-h-24 overflow-y-auto space-y-1 pt-1">
+                                {visibleMileages.map(v => (
+                                  <div key={v.id} className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-md px-2 py-1">
+                                    <span className="text-[10px] font-semibold text-slate-700">{v.vehicleNo} <span className="text-slate-400 font-mono">({v.mileage} KM/L)</span></span>
+                                    <button type="button" onClick={() => onDeleteVehicleMileage(v.id)} className="text-rose-400 hover:text-rose-600 cursor-pointer">
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Diesel Amount / Mileage / Cost per KM / Fixed Mileage - all
+                        auto, Diesel Amount mirrors the Amount entered below */}
+                    <div className="grid grid-cols-2 gap-2 bg-white p-2.5 rounded-lg border border-pink-100 font-mono">
+                      <div>
+                        <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Diesel Amount</span>
+                        <span className="text-xs font-black text-teal-700">₹{amount || 0}</span>
+                      </div>
+                      <div>
+                        <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Cost/KM</span>
+                        <span className="text-xs font-black text-amber-700">₹{mCostPerKm || 0}</span>
+                      </div>
+                      <div>
+                        <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Mileage (this trip)</span>
+                        <span className="text-xs font-black text-pink-700">{mMileage || 0} KM/L</span>
+                      </div>
+                      <div>
+                        <span className="text-[8.5px] text-slate-400 font-bold uppercase flex items-center gap-1">
+                          <HelpCircle className="w-2.5 h-2.5 text-purple-500" /> Fixed Mileage
+                        </span>
+                        <span className="text-xs font-black text-purple-700">{mActualMileage || 0} KM/L</span>
+                      </div>
+                      {(() => {
+                        const totalKmVal = parseFloat(mTotalKm) || 0;
+                        const litresVal = parseFloat(ltrs) || 0;
+                        const actualMileageVal = parseFloat(mActualMileage) || 0;
+                        const { difference } = computeFuelAudit(totalKmVal, litresVal, 0, actualMileageVal, mDriverName);
+                        return (
+                          <div className="col-span-2 pt-2 border-t border-slate-100">
+                            <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Difference (Litres wasted/saved)</span>
+                            <span className={`text-xs font-black ${difference == null ? 'text-slate-400' : difference > 0 ? 'text-emerald-600' : difference < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
+                              {difference == null ? '-' : `${difference > 0 ? '+' : ''}${difference} L`}
+                            </span>
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {(() => {
+                      const totalKmVal = parseFloat(mTotalKm) || 0;
+                      const litresVal = parseFloat(ltrs) || 0;
+                      const rateVal = parseFloat(rate) || 0;
+                      const actualMileageVal = parseFloat(mActualMileage) || 0;
+                      const { note } = computeFuelAudit(totalKmVal, litresVal, rateVal, actualMileageVal, mDriverName);
+                      if (!note) return null;
+                      return (
+                        <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg">
+                          <span className="text-[9px] text-amber-600 font-bold uppercase block mb-0.5">Fuel Audit (auto-added to Mileage Remarks)</span>
+                          <p className="text-xs font-semibold text-amber-800">{note}</p>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Extra Fuel and Rate per Ltr (new) */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block font-semibold text-slate-600 mb-1">Extra Fuel</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="e.g. 5"
+                          value={mExtraFuel}
+                          onChange={(e) => setMExtraFuel(e.target.value)}
+                          className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-semibold text-slate-600 mb-1">Rate per Ltr (new)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="e.g. 96.50"
+                          value={mRatePerLitreNew}
+                          onChange={(e) => setMRatePerLitreNew(e.target.value)}
+                          className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Total Amount - only meaningfully different from Diesel
+                        Amount once Extra Fuel is added */}
+                    <div className="p-2.5 bg-white rounded-lg border border-pink-100 flex items-center justify-between font-mono">
+                      <div>
+                        <span className="text-[9px] text-slate-400 uppercase font-bold block">
+                          Total Amount {parseFloat(mExtraFuel) > 0 ? '(Diesel + Extra Fuel)' : '(auto)'}
+                        </span>
+                        <span className="text-xs font-black text-pink-700">₹{mTotalAmount || 0}</span>
+                      </div>
+                      <DollarSign className="w-4 h-4 text-pink-300" />
+                    </div>
+
+                    {/* Authorized Driver */}
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1 flex items-center gap-1">
+                        <UserIcon className="w-3.5 h-3.5 text-pink-600" />
+                        Authorized Driver *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. Suresh / Adhithya"
+                        value={mDriverName}
+                        onChange={(e) => setMDriverName(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-800 font-semibold"
+                      />
+                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                        Multiple drivers can be entered in one field, separated by "/".
+                      </p>
+                    </div>
+
+                    {/* Mileage Remarks */}
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1">Mileage Remarks</label>
+                      <textarea
+                        placeholder="Enter additional remarks or trip logs..."
+                        value={mRemarks}
+                        onChange={(e) => setMRemarks(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-lg p-2 h-14 text-slate-800"
+                      />
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1">Period (Month) *</label>

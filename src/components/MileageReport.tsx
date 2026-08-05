@@ -31,7 +31,7 @@ interface MileageReportModuleProps {
   user: User;
   reports: MileageReport[];
   vehicles: Vehicle[];
-  onAddReport: (report: Omit<MileageReport, 'id'>) => Promise<void>;
+  onAddReport: (report: Omit<MileageReport, 'id'>) => Promise<string | undefined>;
   onUpdateReport: (id: string, report: Partial<MileageReport>) => Promise<void>;
   onDeleteReport: (id: string) => Promise<void>;
   vehicleMileages?: VehicleMileage[];
@@ -391,7 +391,7 @@ export default function MileageReportModule({
     }
 
     const data = filteredReports.map((r, i) => ({
-      'Sl. No': r.slNo || (i + 1),
+      'Sl. No': i + 1,
       'Date': r.date,
       'Vehicle No': r.vehicleNo,
       'Opening KM': r.openingKm ?? '',
@@ -590,14 +590,14 @@ export default function MileageReportModule({
                   <td colSpan={20 + (isSuperAdmin ? 1 : 0) + (readOnly ? 0 : 1)} className="text-center py-20 text-slate-400 font-mono text-xs">
                     🚫 NO REGISTERED MILEAGE ENTRIES DISCOVERED FOR THIS SEGMENT.
                     <div className="text-[10px] text-slate-400 font-sans mt-1">
-                      {readOnly ? 'Entries are added from the Trip Details tab in Fuel Management.' : 'Use the "Add Details" sidebar button to authorize new mileage and fuel log books.'}
+                      {readOnly ? 'Entries are logged from the Mileage section of the Fuel Entry form in Fuel Management.' : 'Use the "Add Details" sidebar button to authorize new mileage and fuel log books.'}
                     </div>
                   </td>
                 </tr>
               ) : (
                 sortedReports.map((r, i) => (
                   <tr key={r.id} className="hover:bg-slate-50/70 transition-colors text-[11px]">
-                    <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{r.slNo || (i + 1)}</td>
+                    <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{i + 1}</td>
                     <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">{r.date}</td>
                     <td className="px-3 py-2 font-bold font-mono text-slate-900 whitespace-nowrap">{r.vehicleNo}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.openingKm != null ? `${r.openingKm.toLocaleString('en-IN')} KM` : '-'}</td>
@@ -639,7 +639,7 @@ export default function MileageReportModule({
                           </button>
                           <button
                             onClick={() => {
-                              if (window.confirm(`Are you sure you want to delete mileage report entry sl.no ${r.slNo || (i + 1)}?`)) {
+                              if (window.confirm(`Are you sure you want to delete mileage report entry sl.no ${i + 1}?`)) {
                                 onDeleteReport(r.id);
                                 triggerNotif('Entry deleted successfully!', 'success');
                               }

@@ -681,7 +681,10 @@ export default function App() {
     }
   };
 
-  const handleAddMileageReport = async (report: Omit<MileageReport, 'id'>) => {
+  // Returns the newly created report's id (server generates and echoes it
+  // back) - Fuel Entry's combined form needs this to link the fuel log it
+  // saves alongside a mileage entry (see FuelLog.mileageReportId).
+  const handleAddMileageReport = async (report: Omit<MileageReport, 'id'>): Promise<string | undefined> => {
     try {
       const res = await authFetch('/api/mileage', {
         method: 'POST',
@@ -689,11 +692,14 @@ export default function App() {
         body: JSON.stringify(report)
       });
       if (res.ok) {
+        const data = await res.json();
         await fetchAllData();
+        return data.id as string | undefined;
       }
     } catch (err) {
       console.error('Error adding mileage report:', err);
     }
+    return undefined;
   };
 
   const handleUpdateMileageReport = async (id: string, report: Partial<MileageReport>) => {

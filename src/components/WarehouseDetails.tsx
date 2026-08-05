@@ -421,8 +421,8 @@ export default function WarehouseDetails({
       alert('No records to export.');
       return;
     }
-    const data = filteredEntries.map(e => ({
-      'SL No': e.slNo,
+    const data = filteredEntries.map((e, idx) => ({
+      'SL No': idx + 1,
       'Date': e.date,
       'Warehouse Name': e.warehouseName,
       'Warehouse City': e.warehouseCity,
@@ -1040,7 +1040,7 @@ export default function WarehouseDetails({
                   <tbody className="divide-y divide-purple-50/50">
                     {filteredEntries.map((e, idx) => (
                       <tr key={e.id || `wh-entry-${e.slNo || idx}`} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="py-3.5 px-4 font-mono font-bold text-slate-400">{e.slNo}</td>
+                        <td className="py-3.5 px-4 font-mono font-bold text-slate-400">{idx + 1}</td>
                         <td className="py-3.5 px-3 font-medium whitespace-nowrap text-purple-950">{e.date}</td>
                         <td className="py-3.5 px-3">
                           <div className="font-extrabold text-slate-800">{e.warehouseName}</div>
@@ -1098,7 +1098,7 @@ export default function WarehouseDetails({
                             </button>
                             {canDelete && (
                               <button
-                                onClick={() => handleDelete(e.id, e.slNo)}
+                                onClick={() => handleDelete(e.id, idx + 1)}
                                 className="p-1.5 text-pink-600 hover:bg-pink-50 rounded-lg transition-colors cursor-pointer"
                                 title="Delete record"
                               >
