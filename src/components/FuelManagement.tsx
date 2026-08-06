@@ -1060,7 +1060,8 @@ export default function FuelManagement({
                   {/* Mileage section - creates/updates a linked Fleet Mileage
                       Tracker entry from this same submission. None of this
                       shows up in the Fuel Entry ledger above. */}
-                  <div className={`p-3 bg-pink-50/40 rounded-xl border border-pink-200 space-y-3 ${entrySection === 'mileage' ? '' : 'hidden'}`}>
+                  {entrySection === 'mileage' && (
+                  <div className="p-3 bg-pink-50/40 rounded-xl border border-pink-200 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-black text-pink-700 uppercase tracking-wider flex items-center gap-1">
                         <Gauge className="w-3.5 h-3.5" /> Mileage
@@ -1296,10 +1297,12 @@ export default function FuelManagement({
                       />
                     </div>
                   </div>
+                  )}
 
                   {/* Fuel Entry Details tab - everything except the Mileage
                       sub-module above. */}
-                  <div className={`space-y-3.5 ${entrySection === 'details' ? '' : 'hidden'}`}>
+                  {entrySection === 'details' && (
+                  <div className="space-y-3.5">
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1">Period (Month) *</label>
@@ -1543,6 +1546,7 @@ export default function FuelManagement({
 
                   <DocumentAttachment documents={entryDocs} onChange={setEntryDocs} label="Attach Fuel Receipt / Invoice" />
                   </div>
+                  )}
                 </form>
               </div>
 
