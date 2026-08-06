@@ -449,9 +449,10 @@ const DRIVER_LOCATION_SCOPES: Record<string, DriverLocationCategory[]> = {
   'vinod@kcmlogistics.in': ['BLR Swiggy', 'Vijayawada Drivers Details', 'Market Vehicle Driver Details']
 };
 
-// Bhagya gets every location (like a super admin) rather than a single
-// region - her role already spans HR/Billing/Fleet/Vendor admin duties.
-const DRIVER_ALL_LOCATIONS_EMAILS = ['bhagya@kcmlogistics.in'];
+// Bhagya and Divya get every location (like a super admin) rather than a
+// single region - their roles already span HR/Billing/Fleet/Vendor admin
+// duties.
+const DRIVER_ALL_LOCATIONS_EMAILS = ['bhagya@kcmlogistics.in', 'divya@kcmlogistics.in'];
 
 function requireDriverAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));

@@ -52,7 +52,8 @@ const DRIVER_ACCESS_EMAILS = [
   'ramesh@kcmlogistics.in',
   'saneel@kcmlogistics.in',
   'vinod@kcmlogistics.in',
-  'bhagya@kcmlogistics.in'
+  'bhagya@kcmlogistics.in',
+  'divya@kcmlogistics.in'
 ];
 
 // Petty Cash's 3 logins - mirrors server.ts's PETTY_CASH_ACCESS_EMAILS
