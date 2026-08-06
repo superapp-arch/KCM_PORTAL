@@ -51,6 +51,18 @@ export function computeLoanStatus(monthsCompleted: number, tenure: number | unde
   return tenure != null && monthsCompleted >= tenure ? 'Closed' : 'Active';
 }
 
+// What to actually display/export as Loan Status: the auto-computed value by
+// default (so a loan that's fully paid off always reads Closed without
+// needing to be re-saved), except when an employee has explicitly forced a
+// different value (loanStatusManual) - e.g. marking a fully-paid loan back to
+// Active over a payment/amount dispute. That override stays sticky until the
+// employee changes it back (or picks the same value the system would've
+// computed anyway, which clears the manual flag - see VehicleLoanSheet.tsx/
+// BusinessLoanSheet.tsx's Loan Status dropdown onChange).
+export function resolveLoanStatus(storedStatus: 'Active' | 'Closed', manual: boolean | undefined, monthsCompleted: number, tenure: number | undefined): 'Active' | 'Closed' {
+  return manual ? storedStatus : computeLoanStatus(monthsCompleted, tenure);
+}
+
 // Raw next due date as a Date (or null), for alerting logic (e.g. "3 days
 // before due") that needs to compare actual dates rather than a label.
 export function computeDueDateRaw(startDate: string | undefined, tenure: number | undefined): Date | null {

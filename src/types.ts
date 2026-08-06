@@ -562,6 +562,12 @@ export interface VehicleLoan {
   tenure?: number; // months
   interest?: number; // %
   loanStatus: LoanStatus;
+  // true only when an employee explicitly picked a Loan Status that
+  // disagrees with the auto-computed one (e.g. forcing Active despite EMI
+  // Pending being 0, for a payment/amount dispute) - see resolveLoanStatus in
+  // loanDates.ts. Absent/false means loanStatus is always kept in sync with
+  // the auto-computed value and can never go stale.
+  loanStatusManual?: boolean;
   remarks?: string; // e.g. closing month/year once Closed
   nocStatus?: NOCStatus;
   documents?: VehicleDocument[];
@@ -580,6 +586,8 @@ export interface BusinessLoan {
   tenure?: number;
   interestRate?: number; // %
   loanStatus: LoanStatus;
+  // See VehicleLoan.loanStatusManual - same meaning.
+  loanStatusManual?: boolean;
   remarks?: string;
 }
 

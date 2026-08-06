@@ -445,15 +445,20 @@ export default function FuelManagement({
       triggerNotif('Please complete all required fields (*)');
       return;
     }
-    if (!mOpeningKm || !mClosingKm || !mDriverName) {
-      triggerNotif('Please complete the Mileage section (Opening KM, Closing KM, Authorized Driver).');
-      return;
-    }
-    const oKm = parseFloat(mOpeningKm);
-    const cKm = parseFloat(mClosingKm);
-    if (cKm < oKm) {
-      triggerNotif('Closing KM cannot be less than Opening KM.');
-      return;
+    // Mileage is optional - plenty of vehicles only ever get a fuel entry,
+    // with no trip/mileage data at all. Only treat the Mileage tab as filled
+    // in (and validate/save it) when Opening KM, Closing KM, and Authorized
+    // Driver are all present; otherwise the fuel entry commits on its own.
+    const hasMileageData = !!(mOpeningKm && mClosingKm && mDriverName);
+    let oKm = 0;
+    let cKm = 0;
+    if (hasMileageData) {
+      oKm = parseFloat(mOpeningKm);
+      cKm = parseFloat(mClosingKm);
+      if (cKm < oKm) {
+        triggerNotif('Closing KM cannot be less than Opening KM.');
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -463,49 +468,57 @@ export default function FuelManagement({
       const a = parseFloat(amount) || parseFloat((l * r).toFixed(2));
       const nextEntryNumber = logs.length > 0 ? Math.max(...logs.map(lg => lg.entryNumber || 0)) + 1 : 1;
 
-      // Mileage/fuel-audit calculations, mirroring MileageReport.tsx's own
-      // handleSubmit exactly, using this form's rate/litres/amount/date/
-      // vehicle/location instead of separately-entered values.
-      const calculatedTotalKm = cKm - oKm;
-      const calculatedMileage = l > 0 ? parseFloat((calculatedTotalKm / l).toFixed(2)) : 0;
-      const calculatedCostPerKm = calculatedMileage > 0 ? parseFloat((r / calculatedMileage).toFixed(2)) : 0;
-      const calculatedActualMileage = fixedMileageForVehicle || 0;
-      const { difference, note } = computeFuelAudit(calculatedTotalKm, l, r, calculatedActualMileage, mDriverName);
-      const baseMileageRemarks = stripPreviousAuditNote(mRemarks);
-      const finalMileageRemarks = note ? `${baseMileageRemarks}${baseMileageRemarks ? ' ' : ''}(Fuel Audit: ${note})` : baseMileageRemarks;
-      const extra = parseFloat(mExtraFuel) || 0;
-      const rateNew = parseFloat(mRatePerLitreNew) || 0;
-      const calculatedTotalAmount = parseFloat((a + extra * rateNew).toFixed(2));
-      const nextSlNo = mileageReports.length > 0 ? Math.max(...mileageReports.map(rep => rep.slNo || 0)) + 1 : 1;
-
-      const mileagePayload = {
-        slNo: linkedMileageReportId ? mileageReports.find(rep => rep.id === linkedMileageReportId)?.slNo || nextSlNo : nextSlNo,
-        date,
-        vehicleNo: vehicleNumber.trim().toUpperCase(),
-        openingKm: oKm,
-        closingKm: cKm,
-        totalKm: calculatedTotalKm,
-        ratePerLitre: r,
-        litres: l,
-        dieselAmount: a,
-        mileage: calculatedMileage,
-        costPerKm: calculatedCostPerKm,
-        driverName: mDriverName.trim(),
-        location: location.trim(),
-        remarks: finalMileageRemarks,
-        actualMileage: calculatedActualMileage,
-        difference,
-        fuelAuditNote: note,
-        extraFuel: extra,
-        ratePerLitreNew: rateNew,
-        totalAmount: calculatedTotalAmount
-      };
-
       let mileageReportId = linkedMileageReportId;
-      if (linkedMileageReportId) {
-        await onUpdateMileageReport(linkedMileageReportId, mileagePayload);
-      } else {
-        mileageReportId = (await onAddMileageReport(mileagePayload)) || null;
+      if (hasMileageData) {
+        // Mileage/fuel-audit calculations, mirroring MileageReport.tsx's own
+        // handleSubmit exactly, using this form's rate/litres/amount/date/
+        // vehicle/location instead of separately-entered values.
+        const calculatedTotalKm = cKm - oKm;
+        const calculatedMileage = l > 0 ? parseFloat((calculatedTotalKm / l).toFixed(2)) : 0;
+        const calculatedCostPerKm = calculatedMileage > 0 ? parseFloat((r / calculatedMileage).toFixed(2)) : 0;
+        const calculatedActualMileage = fixedMileageForVehicle || 0;
+        const { difference, note } = computeFuelAudit(calculatedTotalKm, l, r, calculatedActualMileage, mDriverName);
+        const baseMileageRemarks = stripPreviousAuditNote(mRemarks);
+        const finalMileageRemarks = note ? `${baseMileageRemarks}${baseMileageRemarks ? ' ' : ''}(Fuel Audit: ${note})` : baseMileageRemarks;
+        const extra = parseFloat(mExtraFuel) || 0;
+        const rateNew = parseFloat(mRatePerLitreNew) || 0;
+        const calculatedTotalAmount = parseFloat((a + extra * rateNew).toFixed(2));
+        const nextSlNo = mileageReports.length > 0 ? Math.max(...mileageReports.map(rep => rep.slNo || 0)) + 1 : 1;
+
+        const mileagePayload = {
+          slNo: linkedMileageReportId ? mileageReports.find(rep => rep.id === linkedMileageReportId)?.slNo || nextSlNo : nextSlNo,
+          date,
+          vehicleNo: vehicleNumber.trim().toUpperCase(),
+          openingKm: oKm,
+          closingKm: cKm,
+          totalKm: calculatedTotalKm,
+          ratePerLitre: r,
+          litres: l,
+          dieselAmount: a,
+          mileage: calculatedMileage,
+          costPerKm: calculatedCostPerKm,
+          driverName: mDriverName.trim(),
+          location: location.trim(),
+          remarks: finalMileageRemarks,
+          actualMileage: calculatedActualMileage,
+          difference,
+          fuelAuditNote: note,
+          extraFuel: extra,
+          ratePerLitreNew: rateNew,
+          totalAmount: calculatedTotalAmount
+        };
+
+        if (linkedMileageReportId) {
+          await onUpdateMileageReport(linkedMileageReportId, mileagePayload);
+        } else {
+          mileageReportId = (await onAddMileageReport(mileagePayload)) || null;
+        }
+      } else if (linkedMileageReportId) {
+        // Editing an entry that previously had mileage data, but the Mileage
+        // tab has since been cleared out - drop the now-stale linked report
+        // rather than leaving it orphaned.
+        await onDeleteMileageReport(linkedMileageReportId);
+        mileageReportId = null;
       }
 
       const payload = {
@@ -1059,24 +1072,22 @@ export default function FuelManagement({
 
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="block font-semibold text-slate-600 mb-1">Opening KM *</label>
+                        <label className="block font-semibold text-slate-600 mb-1">Opening KM</label>
                         <input
                           type="number"
-                          required
                           placeholder="Automatic/Manual"
                           value={mOpeningKm}
                           onChange={(e) => setMOpeningKm(e.target.value)}
                           className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
                         />
                         <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                          {mOpeningKm ? '✓ Autoloaded previous' : 'Enter manually first time'}
+                          {mOpeningKm ? '✓ Autoloaded previous' : 'Optional - leave blank if this vehicle has no mileage tracking'}
                         </p>
                       </div>
                       <div>
-                        <label className="block font-semibold text-slate-600 mb-1">Closing KM *</label>
+                        <label className="block font-semibold text-slate-600 mb-1">Closing KM</label>
                         <input
                           type="number"
-                          required
                           placeholder="Current reading"
                           value={mClosingKm}
                           onChange={(e) => setMClosingKm(e.target.value)}
@@ -1260,18 +1271,17 @@ export default function FuelManagement({
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1 flex items-center gap-1">
                         <UserIcon className="w-3.5 h-3.5 text-pink-600" />
-                        Authorized Driver *
+                        Authorized Driver
                       </label>
                       <input
                         type="text"
-                        required
                         placeholder="e.g. Suresh / Adhithya"
                         value={mDriverName}
                         onChange={(e) => setMDriverName(e.target.value)}
                         className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-800 font-semibold"
                       />
                       <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                        Multiple drivers can be entered in one field, separated by "/".
+                        Multiple drivers can be entered in one field, separated by "/". Fill in Opening/Closing KM + Authorized Driver together to also log a Mileage entry - otherwise this fuel entry commits on its own.
                       </p>
                     </div>
 

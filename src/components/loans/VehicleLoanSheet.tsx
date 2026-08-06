@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { Truck, Plus, Search, Edit2, Trash2, X, ChevronDown, AlertTriangle, Download } from 'lucide-react';
 import { Vehicle, VehicleLoan, VehicleDocument, LoanStatus, NOCStatus, VEHICLE_LOAN_FINANCERS } from '../../types';
-import { computeMonthsCompleted, computeDueDate, computeDueDateRaw, computeLoanStatus } from '../../utils/loanDates';
+import { computeMonthsCompleted, computeDueDate, computeDueDateRaw, computeLoanStatus, resolveLoanStatus } from '../../utils/loanDates';
 import DateInput from '../DateInput';
 import DocumentAttachment from '../DocumentAttachment';
 import VehicleDetailsPopover from './VehicleDetailsPopover';
@@ -56,7 +56,7 @@ const toLoanRow = (loan: VehicleLoan, i: number) => {
     'EMI Pending': bal ?? '',
     'O/S Amount': osAmount,
     'Due Date': computeDueDate(loan.emiStartDate, monthsCompleted, loan.tenure),
-    'Loan Status': loan.loanStatus.toUpperCase(),
+    'Loan Status': resolveLoanStatus(loan.loanStatus, loan.loanStatusManual, monthsCompleted, loan.tenure).toUpperCase(),
     'Remarks': loan.remarks || '',
     'NOC Status': loan.nocStatus || 'Not received',
     'Ownership': loan.ownership || ''
@@ -133,6 +133,14 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
     if (!form.regNo.trim() || !form.financer.trim()) return;
     setIsSubmitting(true);
     try {
+      const tenureNum = parseInt(form.tenure) || undefined;
+      const monthsCompleted = computeMonthsCompleted(form.emiStartDate, tenureNum);
+      // Only flagged manual (sticky override) when the submitted Loan Status
+      // actually disagrees with what the system would auto-compute right now
+      // - e.g. an employee deliberately forcing Active despite EMI Pending
+      // being 0. Otherwise it stays auto and can never go stale - see
+      // resolveLoanStatus in loanDates.ts.
+      const loanStatusManual = form.loanStatus !== computeLoanStatus(monthsCompleted, tenureNum);
       const payload = {
         regNo: form.regNo.trim().toUpperCase(),
         ownership: form.ownership.trim(),
@@ -141,9 +149,10 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
         loanAmount: parseFloat(form.loanAmount) || undefined,
         emiStartDate: form.emiStartDate,
         monthlyEmi: parseFloat(form.monthlyEmi) || undefined,
-        tenure: parseInt(form.tenure) || undefined,
+        tenure: tenureNum,
         interest: parseFloat(form.interest) || undefined,
         loanStatus: form.loanStatus,
+        loanStatusManual,
         remarks: form.remarks.trim(),
         nocStatus: form.nocStatus,
         documents
@@ -352,7 +361,8 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
                 const bal = loan.tenure != null ? loan.tenure - monthsCompleted : null;
                 const osAmount = bal != null && loan.monthlyEmi != null ? bal * loan.monthlyEmi : null;
                 const dueDate = computeDueDate(loan.emiStartDate, monthsCompleted, loan.tenure);
-                const nearing = isNearingCompletion(monthsCompleted, loan.tenure, loan.loanStatus);
+                const displayStatus = resolveLoanStatus(loan.loanStatus, loan.loanStatusManual, monthsCompleted, loan.tenure);
+                const nearing = isNearingCompletion(monthsCompleted, loan.tenure, displayStatus);
                 return (
                   <tr key={loan.id} className={`hover:bg-slate-50 ${nearing ? 'bg-amber-50/60' : ''}`}>
                     <td className="px-3 py-2.5 font-mono text-slate-500">{i + 1}</td>
@@ -381,9 +391,12 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
                     <td className="px-3 py-2.5 text-right font-mono text-slate-700">{osAmount != null ? osAmount.toLocaleString('en-IN') : '-'}</td>
                     <td className="px-3 py-2.5 font-mono font-bold text-red-600 whitespace-nowrap">{dueDate}</td>
                     <td className="px-3 py-2.5">
-                      <span className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] ${loan.loanStatus === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
-                        {loan.loanStatus.toUpperCase()}
+                      <span className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] ${displayStatus === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
+                        {displayStatus.toUpperCase()}
                       </span>
+                      {loan.loanStatusManual && (
+                        <span title="Manually overridden by an employee - won't auto-change until edited again" className="ml-1 text-[9px] text-amber-600 font-bold align-middle">●</span>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
                       <button onClick={() => handleDownloadOne(loan)} title="Download this loan" className="p-1 text-slate-400 hover:text-teal-600 hover:bg-slate-100 rounded cursor-pointer"><Download className="w-3.5 h-3.5" /></button>

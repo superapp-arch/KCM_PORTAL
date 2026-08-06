@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { Landmark, Plus, Search, Edit2, Trash2, X, Download } from 'lucide-react';
 import { BusinessLoan, LoanStatus } from '../../types';
-import { computeMonthsCompleted, computeDueDate, computeLoanStatus } from '../../utils/loanDates';
+import { computeMonthsCompleted, computeDueDate, computeLoanStatus, resolveLoanStatus } from '../../utils/loanDates';
 import DateInput from '../DateInput';
 
 const toLoanRow = (loan: BusinessLoan, i: number) => {
@@ -23,7 +23,7 @@ const toLoanRow = (loan: BusinessLoan, i: number) => {
     'O/S Amount': osAmount,
     'Due Date': computeDueDate(loan.emiDate, emiPaid, loan.tenure),
     'Interest Rate': loan.interestRate ?? '',
-    'Loan Status': loan.loanStatus.toUpperCase(),
+    'Loan Status': resolveLoanStatus(loan.loanStatus, loan.loanStatusManual, emiPaid, loan.tenure).toUpperCase(),
     'Remarks': loan.remarks || ''
   };
 };
@@ -83,6 +83,12 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
     if (!form.financer.trim() || !form.loanNumber.trim()) return;
     setIsSubmitting(true);
     try {
+      const tenureNum = parseInt(form.tenure) || undefined;
+      const emiPaid = computeMonthsCompleted(form.emiDate, tenureNum);
+      // Only flagged manual (sticky override) when the submitted status
+      // actually disagrees with what's currently auto-computed - see
+      // resolveLoanStatus in loanDates.ts.
+      const loanStatusManual = form.loanStatus !== computeLoanStatus(emiPaid, tenureNum);
       const payload = {
         financer: form.financer.trim(),
         loanType: form.loanType.trim(),
@@ -90,9 +96,10 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
         sanctionedAmount: parseFloat(form.sanctionedAmount) || undefined,
         emiDate: form.emiDate,
         emiMonthly: parseFloat(form.emiMonthly) || undefined,
-        tenure: parseInt(form.tenure) || undefined,
+        tenure: tenureNum,
         interestRate: parseFloat(form.interestRate) || undefined,
         loanStatus: form.loanStatus,
+        loanStatusManual,
         remarks: form.remarks.trim()
       };
       if (editingId) {
@@ -178,6 +185,7 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
                 const bal = loan.tenure != null ? loan.tenure - emiPaid : null;
                 const osAmount = bal != null && loan.emiMonthly != null ? bal * loan.emiMonthly : null;
                 const dueDate = computeDueDate(loan.emiDate, emiPaid, loan.tenure);
+                const displayStatus = resolveLoanStatus(loan.loanStatus, loan.loanStatusManual, emiPaid, loan.tenure);
                 return (
                   <tr key={loan.id} className="hover:bg-slate-50">
                     <td className="px-3 py-2.5 font-mono text-slate-500">{i + 1}</td>
@@ -192,9 +200,12 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
                     <td className="px-3 py-2.5 text-right font-mono text-slate-700">{osAmount != null ? osAmount.toLocaleString('en-IN') : '-'}</td>
                     <td className="px-3 py-2.5 font-mono font-bold text-red-600 whitespace-nowrap">{dueDate}</td>
                     <td className="px-3 py-2.5">
-                      <span className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] ${loan.loanStatus === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
-                        {loan.loanStatus.toUpperCase()}
+                      <span className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] ${displayStatus === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
+                        {displayStatus.toUpperCase()}
                       </span>
+                      {loan.loanStatusManual && (
+                        <span title="Manually overridden by an employee - won't auto-change until edited again" className="ml-1 text-[9px] text-amber-600 font-bold align-middle">●</span>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 text-slate-500 max-w-[160px] truncate" title={loan.remarks}>{loan.remarks || '-'}</td>
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
