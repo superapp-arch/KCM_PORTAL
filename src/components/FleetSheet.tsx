@@ -1445,7 +1445,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
 
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
-                        Actual Mileage (KM/L)
+                        Fixed Mileage (KM/L)
                       </label>
                       <input
                         type="number"

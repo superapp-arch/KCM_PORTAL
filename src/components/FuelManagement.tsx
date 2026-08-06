@@ -585,7 +585,9 @@ export default function FuelManagement({
 
   const filteredLogs = sort
     ? [...filteredLogsUnsorted].sort((a, b) => {
-        const cmp = extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber);
+        const cmp = sort.key === 'indentNumber'
+          ? extractLeadingNumber(a.indentNumber) - extractLeadingNumber(b.indentNumber)
+          : extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber);
         return sort.direction === 'asc' ? cmp : -cmp;
       })
     : filteredLogsUnsorted;
@@ -871,7 +873,7 @@ export default function FuelManagement({
                   <th className="px-3 py-2.5">Bunk Name</th>
                   <th className="px-3 py-2.5">Bunk/Card</th>
                   <th className="px-3 py-2.5"><SortHeader label="Vehicle No" sortKey="vehicleNumber" sort={sort} onSort={handleSort} type="numeric" /></th>
-                  <th className="px-3 py-2.5">Indent No</th>
+                  <th className="px-3 py-2.5"><SortHeader label="Indent No" sortKey="indentNumber" sort={sort} onSort={handleSort} type="numeric" /></th>
                   <th className="px-3 py-2.5 text-right">Ltrs</th>
                   <th className="px-3 py-2.5 text-right">Rate</th>
                   <th className="px-3 py-2.5 text-right">Amount</th>
