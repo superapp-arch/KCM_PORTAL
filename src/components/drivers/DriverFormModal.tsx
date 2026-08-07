@@ -35,7 +35,6 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
   const [aadharDocuments, setAadharDocuments] = useState<VehicleDocument[]>(driver?.aadharDocuments || []);
   const [drivingLicenseDocuments, setDrivingLicenseDocuments] = useState<VehicleDocument[]>(driver?.drivingLicenseDocuments || []);
   const [otherDocuments, setOtherDocuments] = useState<VehicleDocument[]>(driver?.otherDocuments || []);
-  const [documentErrors, setDocumentErrors] = useState<{ aadhar?: boolean; drivingLicense?: boolean }>({});
 
   const [salaryMonth, setSalaryMonth] = useState(driver?.month || currentMonthKey());
   const [attendanceSummary, setAttendanceSummary] = useState({ totalDays: 0, presentDays: 0, lopDays: 0, exemptionLeaveDays: 0 });
@@ -81,14 +80,6 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
     if (nextBasicErrors.driverNo) {
       setError('Please fix the highlighted fields below.');
       setTab('basic');
-      return;
-    }
-
-    const nextDocumentErrors = { aadhar: aadharDocuments.length === 0, drivingLicense: drivingLicenseDocuments.length === 0 };
-    setDocumentErrors(nextDocumentErrors);
-    if (nextDocumentErrors.aadhar || nextDocumentErrors.drivingLicense) {
-      setError('Aadhar and Driving License documents are required.');
-      setTab('documents');
       return;
     }
 
@@ -203,14 +194,12 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
           {tab === 'documents' && (
             <div className="space-y-4">
               <div>
-                <label className="block font-semibold text-slate-500 mb-1">Aadhar*</label>
+                <label className="block font-semibold text-slate-500 mb-1">Aadhar</label>
                 <DocumentAttachment documents={aadharDocuments} onChange={setAadharDocuments} label="Attach Aadhar Card" hideDropzone maxFiles={1} />
-                {documentErrors.aadhar && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
               </div>
               <div>
-                <label className="block font-semibold text-slate-500 mb-1">Driving License*</label>
+                <label className="block font-semibold text-slate-500 mb-1">Driving License</label>
                 <DocumentAttachment documents={drivingLicenseDocuments} onChange={setDrivingLicenseDocuments} label="Attach Driving License" hideDropzone maxFiles={1} />
-                {documentErrors.drivingLicense && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
               </div>
               <div>
                 <label className="block font-semibold text-slate-500 mb-1">Others</label>

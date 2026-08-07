@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
-import { PettyCashVoucher, VehicleDocument, Vehicle, MarketPodEntry, MarketPodStatus, User, DriverEmployee, Vendor, PettyCashAdvance } from '../types';
+import { PettyCashVoucher, VehicleDocument, Vehicle, MarketPodEntry, MarketPodStatus, MarketPodPaymentMode, User, DriverEmployee, Vendor, PettyCashAdvance } from '../types';
 import {
   Landmark,
   Plus,
@@ -26,7 +26,8 @@ import {
   Unlock,
   Wallet,
   AlertTriangle,
-  Trash2
+  Trash2,
+  Banknote
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
@@ -192,6 +193,8 @@ export default function PettyCash({
   const [mpTotalFreight, setMpTotalFreight] = useState('');
   const [mpReceivedAdvance, setMpReceivedAdvance] = useState('');
   const [mpOtherExpenses, setMpOtherExpenses] = useState('');
+  const [mpPaymentMode, setMpPaymentMode] = useState<MarketPodPaymentMode>('Petty Cash');
+  const [mpExtraTripAmount, setMpExtraTripAmount] = useState('');
   const [mpCoordinator, setMpCoordinator] = useState('');
   const [mpStatus, setMpStatus] = useState<MarketPodStatus>('Pending');
   const [mpRemarks, setMpRemarks] = useState('');
@@ -214,6 +217,9 @@ export default function PettyCash({
   // for a Super Admin/Principal (everyone else only ever sees their own rows,
   // so there's nothing to pick).
   const [balanceUserFilter, setBalanceUserFilter] = useState<string>(user.username);
+  // Cash tab date filter - '' shows the all-time cumulative total; picking a
+  // date narrows the breakdown to that day's Cash-mode Market POD entries.
+  const [cashDateFilter, setCashDateFilter] = useState('');
 
   const mpBalance = (parseFloat(mpTotalFreight) || 0) - (parseFloat(mpReceivedAdvance) || 0) - (parseFloat(mpOtherExpenses) || 0);
 
@@ -261,6 +267,8 @@ export default function PettyCash({
     setMpTotalFreight('');
     setMpReceivedAdvance('');
     setMpOtherExpenses('');
+    setMpPaymentMode('Petty Cash');
+    setMpExtraTripAmount('');
     setMpCoordinator('');
     setMpStatus('Pending');
     setMpRemarks('');
@@ -279,6 +287,8 @@ export default function PettyCash({
     setMpTotalFreight(entry.totalFreight != null ? String(entry.totalFreight) : '');
     setMpReceivedAdvance(entry.receivedAdvance != null ? String(entry.receivedAdvance) : '');
     setMpOtherExpenses(entry.otherExpenses != null ? String(entry.otherExpenses) : '');
+    setMpPaymentMode(entry.paymentMode || 'Petty Cash');
+    setMpExtraTripAmount(entry.extraTripAmount != null ? String(entry.extraTripAmount) : '');
     setMpCoordinator(entry.coordinator);
     setMpStatus(entry.status);
     setMpRemarks(entry.remarks);
@@ -317,6 +327,8 @@ export default function PettyCash({
         receivedAdvance: parseFloat(mpReceivedAdvance) || 0,
         otherExpenses: parseFloat(mpOtherExpenses) || 0,
         balance: mpBalance,
+        paymentMode: mpPaymentMode,
+        extraTripAmount: parseFloat(mpExtraTripAmount) || 0,
         coordinator: mpCoordinator.trim(),
         status: mpStatus,
         remarks: mpRemarks.trim(),
@@ -547,6 +559,17 @@ export default function PettyCash({
   // Admin/Principal (who sees every user's rows), just the current user
   // otherwise (server-filtered data means there's nothing else to show).
   const dashboardSummaryUsers = isSuperAdmin ? PETTY_CASH_USERS : [{ username: user.username, label: user.name }];
+
+  // Cash tab (Market POD's Payment Mode = Cash auto-routing) - same
+  // isSuperAdmin-scoping pattern as vouchersFor/advancesFor above, since
+  // marketPodEntries is likewise already server-filtered per viewer.
+  const marketPodEntriesFor = (username: string): MarketPodEntry[] =>
+    isSuperAdmin ? marketPodEntries.filter(e => e.enteredBy === username) : marketPodEntries;
+  const cashEntriesFor = (username: string): MarketPodEntry[] =>
+    marketPodEntriesFor(username).filter(e => e.paymentMode === 'Cash');
+  const cashFor = (username: string): number => cashEntriesFor(username).reduce((s, e) => s + (e.extraTripAmount || 0), 0);
+  const cashOnDateFor = (username: string, date: string): number =>
+    cashEntriesFor(username).filter(e => e.date === date).reduce((s, e) => s + (e.extraTripAmount || 0), 0);
 
   // Balance Net as of one specific voucher (for the table's "Balance Net"
   // column) - same formula, but only summing that user's cash paid up to and
@@ -911,8 +934,10 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
         const totalReceived = dashboardSummaryUsers.reduce((s, u) => s + receivedFor(u.username), 0);
         const totalDisbursed = dashboardSummaryUsers.reduce((s, u) => s + disbursedFor(u.username), 0);
         const totalNetBalance = totalReceived - totalDisbursed;
+        const totalCash = dashboardSummaryUsers.reduce((s, u) => s + cashFor(u.username), 0);
+        const totalCashOnDate = cashDateFilter ? dashboardSummaryUsers.reduce((s, u) => s + cashOnDateFor(u.username, cashDateFilter), 0) : null;
         return (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
             <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
               <span className="text-[10px] text-slate-400 font-bold uppercase flex items-center gap-1"><Wallet className="w-3 h-3" /> Total Received Float</span>
               <div className="text-sm font-black text-slate-800 font-mono mt-0.5">₹{totalReceived.toLocaleString('en-IN')}</div>
@@ -968,6 +993,41 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     </div>
                   );
                 })}
+              </div>
+            </div>
+
+            {/* Cash - Market POD entries with Payment Mode = Cash, tagged by
+                that entry's date. Shows the all-time cumulative total plus a
+                date filter to drill into any specific day. */}
+            <div className="bg-teal-50/30 p-3 rounded-xl border border-teal-100">
+              <span className="text-[10px] text-teal-600 font-bold uppercase flex items-center gap-1"><Banknote className="w-3 h-3" /> Cash</span>
+              <div className="text-sm font-black text-teal-700 font-mono mt-0.5">₹{totalCash.toLocaleString('en-IN')}</div>
+              <p className="text-[9px] text-teal-500/80 font-mono mt-0.5">All-time, from Market POD</p>
+              <div className="mt-2 pt-2 border-t border-teal-100 space-y-1.5">
+                <div className="flex items-center gap-1">
+                  <DateInput value={cashDateFilter} onChange={(e) => setCashDateFilter(e.target.value)} className="flex-1 min-w-0 bg-white border border-teal-200 rounded px-1.5 py-1 text-[10px] font-mono text-teal-800" />
+                  {cashDateFilter && (
+                    <button type="button" onClick={() => setCashDateFilter('')} title="Clear date filter" className="text-teal-400 hover:text-rose-500 cursor-pointer shrink-0">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+                {cashDateFilter && (
+                  <div className="text-[10px] font-mono text-teal-700 font-bold flex items-center justify-between">
+                    <span className="font-sans font-semibold">On {cashDateFilter}</span>
+                    <span>₹{(totalCashOnDate || 0).toLocaleString('en-IN')}</span>
+                  </div>
+                )}
+                {isSuperAdmin && (
+                  <div className="pt-1.5 border-t border-teal-100 space-y-0.5">
+                    {dashboardSummaryUsers.map(u => (
+                      <div key={u.username} className="flex items-center justify-between text-[10px] font-mono text-teal-600">
+                        <span className="font-sans font-semibold">{u.label}</span>
+                        <span>₹{(cashDateFilter ? cashOnDateFor(u.username, cashDateFilter) : cashFor(u.username)).toLocaleString('en-IN')}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1451,6 +1511,8 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   <th className="px-3 py-2.5 text-right">Received Advance</th>
                   <th className="px-3 py-2.5 text-right">Other Expenses</th>
                   <th className="px-3 py-2.5 text-right">Balance</th>
+                  <th className="px-3 py-2.5">Payment Mode</th>
+                  <th className="px-3 py-2.5 text-right">Extra Trip</th>
                   <th className="px-3 py-2.5">Co-Ordinator</th>
                   <th className="px-3 py-2.5">Status</th>
                   <th className="px-3 py-2.5">Remarks</th>
@@ -1462,7 +1524,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
                 {filteredMarketPod.length === 0 ? (
                   <tr>
-                    <td colSpan={15 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
+                    <td colSpan={17 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
                       NO MARKET POD TRIP ENTRIES MATCH THE SELECTION.
                       <div className="text-[10px] text-slate-400 font-sans mt-1">Use "Add Trip Entry" above to log a new freight trip.</div>
                     </td>
@@ -1482,6 +1544,14 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       <td className={`px-3 py-2 text-right font-mono font-bold ${entry.balance < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`}>
                         ₹{(entry.balance || 0).toLocaleString('en-IN')}
                       </td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border ${
+                          (entry.paymentMode || 'Petty Cash') === 'Cash' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-600 border-slate-300'
+                        }`}>
+                          {entry.paymentMode || 'Petty Cash'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-slate-600">{entry.extraTripAmount ? `₹${entry.extraTripAmount.toLocaleString('en-IN')}` : '-'}</td>
                       <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{entry.coordinator || '-'}</td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border ${
@@ -2368,6 +2438,39 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   <div className="p-3 bg-amber-50/50 border border-amber-200 rounded-lg flex items-center justify-between">
                     <span className="text-amber-600 uppercase text-[9px] font-bold">Balance (auto = Freight - Advance - Expenses)</span>
                     <span className="font-black text-amber-800 font-mono">₹{mpBalance.toLocaleString('en-IN')}</span>
+                  </div>
+
+                  {/* Payment Mode + Extra Trip - Cash auto-routes the Extra
+                      Trip amount into the Petty Cash Dashboard's Cash tab,
+                      tagged with this entry's date; Petty Cash needs no
+                      extra routing (accounted normally). */}
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Payment Mode</label>
+                      <select
+                        value={mpPaymentMode}
+                        onChange={(e) => setMpPaymentMode(e.target.value as MarketPodPaymentMode)}
+                        className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-800 font-semibold focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      >
+                        <option value="Petty Cash">Petty Cash</option>
+                        <option value="Cash">Cash</option>
+                      </select>
+                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                        {mpPaymentMode === 'Cash'
+                          ? 'Extra Trip amount below flows into the Petty Cash Dashboard\'s Cash tab, dated to this entry.'
+                          : 'Accounted as petty cash normally - no extra routing.'}
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-600 mb-0.5 text-[9px] uppercase">Extra Trip</label>
+                      <input
+                        type="number"
+                        placeholder="₹"
+                        value={mpExtraTripAmount}
+                        onChange={(e) => setMpExtraTripAmount(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-slate-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
                   </div>
 
                   {/* Co-Ordinator - manual text entry */}

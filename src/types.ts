@@ -219,6 +219,12 @@ export interface PettyCashAdvance {
 
 export type MarketPodStatus = 'Pending' | 'Closed';
 
+// How this trip's Extra Trip amount was paid. "Cash" auto-routes that amount
+// into the Petty Cash Dashboard's "Cash" tab, tagged with this entry's date;
+// "Petty Cash" needs no extra routing (accounted normally). Defaults to
+// "Petty Cash" for entries saved before this field existed.
+export type MarketPodPaymentMode = 'Cash' | 'Petty Cash';
+
 // A freight trip ledger nested inside the Petty Cash module ("Market POD"
 // tab). Entry No is auto-generated/sequential (see nextMarketPodEntryNo in
 // PettyCash.tsx) and never user-editable. Balance is always derived -
@@ -239,6 +245,8 @@ export interface MarketPodEntry {
   status: MarketPodStatus;
   remarks: string;
   driverId?: string; // auto-fetched from Driver Details (DriverEmployee.id) by matching vehicleNumber; read-only except for super admin override
+  paymentMode?: MarketPodPaymentMode;
+  extraTripAmount?: number; // separate ad-hoc/extra-trip amount, distinct from the regular freight fields above - this is what routes to the Cash tab when paymentMode is "Cash"
   enteredBy?: string; // username, stamped server-side; row-level-filtered to the 3 Petty Cash logins, visible only to super admins
 }
 
@@ -586,8 +594,8 @@ export interface DriverEmployee {
   otherAdditions?: number; // added to Gross Salary (see Payable Amount formula)
   grossSalary?: number;
   location: DriverLocationCategory;
-  aadharDocuments?: VehicleDocument[]; // mandatory, at least one file
-  drivingLicenseDocuments?: VehicleDocument[]; // mandatory, at least one file
+  aadharDocuments?: VehicleDocument[]; // optional
+  drivingLicenseDocuments?: VehicleDocument[]; // optional
   otherDocuments?: VehicleDocument[];
 }
 
