@@ -31,7 +31,6 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
     reporting: driver?.reporting || '', remark: driver?.remark || '',
     location: driver?.location || DRIVER_LOCATION_CATEGORIES[0] as DriverLocationCategory
   });
-  const [basicErrors, setBasicErrors] = useState<{ driverNo?: boolean }>({});
   const [aadharDocuments, setAadharDocuments] = useState<VehicleDocument[]>(driver?.aadharDocuments || []);
   const [drivingLicenseDocuments, setDrivingLicenseDocuments] = useState<VehicleDocument[]>(driver?.drivingLicenseDocuments || []);
   const [otherDocuments, setOtherDocuments] = useState<VehicleDocument[]>(driver?.otherDocuments || []);
@@ -75,14 +74,6 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
       setTab('basic');
       return;
     }
-    const nextBasicErrors = { driverNo: basic.driverNo.length !== 10 };
-    setBasicErrors(nextBasicErrors);
-    if (nextBasicErrors.driverNo) {
-      setError('Please fix the highlighted fields below.');
-      setTab('basic');
-      return;
-    }
-
     setIsSubmitting(true);
     setError('');
     try {
@@ -151,11 +142,10 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-500 mb-1">Driver No* <span className="text-slate-400 font-normal">(10 digits)</span></label>
+                  <label className="block font-semibold text-slate-500 mb-1">Driver No <span className="text-slate-400 font-normal">(10 digits)</span></label>
                   <input type="text" inputMode="numeric" value={basic.driverNo}
                     onChange={e => setBasic({ ...basic, driverNo: e.target.value.replace(/\D/g, '').slice(0, 10) })}
                     autoComplete="off" maxLength={10} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
-                  {basicErrors.driverNo && <p className="text-orange-500 font-semibold mt-1">Please fill out this*</p>}
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Vehicle No</label>

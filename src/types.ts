@@ -578,7 +578,7 @@ export const DRIVER_LOCATION_CATEGORIES: DriverLocationCategory[] = [
 export interface DriverEmployee {
   id: string; // Driver ID*, e.g. KCMDRV19102
   name: string; // Driver Name*
-  driverNo: string; // 10-digit mobile, required
+  driverNo: string; // 10-digit mobile, optional
   vehicleNo?: string;
   accountNumber?: string; // A/C No
   ifscCode?: string;
