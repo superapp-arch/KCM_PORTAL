@@ -542,6 +542,23 @@ export default function App() {
     }
   };
 
+  // Divya's restricted RQ-ID-only update path - see requireFuelAccess/
+  // FUEL_RQ_ID_ONLY_EMAILS in server.ts.
+  const handleUpdateFuelLogRqId = async (id: string, rqId: string) => {
+    try {
+      const res = await authFetch(`/api/fuel/${id}/rq-id`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rqId })
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error('Error updating fuel log RQ ID:', err);
+    }
+  };
+
   const handleDeleteFuelLog = async (id: string) => {
     try {
       const res = await authFetch(`/api/fuel/${id}`, {
@@ -930,6 +947,7 @@ export default function App() {
         onDeleteVehicle={handleDeleteVehicle}
         onAddFuelLog={handleAddFuelLog}
         onUpdateFuelLog={handleUpdateFuelLog}
+        onUpdateFuelLogRqId={handleUpdateFuelLogRqId}
         onDeleteFuelLog={handleDeleteFuelLog}
         onAddInvoice={handleAddInvoice}
         onUpdateInvoice={handleUpdateInvoice}

@@ -298,17 +298,28 @@ function requireHrAccess(req: express.Request, res: express.Response, next: expr
 // gets).
 const FUEL_ENTRY_USER_EMAILS = ['chandanreddy@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'ramesh@kcmlogistics.in'];
 
+// Divya gets into Fuel Management too, but on a fundamentally different
+// footing than the three above: she can see every entry (to manage RQ IDs
+// across the whole ledger, not just her own - she doesn't own any rows) but
+// cannot create/edit/delete entries at all, only update the rqId field on an
+// existing one via PUT /api/fuel/:id/rq-id below.
+const FUEL_RQ_ID_ONLY_EMAILS = ['divya@kcmlogistics.in'];
+
 // Fuel Management + Mileage Report are restricted to Chandan, Praveen, Ramesh,
-// and super admins - nobody else may access or see this data at all. Within
-// that, see the row-level enteredBy filtering applied inside the /api/fuel and
-// /api/mileage handlers themselves (this middleware only gates the module as
-// a whole, the same two-layer pattern as requireHrAccess above).
+// Divya, and super admins - nobody else may access or see this data at all.
+// Within that, see the row-level enteredBy filtering applied inside the
+// /api/fuel and /api/mileage handlers themselves (this middleware only gates
+// the module as a whole, the same two-layer pattern as requireHrAccess above).
 function requireFuelAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
-  if (sessionUser.department !== 'super_admin' && !FUEL_ENTRY_USER_EMAILS.includes(sessionUser.email || '')) {
+  if (
+    sessionUser.department !== 'super_admin' &&
+    !FUEL_ENTRY_USER_EMAILS.includes(sessionUser.email || '') &&
+    !FUEL_RQ_ID_ONLY_EMAILS.includes(sessionUser.email || '')
+  ) {
     return res.status(403).json({ error: 'You do not have access to Fuel Management.' });
   }
   next();
@@ -403,9 +414,13 @@ function requireVendorManagementAccess(req: express.Request, res: express.Respon
 // else only sees rows they personally entered, with enteredBy stripped out
 // (that "who entered it" information is for super admins only - even the
 // entering user themselves doesn't see it on their own rows).
-function filterEntryRowsForViewer<T extends { enteredBy?: string }>(rows: T[], sessionUser?: ReturnType<typeof getSessionUser>): T[] {
+// `fullViewEmails` is an opt-in extra allowlist for callers that need a
+// specific non-super-admin to see every row too (e.g. Divya on /api/fuel, to
+// manage RQ IDs across the whole ledger) - every other caller (petty-cash,
+// market-pod, mileage) omits it and keeps the plain super-admin-only rule.
+function filterEntryRowsForViewer<T extends { enteredBy?: string }>(rows: T[], sessionUser?: ReturnType<typeof getSessionUser>, fullViewEmails: string[] = []): T[] {
   if (!sessionUser) return [];
-  if (sessionUser.department === 'super_admin') return rows;
+  if (sessionUser.department === 'super_admin' || fullViewEmails.includes(sessionUser.email || '')) return rows;
   return rows
     .filter(r => r.enteredBy === sessionUser.username)
     .map(r => { const { enteredBy, ...rest } = r; return rest as T; });
@@ -1107,14 +1122,19 @@ async function startServer() {
   app.get('/api/fuel', async (req, res) => {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
-      res.json(filterEntryRowsForViewer(await getFuelLogs(), sessionUser));
+      res.json(filterEntryRowsForViewer(await getFuelLogs(), sessionUser, FUEL_RQ_ID_ONLY_EMAILS));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/fuel', async (req, res) => {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      // Divya never creates entries - guard even though the UI never offers
+      // her an Add Entry button.
+      if (sessionUser?.department !== 'super_admin' && FUEL_RQ_ID_ONLY_EMAILS.includes(sessionUser?.email || '')) {
+        return res.status(403).json({ error: 'You cannot add fuel entries.' });
+      }
       const result = await saveFuelLog({ ...req.body, enteredBy: sessionUser?.username });
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/fuel/:id', async (req, res) => {
@@ -1123,7 +1143,21 @@ async function startServer() {
       const existing = (await getFuelLogs()).find(l => l.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
       const result = await saveFuelLog({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  // Divya's restricted update path - only ever touches rqId on an existing
+  // entry, regardless of what else is in the request body.
+  app.put('/api/fuel/:id/rq-id', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      if (sessionUser?.department !== 'super_admin' && !FUEL_RQ_ID_ONLY_EMAILS.includes(sessionUser?.email || '')) {
+        return res.status(403).json({ error: 'You cannot edit this entry.' });
+      }
+      const existing = (await getFuelLogs()).find(l => l.id === req.params.id);
+      if (!existing) return res.status(404).json({ error: 'Fuel entry not found.' });
+      const result = await saveFuelLog({ ...existing, rqId: String(req.body.rqId || '').trim() });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/fuel/:id', async (req, res) => {
@@ -1132,7 +1166,7 @@ async function startServer() {
       const existing = (await getFuelLogs()).find(l => l.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
       const result = await deleteFuelLog(req.params.id);
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 

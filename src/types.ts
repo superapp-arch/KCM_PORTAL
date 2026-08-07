@@ -193,7 +193,8 @@ export interface PettyCashVoucher {
   location: string; // Manual location text
   clientName: string; // swiggy, RIL F&V, market load, etc.
   vendor: 'kcm insta' | 'kcm supply' | string; // kcm insta, kcm supply
-  vehicleNumber: string; // Vehicle number
+  vehicleNumber: string; // Vehicle number - from Fleet & Vehicles master
+  vendorVehicleNumber?: string; // Separate vendor-owned vehicle number - from Vendor Management's registered vehicleNumbers, not Fleet & Vehicles
   receiver: string; // Manual receiver text
   vendorId: string; // Vendor ID
   amountReceived: number; // Amount received
@@ -462,6 +463,7 @@ export interface MileageReport {
   mileage: number; // computed per trip = totalKm / litres (the REAL achieved efficiency this trip)
   costPerKm?: number; // auto = ratePerLitre / mileage
   driverName: string; // UI label "Authorized Driver" - supports multiple names, e.g. "Suresh / Adhithya"
+  driverId?: string; // auto-fetched from Driver Details (DriverEmployee.id) when Authorized Driver matches exactly one registered driver; manual entry allowed for drivers not yet registered
   location: string;
   remarks: string;
   actualMileage: number; // FIXED per-vehicle reference, looked up from the Vehicle Mileage Master (src/db/schema.ts: vehicleMileage) by vehicleNo - not manually typed

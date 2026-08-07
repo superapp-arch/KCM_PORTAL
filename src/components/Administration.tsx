@@ -66,6 +66,11 @@ const PETTY_CASH_ACCESS_EMAILS = ['vinod@kcmlogistics.in', 'ramesh@kcmlogistics.
 // FUEL_ENTRY_USER_EMAILS exactly.
 const FUEL_ACCESS_EMAILS = ['chandanreddy@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'ramesh@kcmlogistics.in'];
 
+// Divya gets Fuel Management too (RQ-ID-only, see server.ts's
+// FUEL_RQ_ID_ONLY_EMAILS), but not Mileage Report - kept separate from
+// FUEL_ACCESS_EMAILS above since her access is much narrower.
+const FUEL_RQ_ID_ONLY_EMAILS = ['divya@kcmlogistics.in'];
+
 // Displays the live header clock in Indian Standard Time regardless of the
 // device/browser's own timezone, so the portal reads consistently for an
 // India-based team.
@@ -101,6 +106,7 @@ interface AdministrationProps {
   onDeleteVehicle: (id: string) => Promise<void>;
   onAddFuelLog: (log: Omit<FuelLog, 'id'>) => Promise<void>;
   onUpdateFuelLog: (id: string, log: Partial<FuelLog>) => Promise<void>;
+  onUpdateFuelLogRqId: (id: string, rqId: string) => Promise<void>;
   onDeleteFuelLog: (id: string) => Promise<void>;
   onAddInvoice: (inv: Omit<BillingInvoice, 'id'>) => Promise<void>;
   onUpdateInvoice: (id: string, inv: Partial<BillingInvoice>) => Promise<void>;
@@ -176,6 +182,7 @@ export default function Administration({
   onDeleteVehicle,
   onAddFuelLog,
   onUpdateFuelLog,
+  onUpdateFuelLogRqId,
   onDeleteFuelLog,
   onAddInvoice,
   onUpdateInvoice,
@@ -351,6 +358,7 @@ export default function Administration({
     if (user.department === 'super_admin') return true;
     // Warehouse Details is super-admin-only for now; may open up to other roles later.
     if ((tabName === 'fuel' || tabName === 'mileage') && FUEL_ACCESS_EMAILS.includes(user.email || '')) return true;
+    if (tabName === 'fuel' && FUEL_RQ_ID_ONLY_EMAILS.includes(user.email || '')) return true;
     if (tabName === 'fleet' && (user.department === 'vehicle_manager' || user.email === 'bhagya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in')) return true;
     if (tabName === 'billing' && (user.department === 'billing' || user.email === 'bhagya@kcmlogistics.in')) return true;
     if (tabName === 'pettycash' && (user.department === 'petty_cash' || PETTY_CASH_ACCESS_EMAILS.includes(user.email || ''))) return true;
@@ -819,8 +827,10 @@ export default function Administration({
               logs={fuelLogs}
               onAddLog={onAddFuelLog}
               onUpdateLog={onUpdateFuelLog}
+              onUpdateFuelLogRqId={onUpdateFuelLogRqId}
               onDeleteLog={onDeleteFuelLog}
               vehicles={vehicles}
+              drivers={drivers}
               mileageReports={mileageReports}
               onAddMileageReport={onAddMileageReport}
               onUpdateMileageReport={onUpdateMileageReport}

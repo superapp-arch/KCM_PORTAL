@@ -159,6 +159,7 @@ export default function PettyCash({
   const [customClientName, setCustomClientName] = useState('');
   const [vendor, setVendor] = useState<PettyCashVoucher['vendor']>('kcm supply');
   const [vehicleNumber, setVehicleNumber] = useState('');
+  const [vendorVehicleNumber, setVendorVehicleNumber] = useState('');
   const [receiver, setReceiver] = useState('');
   const [vendorId, setVendorId] = useState('');
   const [amountReceived, setAmountReceived] = useState('');
@@ -217,6 +218,11 @@ export default function PettyCash({
   const mpBalance = (parseFloat(mpTotalFreight) || 0) - (parseFloat(mpReceivedAdvance) || 0) - (parseFloat(mpOtherExpenses) || 0);
 
   const mpVehicleList = Array.from(new Set(vehicles.map(v => v.regNo || v['Reg. No.'] || '').filter(Boolean))).sort();
+
+  // Vendor Vehicle Number autofetch list - Vendor Management's registered
+  // vehicles, not Fleet & Vehicles (separate source, for vendor-owned
+  // vehicles vs. own fleet).
+  const vendorVehicleList = Array.from(new Set(vendors.flatMap(v => v.vehicleNumbers || []).filter(Boolean))).sort();
 
   const vehicleByRegNo = (regNo: string): Vehicle | undefined =>
     vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === regNo.trim().toUpperCase());
@@ -414,6 +420,7 @@ export default function PettyCash({
     }
     setVendor(v.vendor);
     setVehicleNumber(v.vehicleNumber);
+    setVendorVehicleNumber(v.vendorVehicleNumber || '');
     setReceiver(v.receiver);
     setVendorId(v.vendorId);
     setAmountReceived(v.amountReceived ? String(v.amountReceived) : '');
@@ -430,6 +437,7 @@ export default function PettyCash({
     setCategoryInput('');
     setLocation('');
     setVehicleNumber('');
+    setVendorVehicleNumber('');
     setReceiver('');
     setVendorId('');
     setAmountReceived('');
@@ -468,6 +476,7 @@ export default function PettyCash({
         clientName: finalClient,
         vendor,
         vehicleNumber: vehicleNumber.toUpperCase().trim(),
+        vendorVehicleNumber: vendorVehicleNumber.toUpperCase().trim() || undefined,
         receiver: receiver.trim(),
         vendorId: vendorId.trim(),
         amountReceived: parseFloat(amountReceived) || 0,
@@ -529,11 +538,15 @@ export default function PettyCash({
   // Paid across all of their petty cash entries (computed live, not stored -
   // mathematically equivalent to an incremental running-balance chain, but
   // self-correcting if a past entry/advance is later edited or deleted).
-  const currentBalanceFor = (username: string): number => {
-    const totalAdvances = advancesFor(username).reduce((s, a) => s + (a.amount || 0), 0);
-    const totalSpent = vouchersFor(username).reduce((s, v) => s + (v.cashPaid || 0), 0);
-    return totalAdvances - totalSpent;
-  };
+  const receivedFor = (username: string): number => advancesFor(username).reduce((s, a) => s + (a.amount || 0), 0);
+  const disbursedFor = (username: string): number => vouchersFor(username).reduce((s, v) => s + (v.cashPaid || 0), 0);
+
+  const currentBalanceFor = (username: string): number => receivedFor(username) - disbursedFor(username);
+
+  // Who the Dashboard Summary cards break down by - all 3 logins for a Super
+  // Admin/Principal (who sees every user's rows), just the current user
+  // otherwise (server-filtered data means there's nothing else to show).
+  const dashboardSummaryUsers = isSuperAdmin ? PETTY_CASH_USERS : [{ username: user.username, label: user.name }];
 
   // Balance Net as of one specific voucher (for the table's "Balance Net"
   // column) - same formula, but only summing that user's cash paid up to and
@@ -885,62 +898,81 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
         </div>
       </div>
 
-      {/* Mini KPIs totals - kept at the top so they're visible without
-          scrolling past the table; figures respect the active ledger filters. */}
-      {activeTab === 'ledger' && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-            <span className="text-[10px] text-slate-400 font-bold uppercase">Total Received Float</span>
-            <div className="text-sm font-black text-slate-800 font-mono mt-0.5">
-              ₹{filteredVouchers.reduce((s,v)=>s+(v.amountReceived || 0), 0).toLocaleString('en-IN')}
-            </div>
-          </div>
-          <div className="bg-rose-50/30 p-3 rounded-xl border border-rose-100">
-            <span className="text-[10px] text-rose-500 font-bold uppercase">Total Disbursed Expenses</span>
-            <div className="text-sm font-black text-rose-700 font-mono mt-0.5">
-              ₹{filteredVouchers.reduce((s,v)=>s+(v.cashPaid || 0), 0).toLocaleString('en-IN')}
-            </div>
-          </div>
-          <div className="bg-emerald-50/30 p-3 rounded-xl border border-emerald-100">
-            <span className="text-[10px] text-emerald-600 font-bold uppercase">Net Remaining Balance</span>
-            <div className="text-sm font-black text-emerald-700 font-mono mt-0.5">
-              ₹{filteredVouchers.reduce((s,v)=>s+(v.balance || 0), 0).toLocaleString('en-IN')}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Balance Net Tracking: regular users see their own running balance;
-          Super Admin/Principal sees one card per Petty Cash login since they
-          see all 3 logins' rows at once. */}
-      {activeTab === 'ledger' && (
-        <div className="flex flex-wrap gap-3 text-xs">
-          {(isSuperAdmin ? PETTY_CASH_USERS : [{ username: user.username, label: user.name }]).map(u => {
-            const bal = currentBalanceFor(u.username);
-            return (
-              <div key={u.username} className={`flex-1 min-w-[180px] p-3 rounded-xl border flex items-center justify-between gap-2 ${bal < 0 ? 'bg-rose-50 border-rose-200' : 'bg-amber-50/50 border-amber-200'}`}>
-                <div>
-                  <span className={`text-[10px] font-bold uppercase flex items-center gap-1 ${bal < 0 ? 'text-rose-600' : 'text-amber-600'}`}>
-                    <Wallet className="w-3 h-3" /> {u.label}'s Balance Net
-                  </span>
-                  <div className={`text-sm font-black font-mono mt-0.5 flex items-center gap-1 ${bal < 0 ? 'text-rose-700' : 'text-amber-800'}`}>
-                    {bal < 0 && <AlertTriangle className="w-3.5 h-3.5" />}
-                    ₹{bal.toLocaleString('en-IN')}
-                  </div>
+      {/* Dashboard Summary - kept at the top so it's visible without
+          scrolling past the table. Built from the Balance Net ledger
+          (Amount Received advances + Cash Paid across entries), not the
+          filtered table below, so these numbers always reflect the whole
+          picture regardless of search/filter state. Each card shows the
+          combined grand total plus a per-person breakdown for a Super Admin/
+          Principal (who sees all 3 logins); a regular Petty Cash login only
+          ever has their own data server-side, so they just see their own
+          figure with no breakdown. */}
+      {activeTab === 'ledger' && (() => {
+        const totalReceived = dashboardSummaryUsers.reduce((s, u) => s + receivedFor(u.username), 0);
+        const totalDisbursed = dashboardSummaryUsers.reduce((s, u) => s + disbursedFor(u.username), 0);
+        const totalNetBalance = totalReceived - totalDisbursed;
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+              <span className="text-[10px] text-slate-400 font-bold uppercase flex items-center gap-1"><Wallet className="w-3 h-3" /> Total Received Float</span>
+              <div className="text-sm font-black text-slate-800 font-mono mt-0.5">₹{totalReceived.toLocaleString('en-IN')}</div>
+              {isSuperAdmin && (
+                <div className="mt-2 pt-2 border-t border-slate-200 space-y-0.5">
+                  {dashboardSummaryUsers.map(u => (
+                    <div key={u.username} className="flex items-center justify-between text-[10px] font-mono text-slate-500">
+                      <span className="font-sans font-semibold">{u.label}</span>
+                      <span>₹{receivedFor(u.username).toLocaleString('en-IN')}</span>
+                    </div>
+                  ))}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => { setBalanceUserFilter(u.username); setShowAdvanceModal(true); }}
-                  title={`Log Amount Received for ${u.label}`}
-                  className="p-1.5 bg-white border border-amber-200 text-amber-700 hover:bg-amber-100 rounded-lg cursor-pointer shrink-0 transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
+              )}
+            </div>
+
+            <div className="bg-rose-50/30 p-3 rounded-xl border border-rose-100">
+              <span className="text-[10px] text-rose-500 font-bold uppercase">Total Disbursed Expenses</span>
+              <div className="text-sm font-black text-rose-700 font-mono mt-0.5">₹{totalDisbursed.toLocaleString('en-IN')}</div>
+              {isSuperAdmin && (
+                <div className="mt-2 pt-2 border-t border-rose-100 space-y-0.5">
+                  {dashboardSummaryUsers.map(u => (
+                    <div key={u.username} className="flex items-center justify-between text-[10px] font-mono text-rose-500">
+                      <span className="font-sans font-semibold">{u.label}</span>
+                      <span>₹{disbursedFor(u.username).toLocaleString('en-IN')}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className={`p-3 rounded-xl border ${totalNetBalance < 0 ? 'bg-rose-50 border-rose-200' : 'bg-emerald-50/30 border-emerald-100'}`}>
+              <span className={`text-[10px] font-bold uppercase flex items-center gap-1 ${totalNetBalance < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                {totalNetBalance < 0 && <AlertTriangle className="w-3 h-3" />} Net Remaining Balance
+              </span>
+              <div className={`text-sm font-black font-mono mt-0.5 ${totalNetBalance < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>₹{totalNetBalance.toLocaleString('en-IN')}</div>
+              <div className={`mt-2 pt-2 border-t space-y-0.5 ${totalNetBalance < 0 ? 'border-rose-200' : 'border-emerald-100'}`}>
+                {dashboardSummaryUsers.map(u => {
+                  const bal = currentBalanceFor(u.username);
+                  return (
+                    <div key={u.username} className={`flex items-center justify-between text-[10px] font-mono ${bal < 0 ? 'text-rose-600 font-bold' : 'text-emerald-700'}`}>
+                      <span className="font-sans font-semibold">{u.label}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span>₹{bal.toLocaleString('en-IN')}</span>
+                        <button
+                          type="button"
+                          onClick={() => { setBalanceUserFilter(u.username); setShowAdvanceModal(true); }}
+                          title={`Log Amount Received for ${u.label}`}
+                          className="p-0.5 bg-white border border-current rounded cursor-pointer opacity-70 hover:opacity-100 transition-opacity"
+                        >
+                          <Plus className="w-2.5 h-2.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
-      )}
+            </div>
+          </div>
+        );
+      })()}
 
       {notif && (
         <div
@@ -1128,6 +1160,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <th className="px-3 py-2.5">Client</th>
                     <th className="px-3 py-2.5">Vendor</th>
                     <th className="px-3 py-2.5"><SortHeader label="Vehicle #" sortKey="vehicleNumber" sort={sort} onSort={handleSort} type="numeric" /></th>
+                    <th className="px-3 py-2.5">Vendor Vehicle #</th>
                     <th className="px-3 py-2.5">Receiver</th>
                     <th className="px-3 py-2.5">Vendor ID</th>
                     <th className="px-3 py-2.5 text-right">Amt Rec</th>
@@ -1142,7 +1175,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
                   {filteredVouchers.length === 0 ? (
                     <tr>
-                      <td colSpan={15 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
+                      <td colSpan={16 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
                         NO RECORDED PETTY CASH VOUCHERS MATCH THE SELECTION.
                         <div className="text-[10px] text-slate-400 font-sans mt-1">Use "Add Petty Cash Entry" above to authorize new cash disbursements.</div>
                       </td>
@@ -1167,6 +1200,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           </span>
                         </td>
                         <td className="px-3 py-2 font-mono font-bold text-slate-800 whitespace-nowrap">{v.vehicleNumber || '-'}</td>
+                        <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">{v.vendorVehicleNumber || '-'}</td>
                         <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{v.receiver}</td>
                         <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{v.vendorId || '-'}</td>
                         <td className="px-3 py-2 text-right font-mono text-slate-600">₹{(v.amountReceived || 0).toLocaleString('en-IN')}</td>
@@ -2035,6 +2069,27 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                       />
                     </div>
+                  </div>
+
+                  {/* Vendor Vehicle Number - separate from Vehicle Number
+                      above: this one is vendor-owned vehicles, sourced from
+                      Vendor Management's registered vehicleNumbers rather
+                      than Fleet & Vehicles. */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Vendor Vehicle Number</label>
+                    <input
+                      type="text"
+                      list="petty-cash-vendor-vehicles-datalist"
+                      placeholder="Search or select a vendor-owned vehicle"
+                      value={vendorVehicleNumber}
+                      onChange={(e) => setVendorVehicleNumber(e.target.value.toUpperCase())}
+                      autoComplete="off"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 uppercase font-bold"
+                    />
+                    <datalist id="petty-cash-vendor-vehicles-datalist">
+                      {vendorVehicleList.map(v => <option key={v} value={v} />)}
+                    </datalist>
+                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">Live from Vendor Management&apos;s registered vehicles - type to search.</p>
                   </div>
 
                   {/* Vendor ID / Driver ID & Trip Sheet */}
