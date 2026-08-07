@@ -19,7 +19,10 @@ import {
   VehicleLoan,
   BusinessLoan,
   MarketPodEntry,
-  PettyCashAdvance
+  PettyCashAdvance,
+  VehicleMaintenanceProfile,
+  MaintenanceServiceStation,
+  BreakdownReport
 } from '../types';
 import FleetSheet from './FleetSheet';
 import FuelManagement from './FuelManagement';
@@ -117,6 +120,17 @@ interface AdministrationProps {
   onAddMaintenanceRecord: (record: Omit<MaintenanceRecord, 'id'>) => Promise<void>;
   onUpdateMaintenanceRecord: (id: string, record: Partial<MaintenanceRecord>) => Promise<void>;
   onDeleteMaintenanceRecord: (id: string) => Promise<void>;
+  vehicleMaintenanceProfiles: VehicleMaintenanceProfile[];
+  onAddVehicleMaintenanceProfile: (profile: Omit<VehicleMaintenanceProfile, 'id'> & { id: string }) => Promise<void>;
+  onUpdateVehicleMaintenanceProfile: (id: string, profile: Partial<VehicleMaintenanceProfile>) => Promise<void>;
+  onDeleteVehicleMaintenanceProfile: (id: string) => Promise<void>;
+  maintenanceServiceStations: MaintenanceServiceStation[];
+  onAddMaintenanceServiceStation: (station: Omit<MaintenanceServiceStation, 'id'>) => Promise<void>;
+  onDeleteMaintenanceServiceStation: (id: string) => Promise<void>;
+  breakdownReports: BreakdownReport[];
+  onAddBreakdownReport: (report: Omit<BreakdownReport, 'id'>) => Promise<void>;
+  onUpdateBreakdownReport: (id: string, report: Partial<BreakdownReport>) => Promise<void>;
+  onDeleteBreakdownReport: (id: string) => Promise<void>;
   onAddAccountsEntry: (entry: Omit<AccountsEntry, 'id'>) => Promise<void>;
   onUpdateAccountsEntry: (id: string, entry: Partial<AccountsEntry>) => Promise<void>;
   onDeleteAccountsEntry: (id: string) => Promise<void>;
@@ -193,6 +207,17 @@ export default function Administration({
   onAddMaintenanceRecord,
   onUpdateMaintenanceRecord,
   onDeleteMaintenanceRecord,
+  vehicleMaintenanceProfiles,
+  onAddVehicleMaintenanceProfile,
+  onUpdateVehicleMaintenanceProfile,
+  onDeleteVehicleMaintenanceProfile,
+  maintenanceServiceStations,
+  onAddMaintenanceServiceStation,
+  onDeleteMaintenanceServiceStation,
+  breakdownReports,
+  onAddBreakdownReport,
+  onUpdateBreakdownReport,
+  onDeleteBreakdownReport,
   onAddAccountsEntry,
   onUpdateAccountsEntry,
   onDeleteAccountsEntry,
@@ -875,11 +900,25 @@ export default function Administration({
           )}
 
           {activeTab === 'maintenance' && hasAccess('maintenance') && (
-            <Maintenance 
-              records={records} 
-              onAddRecord={onAddMaintenanceRecord} 
+            <Maintenance
+              records={records}
+              onAddRecord={onAddMaintenanceRecord}
               onUpdateRecord={onUpdateMaintenanceRecord}
               onDeleteRecord={onDeleteMaintenanceRecord}
+              vehicles={vehicles}
+              drivers={drivers}
+              mileageReports={mileageReports}
+              vehicleMaintenanceProfiles={vehicleMaintenanceProfiles}
+              onAddVehicleMaintenanceProfile={onAddVehicleMaintenanceProfile}
+              onUpdateVehicleMaintenanceProfile={onUpdateVehicleMaintenanceProfile}
+              onDeleteVehicleMaintenanceProfile={onDeleteVehicleMaintenanceProfile}
+              serviceStations={maintenanceServiceStations}
+              onAddServiceStation={onAddMaintenanceServiceStation}
+              onDeleteServiceStation={onDeleteMaintenanceServiceStation}
+              breakdownReports={breakdownReports}
+              onAddBreakdownReport={onAddBreakdownReport}
+              onUpdateBreakdownReport={onUpdateBreakdownReport}
+              onDeleteBreakdownReport={onDeleteBreakdownReport}
             />
           )}
 

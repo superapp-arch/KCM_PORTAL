@@ -242,15 +242,74 @@ export interface MarketPodEntry {
   enteredBy?: string; // username, stamped server-side; row-level-filtered to the 3 Petty Cash logins, visible only to super admins
 }
 
+// A single line item within a maintenance visit (item 10: costs must be
+// traceable to what was actually done, not one lump sum per visit).
+export interface MaintenanceWorkItem {
+  description: string;
+  cost: number;
+}
+
 export interface MaintenanceRecord {
   id: string;
   regNo: string;
   date: string;
-  serviceType: 'Scheduled Servicing' | 'Breakdown Repair' | 'Parts Replacement';
+  serviceType: 'Scheduled Servicing' | 'Breakdown Repair' | 'Parts Replacement' | 'Electrical Repair';
   description: string;
-  cost: number;
-  garageName: string;
+  cost: number; // legacy lump-sum field; once workItems is set, this is always the computed sum of workItems - kept for old records saved before workItems existed
+  workItems?: MaintenanceWorkItem[]; // per-work-item costing for this visit
+  garageName: string; // legacy free-text; new entries prefer serviceStationId
+  serviceStationId?: string; // from the Authorised Service Station master (MaintenanceServiceStation)
+  driverName?: string; // who was driving/responsible for the vehicle at the time of this service
+  driverId?: string; // auto-fetched from Driver Details when driverName matches exactly one registered driver; manual entry allowed otherwise
+  breakdownReportId?: string; // links this record back to the BreakdownReport it resolves, when logged as a Workshop Visit
   documents?: VehicleDocument[];
+}
+
+// Authorised Service Station master list - Service Station is a dropdown of
+// these, not free text, to keep it standardized.
+export interface MaintenanceServiceStation {
+  id: string;
+  name: string;
+}
+
+// One record per vehicle (id = Reg. No.) holding maintenance data that
+// belongs to the vehicle itself rather than to any one service visit -
+// warranty, tyres, wheel alignment, battery, and the tools checklist.
+export interface VehicleMaintenanceProfile {
+  id: string; // Reg. No.
+  regNo: string;
+  warrantyStatus: 'Under Warranty' | 'Non-Warranty';
+  // Service due-soon/overdue is computed from the vehicle's last
+  // MaintenanceRecord date/odometer plus whichever of these is set - see
+  // computeServiceDueStatus in src/utils/maintenanceDates.ts. Either or both
+  // may be left blank if that vehicle isn't tracked that way.
+  serviceIntervalDays?: number;
+  serviceIntervalKm?: number;
+  serviceLastOdometerKm?: number; // odometer reading at the last service, as a baseline for the KM interval - set manually or from the last MaintenanceRecord
+  wheelAlignmentLastDate?: string; // YYYY-MM-DD
+  wheelAlignmentIntervalDays?: number;
+  wheelAlignmentIntervalKm?: number;
+  wheelAlignmentLastOdometerKm?: number; // odometer reading at the last alignment
+  batteryNumber?: string;
+  tyres: { brand: string; kmRun: number; position?: string }[];
+  // Seeded with Jack / Jack Rod / Tommy Bar / Spanner but freely extensible -
+  // "add more if applicable".
+  toolsChecklist: { name: string; present: boolean }[];
+}
+
+// A vehicle breaking down at a location, reported before (or without) a
+// repair having happened yet. Once a Workshop Visit (MaintenanceRecord with
+// breakdownReportId set) is logged against it, status flips to Resolved.
+export interface BreakdownReport {
+  id: string;
+  regNo: string;
+  date: string;
+  location: string;
+  description: string;
+  driverName?: string;
+  driverId?: string;
+  status: 'Open' | 'Resolved';
+  workshopVisitId?: string; // the MaintenanceRecord.id that resolved this breakdown
 }
 
 export interface AccountsEntry {

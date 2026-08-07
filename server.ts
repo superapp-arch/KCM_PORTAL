@@ -44,7 +44,10 @@ import {
   VehicleLoan,
   BusinessLoan,
   MarketPodEntry,
-  PettyCashAdvance
+  PettyCashAdvance,
+  VehicleMaintenanceProfile,
+  MaintenanceServiceStation,
+  BreakdownReport
 } from './src/types.ts';
 import {
   seedDatabase,
@@ -73,6 +76,15 @@ import {
   getMaintenanceRecords,
   saveMaintenanceRecord,
   deleteMaintenanceRecord,
+  getVehicleMaintenanceProfiles,
+  saveVehicleMaintenanceProfile,
+  deleteVehicleMaintenanceProfile,
+  getMaintenanceServiceStations,
+  saveMaintenanceServiceStation,
+  deleteMaintenanceServiceStation,
+  getBreakdownReports,
+  saveBreakdownReport,
+  deleteBreakdownReport,
   getAccountsEntries,
   saveAccountsEntry,
   deleteAccountsEntry,
@@ -1296,6 +1308,42 @@ async function startServer() {
   });
   app.delete('/api/maintenance/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteMaintenanceRecord(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/vehicle-maintenance-profiles', async (req, res) => {
+    try { res.json(await getVehicleMaintenanceProfiles()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/vehicle-maintenance-profiles', async (req, res) => {
+    try { res.json({ success: true, data: await saveVehicleMaintenanceProfile(req.body as VehicleMaintenanceProfile) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/vehicle-maintenance-profiles/:id', async (req, res) => {
+    try { res.json({ success: true, data: await saveVehicleMaintenanceProfile({ ...req.body, id: req.params.id } as VehicleMaintenanceProfile) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/vehicle-maintenance-profiles/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteVehicleMaintenanceProfile(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/maintenance-service-stations', async (req, res) => {
+    try { res.json(await getMaintenanceServiceStations()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/maintenance-service-stations', async (req, res) => {
+    try { res.json({ success: true, data: await saveMaintenanceServiceStation(req.body as MaintenanceServiceStation) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/maintenance-service-stations/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteMaintenanceServiceStation(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/breakdown-reports', async (req, res) => {
+    try { res.json(await getBreakdownReports()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/breakdown-reports', async (req, res) => {
+    try { res.json({ success: true, data: await saveBreakdownReport(req.body as BreakdownReport) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/breakdown-reports/:id', async (req, res) => {
+    try { res.json({ success: true, data: await saveBreakdownReport({ ...req.body, id: req.params.id } as BreakdownReport) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/breakdown-reports/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteBreakdownReport(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.get('/api/accounts', async (req, res) => {

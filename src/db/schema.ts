@@ -188,4 +188,28 @@ export const pettyCashAdvances = pgTable('petty_cash_advances', {
   data: text('data').notNull(), // JSON string representing the full PettyCashAdvance object
 });
 
+// Fleet Maintenance module tables
+
+// Per-vehicle maintenance data (warranty, tyres, wheel alignment, battery,
+// tools checklist) - separate from vehicles' core Fleet & Vehicles record.
+export const vehicleMaintenanceProfiles = pgTable('vehicle_maintenance_profiles', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full VehicleMaintenanceProfile object
+});
+
+// Authorised Service Station master list, for the Service Ledger's Service
+// Station dropdown.
+export const maintenanceServiceStations = pgTable('maintenance_service_stations', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full MaintenanceServiceStation object
+});
+
+// Breakdown reports - a vehicle breaking down, logged separately from the
+// repair record so it can show up as "currently broken down" before (or
+// without) a Workshop Visit having happened yet.
+export const breakdownReports = pgTable('breakdown_reports', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full BreakdownReport object
+});
+
 

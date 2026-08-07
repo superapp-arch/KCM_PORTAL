@@ -28,7 +28,10 @@ import {
   vehicleLoans,
   businessLoans,
   marketPodEntries,
-  pettyCashAdvances
+  pettyCashAdvances,
+  vehicleMaintenanceProfiles,
+  maintenanceServiceStations,
+  breakdownReports
 } from './schema.ts';
 import { eq, ne } from 'drizzle-orm';
 import { hashPassword, isHashed } from '../auth/password.ts';
@@ -61,7 +64,10 @@ import {
   VehicleLoan,
   BusinessLoan,
   MarketPodEntry,
-  PettyCashAdvance
+  PettyCashAdvance,
+  VehicleMaintenanceProfile,
+  MaintenanceServiceStation,
+  BreakdownReport
 } from '../types.ts';
 
 // Default Users Seed
@@ -687,6 +693,126 @@ export async function deleteMaintenanceRecord(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteMaintenanceRecord:", error);
     throw new Error("Failed to delete maintenance record.", { cause: error });
+  }
+}
+
+// --- VEHICLE MAINTENANCE PROFILE OPERATIONS ---
+export async function getVehicleMaintenanceProfiles(): Promise<VehicleMaintenanceProfile[]> {
+  try {
+    const rows = await db.select().from(vehicleMaintenanceProfiles);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getVehicleMaintenanceProfiles:", error);
+    throw new Error("Failed to retrieve vehicle maintenance profiles.", { cause: error });
+  }
+}
+
+export async function saveVehicleMaintenanceProfile(profile: VehicleMaintenanceProfile) {
+  try {
+    const id = profile.id || profile.regNo;
+    const completeProfile = { ...profile, id };
+    const dataString = JSON.stringify(completeProfile);
+
+    const existing = await db.select().from(vehicleMaintenanceProfiles).where(eq(vehicleMaintenanceProfiles.id, id));
+    if (existing.length > 0) {
+      await db.update(vehicleMaintenanceProfiles).set({ data: dataString }).where(eq(vehicleMaintenanceProfiles.id, id));
+    } else {
+      await db.insert(vehicleMaintenanceProfiles).values({ id, data: dataString });
+    }
+    return await getVehicleMaintenanceProfiles();
+  } catch (error) {
+    console.error("Database action failed in saveVehicleMaintenanceProfile:", error);
+    throw new Error("Failed to save vehicle maintenance profile.", { cause: error });
+  }
+}
+
+export async function deleteVehicleMaintenanceProfile(id: string) {
+  try {
+    await db.delete(vehicleMaintenanceProfiles).where(eq(vehicleMaintenanceProfiles.id, id));
+    return await getVehicleMaintenanceProfiles();
+  } catch (error) {
+    console.error("Database action failed in deleteVehicleMaintenanceProfile:", error);
+    throw new Error("Failed to delete vehicle maintenance profile.", { cause: error });
+  }
+}
+
+// --- MAINTENANCE SERVICE STATION OPERATIONS ---
+export async function getMaintenanceServiceStations(): Promise<MaintenanceServiceStation[]> {
+  try {
+    const rows = await db.select().from(maintenanceServiceStations);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getMaintenanceServiceStations:", error);
+    throw new Error("Failed to retrieve maintenance service stations.", { cause: error });
+  }
+}
+
+export async function saveMaintenanceServiceStation(station: MaintenanceServiceStation) {
+  try {
+    const id = station.id || String(Date.now());
+    const completeStation = { ...station, id };
+    const dataString = JSON.stringify(completeStation);
+
+    const existing = await db.select().from(maintenanceServiceStations).where(eq(maintenanceServiceStations.id, id));
+    if (existing.length > 0) {
+      await db.update(maintenanceServiceStations).set({ data: dataString }).where(eq(maintenanceServiceStations.id, id));
+    } else {
+      await db.insert(maintenanceServiceStations).values({ id, data: dataString });
+    }
+    return await getMaintenanceServiceStations();
+  } catch (error) {
+    console.error("Database action failed in saveMaintenanceServiceStation:", error);
+    throw new Error("Failed to save maintenance service station.", { cause: error });
+  }
+}
+
+export async function deleteMaintenanceServiceStation(id: string) {
+  try {
+    await db.delete(maintenanceServiceStations).where(eq(maintenanceServiceStations.id, id));
+    return await getMaintenanceServiceStations();
+  } catch (error) {
+    console.error("Database action failed in deleteMaintenanceServiceStation:", error);
+    throw new Error("Failed to delete maintenance service station.", { cause: error });
+  }
+}
+
+// --- BREAKDOWN REPORT OPERATIONS ---
+export async function getBreakdownReports(): Promise<BreakdownReport[]> {
+  try {
+    const rows = await db.select().from(breakdownReports);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getBreakdownReports:", error);
+    throw new Error("Failed to retrieve breakdown reports.", { cause: error });
+  }
+}
+
+export async function saveBreakdownReport(report: BreakdownReport) {
+  try {
+    const id = report.id || String(Date.now());
+    const completeReport = { ...report, id };
+    const dataString = JSON.stringify(completeReport);
+
+    const existing = await db.select().from(breakdownReports).where(eq(breakdownReports.id, id));
+    if (existing.length > 0) {
+      await db.update(breakdownReports).set({ data: dataString }).where(eq(breakdownReports.id, id));
+    } else {
+      await db.insert(breakdownReports).values({ id, data: dataString });
+    }
+    return await getBreakdownReports();
+  } catch (error) {
+    console.error("Database action failed in saveBreakdownReport:", error);
+    throw new Error("Failed to save breakdown report.", { cause: error });
+  }
+}
+
+export async function deleteBreakdownReport(id: string) {
+  try {
+    await db.delete(breakdownReports).where(eq(breakdownReports.id, id));
+    return await getBreakdownReports();
+  } catch (error) {
+    console.error("Database action failed in deleteBreakdownReport:", error);
+    throw new Error("Failed to delete breakdown report.", { cause: error });
   }
 }
 
