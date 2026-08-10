@@ -290,13 +290,15 @@ export default function FuelManagement({
     setAmount(String(parseFloat((l * r).toFixed(2))));
   }, [ltrs, rate]);
 
-  // RQ ID auto-fill: whenever both Client and Type are "KCM", RQ ID becomes
-  // "KCM" and is locked (see the rqIdLocked/isRqIdOnlyUser input below) for
-  // everyone except Divya, who manages RQ IDs directly.
+  // RQ ID: whenever Client is "KCM", it auto-fills to "KCM". Regardless of
+  // Client, the field is locked for everyone except Divya (who manages RQ
+  // IDs directly, here and via her exclusive inline edit on the ledger
+  // table) and a Super Admin override - nobody else can set or change it on
+  // this form, on any entry.
   useEffect(() => {
-    if (client === 'KCM' && entryType === 'KCM') setRqId('KCM');
-  }, [client, entryType]);
-  const rqIdLocked = client === 'KCM' && entryType === 'KCM' && !isRqIdOnlyUser;
+    if (client === 'KCM') setRqId('KCM');
+  }, [client]);
+  const rqIdLocked = !isRqIdOnlyUser && user.department !== 'super_admin';
 
   // Vendor Name/Code/Vehicle all come from the Vendor Management registry
   // (vendorProfiles) - there is no separate "Manage Vendors" list anymore.
@@ -1681,7 +1683,7 @@ export default function FuelManagement({
                         className={`w-full border rounded-lg p-2 ${rqIdLocked ? 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50 border-slate-200 text-slate-800'}`}
                       />
                       {rqIdLocked && (
-                        <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-filled for Client + Type = KCM - only Divya can edit this.</p>
+                        <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-filled to "KCM" when Client = KCM, blank otherwise - only Divya (or a Super Admin) can enter or edit RQ ID.</p>
                       )}
                     </div>
                   </div>

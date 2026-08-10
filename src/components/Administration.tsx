@@ -32,6 +32,7 @@ import FuelManagement from './FuelManagement';
 import Billing from './Billing';
 import PettyCash from './PettyCash';
 import Maintenance from './Maintenance';
+import Reports from './Reports';
 import Accounts from './Accounts';
 import HR from './HR';
 import WarehouseDetails from './WarehouseDetails';
@@ -46,7 +47,7 @@ import {
   LogOut, ShieldAlert, FileSpreadsheet, Fuel, FileText, Landmark,
   Settings, DollarSign, Contact, Bell, Mail, RefreshCw, CheckCircle, Clock,
   KeyRound, Cpu, Terminal, Copy, Check, Eye, EyeOff, Warehouse, Gauge, X,
-  Truck, Building2, HandCoins, Menu
+  Truck, Building2, HandCoins, Menu, BarChart3
 } from 'lucide-react';
 
 // Driver Details module gate - mirrors server.ts's DRIVER_LOCATION_SCOPES
@@ -458,6 +459,11 @@ export default function Administration({
   const PINK_ACTIVE = 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500';
   const navItems: Array<{ id: string; label: string; icon: React.ComponentType<{ className?: string }>; iconColor: string; active: string; visible: boolean; badge?: number }> = [
     { id: 'admin-overview', label: 'Super Admin Terminal', icon: ShieldAlert, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: user.department === 'super_admin', badge: unreadCount },
+    // Super Admin / Principal only - hasAccess() already grants every tab to
+    // department === 'super_admin' unconditionally, and no other branch
+    // matches 'reports', so this is never reachable by any other role. This
+    // now surfaces Payroll/salary data, so keep it that way.
+    { id: 'reports', label: 'Reports', icon: BarChart3, iconColor: 'text-violet-400', active: 'bg-gradient-to-r from-violet-500/20 to-purple-500/20 text-violet-300 border-l-4 border-violet-500', visible: hasAccess('reports') },
     { id: 'fleet', label: 'Fleet & Vehicles', icon: FileSpreadsheet, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fleet') },
     { id: 'fuel', label: 'Fuel Management', icon: Fuel, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fuel') },
     { id: 'mileage', label: 'Mileage Report', icon: Gauge, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('mileage') },
@@ -943,6 +949,28 @@ export default function Administration({
               toolsChecklistRecords={toolsChecklistRecords}
               onSaveToolsChecklistRecord={onSaveToolsChecklistRecord}
               onDeleteToolsChecklistRecord={onDeleteToolsChecklistRecord}
+            />
+          )}
+
+          {activeTab === 'reports' && hasAccess('reports') && (
+            <Reports
+              user={user}
+              vehicles={vehicles}
+              fuelLogs={fuelLogs}
+              mileageReports={mileageReports}
+              vendors={vendors}
+              drivers={drivers}
+              vehicleLoans={vehicleLoans}
+              businessLoans={businessLoans}
+              invoices={invoices}
+              vouchers={vouchers}
+              pettyCashAdvances={pettyCashAdvances}
+              marketPodEntries={marketPodEntries}
+              records={records}
+              breakdownReports={breakdownReports}
+              entries={entries}
+              employees={employees}
+              warehouseEntries={warehouseEntries}
             />
           )}
 

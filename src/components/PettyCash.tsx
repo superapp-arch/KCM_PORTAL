@@ -260,6 +260,10 @@ export default function PettyCash({
   // Cash tab date filter - '' shows the all-time cumulative total; picking a
   // date narrows the breakdown to that day's Cash-mode Market POD entries.
   const [cashDateFilter, setCashDateFilter] = useState('');
+  // Traceability list toggle for the Cash tab - shows the individual Market
+  // POD Cash-mode entries (vehicle, date, freight, advance, balance) feeding
+  // the all-time totals, rather than just the blind aggregate.
+  const [showCashEntries, setShowCashEntries] = useState(false);
 
   const mpBalance = (parseFloat(mpTotalFreight) || 0) - (parseFloat(mpReceivedAdvance) || 0) - (parseFloat(mpOtherExpenses) || 0);
 
@@ -678,9 +682,29 @@ export default function PettyCash({
     isSuperAdmin ? marketPodEntries.filter(e => e.enteredBy === username) : marketPodEntries;
   const cashEntriesFor = (username: string): MarketPodEntry[] =>
     marketPodEntriesFor(username).filter(e => e.paymentMode === 'Cash');
-  const cashFor = (username: string): number => cashEntriesFor(username).reduce((s, e) => s + (e.extraTripAmount || 0), 0);
-  const cashOnDateFor = (username: string, date: string): number =>
-    cashEntriesFor(username).filter(e => e.date === date).reduce((s, e) => s + (e.extraTripAmount || 0), 0);
+
+  // Every Cash-mode Market POD entry across the users the dashboard is
+  // scoped to (see dashboardSummaryUsers above), tagged with whose ledger it
+  // came from - this is the traceable list the Cash tab now shows underneath
+  // its totals, not just a blind aggregate. Optionally narrowed to one date.
+  const allCashEntries = (dateFilter?: string): (MarketPodEntry & { ownerLabel: string })[] =>
+    dashboardSummaryUsers.flatMap(u =>
+      cashEntriesFor(u.username)
+        .filter(e => !dateFilter || e.date === dateFilter)
+        .map(e => ({ ...e, ownerLabel: u.label }))
+    );
+
+  // Total Freight / Total Received Advance / Total Balance across a set of
+  // Cash-mode Market POD entries - these are the 3 figures now on the Cash
+  // tab (previously just a single extraTripAmount sum).
+  const cashTotals = (entries: MarketPodEntry[]) => entries.reduce(
+    (acc, e) => ({
+      freight: acc.freight + (e.totalFreight || 0),
+      advance: acc.advance + (e.receivedAdvance || 0),
+      balance: acc.balance + (e.balance || 0)
+    }),
+    { freight: 0, advance: 0, balance: 0 }
+  );
 
   // Balance Net as of one specific voucher (for the table's "Balance Net"
   // column) - same formula, but only summing that user's cash paid up to and
@@ -1055,8 +1079,14 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
         const totalReceived = dashboardSummaryUsers.reduce((s, u) => s + receivedFor(u.username), 0);
         const totalDisbursed = dashboardSummaryUsers.reduce((s, u) => s + disbursedFor(u.username), 0);
         const totalNetBalance = totalReceived - totalDisbursed;
-        const totalCash = dashboardSummaryUsers.reduce((s, u) => s + cashFor(u.username), 0);
-        const totalCashOnDate = cashDateFilter ? dashboardSummaryUsers.reduce((s, u) => s + cashOnDateFor(u.username, cashDateFilter), 0) : null;
+        const allTimeCashEntries = allCashEntries();
+        const allTimeCashTotals = cashTotals(allTimeCashEntries);
+        const onDateCashEntries = cashDateFilter ? allCashEntries(cashDateFilter) : null;
+        const onDateCashTotals = onDateCashEntries ? cashTotals(onDateCashEntries) : null;
+        // The list underneath shows whichever scope is currently selected -
+        // the date-filtered entries when a date is picked, all-time otherwise
+        // - newest first so the most recent trip is always on top.
+        const displayedCashEntries = [...(onDateCashEntries || allTimeCashEntries)].sort((a, b) => (a.date < b.date ? 1 : -1));
         return (
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
             <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
@@ -1117,13 +1147,29 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
               </div>
             </div>
 
-            {/* Cash - Market POD entries with Payment Mode = Cash, tagged by
-                that entry's date. Shows the all-time cumulative total plus a
-                date filter to drill into any specific day. */}
+            {/* Cash - Market POD entries with Payment Mode = Cash (the
+                "empty return, made a trip via a broker instead" side income).
+                Shows all-time Total Freight / Total Advance / Total Balance,
+                an optional date drill-down, and a traceable list of the
+                individual trips feeding those totals. Updates immediately -
+                it's computed live from marketPodEntries, no separate entry
+                needed here. */}
             <div className="bg-teal-50/30 p-3 rounded-xl border border-teal-100">
-              <span className="text-[10px] text-teal-600 font-bold uppercase flex items-center gap-1"><Banknote className="w-3 h-3" /> Cash</span>
-              <div className="text-sm font-black text-teal-700 font-mono mt-0.5">₹{totalCash.toLocaleString('en-IN')}</div>
-              <p className="text-[9px] text-teal-500/80 font-mono mt-0.5">All-time, from Market POD</p>
+              <span className="text-[10px] text-teal-600 font-bold uppercase flex items-center gap-1"><Banknote className="w-3 h-3" /> Cash (All-time, from Market POD)</span>
+              <div className="grid grid-cols-3 gap-1.5 mt-1">
+                <div>
+                  <div className="text-[8px] text-teal-500/80 font-bold uppercase">Freight</div>
+                  <div className="text-xs font-black text-teal-700 font-mono">₹{allTimeCashTotals.freight.toLocaleString('en-IN')}</div>
+                </div>
+                <div>
+                  <div className="text-[8px] text-teal-500/80 font-bold uppercase">Advance</div>
+                  <div className="text-xs font-black text-teal-700 font-mono">₹{allTimeCashTotals.advance.toLocaleString('en-IN')}</div>
+                </div>
+                <div>
+                  <div className="text-[8px] text-teal-500/80 font-bold uppercase">Balance</div>
+                  <div className="text-xs font-black text-teal-700 font-mono">₹{allTimeCashTotals.balance.toLocaleString('en-IN')}</div>
+                </div>
+              </div>
               <div className="mt-2 pt-2 border-t border-teal-100 space-y-1.5">
                 <div className="flex items-center gap-1">
                   <DateInput value={cashDateFilter} onChange={(e) => setCashDateFilter(e.target.value)} className="flex-1 min-w-0 bg-white border border-teal-200 rounded px-1.5 py-1 text-[10px] font-mono text-teal-800" />
@@ -1133,18 +1179,36 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     </button>
                   )}
                 </div>
-                {cashDateFilter && (
-                  <div className="text-[10px] font-mono text-teal-700 font-bold flex items-center justify-between">
-                    <span className="font-sans font-semibold">On {cashDateFilter}</span>
-                    <span>₹{(totalCashOnDate || 0).toLocaleString('en-IN')}</span>
+                {onDateCashTotals && (
+                  <div className="text-[10px] font-mono text-teal-700 font-bold space-y-0.5">
+                    <div className="font-sans font-semibold text-teal-600">On {cashDateFilter}</div>
+                    <div className="flex items-center justify-between"><span>Freight</span><span>₹{onDateCashTotals.freight.toLocaleString('en-IN')}</span></div>
+                    <div className="flex items-center justify-between"><span>Advance</span><span>₹{onDateCashTotals.advance.toLocaleString('en-IN')}</span></div>
+                    <div className="flex items-center justify-between"><span>Balance</span><span>₹{onDateCashTotals.balance.toLocaleString('en-IN')}</span></div>
                   </div>
                 )}
-                {isSuperAdmin && (
-                  <div className="pt-1.5 border-t border-teal-100 space-y-0.5">
-                    {dashboardSummaryUsers.map(u => (
-                      <div key={u.username} className="flex items-center justify-between text-[10px] font-mono text-teal-600">
-                        <span className="font-sans font-semibold">{u.label}</span>
-                        <span>₹{(cashDateFilter ? cashOnDateFor(u.username, cashDateFilter) : cashFor(u.username)).toLocaleString('en-IN')}</span>
+                <button
+                  type="button"
+                  onClick={() => setShowCashEntries(s => !s)}
+                  className="text-[9px] font-bold text-teal-600 hover:text-teal-800 cursor-pointer uppercase tracking-wide"
+                >
+                  {showCashEntries ? 'Hide' : 'View'} trip-by-trip breakdown ({displayedCashEntries.length})
+                </button>
+                {showCashEntries && (
+                  <div className="space-y-1 max-h-40 overflow-y-auto pt-1 border-t border-teal-100">
+                    {displayedCashEntries.length === 0 ? (
+                      <p className="text-teal-400/80 text-[10px]">No Cash-mode Market POD entries{cashDateFilter ? ' on this date' : ''}.</p>
+                    ) : displayedCashEntries.map(e => (
+                      <div key={e.id} className="bg-white border border-teal-100 rounded px-1.5 py-1 text-[9px] font-mono text-teal-800">
+                        <div className="flex items-center justify-between font-bold">
+                          <span>{e.vehicleNumber}</span>
+                          <span className="text-teal-500 font-sans font-normal">{e.date}{isSuperAdmin ? ` · ${e.ownerLabel}` : ''}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-teal-600">
+                          <span>F ₹{(e.totalFreight || 0).toLocaleString('en-IN')}</span>
+                          <span>A ₹{(e.receivedAdvance || 0).toLocaleString('en-IN')}</span>
+                          <span>B ₹{(e.balance || 0).toLocaleString('en-IN')}</span>
+                        </div>
                       </div>
                     ))}
                   </div>
