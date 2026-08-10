@@ -481,7 +481,13 @@ export default function PettyCash({
 
   // Vehicle Number field's onChange: also auto-fills Location for dedicated
   // fleet vehicles (DEDICATED_VEHICLE_LOCATIONS) or TN-registered vehicles
-  // (assumed Chennai), which in turn cascades into the Client Name auto-fill.
+  // (assumed Chennai), which in turn cascades into the Client Name auto-fill;
+  // and auto-fills Receiver Name from that vehicle's assigned driver in
+  // Driver Details (same vehicleNo match Vendor ID/Driver ID already uses).
+  // Onchange-driven rather than a useEffect for the same reason as the
+  // Location/Client Name auto-fill above - so re-opening a saved entry for
+  // edit never overwrites who actually received the cash on that entry, even
+  // if Driver Details' vehicle-to-driver assignment has since changed.
   const handleVehicleNumberChange = (raw: string) => {
     const vNo = raw.toUpperCase();
     setVehicleNumber(vNo);
@@ -491,6 +497,10 @@ export default function PettyCash({
     if (newLocation) {
       setLocation(newLocation);
       applyLocationAutoClient(newLocation, trimmed);
+    }
+    const matchedDriverRecord = drivers.find(d => (d.vehicleNo || '').trim().toUpperCase() === trimmed);
+    if (matchedDriverRecord?.name) {
+      setReceiver(matchedDriverRecord.name);
     }
   };
 
@@ -2200,6 +2210,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         onChange={(e) => setReceiver(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                       />
+                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-fetched from Driver Details by Vehicle Number - editable.</p>
                     </div>
                   </div>
 
