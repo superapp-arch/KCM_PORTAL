@@ -724,7 +724,7 @@ export default function PettyCash({
       'Vehicle Number': v.vehicleNumber,
       'Receiver': v.receiver,
       'Vendor ID': v.vendorId,
-      'Amount Received': v.amountReceived,
+      'Amount Received': receivedFor(v.enteredBy || user.username), // that holder's current Total Received Float, not a stored per-entry figure
       'Cash Paid': v.cashPaid,
       'Balance': v.balance,
       'Trip Sheet': v.tripSheet,
@@ -741,7 +741,11 @@ export default function PettyCash({
 
   // Share text builder
   const buildShareSummaryText = () => {
-    const totalRec = filteredVouchers.reduce((s, v) => s + (v.amountReceived || 0), 0);
+    // Amount Received is a per-holder Total Received Float, not a per-entry
+    // figure - sum each unique holder appearing in this filtered view once,
+    // not once per voucher (which would double/triple-count them).
+    const uniqueHolders = Array.from(new Set(filteredVouchers.map(v => v.enteredBy || user.username)));
+    const totalRec = uniqueHolders.reduce((s, h) => s + receivedFor(h), 0);
     const totalPaid = filteredVouchers.reduce((s, v) => s + (v.cashPaid || 0), 0);
     const totalBal = totalRec - totalPaid;
 
@@ -1290,7 +1294,9 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">{v.vendorVehicleNumber || '-'}</td>
                         <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{v.receiver}</td>
                         <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{v.vendorId || '-'}</td>
-                        <td className="px-3 py-2 text-right font-mono text-slate-600">₹{(v.amountReceived || 0).toLocaleString('en-IN')}</td>
+                        <td className="px-3 py-2 text-right font-mono text-slate-600" title="This holder's current Total Received Float (from the Dashboard's Amount Received ledger), not a per-entry figure">
+                          ₹{receivedFor(v.enteredBy || user.username).toLocaleString('en-IN')}
+                        </td>
                         <td className="px-3 py-2 text-right font-mono font-bold text-red-700 bg-red-50/20">₹{(v.cashPaid || 0).toLocaleString('en-IN')}</td>
                         {(() => {
                           const net = balanceNetAt(v);
