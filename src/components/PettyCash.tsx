@@ -32,7 +32,7 @@ import {
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
 import SortHeader from './SortHeader';
-import { SortState, SortDirection, extractLeadingNumber, compareText } from '../utils/sort';
+import { SortState, SortDirection, extractLeadingNumber, extractTrailingNumber, compareText } from '../utils/sort';
 
 interface PettyCashProps {
   user: User;
@@ -140,7 +140,11 @@ export default function PettyCash({
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('All');
   const [selectedVendorFilter, setSelectedVendorFilter] = useState('All');
-  const [sort, setSort] = useState<SortState | null>(null);
+  // Defaults to Entry No ascending (by trailing digits, e.g. ENT-2026-2525)
+  // rather than raw/insertion order, so the ledger's order stays consistent
+  // and predictable on every page load/refresh instead of appearing to
+  // shuffle - still fully overridable via the column sort dropdowns.
+  const [sort, setSort] = useState<SortState | null>({ key: 'entryNo', direction: 'asc' });
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
 
   // Date range filter for staff to access historical data
@@ -204,7 +208,9 @@ export default function PettyCash({
   const [mpDriverOverride, setMpDriverOverride] = useState(false);
   const [mpIsSubmitting, setMpIsSubmitting] = useState(false);
   const [mpSearchTerm, setMpSearchTerm] = useState('');
-  const [mpSort, setMpSort] = useState<SortState | null>(null);
+  // Same rationale as the Ledger's `sort` default above - Entry No ascending
+  // by default so the table doesn't appear to reshuffle on every refresh.
+  const [mpSort, setMpSort] = useState<SortState | null>({ key: 'entryNo', direction: 'asc' });
   const handleMpSort = (key: string, direction: SortDirection) => setMpSort({ key, direction });
 
   // --- Petty Cash Balance Net / Amount Received state ---
@@ -255,6 +261,22 @@ export default function PettyCash({
       return n > max ? n : max;
     }, 0);
     return `TRIP-${String(maxNum + 1).padStart(6, '0')}`;
+  };
+
+  // Ledger Entry No is likewise auto-generated and never user-editable, e.g.
+  // "ENT-2026-2525" - continues from that year's highest existing trailing
+  // 4-digit sequence (never resets/skips within a year), same live-max-plus-
+  // one convention as nextMarketPodEntryNo above.
+  const nextPettyCashEntryNo = () => {
+    const currentYear = new Date().getFullYear();
+    const prefix = `ENT-${currentYear}-`;
+    const maxNum = vouchers.reduce((max, v) => {
+      if (!(v.entryNo || '').toUpperCase().startsWith(prefix)) return max;
+      const match = (v.entryNo || '').match(/(\d+)$/);
+      const n = match ? parseInt(match[1], 10) : 0;
+      return n > max ? n : max;
+    }, 0);
+    return `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
   };
 
   const resetMarketPodForm = () => {
@@ -363,9 +385,12 @@ export default function PettyCash({
 
   const filteredMarketPod = mpSort
     ? [...filteredMarketPodUnsorted].sort((a, b) => {
-        const cmp = mpSort.key === 'vehicleNumber'
-          ? extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber)
-          : compareText(a.customer, b.customer);
+        let cmp = 0;
+        switch (mpSort.key) {
+          case 'vehicleNumber': cmp = extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber); break;
+          case 'customer': cmp = compareText(a.customer, b.customer); break;
+          case 'entryNo': cmp = extractTrailingNumber(a.entryNo) - extractTrailingNumber(b.entryNo); break;
+        }
         return mpSort.direction === 'asc' ? cmp : -cmp;
       })
     : filteredMarketPodUnsorted;
@@ -472,8 +497,8 @@ export default function PettyCash({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!date || !entryNo || !categoryInput || !receiver) {
-      triggerNotif('Please fill in Date, Entry Number, Category, and Receiver.', 'error');
+    if (!date || !categoryInput || !receiver) {
+      triggerNotif('Please fill in Date, Category, and Receiver.', 'error');
       return;
     }
 
@@ -482,7 +507,7 @@ export default function PettyCash({
       const finalClient = clientName === 'Other' ? customClientName || 'Other' : clientName;
       const voucherData = {
         date,
-        entryNo: entryNo.toUpperCase().trim(),
+        entryNo: editingId ? entryNo : nextPettyCashEntryNo(),
         category: categoryInput.trim(),
         location: location.trim(),
         clientName: finalClient,
@@ -640,7 +665,9 @@ export default function PettyCash({
 
   const filteredVouchers = sort
     ? [...filteredVouchersUnsorted].sort((a, b) => {
-        const cmp = extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber);
+        const cmp = sort.key === 'entryNo'
+          ? extractTrailingNumber(a.entryNo) - extractTrailingNumber(b.entryNo)
+          : extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber);
         return sort.direction === 'asc' ? cmp : -cmp;
       })
     : filteredVouchersUnsorted;
@@ -1214,7 +1241,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
                   <tr>
                     <th className="px-3 py-2.5">Date</th>
-                    <th className="px-3 py-2.5">Entry No</th>
+                    <th className="px-3 py-2.5"><SortHeader label="Entry No" sortKey="entryNo" sort={sort} onSort={handleSort} type="numeric" /></th>
                     <th className="px-3 py-2.5">Expense Category</th>
                     <th className="px-3 py-2.5">Location</th>
                     <th className="px-3 py-2.5">Client</th>
@@ -1501,7 +1528,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
             <table className="w-full text-left text-xs border-collapse">
               <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
                 <tr>
-                  <th className="px-3 py-2.5">Entry No</th>
+                  <th className="px-3 py-2.5"><SortHeader label="Entry No" sortKey="entryNo" sort={mpSort} onSort={handleMpSort} type="numeric" /></th>
                   <th className="px-3 py-2.5"><SortHeader label="Vehicle Number" sortKey="vehicleNumber" sort={mpSort} onSort={handleMpSort} type="numeric" /></th>
                   <th className="px-3 py-2.5">Date</th>
                   <th className="px-3 py-2.5">From</th>
@@ -2001,17 +2028,18 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <p className="text-[9px] text-slate-400 font-mono mt-0.5">Select year, month & day calendar</p>
                   </div>
 
-                  {/* Entry Number */}
+                  {/* Entry Number - auto-generated, not editable (same
+                      convention as Market POD's Entry No) */}
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Entry Number *</label>
+                    <label className="block font-semibold text-slate-700 mb-1">Entry Number</label>
                     <input
                       type="text"
-                      required
-                      value={entryNo}
-                      onChange={(e) => setEntryNo(e.target.value)}
-                      placeholder="e.g. ENT-2026-1049"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold tracking-wider text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      readOnly
+                      disabled
+                      value={editingId ? entryNo : nextPettyCashEntryNo()}
+                      className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono font-bold tracking-wider text-slate-500 uppercase cursor-not-allowed"
                     />
+                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-generated, not editable</p>
                   </div>
 
                   {/* Searchable Expense Category Dropdown */}

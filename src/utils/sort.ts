@@ -16,3 +16,15 @@ export const extractLeadingNumber = (value?: string | null): number => {
 
 export const compareLeadingNumber = (a?: string | null, b?: string | null): number =>
   extractLeadingNumber(a) - extractLeadingNumber(b);
+
+// Entry-number-style codes (e.g. "ENT-2026-2525", "TRIP-000001") should sort
+// by their trailing/sequential digit run (2525), not their first one (2026,
+// which is just the year and is shared by every entry that year) - this is
+// the opposite end from extractLeadingNumber above.
+export const extractTrailingNumber = (value?: string | null): number => {
+  const match = (value || '').match(/(\d+)$/);
+  return match ? parseInt(match[1], 10) : 0;
+};
+
+export const compareTrailingNumber = (a?: string | null, b?: string | null): number =>
+  extractTrailingNumber(a) - extractTrailingNumber(b);

@@ -180,7 +180,11 @@ export default function FuelManagement({
 
   const [searchTerm, setSearchTerm] = useState('');
   const [bunkFilter, setBunkFilter] = useState('All');
-  const [sort, setSort] = useState<SortState | null>(null);
+  // Defaults to Indent No ascending rather than raw/insertion order, so the
+  // ledger's order stays consistent and predictable on every page load/
+  // refresh instead of appearing to shuffle - still fully overridable via
+  // the column sort dropdowns (including switching to Vehicle No).
+  const [sort, setSort] = useState<SortState | null>({ key: 'indentNumber', direction: 'asc' });
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<string | null>(null);
