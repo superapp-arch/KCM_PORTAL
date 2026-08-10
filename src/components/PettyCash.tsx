@@ -101,8 +101,42 @@ const EXPENSE_CATEGORIES = [
   "RATIO"
 ];
 
-const CLIENT_NAMES = ["swiggy", "RIL F&V", "market load", "Other"];
+const CLIENT_NAMES = ["Swiggy", "Reliance F&V", "Market Load", "KCM", "Other"];
 const VENDORS = ["kcm insta", "kcm supply"];
+
+// Locations selectable (dropdown/type-to-search) for Ramesh's Petty Cash
+// login only - every other login keeps the free-text Location field.
+const RAMESH_LOCATIONS = ["Nelamangala", "Nidagatta", "DHL Attibele", "Chennai"];
+
+// Dedicated fleet vehicles with a fixed operating location - selecting one of
+// these Vehicle Numbers auto-fills Location accordingly (see the auto-fill
+// effect below). Sourced from the fleet list of vehicles permanently based
+// out of each site.
+const NELAMANGALA_VEHICLES = [
+  "KA51AF5645", "KA51AG5798", "KA51AG5801", "KA51AG5806", "KA51AG9297",
+  "KA51AG9298", "KA51AH0197", "KA51AH0208", "KA51AH0651", "KA51AH0657",
+  "KA51AH0658", "KA51AH3428", "KA51AH3431", "KA51AH3432", "KA51AH3973",
+  "KA51AH7869", "KA51AG5795", "KA52A6597", "KA53AA0063", "KA53AB3695",
+  "KA53D4713"
+];
+const DHL_ATTIBELE_VEHICLES = [
+  "KA51AH3421", "KA51AH3422", "KA51AG9295", "KA51AH3429", "KA51AH7868",
+  "KA51AH7870", "KA51AG9306", "KA51AG9305", "KA51AG5807", "KA51AG5805",
+  "KA53AA2995", "KA53AA0069", "KA53AA2272", "KA51AF5646"
+];
+const NIDAGATTA_VEHICLES = [
+  "KA51AH3425", "KA53AA0067", "KA51AG5804", "KA51AN0236", "KA51AN0238",
+  "KA51AH3426", "KA53D9303", "KA51AG2979", "KA53D9298", "KA51AK4717",
+  "KA51AK4722", "KA51AN0237", "KA51AH3427", "KA53AA2224", "KA53AA0064",
+  "KA53AA0065", "KA51AH3423", "KA51AG9301", "KA51AG9302", "KA51AG9303",
+  "KA51AG9304", "KA53D9299", "KA51AH3424", "KA51AH2019", "KA51AH0653",
+  "KA51AH0659", "KA51AH0660", "KA52B6137", "KA52B6437", "KA52A6575",
+  "KA16D5037", "KA52B4137"
+];
+const DEDICATED_VEHICLE_LOCATIONS: Record<string, string> = {};
+NELAMANGALA_VEHICLES.forEach(v => { DEDICATED_VEHICLE_LOCATIONS[v] = "Nelamangala"; });
+DHL_ATTIBELE_VEHICLES.forEach(v => { DEDICATED_VEHICLE_LOCATIONS[v] = "DHL Attibele"; });
+NIDAGATTA_VEHICLES.forEach(v => { DEDICATED_VEHICLE_LOCATIONS[v] = "Nidagatta"; });
 
 export default function PettyCash({
   user,
@@ -160,7 +194,7 @@ export default function PettyCash({
   const [categoryInput, setCategoryInput] = useState('');
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
   const [location, setLocation] = useState('');
-  const [clientName, setClientName] = useState('swiggy');
+  const [clientName, setClientName] = useState('Swiggy');
   const [customClientName, setCustomClientName] = useState('');
   const [vendor, setVendor] = useState<PettyCashVoucher['vendor']>('kcm supply');
   const [vehicleNumber, setVehicleNumber] = useState('');
@@ -408,22 +442,64 @@ export default function PettyCash({
     setBalance(String(r - p));
   }, [amountReceived, cashPaid]);
 
-  // Auto-fetch Vendor ID / Driver ID: on Vehicle Number match, checks Vendor
-  // Management first (by registered vehicleNumbers), then falls back to
-  // Driver Details (by vehicleNo) - whichever matches first wins. Leaves the
-  // field blank (still manually editable) when neither module has this
-  // vehicle mapped.
+  // Auto-fetch Vendor ID / Driver ID: on Vehicle Number OR Vendor Vehicle
+  // Number match, checks Vendor Management first (by registered
+  // vehicleNumbers), then falls back to Driver Details (by vehicleNo) -
+  // whichever matches first wins, trying Vehicle Number before Vendor
+  // Vehicle Number. Leaves the field blank (still manually editable) when
+  // neither module has this vehicle mapped.
   useEffect(() => {
-    if (!vehicleNumber.trim()) return;
     const vNo = vehicleNumber.trim().toUpperCase();
-    const matchedVendor = vendors.find(v => (v.vehicleNumbers || []).some(num => (num || '').trim().toUpperCase() === vNo));
-    if (matchedVendor) {
-      setVendorId(matchedVendor.code);
-      return;
+    const vvNo = vendorVehicleNumber.trim().toUpperCase();
+    if (!vNo && !vvNo) return;
+
+    const matchFor = (regNo: string): string | undefined => {
+      if (!regNo) return undefined;
+      const matchedVendor = vendors.find(v => (v.vehicleNumbers || []).some(num => (num || '').trim().toUpperCase() === regNo));
+      if (matchedVendor) return matchedVendor.code;
+      const matchedDriverRecord = drivers.find(d => (d.vehicleNo || '').trim().toUpperCase() === regNo);
+      return matchedDriverRecord ? matchedDriverRecord.id : undefined;
+    };
+
+    setVendorId(matchFor(vNo) || matchFor(vvNo) || '');
+  }, [vehicleNumber, vendorVehicleNumber, vendors, drivers]);
+
+  // Location -> Client Name auto-fill (Nelamangala/Nidagatta => Reliance
+  // F&V, DHL Attibele/Chennai or a TN Vehicle Number => Swiggy). Applied from
+  // the onChange handlers below rather than as a useEffect so it only fires
+  // on the user's own action, not when the form is populated programmatically
+  // (handleStartEdit re-opening a saved entry, resetVoucherForm clearing it) -
+  // otherwise opening an existing entry for edit could silently overwrite an
+  // intentionally-different saved Client Name.
+  const applyLocationAutoClient = (loc: string, vNoUpper: string) => {
+    if (loc === 'Nelamangala' || loc === 'Nidagatta') {
+      setClientName('Reliance F&V');
+    } else if (loc === 'DHL Attibele' || loc === 'Chennai' || vNoUpper.startsWith('TN')) {
+      setClientName('Swiggy');
     }
-    const matchedDriverRecord = drivers.find(d => (d.vehicleNo || '').trim().toUpperCase() === vNo);
-    setVendorId(matchedDriverRecord ? matchedDriverRecord.id : '');
-  }, [vehicleNumber]);
+  };
+
+  // Vehicle Number field's onChange: also auto-fills Location for dedicated
+  // fleet vehicles (DEDICATED_VEHICLE_LOCATIONS) or TN-registered vehicles
+  // (assumed Chennai), which in turn cascades into the Client Name auto-fill.
+  const handleVehicleNumberChange = (raw: string) => {
+    const vNo = raw.toUpperCase();
+    setVehicleNumber(vNo);
+    const trimmed = vNo.trim();
+    if (!trimmed) return;
+    const newLocation = DEDICATED_VEHICLE_LOCATIONS[trimmed] || (trimmed.startsWith('TN') ? 'Chennai' : undefined);
+    if (newLocation) {
+      setLocation(newLocation);
+      applyLocationAutoClient(newLocation, trimmed);
+    }
+  };
+
+  // Location field's onChange (both the Ramesh dropdown and the free-text
+  // field for everyone else) - cascades into the Client Name auto-fill.
+  const handleLocationChange = (raw: string) => {
+    setLocation(raw);
+    applyLocationAutoClient(raw, vehicleNumber.trim().toUpperCase());
+  };
 
   // Handle clicking outside of category dropdown to close it
   useEffect(() => {
@@ -2093,20 +2169,76 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     )}
                   </div>
 
-                  {/* Location */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Location *</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Manual branch or location"
-                      value={location}
-                      onChange={(e) => setLocation(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                    />
+                  {/* Vehicle Number & Receiver - placed above Location since
+                      selecting a Vehicle Number can auto-fill Location (see
+                      the auto-fill effect above: dedicated fleet vehicles /
+                      TN-registered vehicles). */}
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Vehicle Number</label>
+                      <input
+                        type="text"
+                        list="petty-cash-vehicles-datalist"
+                        placeholder="Search or select a vehicle"
+                        value={vehicleNumber}
+                        onChange={(e) => handleVehicleNumberChange(e.target.value)}
+                        autoComplete="off"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 uppercase font-bold"
+                      />
+                      <datalist id="petty-cash-vehicles-datalist">
+                        {mpVehicleList.map(v => <option key={v} value={v} />)}
+                      </datalist>
+                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">Live from Fleet &amp; Vehicles - type to search.</p>
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Receiver Name *</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Cash recipient"
+                        value={receiver}
+                        onChange={(e) => setReceiver(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
                   </div>
 
-                  {/* Client Name (swiggy, RIL F&V, market load, other) */}
+                  {/* Location - a fixed dropdown/type-to-search of
+                      Nelamangala / Nidagatta / DHL Attibele / Chennai for
+                      Ramesh's login only; every other login keeps the
+                      free-text field. May be auto-filled by Vehicle Number
+                      above. */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Location *</label>
+                    {user.username === 'ramesh' ? (
+                      <>
+                        <input
+                          type="text"
+                          required
+                          list="petty-cash-ramesh-locations-datalist"
+                          placeholder="Search or select a location"
+                          value={location}
+                          onChange={(e) => handleLocationChange(e.target.value)}
+                          autoComplete="off"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                        />
+                        <datalist id="petty-cash-ramesh-locations-datalist">
+                          {RAMESH_LOCATIONS.map(loc => <option key={loc} value={loc} />)}
+                        </datalist>
+                      </>
+                    ) : (
+                      <input
+                        type="text"
+                        required
+                        placeholder="Manual branch or location"
+                        value={location}
+                        onChange={(e) => handleLocationChange(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    )}
+                  </div>
+
+                  {/* Client Name (Swiggy, Reliance F&V, Market Load, KCM, Other) */}
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="block font-semibold text-slate-700 mb-1">Client Name *</label>
@@ -2147,37 +2279,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       />
                     </div>
                   )}
-
-                  {/* Vehicle Number & Receiver */}
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Vehicle Number</label>
-                      <input
-                        type="text"
-                        list="petty-cash-vehicles-datalist"
-                        placeholder="Search or select a vehicle"
-                        value={vehicleNumber}
-                        onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
-                        autoComplete="off"
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 uppercase font-bold"
-                      />
-                      <datalist id="petty-cash-vehicles-datalist">
-                        {mpVehicleList.map(v => <option key={v} value={v} />)}
-                      </datalist>
-                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">Live from Fleet &amp; Vehicles - type to search.</p>
-                    </div>
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Receiver Name *</label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="Cash recipient"
-                        value={receiver}
-                        onChange={(e) => setReceiver(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                      />
-                    </div>
-                  </div>
 
                   {/* Vendor Vehicle Number - separate from Vehicle Number
                       above: this one is vendor-owned vehicles, sourced from
