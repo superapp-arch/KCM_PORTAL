@@ -421,6 +421,50 @@ function requireVendorManagementAccess(req: express.Request, res: express.Respon
   next();
 }
 
+// Petty Cash Entry No / Market POD Entry No are auto-generated server-side
+// (never trusting whatever the client computed) so that two Petty Cash
+// logins adding entries around the same time can never land on the same
+// number - generating it client-side left a race window as wide as "form was
+// open" (seconds to minutes), which is exactly how the same Entry No ended
+// up assigned to multiple real entries. Computing it here, immediately
+// before insert, shrinks that window to a single request, and the
+// while-loop below is a belt-and-suspenders check against the (much
+// smaller) remaining chance of two inserts landing back-to-back.
+function nextPettyCashEntryNo(vouchers: PettyCashVoucher[]): string {
+  const prefix = `ENT-${new Date().getFullYear()}-`;
+  const existing = new Set(vouchers.map(v => (v.entryNo || '').toUpperCase()));
+  let maxNum = 0;
+  for (const v of vouchers) {
+    const upper = (v.entryNo || '').toUpperCase();
+    if (!upper.startsWith(prefix)) continue;
+    const match = upper.match(/(\d+)$/);
+    const n = match ? parseInt(match[1], 10) : 0;
+    if (n > maxNum) maxNum = n;
+  }
+  let candidate = `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
+  while (existing.has(candidate)) {
+    maxNum++;
+    candidate = `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
+  }
+  return candidate;
+}
+
+function nextMarketPodEntryNo(entries: MarketPodEntry[]): string {
+  const existing = new Set(entries.map(e => (e.entryNo || '').toUpperCase()));
+  let maxNum = 0;
+  for (const e of entries) {
+    const match = (e.entryNo || '').match(/(\d+)$/);
+    const n = match ? parseInt(match[1], 10) : 0;
+    if (n > maxNum) maxNum = n;
+  }
+  let candidate = `TRIP-${String(maxNum + 1).padStart(6, '0')}`;
+  while (existing.has(candidate.toUpperCase())) {
+    maxNum++;
+    candidate = `TRIP-${String(maxNum + 1).padStart(6, '0')}`;
+  }
+  return candidate;
+}
+
 // Applies the Chandan/Praveen row-level visibility rule shared by /api/fuel
 // and /api/mileage: super admins see every row with enteredBy intact; anyone
 // else only sees rows they personally entered, with enteredBy stripped out
@@ -1212,7 +1256,8 @@ async function startServer() {
   app.post('/api/petty-cash', async (req, res) => {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
-      const result = await savePettyCashVoucher({ ...req.body, enteredBy: sessionUser?.username });
+      const entryNo = nextPettyCashEntryNo(await getPettyCashVouchers());
+      const result = await savePettyCashVoucher({ ...req.body, entryNo, enteredBy: sessionUser?.username });
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
@@ -1244,7 +1289,8 @@ async function startServer() {
   app.post('/api/market-pod', async (req, res) => {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
-      const result = await saveMarketPodEntry({ ...req.body, enteredBy: sessionUser?.username } as MarketPodEntry);
+      const entryNo = nextMarketPodEntryNo(await getMarketPodEntries());
+      const result = await saveMarketPodEntry({ ...req.body, entryNo, enteredBy: sessionUser?.username } as MarketPodEntry);
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });

@@ -599,13 +599,17 @@ export default function PettyCash({
   // Balance Net as of one specific voucher (for the table's "Balance Net"
   // column) - same formula, but only summing that user's cash paid up to and
   // including this entry, in chronological order.
+  // Ordered by Entry No (the sequence entries were actually created in, see
+  // nextPettyCashEntryNo) rather than the user-editable Date field - Date can
+  // be backdated independently of when an entry was actually logged, which
+  // made this column look like it was jumping around at random whenever the
+  // ledger (now sorted by Entry No by default) didn't happen to match Date
+  // order too. Entry No order always matches the ledger's default sort, so
+  // Balance Net now reads as a clean, steadily-moving running total.
   const balanceNetAt = (voucher: PettyCashVoucher): number => {
     const owner = voucher.enteredBy || user.username;
     const totalAdvances = advancesFor(owner).reduce((s, a) => s + (a.amount || 0), 0);
-    const ordered = [...vouchersFor(owner)].sort((a, b) => {
-      if (a.date !== b.date) return a.date < b.date ? -1 : 1;
-      return (a.entryNo || a.id).localeCompare(b.entryNo || b.id);
-    });
+    const ordered = [...vouchersFor(owner)].sort((a, b) => extractTrailingNumber(a.entryNo) - extractTrailingNumber(b.entryNo));
     let spent = 0;
     for (const v of ordered) {
       spent += v.cashPaid || 0;
@@ -1301,7 +1305,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         {(() => {
                           const net = balanceNetAt(v);
                           return (
-                            <td className={`px-3 py-2 text-right font-mono font-black ${net < 0 ? 'text-rose-700 bg-rose-50/40' : 'text-slate-800'}`} title="Running balance for this user: total Amount Received minus cash paid up to this entry">
+                            <td className={`px-3 py-2 text-right font-mono font-black ${net < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`} title="This holder's running balance in Entry No order: Total Received Float minus cash paid up to and including this entry">
                               {net < 0 && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
                               ₹{net.toLocaleString('en-IN')}
                             </td>
