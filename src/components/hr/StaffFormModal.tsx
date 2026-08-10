@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Plus, Trash2, User, Coins, Landmark, Wallet, Upload } from 'lucide-react';
 import { StaffEmployee, StaffSalaryDetail, StaffSalaryHike, StaffAdvanceDeduction, StaffBankDetail, StaffProvidentFund, VehicleDocument } from '../../types';
 import DocumentAttachment from '../DocumentAttachment';
+import DateInput from '../DateInput';
 import { authFetch } from '../../authFetch';
 
 interface StaffFormModalProps {
@@ -42,6 +43,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
     location: employee?.location || 'Bangalore', status: employee?.status || 'Active' as StaffEmployee['status'],
     employmentType: employee?.employmentType || 'On-Roll' as StaffEmployee['employmentType'],
     contactNumber: employee?.contactNumber || '', aadharNumber: employee?.aadharNumber || '', panNumber: employee?.panNumber || '',
+    dateOfBirth: employee?.dateOfBirth || '', email: employee?.email || '',
     remarks: employee?.remarks || ''
   });
   const [basicErrors, setBasicErrors] = useState<{ aadharNumber?: boolean; panNumber?: boolean; contactNumber?: boolean }>({});
@@ -344,6 +346,20 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
                   <label className="block font-semibold text-slate-500 mb-1">Date of Leaving</label>
                   <input value={basic.dateOfLeaving} onChange={e => handleDateOfLeavingChange(e.target.value)}
                     autoComplete="off" placeholder="DD/MM/YYYY" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-500 mb-1">Date of Birth</label>
+                  <DateInput value={basic.dateOfBirth} onChange={e => setBasic({ ...basic, dateOfBirth: e.target.value })}
+                    className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <p className="text-[10px] text-slate-400 mt-1">Source of truth for the Birthday Reminder wish email.</p>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-500 mb-1">Email</label>
+                  <input type="email" value={basic.email} onChange={e => setBasic({ ...basic, email: e.target.value.trim() })}
+                    autoComplete="off" placeholder="employee@kcmlogistics.in" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <p className="text-[10px] text-slate-400 mt-1">Where the Birthday Reminder wish email is sent.</p>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">

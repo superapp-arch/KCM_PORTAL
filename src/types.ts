@@ -414,6 +414,8 @@ export interface StaffEmployee {
   contactNumber?: string; // exactly 10 digits
   aadharNumber?: string; // exactly 12 digits
   panNumber?: string; // exactly 10 characters
+  dateOfBirth?: string; // YYYY-MM-DD, via DateInput (displays dd/mm/yyyy) - source of truth for the Birthday Reminder job (server.ts)
+  email?: string; // registered email - the Birthday Reminder wish goes here; also usable for other future employee-facing notifications
   remarks?: string;
   documents?: VehicleDocument[]; // "Other Documents" - unlimited
   aadharDocuments?: VehicleDocument[]; // mandatory in the UI, limited to one file
@@ -544,7 +546,7 @@ export interface DashboardNotification {
   id: string;
   title: string;
   message: string;
-  type: 'security' | 'insurance' | 'permit' | 'fc' | 'tax' | 'general' | 'service-due' | 'alignment-due';
+  type: 'security' | 'insurance' | 'permit' | 'fc' | 'tax' | 'general' | 'service-due' | 'alignment-due' | 'birthday';
   timestamp: string;
   read: boolean;
   vehicleRegNo?: string;

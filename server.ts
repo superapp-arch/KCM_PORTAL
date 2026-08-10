@@ -12,7 +12,7 @@ import { createServer as createViteServer } from 'vite';
 import { verifyPassword } from './src/auth/password.ts';
 import { createSession, getSessionUser, destroySession, extractBearerToken } from './src/auth/session.ts';
 import { issueOtp, verifyOtp } from './src/auth/otp.ts';
-import { istTimestamp, istDateKey } from './src/auth/time.ts';
+import { istTimestamp, istDateKey, istHour, istMonthDayKey } from './src/auth/time.ts';
 import { computeDueDateRaw } from './src/utils/loanDates.ts';
 import { latestOdometerFor, computeKmStatus, computeAlignmentStatus, nextAlignmentDueKm, projectDueDate, daysUntil } from './src/utils/maintenanceDates.ts';
 import {
@@ -824,6 +824,137 @@ async function startServer() {
       console.error('Failed to send scheduled compliance digest:', error);
     }
   }
+
+  // --- Birthday Reminder (HR & Payroll -> Staff Salary -> Basic Info ->
+  // Date of Birth is the sole source of truth - no separate DOB field
+  // anywhere else). Confirmed send window: no earlier than 9:00 AM IST -
+  // easy to change if a different time is wanted. Matches day+month only
+  // (ignores year) against each Active employee's stored Date of Birth.
+  const BIRTHDAY_EMAIL_HOUR_IST = 9;
+
+  async function getTodaysBirthdayEmployees(): Promise<StaffEmployee[]> {
+    const employees = await getStaffEmployees();
+    const todayKey = istMonthDayKey();
+    return employees.filter(e => {
+      if (e.status !== 'Active' || !e.dateOfBirth) return false;
+      const dob = new Date(e.dateOfBirth);
+      if (isNaN(dob.getTime())) return false;
+      const dobKey = `${String(dob.getMonth() + 1).padStart(2, '0')}-${String(dob.getDate()).padStart(2, '0')}`;
+      return dobKey === todayKey;
+    });
+  }
+
+  function firstNameOf(fullName: string): string {
+    return (fullName || '').trim().split(/\s+/)[0] || fullName;
+  }
+
+  // Sends today's birthday employees their wish email, plus a separate short
+  // notice email (not a CC - its own send) to every Super Admin, plus an
+  // in-app notification. Dedup'd per employee/day via a persisted marker so
+  // re-checking within the same day (the hourly interval) never double-sends
+  // - same pattern as runScheduledComplianceDigest's digest-sent-<date> marker,
+  // just one marker per employee instead of one for the whole batch, since
+  // more than one employee can share a birthday.
+  async function sendTodaysBirthdayWishes(): Promise<{ sent: number; names: string[] }> {
+    const birthdayEmployees = await getTodaysBirthdayEmployees();
+    if (birthdayEmployees.length === 0) return { sent: 0, names: [] };
+
+    const todayKey = istDateKey();
+    const existingNotifs = await getNotifications();
+    const usersList = await getUsersWithFallback();
+    const superAdminEmails = usersList.filter((u: any) => u.department === 'super_admin').map((u: any) => u.email).filter(Boolean) as string[];
+
+    let sentCount = 0;
+    const sentNames: string[] = [];
+
+    for (const emp of birthdayEmployees) {
+      const markerId = `birthday-sent-${emp.id}-${todayKey}`;
+      if (existingNotifs.some((n: any) => n.id === markerId)) continue;
+      if (!emp.email) {
+        console.warn(`[BIRTHDAY] Skipping ${emp.name} (${emp.id}) - no registered email on file.`);
+        continue;
+      }
+
+      const firstName = firstNameOf(emp.name);
+      try {
+        await resend.emails.send({
+          from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
+          to: emp.email,
+          subject: `Happy Birthday, ${firstName}! 🎉`,
+          html: `
+            <div style="font-family:Arial,sans-serif;line-height:1.6;font-size:14px;color:#1e293b;">
+              <p>Dear ${firstName},</p>
+              <p>Wishing you a wonderful birthday filled with joy, laughter, and moments worth celebrating!</p>
+              <p>Thank you for the dedication and energy you bring to KCM Logistics every day - it truly makes a difference to our team. We hope this year brings you good health, new milestones, and everything that makes you happiest.</p>
+              <p>Have a fantastic day, and enjoy every bit of it!</p>
+              <p>Warm wishes,<br/>Team KCM Logistics</p>
+            </div>
+          `
+        });
+
+        if (superAdminEmails.length > 0) {
+          await resend.emails.send({
+            from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
+            to: superAdminEmails,
+            subject: `Birthday Wish Sent - ${emp.name}`,
+            html: `<p>Today is ${emp.name}'s birthday - wish email sent automatically.</p>`
+          });
+        }
+
+        await saveNotification({
+          id: markerId,
+          title: 'Employee Birthday',
+          message: `Today is ${emp.name}'s birthday - wish email sent automatically.`,
+          type: 'birthday',
+          timestamp: istTimestamp(),
+          read: true
+        });
+
+        sentCount++;
+        sentNames.push(emp.name);
+        console.log(`[BIRTHDAY] Sent wish email to ${emp.name} (${emp.email}).`);
+      } catch (error) {
+        console.error(`[BIRTHDAY] Failed to send birthday wish for ${emp.name} (${emp.id}):`, error);
+      }
+    }
+
+    return { sent: sentCount, names: sentNames };
+  }
+
+  // Automatic trigger - runs on the same hourly interval as the compliance
+  // digest, but only actually sends from BIRTHDAY_EMAIL_HOUR_IST onward each
+  // day (never earlier), and only once per employee per day regardless of
+  // how many times the hourly tick lands after that hour.
+  async function runScheduledBirthdayCheck() {
+    try {
+      if (istHour() < BIRTHDAY_EMAIL_HOUR_IST) return;
+      await sendTodaysBirthdayWishes();
+    } catch (error) {
+      console.error('Failed to run scheduled birthday check:', error);
+    }
+  }
+
+  // Manually trigger the birthday check immediately (Super Admin only) - for
+  // verifying the feature works without waiting for 9 AM on someone's actual
+  // birthday. Still respects the per-employee/day dedup marker.
+  app.post('/api/birthday-check/send-now', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser || sessionUser.department !== 'super_admin') {
+        return res.status(403).json({ success: false, error: 'Only Super Admin can trigger the birthday check.' });
+      }
+      const result = await sendTodaysBirthdayWishes();
+      res.json({
+        success: true,
+        sent: result.sent > 0,
+        message: result.sent > 0
+          ? `Birthday wishes sent for: ${result.names.join(', ')}.`
+          : 'No matching employee birthdays today (or already sent earlier today).'
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
 
   // Health endpoint
   app.get('/api/health', (req, res) => {
@@ -2379,6 +2510,13 @@ async function startServer() {
   // (written inside buildAndSendComplianceDigest) keeps it to once/day.
   runScheduledComplianceDigest();
   setInterval(runScheduledComplianceDigest, 60 * 60 * 1000);
+
+  // Same hourly-check pattern for the Birthday Reminder - runScheduledBirthdayCheck
+  // itself holds off until BIRTHDAY_EMAIL_HOUR_IST (9 AM), then the
+  // per-employee birthday-sent-<empId>-<date> marker keeps each employee to
+  // once/day regardless of how many times the hourly tick lands after that.
+  runScheduledBirthdayCheck();
+  setInterval(runScheduledBirthdayCheck, 60 * 60 * 1000);
 }
 
 startServer();

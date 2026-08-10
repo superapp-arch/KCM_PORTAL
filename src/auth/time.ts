@@ -29,3 +29,16 @@ export function istDateKey(date: Date = new Date()): string {
   const p = istParts(date);
   return `${p.year}-${p.month}-${p.day}`;
 }
+
+// Current hour (0-23) in IST - used to gate a job to "no earlier than X AM"
+// (e.g. the Birthday Reminder email) without needing a real cron scheduler.
+export function istHour(date: Date = new Date()): number {
+  return parseInt(istParts(date).hour, 10);
+}
+
+// "MM-DD" in IST - used to match a stored YYYY-MM-DD field (e.g. an
+// employee's Date of Birth) against today's day+month, ignoring year.
+export function istMonthDayKey(date: Date = new Date()): string {
+  const p = istParts(date);
+  return `${p.month}-${p.day}`;
+}
