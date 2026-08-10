@@ -31,7 +31,11 @@ import {
   pettyCashAdvances,
   vehicleMaintenanceProfiles,
   maintenanceServiceStations,
-  breakdownReports
+  breakdownReports,
+  vehicleServiceSchedules,
+  tireRecords,
+  batteryRecords,
+  toolsChecklistRecords
 } from './schema.ts';
 import { eq, ne } from 'drizzle-orm';
 import { hashPassword, isHashed } from '../auth/password.ts';
@@ -67,7 +71,11 @@ import {
   PettyCashAdvance,
   VehicleMaintenanceProfile,
   MaintenanceServiceStation,
-  BreakdownReport
+  BreakdownReport,
+  VehicleServiceSchedule,
+  TireRecord,
+  BatteryRecord,
+  ToolsChecklistRecord
 } from '../types.ts';
 
 // Default Users Seed
@@ -813,6 +821,272 @@ export async function deleteBreakdownReport(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteBreakdownReport:", error);
     throw new Error("Failed to delete breakdown report.", { cause: error });
+  }
+}
+
+// --- VEHICLE SERVICE SCHEDULE OPERATIONS (Fleet Maintenance rebuild) ---
+export async function getVehicleServiceSchedules(): Promise<VehicleServiceSchedule[]> {
+  try {
+    const rows = await db.select().from(vehicleServiceSchedules);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getVehicleServiceSchedules:", error);
+    throw new Error("Failed to retrieve vehicle service schedules.", { cause: error });
+  }
+}
+
+export async function saveVehicleServiceSchedule(schedule: VehicleServiceSchedule) {
+  try {
+    const id = schedule.id || schedule.regNo;
+    const complete = { ...schedule, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(vehicleServiceSchedules).where(eq(vehicleServiceSchedules.id, id));
+    if (existing.length > 0) {
+      await db.update(vehicleServiceSchedules).set({ data: dataString }).where(eq(vehicleServiceSchedules.id, id));
+    } else {
+      await db.insert(vehicleServiceSchedules).values({ id, data: dataString });
+    }
+    return await getVehicleServiceSchedules();
+  } catch (error) {
+    console.error("Database action failed in saveVehicleServiceSchedule:", error);
+    throw new Error("Failed to save vehicle service schedule.", { cause: error });
+  }
+}
+
+export async function deleteVehicleServiceSchedule(id: string) {
+  try {
+    await db.delete(vehicleServiceSchedules).where(eq(vehicleServiceSchedules.id, id));
+    return await getVehicleServiceSchedules();
+  } catch (error) {
+    console.error("Database action failed in deleteVehicleServiceSchedule:", error);
+    throw new Error("Failed to delete vehicle service schedule.", { cause: error });
+  }
+}
+
+// --- TIRE RECORD OPERATIONS ---
+export async function getTireRecords(): Promise<TireRecord[]> {
+  try {
+    const rows = await db.select().from(tireRecords);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getTireRecords:", error);
+    throw new Error("Failed to retrieve tire records.", { cause: error });
+  }
+}
+
+export async function saveTireRecord(record: TireRecord) {
+  try {
+    const id = record.id || String(Date.now());
+    const complete = { ...record, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(tireRecords).where(eq(tireRecords.id, id));
+    if (existing.length > 0) {
+      await db.update(tireRecords).set({ data: dataString, regNo: complete.regNo }).where(eq(tireRecords.id, id));
+    } else {
+      await db.insert(tireRecords).values({ id, regNo: complete.regNo, data: dataString });
+    }
+    return await getTireRecords();
+  } catch (error) {
+    console.error("Database action failed in saveTireRecord:", error);
+    throw new Error("Failed to save tire record.", { cause: error });
+  }
+}
+
+export async function deleteTireRecord(id: string) {
+  try {
+    await db.delete(tireRecords).where(eq(tireRecords.id, id));
+    return await getTireRecords();
+  } catch (error) {
+    console.error("Database action failed in deleteTireRecord:", error);
+    throw new Error("Failed to delete tire record.", { cause: error });
+  }
+}
+
+// --- BATTERY RECORD OPERATIONS ---
+export async function getBatteryRecords(): Promise<BatteryRecord[]> {
+  try {
+    const rows = await db.select().from(batteryRecords);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getBatteryRecords:", error);
+    throw new Error("Failed to retrieve battery records.", { cause: error });
+  }
+}
+
+export async function saveBatteryRecord(record: BatteryRecord) {
+  try {
+    const id = record.id || String(Date.now());
+    const complete = { ...record, id };
+    const dataString = JSON.stringify(complete);
+
+    // Only one battery per vehicle should ever be "current" - flip any other
+    // current row for this regNo to false before writing this one, same
+    // spirit as BreakdownReport's Open->Resolved single-active-state pattern.
+    if (complete.isCurrent) {
+      const siblings = await db.select().from(batteryRecords).where(eq(batteryRecords.regNo, complete.regNo));
+      for (const row of siblings) {
+        if (row.id === id) continue;
+        const parsed: BatteryRecord = JSON.parse(row.data);
+        if (parsed.isCurrent) {
+          await db.update(batteryRecords).set({ data: JSON.stringify({ ...parsed, isCurrent: false }) }).where(eq(batteryRecords.id, row.id));
+        }
+      }
+    }
+
+    const existing = await db.select().from(batteryRecords).where(eq(batteryRecords.id, id));
+    if (existing.length > 0) {
+      await db.update(batteryRecords).set({ data: dataString, regNo: complete.regNo }).where(eq(batteryRecords.id, id));
+    } else {
+      await db.insert(batteryRecords).values({ id, regNo: complete.regNo, data: dataString });
+    }
+    return await getBatteryRecords();
+  } catch (error) {
+    console.error("Database action failed in saveBatteryRecord:", error);
+    throw new Error("Failed to save battery record.", { cause: error });
+  }
+}
+
+export async function deleteBatteryRecord(id: string) {
+  try {
+    await db.delete(batteryRecords).where(eq(batteryRecords.id, id));
+    return await getBatteryRecords();
+  } catch (error) {
+    console.error("Database action failed in deleteBatteryRecord:", error);
+    throw new Error("Failed to delete battery record.", { cause: error });
+  }
+}
+
+// --- TOOLS CHECKLIST RECORD OPERATIONS ---
+export async function getToolsChecklistRecords(): Promise<ToolsChecklistRecord[]> {
+  try {
+    const rows = await db.select().from(toolsChecklistRecords);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getToolsChecklistRecords:", error);
+    throw new Error("Failed to retrieve tools checklist records.", { cause: error });
+  }
+}
+
+export async function saveToolsChecklistRecord(record: ToolsChecklistRecord) {
+  try {
+    const id = record.id || String(Date.now());
+    const complete = { ...record, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(toolsChecklistRecords).where(eq(toolsChecklistRecords.id, id));
+    if (existing.length > 0) {
+      await db.update(toolsChecklistRecords).set({ data: dataString, regNo: complete.regNo }).where(eq(toolsChecklistRecords.id, id));
+    } else {
+      await db.insert(toolsChecklistRecords).values({ id, regNo: complete.regNo, data: dataString });
+    }
+    return await getToolsChecklistRecords();
+  } catch (error) {
+    console.error("Database action failed in saveToolsChecklistRecord:", error);
+    throw new Error("Failed to save tools checklist record.", { cause: error });
+  }
+}
+
+export async function deleteToolsChecklistRecord(id: string) {
+  try {
+    await db.delete(toolsChecklistRecords).where(eq(toolsChecklistRecords.id, id));
+    return await getToolsChecklistRecords();
+  } catch (error) {
+    console.error("Database action failed in deleteToolsChecklistRecord:", error);
+    throw new Error("Failed to delete tools checklist record.", { cause: error });
+  }
+}
+
+// One-time migration: the Fleet Maintenance rebuild replaced the single
+// combined VehicleMaintenanceProfile with 4 focused tables. If those 4 are
+// still completely empty but legacy profiles exist, convert each profile
+// into a VehicleServiceSchedule + TireRecord[] + BatteryRecord + a
+// ToolsChecklistRecord snapshot, so nothing already entered gets silently
+// dropped. Safe to call on every boot - it's a no-op once the new tables
+// have any data at all (never overwrites/re-runs after that point, even if
+// more legacy profiles are added later - those are effectively frozen).
+export async function migrateLegacyMaintenanceProfiles() {
+  try {
+    const [legacyProfiles, existingSchedules] = await Promise.all([
+      getVehicleMaintenanceProfiles(),
+      getVehicleServiceSchedules()
+    ]);
+    if (legacyProfiles.length === 0 || existingSchedules.length > 0) return;
+
+    const legacyRecords = await getMaintenanceRecords();
+    const TOOL_FIELD_BY_NAME: Record<string, 'hasJack' | 'hasJackRod' | 'hasTommyBar' | 'hasSpanner'> = {
+      jack: 'hasJack',
+      'jack rod': 'hasJackRod',
+      'tommy bar': 'hasTommyBar',
+      spanner: 'hasSpanner'
+    };
+
+    for (const profile of legacyProfiles) {
+      const regNo = profile.regNo || profile.id;
+      if (!regNo) continue;
+
+      const lastServiceDate = legacyRecords
+        .filter(r => (r.regNo || '').trim().toUpperCase() === regNo.trim().toUpperCase())
+        .sort((a, b) => (a.date < b.date ? 1 : -1))[0]?.date;
+
+      await saveVehicleServiceSchedule({
+        id: regNo,
+        regNo,
+        lastServiceDate,
+        lastServiceKm: profile.serviceLastOdometerKm,
+        serviceIntervalKm: profile.serviceIntervalKm ?? 10000,
+        warrantyStatus: profile.warrantyStatus === 'Under Warranty' ? 'InWarranty' : 'OutOfWarranty',
+        remarks: 'Migrated from the legacy Vehicle Maintenance Profile.'
+      });
+
+      for (const tyre of profile.tyres || []) {
+        await saveTireRecord({
+          id: `${regNo}-${tyre.position || 'unspecified'}-legacy`,
+          regNo,
+          position: tyre.position || 'Unspecified',
+          tireBrand: tyre.brand || '',
+          installedKm: tyre.kmRun || undefined,
+          // The legacy model tracked wheel alignment once per vehicle, not
+          // per tyre - applied here as this tyre's starting point so the new
+          // per-tyre alignment cycle has a baseline to compute from.
+          lastAlignmentKm: profile.wheelAlignmentLastOdometerKm
+        });
+      }
+
+      if (profile.batteryNumber) {
+        await saveBatteryRecord({
+          id: `${regNo}-legacy-battery`,
+          regNo,
+          batteryNumber: profile.batteryNumber,
+          isCurrent: true
+        });
+      }
+
+      if (profile.toolsChecklist && profile.toolsChecklist.length > 0) {
+        const flags: Record<string, boolean> = { hasJack: false, hasJackRod: false, hasTommyBar: false, hasSpanner: false };
+        const extras: string[] = [];
+        for (const tool of profile.toolsChecklist) {
+          const field = TOOL_FIELD_BY_NAME[(tool.name || '').trim().toLowerCase()];
+          if (field) flags[field] = tool.present;
+          else extras.push(`${tool.name}: ${tool.present ? 'Yes' : 'No'}`);
+        }
+        await saveToolsChecklistRecord({
+          id: `${regNo}-legacy-checklist`,
+          regNo,
+          checkDate: new Date().toISOString().slice(0, 10),
+          hasJack: flags.hasJack,
+          hasJackRod: flags.hasJackRod,
+          hasTommyBar: flags.hasTommyBar,
+          hasSpanner: flags.hasSpanner,
+          remarks: ['Migrated from the legacy Vehicle Maintenance Profile.', ...extras].join(' ')
+        });
+      }
+    }
+
+    console.log(`[MIGRATION] Converted ${legacyProfiles.length} legacy vehicle maintenance profile(s) into the new Service Schedule / Tire / Battery / Tools Checklist tables.`);
+  } catch (error) {
+    console.error("Migration failed in migrateLegacyMaintenanceProfiles:", error);
   }
 }
 

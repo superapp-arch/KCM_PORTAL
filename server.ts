@@ -14,6 +14,7 @@ import { createSession, getSessionUser, destroySession, extractBearerToken } fro
 import { issueOtp, verifyOtp } from './src/auth/otp.ts';
 import { istTimestamp, istDateKey } from './src/auth/time.ts';
 import { computeDueDateRaw } from './src/utils/loanDates.ts';
+import { latestOdometerFor, computeKmStatus, computeAlignmentStatus, nextAlignmentDueKm, projectDueDate, daysUntil } from './src/utils/maintenanceDates.ts';
 import {
   User,
   Vehicle,
@@ -47,7 +48,11 @@ import {
   PettyCashAdvance,
   VehicleMaintenanceProfile,
   MaintenanceServiceStation,
-  BreakdownReport
+  BreakdownReport,
+  VehicleServiceSchedule,
+  TireRecord,
+  BatteryRecord,
+  ToolsChecklistRecord
 } from './src/types.ts';
 import {
   seedDatabase,
@@ -85,6 +90,19 @@ import {
   getBreakdownReports,
   saveBreakdownReport,
   deleteBreakdownReport,
+  getVehicleServiceSchedules,
+  saveVehicleServiceSchedule,
+  deleteVehicleServiceSchedule,
+  getTireRecords,
+  saveTireRecord,
+  deleteTireRecord,
+  getBatteryRecords,
+  saveBatteryRecord,
+  deleteBatteryRecord,
+  getToolsChecklistRecords,
+  saveToolsChecklistRecord,
+  deleteToolsChecklistRecord,
+  migrateLegacyMaintenanceProfiles,
   getAccountsEntries,
   saveAccountsEntry,
   deleteAccountsEntry,
@@ -190,6 +208,10 @@ const COMPLIANCE_CHECKS: Array<{
 // nagging every day inside a wide window. Kept in ascending order so digest
 // rows sort soonest-first.
 const ALERT_MILESTONE_DAYS = [3, 7, 15];
+
+// Fleet Maintenance's own email milestones (Service Due / Wheel Alignment
+// Due) - confirmed 3/5/7 days, distinct from compliance's 3/7/15.
+const MAINTENANCE_ALERT_MILESTONE_DAYS = [3, 5, 7];
 
 // --- Staff Salary & Attendance calculation helpers ---
 
@@ -564,6 +586,10 @@ async function startServer() {
   // passwords left over from before hashing was introduced.
   await seedDatabase();
   await migratePlaintextPasswords();
+  // Fleet Maintenance rebuild: one-time conversion of any pre-existing
+  // combined Vehicle Maintenance Profiles into the new Service Schedule /
+  // Tire / Battery / Tools Checklist tables (no-op once already migrated).
+  await migrateLegacyMaintenanceProfiles();
 
   // Sessions, OTPs, and password hashing/verification are handled by the
   // dedicated modules under src/auth - see session.ts, otp.ts, password.ts.
@@ -659,15 +685,69 @@ async function startServer() {
     return alerts.sort((a, b) => a.diffDays - b.diffDays);
   }
 
-  // Builds and sends the compliance digest email right now - listing every
-  // vehicle whose insurance/permit/FC/tax expiry falls exactly on the 3, 7,
-  // or 15 day milestone today (see calculateMilestoneAlerts), sorted
-  // soonest-first - to the Super Admin(s) and the Vehicle Data Manager
-  // (Chandana). Used both by the automatic daily schedule and the manual
+  // Fleet Maintenance's own milestone check (Service Due / Wheel Alignment
+  // Due), mirroring calculateMilestoneAlerts above but KM-driven: each
+  // vehicle/tire's remaining KM is projected to a calendar date via its own
+  // trailing-30-day average km/day (see projectDueDate), then that projected
+  // date is checked against MAINTENANCE_ALERT_MILESTONE_DAYS. A vehicle with
+  // too little recent mileage history to project a rate is simply skipped
+  // here (it still shows on the module's own live KM-based dashboard
+  // widgets - see calculateMaintenanceDynamicAlerts below - just without a
+  // day-count email).
+  async function calculateMaintenanceMilestoneAlerts() {
+    const alerts: any[] = [];
+    const [schedules, tires, mileage] = await Promise.all([
+      getVehicleServiceSchedules(),
+      getTireRecords(),
+      getMileageReports()
+    ]);
+
+    const projectedDateLabel = (isoDate: string) => {
+      const [y, m, d] = isoDate.split('-').map(Number);
+      return formatDateDDMMYYYY(new Date(y, m - 1, d));
+    };
+
+    schedules.forEach(schedule => {
+      if (schedule.lastServiceKm == null) return;
+      const currentKm = latestOdometerFor(schedule.regNo, mileage as any);
+      if (currentKm == null) return;
+      const remaining = (schedule.lastServiceKm + (schedule.serviceIntervalKm || 10000)) - currentKm;
+      const projected = projectDueDate(schedule.regNo, remaining, mileage as any);
+      if (!projected) return;
+      const diffDays = daysUntil(projected);
+      if (!MAINTENANCE_ALERT_MILESTONE_DAYS.includes(diffDays)) return;
+      alerts.push({ vehicleRegNo: schedule.regNo, category: 'Service Due', checkLabel: 'Scheduled Service', expiryDate: projectedDateLabel(projected), diffDays });
+    });
+
+    tires.forEach(tire => {
+      if (tire.lastAlignmentKm == null) return;
+      const currentKm = latestOdometerFor(tire.regNo, mileage as any);
+      if (currentKm == null) return;
+      const dueAt = nextAlignmentDueKm(tire.lastAlignmentKm)!;
+      const projected = projectDueDate(tire.regNo, dueAt - currentKm, mileage as any);
+      if (!projected) return;
+      const diffDays = daysUntil(projected);
+      if (!MAINTENANCE_ALERT_MILESTONE_DAYS.includes(diffDays)) return;
+      alerts.push({ vehicleRegNo: tire.regNo, category: 'Wheel Alignment', checkLabel: `Wheel Alignment (${tire.position})`, expiryDate: projectedDateLabel(projected), diffDays });
+    });
+
+    return alerts.sort((a, b) => a.diffDays - b.diffDays);
+  }
+
+  // Builds and sends the combined Fleet digest email right now - every
+  // vehicle whose insurance/permit/FC/tax expiry, scheduled service, or wheel
+  // alignment falls exactly on its 3/7/15 (compliance) or 3/5/7 (maintenance)
+  // day milestone today, sorted soonest-first - to the Super Admin(s) and the
+  // Vehicle Data Manager (Chandana), same recipients as before this covered
+  // maintenance too. Used both by the automatic daily schedule and the manual
   // "Send Alerts Now" button; the manual path always sends regardless of
   // whether today's automatic digest already went out.
   async function buildAndSendComplianceDigest(): Promise<{ sent: boolean; count: number; recipients: string[] }> {
-    const sortedAlerts = await calculateMilestoneAlerts();
+    const [complianceAlerts, maintenanceAlerts] = await Promise.all([
+      calculateMilestoneAlerts(),
+      calculateMaintenanceMilestoneAlerts()
+    ]);
+    const sortedAlerts = [...complianceAlerts, ...maintenanceAlerts].sort((a, b) => a.diffDays - b.diffDays);
     if (sortedAlerts.length === 0) return { sent: false, count: 0, recipients: [] };
 
     const usersList = await getUsersWithFallback();
@@ -679,9 +759,14 @@ async function startServer() {
     if (recipients.length === 0) return { sent: false, count: 0, recipients: [] };
 
     const todayKey = istDateKey();
+    // Compliance rows (Insurance/Permit/FC/Tax) don't carry their own
+    // category label the way the maintenance ones do (checkLabel already IS
+    // the check type for compliance, e.g. "Insurance") - default the column
+    // to "Compliance" for those.
     const rows = sortedAlerts.map((a: any) => `
       <tr>
         <td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;">${a.vehicleRegNo}</td>
+        <td style="padding:6px 10px;border:1px solid #e2e8f0;">${a.category || 'Compliance'}</td>
         <td style="padding:6px 10px;border:1px solid #e2e8f0;">${a.checkLabel}</td>
         <td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;">${a.expiryDate}</td>
         <td style="padding:6px 10px;border:1px solid #e2e8f0;text-align:center;">${a.diffDays}</td>
@@ -691,31 +776,32 @@ async function startServer() {
     await resend.emails.send({
       from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
       to: recipients,
-      subject: 'KCM Fleet Compliance Digest',
+      subject: 'KCM Fleet Compliance & Maintenance Digest',
       html: `
         <div style="font-family:Arial,sans-serif;line-height:1.5;">
           <p>Hello,</p>
-          <p>The following documents are expiring, please renew before expiry.</p>
+          <p>The following documents, scheduled services, and wheel alignments are coming due - please action before the due date.</p>
           <table style="border-collapse:collapse;font-size:13px;">
             <thead>
               <tr>
                 <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Vehicle No</th>
-                <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Expiry Type</th>
-                <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Expiry Date</th>
+                <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Category</th>
+                <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Item</th>
+                <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Due Date</th>
                 <th style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;text-align:left;">Days Left</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
           </table>
-          <p style="margin-top:14px;">Please arrange renewals at the earliest to avoid compliance violations.</p>
+          <p style="margin-top:14px;">Please arrange renewals/service at the earliest to avoid compliance violations or breakdowns.</p>
         </div>
       `,
     });
 
     await saveNotification({
       id: `digest-sent-${todayKey}`,
-      title: 'Daily Compliance Digest Sent',
-      message: `Compliance digest emailed to ${recipients.join(', ')} covering ${sortedAlerts.length} expir${sortedAlerts.length === 1 ? 'y' : 'ies'} at the 3/7/15-day mark.`,
+      title: 'Daily Compliance & Maintenance Digest Sent',
+      message: `Digest emailed to ${recipients.join(', ')} covering ${sortedAlerts.length} item${sortedAlerts.length === 1 ? '' : 's'} (compliance at 3/7/15 days, service/alignment at 3/5/7 days).`,
       type: 'general',
       timestamp: istTimestamp(),
       read: true
@@ -1090,6 +1176,67 @@ async function startServer() {
     return alerts;
   }
 
+  // Fleet Maintenance's own continuous (non-day-gated) dashboard alerts -
+  // Service Due and Wheel Alignment Due/Overdue, straight off the same
+  // KM-status thresholds the module's own tabs render (computeKmStatus /
+  // computeAlignmentStatus), so a vehicle shows up here the moment it enters
+  // the due-soon window, not just on its 3/5/7-day email milestone.
+  async function calculateMaintenanceDynamicAlerts() {
+    const alerts: any[] = [];
+    const [schedules, tires, mileage, existingNotifs] = await Promise.all([
+      getVehicleServiceSchedules(),
+      getTireRecords(),
+      getMileageReports(),
+      getNotifications()
+    ]);
+    const resolvedIds = new Set(
+      existingNotifs.filter((n: any) => n.read || n.status === 'Resolved').map((n: any) => n.id)
+    );
+
+    schedules.forEach(schedule => {
+      const alertId = `svc-due-${schedule.regNo}`;
+      if (resolvedIds.has(alertId) || schedule.lastServiceKm == null) return;
+      const currentKm = latestOdometerFor(schedule.regNo, mileage as any);
+      if (currentKm == null) return;
+      const remaining = (schedule.lastServiceKm + (schedule.serviceIntervalKm || 10000)) - currentKm;
+      const status = computeKmStatus(remaining);
+      if (!status || status === 'ok') return;
+
+      alerts.push({
+        id: alertId,
+        title: 'Scheduled Service Due Alert',
+        message: `Vehicle ${schedule.regNo} is ${status === 'overdue' ? 'overdue for' : 'due soon for'} scheduled service (${remaining} km remaining).`,
+        type: 'service-due',
+        timestamp: istTimestamp(),
+        status: 'Active',
+        read: false,
+        vehicleRegNo: schedule.regNo
+      });
+    });
+
+    tires.forEach(tire => {
+      const alertId = `align-due-${tire.regNo}-${tire.position}`;
+      if (resolvedIds.has(alertId)) return;
+      const currentKm = latestOdometerFor(tire.regNo, mileage as any);
+      const status = computeAlignmentStatus(tire.lastAlignmentKm, currentKm);
+      if (!status || status === 'ok') return;
+      const remaining = currentKm != null ? nextAlignmentDueKm(tire.lastAlignmentKm)! - currentKm : undefined;
+
+      alerts.push({
+        id: alertId,
+        title: 'Wheel Alignment Due Alert',
+        message: `Vehicle ${tire.regNo} (${tire.position}) is ${status === 'overdue' ? 'overdue for' : 'due soon for'} wheel alignment${remaining != null ? ` (${remaining} km remaining)` : ''}.`,
+        type: 'alignment-due',
+        timestamp: istTimestamp(),
+        status: 'Active',
+        read: false,
+        vehicleRegNo: tire.regNo
+      });
+    });
+
+    return alerts;
+  }
+
   // Manually trigger the compliance digest email immediately (Super Admin only),
   // bypassing the once-per-day automatic gate.
   app.post('/api/compliance-digest/send-now', async (req, res) => {
@@ -1104,14 +1251,14 @@ async function startServer() {
         return res.json({
           success: true,
           sent: false,
-          message: 'No vehicles are currently at the 3/7/15-day expiry mark for insurance, permits, FC, or tax - nothing to send.'
+          message: 'Nothing is currently at its 3/7/15-day expiry mark (insurance, permits, FC, tax) or its 3/5/7-day mark (scheduled service, wheel alignment) - nothing to send.'
         });
       }
 
       res.json({
         success: true,
         sent: true,
-        message: `Compliance digest sent to ${result.recipients.join(', ')} covering ${result.count} item${result.count === 1 ? '' : 's'}.`
+        message: `Compliance & maintenance digest sent to ${result.recipients.join(', ')} covering ${result.count} item${result.count === 1 ? '' : 's'}.`
       });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -1122,10 +1269,10 @@ async function startServer() {
   app.get('/api/alerts', async (req, res) => {
     try {
       const notifs = await getNotifications();
-      const dynamic = await calculateDynamicAlerts();
+      const [dynamic, maintenanceDynamic] = await Promise.all([calculateDynamicAlerts(), calculateMaintenanceDynamicAlerts()]);
       const sec = notifs.filter((n: any) => n.type === 'security');
       res.json({
-        alerts: [...dynamic, ...sec]
+        alerts: [...dynamic, ...maintenanceDynamic, ...sec]
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1136,8 +1283,9 @@ async function startServer() {
   app.get('/api/notifications', async (req, res) => {
     try {
       const storedNotifs = await getNotifications();
-      const dynamic = await calculateDynamicAlerts();
-      
+      const [dynamicCompliance, dynamicMaintenance] = await Promise.all([calculateDynamicAlerts(), calculateMaintenanceDynamicAlerts()]);
+      const dynamic = [...dynamicCompliance, ...dynamicMaintenance];
+
       const normalizedStored = storedNotifs.map((n: any) => ({
         status: n.status || 'Active',
         ...n
@@ -1390,6 +1538,58 @@ async function startServer() {
   });
   app.delete('/api/breakdown-reports/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteBreakdownReport(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/vehicle-service-schedules', async (req, res) => {
+    try { res.json(await getVehicleServiceSchedules()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/vehicle-service-schedules', async (req, res) => {
+    try { res.json({ success: true, data: await saveVehicleServiceSchedule(req.body as VehicleServiceSchedule) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/vehicle-service-schedules/:id', async (req, res) => {
+    try { res.json({ success: true, data: await saveVehicleServiceSchedule({ ...req.body, id: req.params.id } as VehicleServiceSchedule) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/vehicle-service-schedules/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteVehicleServiceSchedule(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/tire-records', async (req, res) => {
+    try { res.json(await getTireRecords()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/tire-records', async (req, res) => {
+    try { res.json({ success: true, data: await saveTireRecord(req.body as TireRecord) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/tire-records/:id', async (req, res) => {
+    try { res.json({ success: true, data: await saveTireRecord({ ...req.body, id: req.params.id } as TireRecord) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/tire-records/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteTireRecord(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/battery-records', async (req, res) => {
+    try { res.json(await getBatteryRecords()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/battery-records', async (req, res) => {
+    try { res.json({ success: true, data: await saveBatteryRecord(req.body as BatteryRecord) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/battery-records/:id', async (req, res) => {
+    try { res.json({ success: true, data: await saveBatteryRecord({ ...req.body, id: req.params.id } as BatteryRecord) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/battery-records/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteBatteryRecord(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/tools-checklist-records', async (req, res) => {
+    try { res.json(await getToolsChecklistRecords()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/tools-checklist-records', async (req, res) => {
+    try { res.json({ success: true, data: await saveToolsChecklistRecord(req.body as ToolsChecklistRecord) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/tools-checklist-records/:id', async (req, res) => {
+    try { res.json({ success: true, data: await saveToolsChecklistRecord({ ...req.body, id: req.params.id } as ToolsChecklistRecord) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/tools-checklist-records/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteToolsChecklistRecord(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.get('/api/accounts', async (req, res) => {

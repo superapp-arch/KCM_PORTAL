@@ -20,9 +20,12 @@ import {
   BusinessLoan,
   MarketPodEntry,
   PettyCashAdvance,
-  VehicleMaintenanceProfile,
   MaintenanceServiceStation,
-  BreakdownReport
+  BreakdownReport,
+  VehicleServiceSchedule,
+  TireRecord,
+  BatteryRecord,
+  ToolsChecklistRecord
 } from '../types';
 import FleetSheet from './FleetSheet';
 import FuelManagement from './FuelManagement';
@@ -120,10 +123,6 @@ interface AdministrationProps {
   onAddMaintenanceRecord: (record: Omit<MaintenanceRecord, 'id'>) => Promise<void>;
   onUpdateMaintenanceRecord: (id: string, record: Partial<MaintenanceRecord>) => Promise<void>;
   onDeleteMaintenanceRecord: (id: string) => Promise<void>;
-  vehicleMaintenanceProfiles: VehicleMaintenanceProfile[];
-  onAddVehicleMaintenanceProfile: (profile: Omit<VehicleMaintenanceProfile, 'id'> & { id: string }) => Promise<void>;
-  onUpdateVehicleMaintenanceProfile: (id: string, profile: Partial<VehicleMaintenanceProfile>) => Promise<void>;
-  onDeleteVehicleMaintenanceProfile: (id: string) => Promise<void>;
   maintenanceServiceStations: MaintenanceServiceStation[];
   onAddMaintenanceServiceStation: (station: Omit<MaintenanceServiceStation, 'id'>) => Promise<void>;
   onDeleteMaintenanceServiceStation: (id: string) => Promise<void>;
@@ -131,6 +130,17 @@ interface AdministrationProps {
   onAddBreakdownReport: (report: Omit<BreakdownReport, 'id'>) => Promise<void>;
   onUpdateBreakdownReport: (id: string, report: Partial<BreakdownReport>) => Promise<void>;
   onDeleteBreakdownReport: (id: string) => Promise<void>;
+  vehicleServiceSchedules: VehicleServiceSchedule[];
+  onSaveVehicleServiceSchedule: (schedule: VehicleServiceSchedule) => Promise<void>;
+  tireRecords: TireRecord[];
+  onSaveTireRecord: (record: TireRecord | Omit<TireRecord, 'id'>) => Promise<void>;
+  onDeleteTireRecord: (id: string) => Promise<void>;
+  batteryRecords: BatteryRecord[];
+  onSaveBatteryRecord: (record: BatteryRecord | Omit<BatteryRecord, 'id'>) => Promise<void>;
+  onDeleteBatteryRecord: (id: string) => Promise<void>;
+  toolsChecklistRecords: ToolsChecklistRecord[];
+  onSaveToolsChecklistRecord: (record: Omit<ToolsChecklistRecord, 'id'>) => Promise<void>;
+  onDeleteToolsChecklistRecord: (id: string) => Promise<void>;
   onAddAccountsEntry: (entry: Omit<AccountsEntry, 'id'>) => Promise<void>;
   onUpdateAccountsEntry: (id: string, entry: Partial<AccountsEntry>) => Promise<void>;
   onDeleteAccountsEntry: (id: string) => Promise<void>;
@@ -207,10 +217,17 @@ export default function Administration({
   onAddMaintenanceRecord,
   onUpdateMaintenanceRecord,
   onDeleteMaintenanceRecord,
-  vehicleMaintenanceProfiles,
-  onAddVehicleMaintenanceProfile,
-  onUpdateVehicleMaintenanceProfile,
-  onDeleteVehicleMaintenanceProfile,
+  vehicleServiceSchedules,
+  onSaveVehicleServiceSchedule,
+  tireRecords,
+  onSaveTireRecord,
+  onDeleteTireRecord,
+  batteryRecords,
+  onSaveBatteryRecord,
+  onDeleteBatteryRecord,
+  toolsChecklistRecords,
+  onSaveToolsChecklistRecord,
+  onDeleteToolsChecklistRecord,
   maintenanceServiceStations,
   onAddMaintenanceServiceStation,
   onDeleteMaintenanceServiceStation,
@@ -908,10 +925,6 @@ export default function Administration({
               vehicles={vehicles}
               drivers={drivers}
               mileageReports={mileageReports}
-              vehicleMaintenanceProfiles={vehicleMaintenanceProfiles}
-              onAddVehicleMaintenanceProfile={onAddVehicleMaintenanceProfile}
-              onUpdateVehicleMaintenanceProfile={onUpdateVehicleMaintenanceProfile}
-              onDeleteVehicleMaintenanceProfile={onDeleteVehicleMaintenanceProfile}
               serviceStations={maintenanceServiceStations}
               onAddServiceStation={onAddMaintenanceServiceStation}
               onDeleteServiceStation={onDeleteMaintenanceServiceStation}
@@ -919,6 +932,17 @@ export default function Administration({
               onAddBreakdownReport={onAddBreakdownReport}
               onUpdateBreakdownReport={onUpdateBreakdownReport}
               onDeleteBreakdownReport={onDeleteBreakdownReport}
+              vehicleServiceSchedules={vehicleServiceSchedules}
+              onSaveVehicleServiceSchedule={onSaveVehicleServiceSchedule}
+              tireRecords={tireRecords}
+              onSaveTireRecord={onSaveTireRecord}
+              onDeleteTireRecord={onDeleteTireRecord}
+              batteryRecords={batteryRecords}
+              onSaveBatteryRecord={onSaveBatteryRecord}
+              onDeleteBatteryRecord={onDeleteBatteryRecord}
+              toolsChecklistRecords={toolsChecklistRecords}
+              onSaveToolsChecklistRecord={onSaveToolsChecklistRecord}
+              onDeleteToolsChecklistRecord={onDeleteToolsChecklistRecord}
             />
           )}
 

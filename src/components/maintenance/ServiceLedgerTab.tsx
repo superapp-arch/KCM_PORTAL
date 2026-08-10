@@ -5,7 +5,7 @@ import {
   Vehicle,
   DriverEmployee,
   MileageReport,
-  VehicleMaintenanceProfile,
+  VehicleServiceSchedule,
   MaintenanceServiceStation,
   VehicleDocument
 } from '../../types';
@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import DocumentAttachment from '../DocumentAttachment';
 import DateInput from '../DateInput';
-import { computeServiceDueStatus, latestOdometerFor } from '../../utils/maintenanceDates';
+import { latestOdometerFor, computeKmStatus, computeWarrantyStatus } from '../../utils/maintenanceDates';
 
 interface ServiceLedgerTabProps {
   records: MaintenanceRecord[];
@@ -24,19 +24,19 @@ interface ServiceLedgerTabProps {
   vehicles: Vehicle[];
   drivers: DriverEmployee[];
   mileageReports: MileageReport[];
-  vehicleMaintenanceProfiles: VehicleMaintenanceProfile[];
+  vehicleServiceSchedules: VehicleServiceSchedule[];
   serviceStations: MaintenanceServiceStation[];
   onAddServiceStation: (station: Omit<MaintenanceServiceStation, 'id'>) => Promise<void>;
   onDeleteServiceStation: (id: string) => Promise<void>;
 }
 
 const SERVICE_TYPES: MaintenanceRecord['serviceType'][] = [
-  'Scheduled Servicing', 'Breakdown Repair', 'Parts Replacement', 'Electrical Repair'
+  'Scheduled Servicing', 'Breakdown Repair', 'Parts Replacement', 'Electrical Repair', 'Tire Service', 'Battery Service', 'Tools Check'
 ];
 
 export default function ServiceLedgerTab({
   records, onAddRecord, onUpdateRecord, onDeleteRecord,
-  vehicles, drivers, mileageReports, vehicleMaintenanceProfiles,
+  vehicles, drivers, mileageReports, vehicleServiceSchedules,
   serviceStations, onAddServiceStation, onDeleteServiceStation
 }: ServiceLedgerTabProps) {
   const [searchTerm, setSearchTerm] = useState('');
@@ -180,15 +180,21 @@ export default function ServiceLedgerTab({
   const totalCostAll = records.reduce((sum, r) => sum + (r.cost || 0), 0);
   const totalBreakdowns = records.filter(r => r.serviceType === 'Breakdown Repair').length;
 
-  // Warranty + due-status badge per vehicle (item 1) - computed from that
-  // vehicle's profile plus its most recent service record/odometer.
+  // Warranty + due-status badge per vehicle - computed from that vehicle's
+  // Service Schedule plus its live Fuel Management odometer (see
+  // src/utils/maintenanceDates.ts - Maintenance.tsx's own Scheduled Vehicles
+  // widget uses this exact same math).
   const dueStatusFor = (regNoVal: string) => {
-    const profile = vehicleMaintenanceProfiles.find(p => p.regNo === regNoVal);
-    if (!profile) return null;
-    const vehicleRecords = records.filter(r => (r.regNo || '').trim().toUpperCase() === regNoVal.trim().toUpperCase()).sort((a, b) => a.date < b.date ? 1 : -1);
+    const schedule = vehicleServiceSchedules.find(s => s.regNo === regNoVal);
+    if (!schedule || schedule.lastServiceKm == null) return null;
     const currentKm = latestOdometerFor(regNoVal, mileageReports);
-    const status = computeServiceDueStatus(vehicleRecords[0]?.date, profile.serviceIntervalDays, profile.serviceLastOdometerKm, currentKm, profile.serviceIntervalKm);
-    return { warranty: profile.warrantyStatus, status };
+    if (currentKm == null) return null;
+    const remaining = (schedule.lastServiceKm + (schedule.serviceIntervalKm || 10000)) - currentKm;
+    const status = computeKmStatus(remaining);
+    if (!status) return null;
+    const vehicle = vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === regNoVal.trim().toUpperCase());
+    const warranty = computeWarrantyStatus(schedule.warrantyStatus, currentKm, vehicle?.regDate || vehicle?.['Reg Date'] || '');
+    return { warranty, status };
   };
 
   return (
@@ -272,8 +278,8 @@ export default function ServiceLedgerTab({
                       <td className="px-3 py-2.5 whitespace-nowrap">
                         {due ? (
                           <div className="flex flex-col gap-0.5">
-                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase w-fit ${due.warranty === 'Under Warranty' ? 'bg-sky-50 text-sky-700 border border-sky-200' : 'bg-slate-100 text-slate-500 border border-slate-300'}`}>
-                              {due.warranty}
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase w-fit ${due.warranty === 'InWarranty' ? 'bg-sky-50 text-sky-700 border border-sky-200' : 'bg-slate-100 text-slate-500 border border-slate-300'}`}>
+                              {due.warranty === 'InWarranty' ? 'In Warranty' : 'Out of Warranty'}
                             </span>
                             <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase w-fit ${
                               due.status === 'overdue' ? 'bg-rose-50 text-rose-700 border border-rose-200' :

@@ -1,9 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import {
-  BreakdownReport, Vehicle, DriverEmployee, MaintenanceServiceStation, MaintenanceRecord, MaintenanceWorkItem
+  BreakdownReport, Vehicle, DriverEmployee, MaintenanceServiceStation, MaintenanceRecord, MaintenanceWorkItem, VehicleDocument
 } from '../../types';
-import { AlertTriangle, Plus, X, Wrench, CheckCircle2, Trash2 } from 'lucide-react';
+import { AlertTriangle, Plus, X, Wrench, CheckCircle2, Trash2, Zap, Truck as TruckIcon } from 'lucide-react';
 import DateInput from '../DateInput';
+import DocumentAttachment from '../DocumentAttachment';
+
+const BREAKDOWN_TYPES: { value: BreakdownReport['type']; label: string }[] = [
+  { value: 'EnRouteBreakdown', label: 'En-Route Breakdown' },
+  { value: 'WorkshopVisit', label: 'Workshop Visit' },
+  { value: 'ElectricalProblem', label: 'Electrical Problem' }
+];
+
+const PAYMENT_TYPES = ['Cash', 'Credit', 'Company Paid', 'Vendor Paid'];
 
 interface BreakdownsTabProps {
   breakdownReports: BreakdownReport[];
@@ -29,12 +38,16 @@ export default function BreakdownsTab({
 
   // Report Breakdown form
   const [showReportForm, setShowReportForm] = useState(false);
+  const [type, setType] = useState<BreakdownReport['type']>('EnRouteBreakdown');
   const [regNo, setRegNo] = useState('');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [location, setLocation] = useState('');
   const [description, setDescription] = useState('');
   const [driverName, setDriverName] = useState('');
   const [driverId, setDriverId] = useState('');
+  const [paymentType, setPaymentType] = useState('');
+  const [amount, setAmount] = useState('');
+  const [docs, setDocs] = useState<VehicleDocument[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const matchedDriver = (() => {
@@ -46,8 +59,8 @@ export default function BreakdownsTab({
   useEffect(() => { if (matchedDriver) setDriverId(matchedDriver.id); }, [matchedDriver]);
 
   const resetReportForm = () => {
-    setRegNo(''); setDate(new Date().toISOString().slice(0, 10)); setLocation(''); setDescription('');
-    setDriverName(''); setDriverId(''); setShowReportForm(false);
+    setType('EnRouteBreakdown'); setRegNo(''); setDate(new Date().toISOString().slice(0, 10)); setLocation(''); setDescription('');
+    setDriverName(''); setDriverId(''); setPaymentType(''); setAmount(''); setDocs([]); setShowReportForm(false);
   };
 
   const handleReportSubmit = async (e: React.FormEvent) => {
@@ -56,8 +69,10 @@ export default function BreakdownsTab({
     setIsSubmitting(true);
     try {
       await onAddBreakdownReport({
-        regNo: regNo.trim().toUpperCase(), date, location: location.trim(), description: description.trim(),
-        driverName: driverName.trim() || undefined, driverId: driverId.trim() || undefined, status: 'Open'
+        type, regNo: regNo.trim().toUpperCase(), date, location: location.trim(), description: description.trim(),
+        driverName: driverName.trim() || undefined, driverId: driverId.trim() || undefined,
+        paymentType: paymentType.trim() || undefined, amount: parseFloat(amount) || undefined,
+        documents: docs, status: 'Open'
       });
       triggerNotif('🚨 Breakdown reported.');
       resetReportForm();
@@ -163,23 +178,43 @@ export default function BreakdownsTab({
               <tr>
                 <th className="px-3 py-2.5">Date</th>
                 <th className="px-3 py-2.5">Reg. No.</th>
+                <th className="px-3 py-2.5">Type</th>
                 <th className="px-3 py-2.5">Location</th>
                 <th className="px-3 py-2.5">Description</th>
                 <th className="px-3 py-2.5">Driver</th>
+                <th className="px-3 py-2.5">Payment</th>
+                <th className="px-3 py-2.5 text-right">Amount</th>
+                <th className="px-3 py-2.5 text-center">Docs</th>
                 <th className="px-3 py-2.5">Status</th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
               {breakdownReports.length === 0 ? (
-                <tr><td colSpan={7} className="text-center py-10 text-slate-400 font-mono">NO BREAKDOWN REPORTS LOGGED.</td></tr>
+                <tr><td colSpan={11} className="text-center py-10 text-slate-400 font-mono">NO BREAKDOWN REPORTS LOGGED.</td></tr>
               ) : [...openReports, ...resolvedReports].map(b => (
                 <tr key={b.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{b.date}</td>
                   <td className="px-3 py-2.5 font-bold font-mono text-slate-900 uppercase whitespace-nowrap">{b.regNo}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap">
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase border ${
+                      b.type === 'ElectricalProblem' ? 'bg-purple-50 text-purple-700 border-purple-100' :
+                      b.type === 'WorkshopVisit' ? 'bg-teal-50 text-teal-700 border-teal-100' :
+                      'bg-rose-50 text-rose-700 border-rose-100'
+                    }`}>
+                      {BREAKDOWN_TYPES.find(t => t.value === b.type)?.label || b.type || 'En-Route Breakdown'}
+                    </span>
+                  </td>
                   <td className="px-3 py-2.5 text-slate-600">{b.location || '-'}</td>
                   <td className="px-3 py-2.5 text-slate-500 max-w-[200px] truncate" title={b.description}>{b.description || '-'}</td>
                   <td className="px-3 py-2.5 whitespace-nowrap">{b.driverName || '-'}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap">{b.paymentType || '-'}</td>
+                  <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800 whitespace-nowrap">{b.amount ? `₹${b.amount.toLocaleString('en-IN')}` : '-'}</td>
+                  <td className="px-3 py-2.5 text-center">
+                    {b.documents && b.documents.length > 0 ? (
+                      <span className="inline-flex items-center justify-center px-1.5 py-0.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-[10px] font-bold">{b.documents.length}</span>
+                    ) : <span className="text-slate-300">-</span>}
+                  </td>
                   <td className="px-3 py-2.5">
                     <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${b.status === 'Open' ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
                       {b.status}
@@ -205,12 +240,30 @@ export default function BreakdownsTab({
       {/* Report Breakdown modal */}
       {showReportForm && (
         <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full max-h-[90vh] overflow-y-auto">
             <div className="p-4 bg-gradient-to-r from-rose-700 to-slate-900 text-white flex items-center justify-between">
               <h3 className="font-extrabold text-sm flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> Report Breakdown</h3>
               <button onClick={resetReportForm} className="p-1.5 rounded-lg hover:bg-white/10 text-white cursor-pointer"><X className="w-4 h-4" /></button>
             </div>
             <form onSubmit={handleReportSubmit} className="p-5 space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-600 mb-1">Type *</label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {BREAKDOWN_TYPES.map(t => (
+                    <button
+                      key={t.value}
+                      type="button"
+                      onClick={() => setType(t.value)}
+                      className={`px-2 py-1.5 rounded-lg border text-[10px] font-bold flex flex-col items-center gap-1 cursor-pointer transition-colors ${
+                        type === t.value ? 'bg-rose-600 border-rose-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      {t.value === 'ElectricalProblem' ? <Zap className="w-3.5 h-3.5" /> : t.value === 'WorkshopVisit' ? <Wrench className="w-3.5 h-3.5" /> : <TruckIcon className="w-3.5 h-3.5" />}
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div>
                 <label className="block font-semibold text-slate-600 mb-1">Vehicle Registration Number *</label>
                 <input type="text" required list="breakdown-vehicles-datalist" value={regNo} onChange={(e) => setRegNo(e.target.value.toUpperCase())} autoComplete="off"
@@ -239,10 +292,23 @@ export default function BreakdownsTab({
                   <input type="text" value={driverId} onChange={(e) => setDriverId(e.target.value)} autoComplete="off" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
                 </div>
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-600 mb-1">Payment Type</label>
+                  <input type="text" list="breakdown-payment-types-datalist" value={paymentType} onChange={(e) => setPaymentType(e.target.value)} autoComplete="off"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800" />
+                  <datalist id="breakdown-payment-types-datalist">{PAYMENT_TYPES.map(p => <option key={p} value={p} />)}</datalist>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-600 mb-1">Amount</label>
+                  <input type="number" step="0.01" placeholder="₹" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800" />
+                </div>
+              </div>
               <div>
                 <label className="block font-semibold text-slate-600 mb-1">Description</label>
                 <textarea value={description} onChange={(e) => setDescription(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 h-16 text-slate-800" />
               </div>
+              <DocumentAttachment documents={docs} onChange={setDocs} label="Attach Bills / Photos" />
               <div className="flex gap-2 pt-2">
                 <button type="button" onClick={resetReportForm} className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 uppercase text-[10px] cursor-pointer">Cancel</button>
                 <button type="submit" disabled={isSubmitting} className="flex-1 bg-gradient-to-r from-rose-600 to-slate-800 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md uppercase text-[10px] cursor-pointer">

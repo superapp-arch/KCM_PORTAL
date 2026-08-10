@@ -190,8 +190,10 @@ export const pettyCashAdvances = pgTable('petty_cash_advances', {
 
 // Fleet Maintenance module tables
 
-// Per-vehicle maintenance data (warranty, tyres, wheel alignment, battery,
-// tools checklist) - separate from vehicles' core Fleet & Vehicles record.
+// [Deprecated] Per-vehicle maintenance data (warranty, tyres, wheel
+// alignment, battery, tools checklist) - superseded by the 4 tables below
+// (Fleet Maintenance rebuild). Kept only so migrateLegacyMaintenanceProfiles()
+// in service.ts can do a one-time read of any pre-existing rows.
 export const vehicleMaintenanceProfiles = pgTable('vehicle_maintenance_profiles', {
   id: text('id').primaryKey(),
   data: text('data').notNull(), // JSON string representing the full VehicleMaintenanceProfile object
@@ -210,6 +212,33 @@ export const maintenanceServiceStations = pgTable('maintenance_service_stations'
 export const breakdownReports = pgTable('breakdown_reports', {
   id: text('id').primaryKey(),
   data: text('data').notNull(), // JSON string representing the full BreakdownReport object
+});
+
+// One row per vehicle - service interval + warranty (see VehicleServiceSchedule).
+export const vehicleServiceSchedules = pgTable('vehicle_service_schedules', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full VehicleServiceSchedule object
+});
+
+// One row per tyre position per vehicle (see TireRecord).
+export const tireRecords = pgTable('tire_records', {
+  id: text('id').primaryKey(),
+  regNo: text('reg_no'),
+  data: text('data').notNull(), // JSON string representing the full TireRecord object
+});
+
+// One row per battery ever fitted to a vehicle - a history (see BatteryRecord).
+export const batteryRecords = pgTable('battery_records', {
+  id: text('id').primaryKey(),
+  regNo: text('reg_no'),
+  data: text('data').notNull(), // JSON string representing the full BatteryRecord object
+});
+
+// One row per tools check performed - a dated log (see ToolsChecklistRecord).
+export const toolsChecklistRecords = pgTable('tools_checklist_records', {
+  id: text('id').primaryKey(),
+  regNo: text('reg_no'),
+  data: text('data').notNull(), // JSON string representing the full ToolsChecklistRecord object
 });
 
 

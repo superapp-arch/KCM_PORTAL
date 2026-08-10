@@ -4,14 +4,20 @@ import {
   Vehicle,
   DriverEmployee,
   MileageReport,
-  VehicleMaintenanceProfile,
   MaintenanceServiceStation,
-  BreakdownReport
+  BreakdownReport,
+  VehicleServiceSchedule,
+  TireRecord,
+  BatteryRecord,
+  ToolsChecklistRecord
 } from '../types';
-import { Settings, Truck, AlertTriangle, CalendarClock, Wrench } from 'lucide-react';
-import { computeServiceDueStatus, latestOdometerFor } from '../utils/maintenanceDates';
+import { Settings, Truck, AlertTriangle, CalendarClock, Wrench, CircleDot, Battery } from 'lucide-react';
+import { latestOdometerFor, computeKmStatus, computeAlignmentStatus } from '../utils/maintenanceDates';
 import ServiceLedgerTab from './maintenance/ServiceLedgerTab';
-import VehicleProfilesTab from './maintenance/VehicleProfilesTab';
+import ServiceScheduleTab from './maintenance/ServiceScheduleTab';
+import TireAlignmentTab from './maintenance/TireAlignmentTab';
+import BatteryTab from './maintenance/BatteryTab';
+import ToolsChecklistTab from './maintenance/ToolsChecklistTab';
 import BreakdownsTab from './maintenance/BreakdownsTab';
 
 interface MaintenanceProps {
@@ -22,10 +28,6 @@ interface MaintenanceProps {
   vehicles: Vehicle[];
   drivers: DriverEmployee[];
   mileageReports: MileageReport[];
-  vehicleMaintenanceProfiles: VehicleMaintenanceProfile[];
-  onAddVehicleMaintenanceProfile: (profile: Omit<VehicleMaintenanceProfile, 'id'> & { id: string }) => Promise<void>;
-  onUpdateVehicleMaintenanceProfile: (id: string, profile: Partial<VehicleMaintenanceProfile>) => Promise<void>;
-  onDeleteVehicleMaintenanceProfile: (id: string) => Promise<void>;
   serviceStations: MaintenanceServiceStation[];
   onAddServiceStation: (station: Omit<MaintenanceServiceStation, 'id'>) => Promise<void>;
   onDeleteServiceStation: (id: string) => Promise<void>;
@@ -33,51 +35,67 @@ interface MaintenanceProps {
   onAddBreakdownReport: (report: Omit<BreakdownReport, 'id'>) => Promise<void>;
   onUpdateBreakdownReport: (id: string, report: Partial<BreakdownReport>) => Promise<void>;
   onDeleteBreakdownReport: (id: string) => Promise<void>;
+  vehicleServiceSchedules: VehicleServiceSchedule[];
+  onSaveVehicleServiceSchedule: (schedule: VehicleServiceSchedule) => Promise<void>;
+  tireRecords: TireRecord[];
+  onSaveTireRecord: (record: TireRecord | Omit<TireRecord, 'id'>) => Promise<void>;
+  onDeleteTireRecord: (id: string) => Promise<void>;
+  batteryRecords: BatteryRecord[];
+  onSaveBatteryRecord: (record: BatteryRecord | Omit<BatteryRecord, 'id'>) => Promise<void>;
+  onDeleteBatteryRecord: (id: string) => Promise<void>;
+  toolsChecklistRecords: ToolsChecklistRecord[];
+  onSaveToolsChecklistRecord: (record: Omit<ToolsChecklistRecord, 'id'>) => Promise<void>;
+  onDeleteToolsChecklistRecord: (id: string) => Promise<void>;
 }
 
-type ModuleTab = 'ledger' | 'profiles' | 'breakdowns';
+type ModuleTab = 'ledger' | 'schedule' | 'tires' | 'battery' | 'tools' | 'breakdowns';
 
 export default function Maintenance(props: MaintenanceProps) {
   const {
-    records, vehicles, mileageReports, vehicleMaintenanceProfiles, breakdownReports
+    vehicles, mileageReports, vehicleServiceSchedules, tireRecords, breakdownReports
   } = props;
   const [moduleTab, setModuleTab] = useState<ModuleTab>('ledger');
   const [showScheduledList, setShowScheduledList] = useState(false);
+  const [showAlignmentList, setShowAlignmentList] = useState(false);
   const [showBreakdownList, setShowBreakdownList] = useState(false);
 
   const regNoOf = (v: Vehicle) => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase();
   const vehicleList = Array.from(new Set(vehicles.map(regNoOf).filter(Boolean))).sort();
 
-  // Scheduled Vehicles widget (item 8): vehicles whose service is due-soon or
-  // overdue, per computeServiceDueStatus - reads each vehicle's last service
-  // date/odometer from its most recent MaintenanceRecord (falling back to
-  // nothing if it's never been serviced) plus its VehicleMaintenanceProfile's
-  // configured intervals.
-  const scheduledVehicles = vehicleList
-    .map(regNo => {
-      const profile = vehicleMaintenanceProfiles.find(p => p.regNo === regNo);
-      if (!profile || (profile.serviceIntervalDays == null && profile.serviceIntervalKm == null)) return null;
-      const vehicleRecords = records.filter(r => (r.regNo || '').trim().toUpperCase() === regNo).sort((a, b) => a.date < b.date ? 1 : -1);
-      const lastService = vehicleRecords[0];
-      const currentKm = latestOdometerFor(regNo, mileageReports);
-      const status = computeServiceDueStatus(
-        lastService?.date,
-        profile.serviceIntervalDays,
-        profile.serviceLastOdometerKm,
-        currentKm,
-        profile.serviceIntervalKm
-      );
-      return status === 'ok' ? null : { regNo, status, lastServiceDate: lastService?.date };
+  // Scheduled Vehicles widget: vehicles whose Service Status is due-soon or
+  // overdue, per computeKmStatus against that vehicle's VehicleServiceSchedule
+  // and live Fuel Management odometer - see src/utils/maintenanceDates.ts.
+  const scheduledVehicles = vehicleServiceSchedules
+    .map(schedule => {
+      if (schedule.lastServiceKm == null) return null;
+      const currentKm = latestOdometerFor(schedule.regNo, mileageReports);
+      if (currentKm == null) return null;
+      const remaining = (schedule.lastServiceKm + (schedule.serviceIntervalKm || 10000)) - currentKm;
+      const status = computeKmStatus(remaining);
+      return status && status !== 'ok' ? { regNo: schedule.regNo, status, remaining } : null;
     })
-    .filter((v): v is { regNo: string; status: 'due-soon' | 'overdue'; lastServiceDate: string | undefined } => v != null)
+    .filter((v): v is { regNo: string; status: 'due-soon' | 'overdue'; remaining: number } => v != null)
+    .sort((a, b) => (a.status === 'overdue' ? -1 : 1) - (b.status === 'overdue' ? -1 : 1));
+
+  // Wheel Alignment widget - same KM-driven pattern, per tyre position.
+  const alignmentVehicles = tireRecords
+    .map(tire => {
+      const currentKm = latestOdometerFor(tire.regNo, mileageReports);
+      const status = computeAlignmentStatus(tire.lastAlignmentKm, currentKm);
+      return status && status !== 'ok' ? { regNo: tire.regNo, position: tire.position, status } : null;
+    })
+    .filter((v): v is { regNo: string; position: string; status: 'due-soon' | 'overdue' } => v != null)
     .sort((a, b) => (a.status === 'overdue' ? -1 : 1) - (b.status === 'overdue' ? -1 : 1));
 
   const openBreakdowns = breakdownReports.filter(b => b.status === 'Open');
 
   const TABS: [ModuleTab, string, React.ComponentType<{ className?: string }>][] = [
-    ['ledger', 'Service Ledger', Settings],
-    ['profiles', 'Vehicle Profiles', Truck],
-    ['breakdowns', 'Breakdowns', AlertTriangle]
+    ['ledger', 'Service History', Settings],
+    ['schedule', 'Service Schedule', CalendarClock],
+    ['tires', 'Tire & Alignment', CircleDot],
+    ['battery', 'Battery', Battery],
+    ['tools', 'Tools Checklist', Wrench],
+    ['breakdowns', 'Breakdown / Workshop / Electrical', AlertTriangle]
   ];
 
   return (
@@ -89,13 +107,13 @@ export default function Maintenance(props: MaintenanceProps) {
             KCM Fleet Maintenance & Garage Center
           </h1>
           <p className="text-xs text-slate-500 font-mono mt-1">
-            Service ledger, vehicle maintenance profiles, and breakdown/workshop visit tracking
+            Service schedule, tire &amp; alignment, battery, tools checklist, and breakdown/workshop/electrical tracking
           </p>
         </div>
       </div>
 
-      {/* Dashboard widgets - always visible regardless of active tab (item 8) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+      {/* Dashboard widgets - always visible regardless of active tab */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
         <button
           type="button"
           onClick={() => setShowScheduledList(s => !s)}
@@ -120,6 +138,39 @@ export default function Maintenance(props: MaintenanceProps) {
               ) : scheduledVehicles.map(v => (
                 <div key={v.regNo} className="flex items-center justify-between font-mono">
                   <span className="font-bold text-slate-800">{v.regNo}</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${v.status === 'overdue' ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                    {v.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowAlignmentList(s => !s)}
+          className="text-left bg-white p-4 rounded-xl border border-blue-200 shadow-xs hover:shadow-sm transition-all cursor-pointer"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-bold text-blue-600 uppercase tracking-wider flex items-center gap-1.5">
+                <CircleDot className="w-3.5 h-3.5" /> Wheel Alignment
+              </p>
+              <h3 className="text-lg font-bold text-blue-700 mt-1">{alignmentVehicles.length} Due</h3>
+              <p className="text-slate-400 mt-0.5">Alignment due-soon or overdue - click to {showAlignmentList ? 'hide' : 'view'}</p>
+            </div>
+            <div className="p-2.5 bg-blue-50 rounded-lg text-blue-600">
+              <CircleDot className="w-4 h-4" />
+            </div>
+          </div>
+          {showAlignmentList && (
+            <div className="mt-3 pt-3 border-t border-blue-100 space-y-1 max-h-40 overflow-y-auto">
+              {alignmentVehicles.length === 0 ? (
+                <p className="text-slate-400">Nothing due right now.</p>
+              ) : alignmentVehicles.map((v, i) => (
+                <div key={`${v.regNo}-${v.position}-${i}`} className="flex items-center justify-between font-mono">
+                  <span className="font-bold text-slate-800">{v.regNo} <span className="text-slate-400 font-sans font-normal">({v.position})</span></span>
                   <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${v.status === 'overdue' ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
                     {v.status}
                   </span>
@@ -161,7 +212,7 @@ export default function Maintenance(props: MaintenanceProps) {
         </button>
       </div>
 
-      <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-lg border border-slate-200 text-xs font-semibold w-fit">
+      <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-lg border border-slate-200 text-xs font-semibold w-fit flex-wrap">
         {TABS.map(([key, label, Icon]) => (
           <button
             key={key}
@@ -184,20 +235,43 @@ export default function Maintenance(props: MaintenanceProps) {
           vehicles={props.vehicles}
           drivers={props.drivers}
           mileageReports={props.mileageReports}
-          vehicleMaintenanceProfiles={props.vehicleMaintenanceProfiles}
+          vehicleServiceSchedules={props.vehicleServiceSchedules}
           serviceStations={props.serviceStations}
           onAddServiceStation={props.onAddServiceStation}
           onDeleteServiceStation={props.onDeleteServiceStation}
         />
       )}
-      {moduleTab === 'profiles' && (
-        <VehicleProfilesTab
+      {moduleTab === 'schedule' && (
+        <ServiceScheduleTab
           vehicles={props.vehicles}
           mileageReports={props.mileageReports}
-          records={props.records}
-          vehicleMaintenanceProfiles={props.vehicleMaintenanceProfiles}
-          onAddVehicleMaintenanceProfile={props.onAddVehicleMaintenanceProfile}
-          onDeleteVehicleMaintenanceProfile={props.onDeleteVehicleMaintenanceProfile}
+          vehicleServiceSchedules={props.vehicleServiceSchedules}
+          onSaveVehicleServiceSchedule={props.onSaveVehicleServiceSchedule}
+        />
+      )}
+      {moduleTab === 'tires' && (
+        <TireAlignmentTab
+          vehicles={props.vehicles}
+          mileageReports={props.mileageReports}
+          tireRecords={props.tireRecords}
+          onSaveTireRecord={props.onSaveTireRecord}
+          onDeleteTireRecord={props.onDeleteTireRecord}
+        />
+      )}
+      {moduleTab === 'battery' && (
+        <BatteryTab
+          vehicles={props.vehicles}
+          batteryRecords={props.batteryRecords}
+          onSaveBatteryRecord={props.onSaveBatteryRecord}
+          onDeleteBatteryRecord={props.onDeleteBatteryRecord}
+        />
+      )}
+      {moduleTab === 'tools' && (
+        <ToolsChecklistTab
+          vehicles={props.vehicles}
+          toolsChecklistRecords={props.toolsChecklistRecords}
+          onSaveToolsChecklistRecord={props.onSaveToolsChecklistRecord}
+          onDeleteToolsChecklistRecord={props.onDeleteToolsChecklistRecord}
         />
       )}
       {moduleTab === 'breakdowns' && (

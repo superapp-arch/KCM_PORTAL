@@ -23,9 +23,12 @@ import {
   BusinessLoan,
   MarketPodEntry,
   PettyCashAdvance,
-  VehicleMaintenanceProfile,
   MaintenanceServiceStation,
-  BreakdownReport
+  BreakdownReport,
+  VehicleServiceSchedule,
+  TireRecord,
+  BatteryRecord,
+  ToolsChecklistRecord
 } from './types';
 
 export default function App() {
@@ -42,9 +45,12 @@ export default function App() {
   const [marketPodEntries, setMarketPodEntries] = useState<MarketPodEntry[]>([]);
   const [pettyCashAdvances, setPettyCashAdvances] = useState<PettyCashAdvance[]>([]);
   const [records, setRecords] = useState<MaintenanceRecord[]>([]);
-  const [vehicleMaintenanceProfiles, setVehicleMaintenanceProfiles] = useState<VehicleMaintenanceProfile[]>([]);
   const [maintenanceServiceStations, setMaintenanceServiceStations] = useState<MaintenanceServiceStation[]>([]);
   const [breakdownReports, setBreakdownReports] = useState<BreakdownReport[]>([]);
+  const [vehicleServiceSchedules, setVehicleServiceSchedules] = useState<VehicleServiceSchedule[]>([]);
+  const [tireRecords, setTireRecords] = useState<TireRecord[]>([]);
+  const [batteryRecords, setBatteryRecords] = useState<BatteryRecord[]>([]);
+  const [toolsChecklistRecords, setToolsChecklistRecords] = useState<ToolsChecklistRecord[]>([]);
   const [entries, setEntries] = useState<AccountsEntry[]>([]);
   const [employees, setEmployees] = useState<StaffEmployee[]>([]);
   const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
@@ -103,9 +109,12 @@ export default function App() {
         marketPodRes,
         pettyCashAdvancesRes,
         maintRes,
-        vehicleMaintenanceProfilesRes,
         maintenanceServiceStationsRes,
         breakdownReportsRes,
+        vehicleServiceSchedulesRes,
+        tireRecordsRes,
+        batteryRecordsRes,
+        toolsChecklistRecordsRes,
         acctRes,
         hrRes,
         notifRes,
@@ -125,9 +134,12 @@ export default function App() {
         authFetch('/api/market-pod'),
         authFetch('/api/petty-cash-advances'),
         fetch('/api/maintenance'),
-        fetch('/api/vehicle-maintenance-profiles'),
         fetch('/api/maintenance-service-stations'),
         fetch('/api/breakdown-reports'),
+        fetch('/api/vehicle-service-schedules'),
+        fetch('/api/tire-records'),
+        fetch('/api/battery-records'),
+        fetch('/api/tools-checklist-records'),
         fetch('/api/accounts'),
         authFetch('/api/staff/employees'),
         fetch('/api/notifications'),
@@ -148,9 +160,12 @@ export default function App() {
       if (marketPodRes.ok) setMarketPodEntries(await marketPodRes.json());
       if (pettyCashAdvancesRes.ok) setPettyCashAdvances(await pettyCashAdvancesRes.json());
       if (maintRes.ok) setRecords(await maintRes.json());
-      if (vehicleMaintenanceProfilesRes.ok) setVehicleMaintenanceProfiles(await vehicleMaintenanceProfilesRes.json());
       if (maintenanceServiceStationsRes.ok) setMaintenanceServiceStations(await maintenanceServiceStationsRes.json());
       if (breakdownReportsRes.ok) setBreakdownReports(await breakdownReportsRes.json());
+      if (vehicleServiceSchedulesRes.ok) setVehicleServiceSchedules(await vehicleServiceSchedulesRes.json());
+      if (tireRecordsRes.ok) setTireRecords(await tireRecordsRes.json());
+      if (batteryRecordsRes.ok) setBatteryRecords(await batteryRecordsRes.json());
+      if (toolsChecklistRecordsRes.ok) setToolsChecklistRecords(await toolsChecklistRecordsRes.json());
       if (acctRes.ok) setEntries(await acctRes.json());
       if (hrRes.ok) setEmployees(await hrRes.json());
       if (notifRes.ok) setNotifications(await notifRes.json());
@@ -342,12 +357,12 @@ export default function App() {
     }
   };
 
-  const handleAddVehicleMaintenanceProfile = async (profile: Omit<VehicleMaintenanceProfile, 'id'> & { id: string }) => {
+  const handleSaveVehicleServiceSchedule = async (schedule: VehicleServiceSchedule) => {
     try {
-      const res = await fetch('/api/vehicle-maintenance-profiles', {
+      const res = await fetch('/api/vehicle-service-schedules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(profile)
+        body: JSON.stringify(schedule)
       });
       if (res.ok) {
         await fetchAllData();
@@ -357,12 +372,12 @@ export default function App() {
     }
   };
 
-  const handleUpdateVehicleMaintenanceProfile = async (id: string, profile: Partial<VehicleMaintenanceProfile>) => {
+  const handleSaveTireRecord = async (record: TireRecord | Omit<TireRecord, 'id'>) => {
     try {
-      const res = await fetch(`/api/vehicle-maintenance-profiles/${id}`, {
-        method: 'PUT',
+      const res = await fetch('/api/tire-records', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(profile)
+        body: JSON.stringify(record)
       });
       if (res.ok) {
         await fetchAllData();
@@ -372,9 +387,61 @@ export default function App() {
     }
   };
 
-  const handleDeleteVehicleMaintenanceProfile = async (id: string) => {
+  const handleDeleteTireRecord = async (id: string) => {
     try {
-      const res = await fetch(`/api/vehicle-maintenance-profiles/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/tire-records/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSaveBatteryRecord = async (record: BatteryRecord | Omit<BatteryRecord, 'id'>) => {
+    try {
+      const res = await fetch('/api/battery-records', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteBatteryRecord = async (id: string) => {
+    try {
+      const res = await fetch(`/api/battery-records/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSaveToolsChecklistRecord = async (record: Omit<ToolsChecklistRecord, 'id'>) => {
+    try {
+      const res = await fetch('/api/tools-checklist-records', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteToolsChecklistRecord = async (id: string) => {
+    try {
+      const res = await fetch(`/api/tools-checklist-records/${id}`, { method: 'DELETE' });
       if (res.ok) {
         await fetchAllData();
       }
@@ -1088,10 +1155,17 @@ export default function App() {
         onAddMaintenanceRecord={handleAddMaintenanceRecord}
         onUpdateMaintenanceRecord={handleUpdateMaintenanceRecord}
         onDeleteMaintenanceRecord={handleDeleteMaintenanceRecord}
-        vehicleMaintenanceProfiles={vehicleMaintenanceProfiles}
-        onAddVehicleMaintenanceProfile={handleAddVehicleMaintenanceProfile}
-        onUpdateVehicleMaintenanceProfile={handleUpdateVehicleMaintenanceProfile}
-        onDeleteVehicleMaintenanceProfile={handleDeleteVehicleMaintenanceProfile}
+        vehicleServiceSchedules={vehicleServiceSchedules}
+        onSaveVehicleServiceSchedule={handleSaveVehicleServiceSchedule}
+        tireRecords={tireRecords}
+        onSaveTireRecord={handleSaveTireRecord}
+        onDeleteTireRecord={handleDeleteTireRecord}
+        batteryRecords={batteryRecords}
+        onSaveBatteryRecord={handleSaveBatteryRecord}
+        onDeleteBatteryRecord={handleDeleteBatteryRecord}
+        toolsChecklistRecords={toolsChecklistRecords}
+        onSaveToolsChecklistRecord={handleSaveToolsChecklistRecord}
+        onDeleteToolsChecklistRecord={handleDeleteToolsChecklistRecord}
         maintenanceServiceStations={maintenanceServiceStations}
         onAddMaintenanceServiceStation={handleAddMaintenanceServiceStation}
         onDeleteMaintenanceServiceStation={handleDeleteMaintenanceServiceStation}

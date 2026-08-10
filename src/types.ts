@@ -261,7 +261,7 @@ export interface MaintenanceRecord {
   id: string;
   regNo: string;
   date: string;
-  serviceType: 'Scheduled Servicing' | 'Breakdown Repair' | 'Parts Replacement' | 'Electrical Repair';
+  serviceType: 'Scheduled Servicing' | 'Breakdown Repair' | 'Parts Replacement' | 'Electrical Repair' | 'Tire Service' | 'Battery Service' | 'Tools Check';
   description: string;
   cost: number; // legacy lump-sum field; once workItems is set, this is always the computed sum of workItems - kept for old records saved before workItems existed
   workItems?: MaintenanceWorkItem[]; // per-work-item costing for this visit
@@ -280,42 +280,111 @@ export interface MaintenanceServiceStation {
   name: string;
 }
 
-// One record per vehicle (id = Reg. No.) holding maintenance data that
-// belongs to the vehicle itself rather than to any one service visit -
-// warranty, tyres, wheel alignment, battery, and the tools checklist.
+// [Deprecated] One record per vehicle (id = Reg. No.) holding maintenance
+// data that belongs to the vehicle itself - warranty, tyres, wheel
+// alignment, battery, and the tools checklist. Superseded by the
+// VehicleServiceSchedule / TireRecord / BatteryRecord / ToolsChecklistRecord
+// split below (Fleet Maintenance rebuild). The type, DB table, and API route
+// are kept only so migrateLegacyMaintenanceProfiles() in src/db/service.ts
+// can do a one-time read of any pre-existing rows on upgrade - no UI reads or
+// writes this anymore.
 export interface VehicleMaintenanceProfile {
   id: string; // Reg. No.
   regNo: string;
   warrantyStatus: 'Under Warranty' | 'Non-Warranty';
-  // Service due-soon/overdue is computed from the vehicle's last
-  // MaintenanceRecord date/odometer plus whichever of these is set - see
-  // computeServiceDueStatus in src/utils/maintenanceDates.ts. Either or both
-  // may be left blank if that vehicle isn't tracked that way.
   serviceIntervalDays?: number;
   serviceIntervalKm?: number;
-  serviceLastOdometerKm?: number; // odometer reading at the last service, as a baseline for the KM interval - set manually or from the last MaintenanceRecord
+  serviceLastOdometerKm?: number;
   wheelAlignmentLastDate?: string; // YYYY-MM-DD
   wheelAlignmentIntervalDays?: number;
   wheelAlignmentIntervalKm?: number;
-  wheelAlignmentLastOdometerKm?: number; // odometer reading at the last alignment
+  wheelAlignmentLastOdometerKm?: number;
   batteryNumber?: string;
   tyres: { brand: string; kmRun: number; position?: string }[];
-  // Seeded with Jack / Jack Rod / Tommy Bar / Spanner but freely extensible -
-  // "add more if applicable".
   toolsChecklist: { name: string; present: boolean }[];
 }
 
-// A vehicle breaking down at a location, reported before (or without) a
+// One row per vehicle (id = Reg. No.) tracking its scheduled-service
+// interval and warranty. CurrentOdometerKm is never stored here - it's
+// always read live from Fuel Management's latest Closing KM (see
+// latestOdometerFor in src/utils/maintenanceDates.ts) and combined with
+// lastServiceKm/serviceIntervalKm at render/alert time to get ServiceStatus.
+export interface VehicleServiceSchedule {
+  id: string; // Reg. No.
+  regNo: string;
+  lastServiceDate?: string; // YYYY-MM-DD
+  lastServiceKm?: number;
+  serviceIntervalKm: number; // default 10,000 km
+  // The status the office has recorded (e.g. voided early, or genuinely
+  // still under the manufacturer's warranty). This is a FLOOR only in the
+  // "OutOfWarranty" direction - computeWarrantyStatus() in maintenanceDates.ts
+  // can force InWarranty -> OutOfWarranty once the vehicle crosses 3,00,000 km
+  // or 3 years from its Fleet & Vehicles Registration Date (whichever first),
+  // but never forces OutOfWarranty back to InWarranty automatically.
+  warrantyStatus: 'InWarranty' | 'OutOfWarranty';
+  warrantyExpiryDate?: string; // optional manual tracking, nullable
+  warrantyExpiryKm?: number; // optional manual tracking, nullable
+  remarks?: string;
+}
+
+// One row per tyre position per vehicle. AlignmentStatus/NextAlignmentDueKm
+// are always computed (see computeAlignmentStatus in maintenanceDates.ts),
+// never stored - NextAlignmentDueKm = lastAlignmentKm + ALIGNMENT_INTERVAL_KM
+// (fixed 10,000 km, not configurable per spec).
+export interface TireRecord {
+  id: string;
+  regNo: string;
+  position: string; // e.g. "Front Left", "Rear Right Outer" - free text, axle configs vary by vehicle type
+  tireBrand: string; // Company/Brand - required
+  tireSerialNumber?: string;
+  installedDate?: string;
+  installedKm?: number;
+  lastAlignmentKm?: number;
+}
+
+// One row per battery ever fitted to a vehicle - a history, not just the
+// current one. Exactly one row per regNo should have isCurrent true.
+export interface BatteryRecord {
+  id: string;
+  regNo: string;
+  batteryNumber: string;
+  make?: string;
+  installedKm?: number;
+  installedDate?: string;
+  warrantyExpiryDate?: string; // nullable
+  isCurrent: boolean;
+}
+
+// One row per tools check performed (a dated log, not a single always-current
+// state) - CheckDate, CheckedBy, and the 4 fixed tool flags per spec.
+export interface ToolsChecklistRecord {
+  id: string;
+  regNo: string;
+  checkDate: string;
+  hasJack: boolean;
+  hasJackRod: boolean;
+  hasTommyBar: boolean;
+  hasSpanner: boolean;
+  checkedBy?: string;
+  remarks?: string;
+}
+
+// A vehicle breaking down (Type: EnRouteBreakdown), a scheduled/unscheduled
+// WorkshopVisit, or an ElectricalProblem - reported before (or without) a
 // repair having happened yet. Once a Workshop Visit (MaintenanceRecord with
 // breakdownReportId set) is logged against it, status flips to Resolved.
 export interface BreakdownReport {
   id: string;
   regNo: string;
+  type: 'EnRouteBreakdown' | 'WorkshopVisit' | 'ElectricalProblem';
   date: string;
   location: string;
   description: string;
   driverName?: string;
   driverId?: string;
+  paymentType?: string; // e.g. Cash / Credit / Company Paid - free text, no fixed master list requested
+  amount?: number;
+  documents?: VehicleDocument[];
   status: 'Open' | 'Resolved';
   workshopVisitId?: string; // the MaintenanceRecord.id that resolved this breakdown
 }
@@ -475,7 +544,7 @@ export interface DashboardNotification {
   id: string;
   title: string;
   message: string;
-  type: 'security' | 'insurance' | 'permit' | 'fc' | 'tax' | 'general';
+  type: 'security' | 'insurance' | 'permit' | 'fc' | 'tax' | 'general' | 'service-due' | 'alignment-due';
   timestamp: string;
   read: boolean;
   vehicleRegNo?: string;
