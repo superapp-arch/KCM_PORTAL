@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   User, Vehicle, FuelLog, MileageReport, Vendor, DriverEmployee, VehicleLoan, BusinessLoan,
   BillingInvoice, PettyCashVoucher, PettyCashAdvance, MarketPodEntry, MaintenanceRecord,
@@ -6,11 +6,12 @@ import {
 } from '../types';
 import { authFetch } from '../authFetch';
 import {
-  BarChart3, Download, FileSpreadsheet, FileText, Lock, ShieldAlert, Loader2
+  BarChart3, Lock, ShieldAlert, Loader2, X, Eye, FileSpreadsheet, FileText, Share2,
+  Fuel, Gauge, Building2, Contact, Truck, HandCoins, Landmark, Settings, DollarSign, Warehouse
 } from 'lucide-react';
 import DateInput from './DateInput';
 import { ReportPeriod, ReportRange, getReportRange, isDateInRange, isMonthInRange } from '../utils/reportDateRange';
-import { exportReportToExcel, exportReportToPdf, ReportTableSection } from '../utils/reportExport';
+import { ReportTableSection, exportReportToExcel, exportReportToPdf, buildExcelFile, buildPdfFile, shareOrDownloadFile } from '../utils/reportExport';
 
 interface ReportsProps {
   user: User;
@@ -39,6 +40,7 @@ type ModuleKey =
 interface ModuleMeta {
   key: ModuleKey;
   label: string;
+  icon: React.ComponentType<{ className?: string }>;
   // Fleet & Vehicles / Vendor Management / Loan Management are master/status
   // registries, not dated event logs - they're shown as a current snapshot
   // with no date-range filter, same as their source modules work today.
@@ -46,20 +48,41 @@ interface ModuleMeta {
   note?: string;
 }
 
+// Same icon each module already uses on its own Administration.tsx nav tab,
+// so a card here is instantly recognizable.
 const MODULES: ModuleMeta[] = [
-  { key: 'pettycash', label: 'Petty Cash', dateFiltered: true },
-  { key: 'maintenance', label: 'Fleet Maintenance', dateFiltered: true },
-  { key: 'fuel', label: 'Fuel Management', dateFiltered: true },
-  { key: 'mileage', label: 'Mileage Report', dateFiltered: true },
-  { key: 'fleet', label: 'Fleet & Vehicles', dateFiltered: false, note: 'Current fleet snapshot - not a dated log, so no date range applies.' },
-  { key: 'vendors', label: 'Vendor Management', dateFiltered: false, note: 'Current vendor registry snapshot - not a dated log, so no date range applies.' },
-  { key: 'drivers', label: 'Driver Salary', dateFiltered: true, note: "Driver Details stores only each driver's most recently-entered salary month, not a full month-by-month history - this shows whichever drivers' recorded month falls in the selected range." },
-  { key: 'loans', label: 'Loan Management', dateFiltered: false, note: 'Current loan status snapshot - not a dated log, so no date range applies.' },
-  { key: 'billing', label: 'Customer Billings', dateFiltered: true },
-  { key: 'accounts', label: 'Accounts & Finance', dateFiltered: true },
-  { key: 'warehouse', label: 'Warehouse Details', dateFiltered: true },
-  { key: 'hr', label: 'HR & Payroll', dateFiltered: true, note: 'Payroll figures (gross/deductions/net) are the same computation HR & Payroll itself uses - cross-check there for exact payslips.' }
+  { key: 'fleet', label: 'Fleet & Vehicles', icon: FileSpreadsheet, dateFiltered: false, note: 'Current fleet snapshot - not a dated log, so no date range applies.' },
+  { key: 'fuel', label: 'Fuel Management', icon: Fuel, dateFiltered: true },
+  { key: 'mileage', label: 'Mileage Report', icon: Gauge, dateFiltered: true },
+  { key: 'vendors', label: 'Vendor Management', icon: Building2, dateFiltered: false, note: 'Current vendor registry snapshot - not a dated log, so no date range applies.' },
+  { key: 'hr', label: 'HR & Payroll', icon: Contact, dateFiltered: true, note: 'Payroll figures (gross/deductions/net) are the same computation HR & Payroll itself uses - cross-check there for exact payslips.' },
+  { key: 'drivers', label: 'Driver Details', icon: Truck, dateFiltered: true, note: "Driver Details stores only each driver's most recently-entered salary month, not a full month-by-month history - this shows whichever drivers' recorded month falls in the selected range." },
+  { key: 'loans', label: 'Loan Management', icon: HandCoins, dateFiltered: false, note: 'Current loan status snapshot - not a dated log, so no date range applies.' },
+  { key: 'billing', label: 'Customer Billings', icon: FileText, dateFiltered: true },
+  { key: 'pettycash', label: 'Petty Cash', icon: Landmark, dateFiltered: true },
+  { key: 'maintenance', label: 'Fleet Maintenance', icon: Settings, dateFiltered: true },
+  { key: 'accounts', label: 'Accounts and Finance', icon: DollarSign, dateFiltered: true },
+  { key: 'warehouse', label: 'Warehouse Details', icon: Warehouse, dateFiltered: true }
 ];
+
+// Literal Tailwind class names per module (not synthesized from a variable -
+// Tailwind's build-time scanner needs to see the exact class strings
+// somewhere in source, a `border-${color}-200` template would silently
+// produce no CSS at all).
+const MODULE_THEMES: Record<ModuleKey, { border: string; bg: string; text: string; iconBg: string; btn: string }> = {
+  fleet: { border: 'border-pink-200', bg: 'bg-pink-50', text: 'text-pink-700', iconBg: 'bg-pink-100', btn: 'bg-pink-600 hover:bg-pink-700' },
+  fuel: { border: 'border-amber-200', bg: 'bg-amber-50', text: 'text-amber-700', iconBg: 'bg-amber-100', btn: 'bg-amber-600 hover:bg-amber-700' },
+  mileage: { border: 'border-cyan-200', bg: 'bg-cyan-50', text: 'text-cyan-700', iconBg: 'bg-cyan-100', btn: 'bg-cyan-600 hover:bg-cyan-700' },
+  vendors: { border: 'border-indigo-200', bg: 'bg-indigo-50', text: 'text-indigo-700', iconBg: 'bg-indigo-100', btn: 'bg-indigo-600 hover:bg-indigo-700' },
+  hr: { border: 'border-purple-200', bg: 'bg-purple-50', text: 'text-purple-700', iconBg: 'bg-purple-100', btn: 'bg-purple-600 hover:bg-purple-700' },
+  drivers: { border: 'border-sky-200', bg: 'bg-sky-50', text: 'text-sky-700', iconBg: 'bg-sky-100', btn: 'bg-sky-600 hover:bg-sky-700' },
+  loans: { border: 'border-emerald-200', bg: 'bg-emerald-50', text: 'text-emerald-700', iconBg: 'bg-emerald-100', btn: 'bg-emerald-600 hover:bg-emerald-700' },
+  billing: { border: 'border-fuchsia-200', bg: 'bg-fuchsia-50', text: 'text-fuchsia-700', iconBg: 'bg-fuchsia-100', btn: 'bg-fuchsia-600 hover:bg-fuchsia-700' },
+  pettycash: { border: 'border-teal-200', bg: 'bg-teal-50', text: 'text-teal-700', iconBg: 'bg-teal-100', btn: 'bg-teal-600 hover:bg-teal-700' },
+  maintenance: { border: 'border-blue-200', bg: 'bg-blue-50', text: 'text-blue-700', iconBg: 'bg-blue-100', btn: 'bg-blue-600 hover:bg-blue-700' },
+  accounts: { border: 'border-green-200', bg: 'bg-green-50', text: 'text-green-700', iconBg: 'bg-green-100', btn: 'bg-green-600 hover:bg-green-700' },
+  warehouse: { border: 'border-orange-200', bg: 'bg-orange-50', text: 'text-orange-700', iconBg: 'bg-orange-100', btn: 'bg-orange-600 hover:bg-orange-700' }
+};
 
 const PETTY_CASH_USERS = [
   { username: 'vinoda', label: 'Vinod' },
@@ -379,30 +402,46 @@ const PERIOD_LABELS: { value: ReportPeriod; label: string }[] = [
   { value: 'weekly', label: 'Weekly' },
   { value: 'monthly', label: 'Monthly' },
   { value: 'yearly', label: 'Yearly' },
-  { value: 'custom', label: 'Custom Range' }
+  { value: 'custom', label: 'Custom' }
 ];
+
+interface CardRangeState {
+  period: ReportPeriod;
+  anchorDate: string;
+  customStart: string;
+  customEnd: string;
+}
+
+const defaultRangeState = (): CardRangeState => {
+  const today = new Date().toISOString().slice(0, 10);
+  return { period: 'monthly', anchorDate: today, customStart: today, customEnd: today };
+};
 
 export default function Reports(props: ReportsProps) {
   const isSuperAdmin = props.user.department === 'super_admin';
 
-  const [selectedModule, setSelectedModule] = useState<ModuleKey>('pettycash');
-  const [period, setPeriod] = useState<ReportPeriod>('monthly');
-  const [anchorDate, setAnchorDate] = useState(new Date().toISOString().slice(0, 10));
-  const [customStart, setCustomStart] = useState(new Date().toISOString().slice(0, 10));
-  const [customEnd, setCustomEnd] = useState(new Date().toISOString().slice(0, 10));
+  const [cardRanges, setCardRanges] = useState<Record<ModuleKey, CardRangeState>>(() => {
+    const init = {} as Record<ModuleKey, CardRangeState>;
+    MODULES.forEach(m => { init[m.key] = defaultRangeState(); });
+    return init;
+  });
+  const updateCardRange = (key: ModuleKey, patch: Partial<CardRangeState>) =>
+    setCardRanges(prev => ({ ...prev, [key]: { ...prev[key], ...patch } }));
 
-  const moduleMeta = MODULES.find(m => m.key === selectedModule)!;
-  const range = useMemo(() => getReportRange(period, anchorDate, customStart, customEnd), [period, anchorDate, customStart, customEnd]);
+  const [viewingModule, setViewingModule] = useState<ModuleKey | null>(null);
+  const [openMenu, setOpenMenu] = useState<{ key: ModuleKey; kind: 'download' | 'share' } | null>(null);
+  const [notif, setNotif] = useState<string | null>(null);
+  const triggerNotif = (msg: string) => { setNotif(msg); setTimeout(() => setNotif(null), 4500); };
 
   // HR & Payroll's deeper data (attendance/payroll) isn't otherwise fetched
   // into this portal's shared state (see HR.tsx, which fetches it itself
-  // too) - lazily fetched here the first time that module is opened.
+  // too) - fetched once here on mount so the HR & Payroll card's numbers are
+  // ready whenever it's viewed/exported.
   const [staffAttendance, setStaffAttendance] = useState<any[]>([]);
   const [staffPayroll, setStaffPayroll] = useState<any[]>([]);
-  const [hrLoaded, setHrLoaded] = useState(false);
   const [hrLoading, setHrLoading] = useState(false);
   useEffect(() => {
-    if (!isSuperAdmin || selectedModule !== 'hr' || hrLoaded || hrLoading) return;
+    if (!isSuperAdmin) return;
     setHrLoading(true);
     Promise.all([
       authFetch('/api/staff/attendance').then(r => r.ok ? r.json() : []),
@@ -410,39 +449,71 @@ export default function Reports(props: ReportsProps) {
     ]).then(([attendance, payroll]) => {
       setStaffAttendance(Array.isArray(attendance) ? attendance : []);
       setStaffPayroll(Array.isArray(payroll) ? payroll : []);
-      setHrLoaded(true);
     }).catch(err => console.error('Failed to load HR & Payroll report data:', err))
       .finally(() => setHrLoading(false));
-  }, [selectedModule, hrLoaded, hrLoading]);
-
-  const report = useMemo(
-    () => buildReport(selectedModule, props, range, { staffAttendance, staffPayroll }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedModule, props, range, staffAttendance, staffPayroll]
-  );
+  }, [isSuperAdmin]);
 
-  const exportFilenameBase = `KCM_Report_${moduleMeta.label.replace(/[^a-zA-Z0-9]+/g, '_')}_${moduleMeta.dateFiltered ? range.label.replace(/[^a-zA-Z0-9]+/g, '_') : 'Snapshot'}`;
-  const exportSubtitle = moduleMeta.dateFiltered ? `Period: ${range.label} (${range.start} to ${range.end})` : 'Current snapshot';
+  // Close an open Download/Share menu on any outside click.
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!openMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpenMenu(null);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [openMenu]);
 
-  const handleExportExcel = () => exportReportToExcel(exportFilenameBase, report.sections);
-  const handleExportPdf = () => exportReportToPdf(exportFilenameBase, `KCM Logistics - ${moduleMeta.label} Report`, exportSubtitle, report.sections);
+  const rangeFor = (key: ModuleKey): ReportRange => {
+    const c = cardRanges[key];
+    return getReportRange(c.period, c.anchorDate, c.customStart, c.customEnd);
+  };
+  const reportFor = (key: ModuleKey): ModuleReport => buildReport(key, props, rangeFor(key), { staffAttendance, staffPayroll });
+
+  const exportMetaFor = (meta: ModuleMeta) => {
+    const range = rangeFor(meta.key);
+    const filenameBase = `KCM_Report_${meta.label.replace(/[^a-zA-Z0-9]+/g, '_')}_${meta.dateFiltered ? range.label.replace(/[^a-zA-Z0-9]+/g, '_') : 'Snapshot'}`;
+    const subtitle = meta.dateFiltered ? `Period: ${range.label} (${range.start} to ${range.end})` : 'Current snapshot';
+    const title = `KCM Logistics - ${meta.label} Report`;
+    return { filenameBase, subtitle, title };
+  };
+
+  const handleDownload = (meta: ModuleMeta, format: 'excel' | 'pdf') => {
+    setOpenMenu(null);
+    const { filenameBase, subtitle, title } = exportMetaFor(meta);
+    const sections = reportFor(meta.key).sections;
+    if (format === 'excel') exportReportToExcel(filenameBase, sections);
+    else exportReportToPdf(filenameBase, title, subtitle, sections);
+  };
+
+  const handleShare = async (meta: ModuleMeta, format: 'excel' | 'pdf') => {
+    setOpenMenu(null);
+    const { filenameBase, subtitle, title } = exportMetaFor(meta);
+    const sections = reportFor(meta.key).sections;
+    const file = format === 'excel' ? buildExcelFile(filenameBase, sections) : buildPdfFile(filenameBase, title, subtitle, sections);
+    await shareOrDownloadFile(file, title, subtitle, triggerNotif);
+  };
 
   // Defense-in-depth: Administration.tsx already gates rendering this
   // component to Super Admin only (same hasAccess() pattern every other
-  // module uses), but this internal check means Reports refuses to show
-  // anything even if it were ever reached another way - required per spec
-  // since this now surfaces Payroll/salary data. Placed after every hook
-  // above (never before) so hook call order stays identical on every render,
-  // regardless of this condition.
+  // module uses), but this internal check means Reports & Analytics refuses
+  // to show anything even if it were ever reached another way - required per
+  // spec since this now surfaces Payroll/salary data. Placed after every
+  // hook above (never before) so hook call order stays identical on every
+  // render, regardless of this condition.
   if (!isSuperAdmin) {
     return (
       <div className="bg-white rounded-2xl shadow-xs border border-slate-200 p-10 text-center">
         <ShieldAlert className="w-8 h-8 text-rose-500 mx-auto mb-3" />
         <h2 className="text-sm font-bold text-slate-800">Access Restricted</h2>
-        <p className="text-xs text-slate-500 mt-1">The Reports module is limited to Super Admin / Principal logins only.</p>
+        <p className="text-xs text-slate-500 mt-1">Reports &amp; Analytics is limited to Super Admin / Principal logins only.</p>
       </div>
     );
   }
+
+  const viewingMeta = viewingModule ? MODULES.find(m => m.key === viewingModule)! : null;
+  const viewingReport = viewingModule ? reportFor(viewingModule) : null;
 
   return (
     <div className="space-y-6" id="reports-view-wrapper">
@@ -450,7 +521,7 @@ export default function Reports(props: ReportsProps) {
         <div>
           <h1 className="text-xl font-bold tracking-tight text-slate-900 font-sans flex items-center gap-2">
             <BarChart3 className="text-violet-600 w-5 h-5" />
-            Reports
+            Reports &amp; Analytics
           </h1>
           <p className="text-xs text-slate-500 font-mono mt-1 flex items-center gap-1.5">
             <Lock className="w-3 h-3" /> Centralized cross-module reporting - Super Admin / Principal only.
@@ -458,107 +529,169 @@ export default function Reports(props: ReportsProps) {
         </div>
       </div>
 
-      {/* Module selector */}
-      <div className="flex flex-wrap gap-1.5 bg-slate-100 p-1.5 rounded-lg border border-slate-200 text-xs font-semibold">
-        {MODULES.map(m => (
-          <button
-            key={m.key}
-            onClick={() => setSelectedModule(m.key)}
-            className={`px-3 py-1.5 rounded-md transition-all cursor-pointer ${
-              selectedModule === m.key ? 'bg-gradient-to-r from-violet-600 to-slate-800 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-            }`}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
+      {notif && (
+        <div className="p-3 bg-blue-50 border border-blue-200 text-blue-800 rounded-xl text-xs font-semibold">{notif}</div>
+      )}
 
-      <div className="bg-white rounded-2xl shadow-xs border border-slate-200 p-5 space-y-4">
-        {/* Date range controls */}
-        {moduleMeta.dateFiltered ? (
-          <div className="flex flex-wrap items-center gap-2 text-xs bg-slate-50 p-3 rounded-xl border border-slate-100">
-            {PERIOD_LABELS.map(p => (
-              <button
-                key={p.value}
-                onClick={() => setPeriod(p.value)}
-                className={`px-3 py-1.5 rounded-lg font-semibold cursor-pointer transition-colors ${
-                  period === p.value ? 'bg-violet-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                }`}
-              >
-                {p.label}
-              </button>
-            ))}
-            {period === 'custom' ? (
-              <div className="flex items-center gap-1.5 ml-1">
-                <DateInput value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-mono text-slate-700" />
-                <span className="text-slate-400">to</span>
-                <DateInput value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-mono text-slate-700" />
+      {hrLoading && (
+        <div className="flex items-center gap-2 text-xs text-slate-500 font-mono"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading HR &amp; Payroll data...</div>
+      )}
+
+      {/* 12 color-coded module cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        {MODULES.map(meta => {
+          const theme = MODULE_THEMES[meta.key];
+          const c = cardRanges[meta.key];
+          const range = rangeFor(meta.key);
+          const Icon = meta.icon;
+          return (
+            <div key={meta.key} className={`rounded-2xl border ${theme.border} ${theme.bg} p-4 flex flex-col gap-3 text-xs shadow-xs`}>
+              <div className="flex items-center gap-2">
+                <div className={`p-2 rounded-xl ${theme.iconBg} ${theme.text}`}><Icon className="w-4 h-4" /></div>
+                <h3 className={`font-bold text-sm ${theme.text}`}>{meta.label}</h3>
               </div>
-            ) : (
-              <DateInput value={anchorDate} onChange={(e) => setAnchorDate(e.target.value)} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-mono text-slate-700 ml-1" />
-            )}
-            <span className="text-slate-500 font-mono ml-auto">Showing: <span className="font-bold text-slate-700">{range.label}</span></span>
-          </div>
-        ) : moduleMeta.note && (
-          <div className="text-[10px] text-slate-400 font-mono bg-slate-50 p-2.5 rounded-lg border border-slate-100">{moduleMeta.note}</div>
-        )}
-        {moduleMeta.dateFiltered && moduleMeta.note && (
-          <p className="text-[10px] text-amber-600 font-mono bg-amber-50 border border-amber-100 rounded-lg p-2.5">{moduleMeta.note}</p>
-        )}
 
-        {selectedModule === 'hr' && hrLoading && (
-          <div className="flex items-center gap-2 text-xs text-slate-500 font-mono"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading attendance & payroll data...</div>
-        )}
+              {meta.dateFiltered ? (
+                <div className="space-y-1.5">
+                  <div className="flex flex-wrap gap-1">
+                    {PERIOD_LABELS.map(p => (
+                      <button
+                        key={p.value}
+                        onClick={() => updateCardRange(meta.key, { period: p.value })}
+                        className={`px-2 py-1 rounded-md font-semibold cursor-pointer transition-colors text-[10px] ${
+                          c.period === p.value ? `${theme.btn} text-white` : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                  {c.period === 'custom' ? (
+                    <div className="flex items-center gap-1">
+                      <DateInput value={c.customStart} onChange={(e) => updateCardRange(meta.key, { customStart: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-1.5 py-1 font-mono text-slate-700 text-[10px]" />
+                      <span className="text-slate-400 text-[10px]">to</span>
+                      <DateInput value={c.customEnd} onChange={(e) => updateCardRange(meta.key, { customEnd: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-1.5 py-1 font-mono text-slate-700 text-[10px]" />
+                    </div>
+                  ) : (
+                    <DateInput value={c.anchorDate} onChange={(e) => updateCardRange(meta.key, { anchorDate: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-1.5 py-1 font-mono text-slate-700 text-[10px] w-full" />
+                  )}
+                  <p className="text-[9px] text-slate-500 font-mono">Showing: <span className="font-bold">{range.label}</span></p>
+                </div>
+              ) : (
+                <p className="text-[9px] text-slate-500 font-mono bg-white/70 border border-slate-200 rounded-lg p-2">{meta.note}</p>
+              )}
 
-        {/* Export buttons */}
-        <div className="flex items-center justify-end gap-2">
-          <button onClick={handleExportExcel} className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 text-xs transition-all cursor-pointer shadow-2xs">
-            <FileSpreadsheet className="w-3.5 h-3.5" /> Export Excel
-          </button>
-          <button onClick={handleExportPdf} className="bg-rose-700 hover:bg-rose-800 text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 text-xs transition-all cursor-pointer shadow-2xs">
-            <FileText className="w-3.5 h-3.5" /> Export PDF
-          </button>
-        </div>
-
-        {/* Summary cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 text-xs">
-          {report.summary.map((s, idx) => (
-            <div key={idx} className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide truncate" title={s.label}>{s.label}</p>
-              <p className="text-sm font-black text-slate-800 font-mono mt-0.5">{s.value}</p>
+              <div className="flex items-center gap-1.5 pt-1 mt-auto border-t border-white/60">
+                <button
+                  onClick={() => setViewingModule(meta.key)}
+                  className={`flex-1 flex items-center justify-center gap-1 ${theme.btn} text-white font-bold py-1.5 rounded-lg cursor-pointer transition-all text-[10px]`}
+                >
+                  <Eye className="w-3 h-3" /> View
+                </button>
+                <div className="relative">
+                  <button
+                    onClick={() => setOpenMenu(openMenu?.key === meta.key && openMenu.kind === 'download' ? null : { key: meta.key, kind: 'download' })}
+                    className="p-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors"
+                    title="Download"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                  </button>
+                  {openMenu?.key === meta.key && openMenu.kind === 'download' && (
+                    <div ref={menuRef} className="absolute right-0 top-full mt-1 z-20 bg-white border border-slate-200 rounded-lg shadow-lg py-1 w-32">
+                      <button onClick={() => handleDownload(meta, 'excel')} className="w-full text-left px-3 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer flex items-center gap-1.5">
+                        <FileSpreadsheet className="w-3 h-3 text-emerald-600" /> Excel
+                      </button>
+                      <button onClick={() => handleDownload(meta, 'pdf')} className="w-full text-left px-3 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer flex items-center gap-1.5">
+                        <FileText className="w-3 h-3 text-rose-600" /> PDF
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div className="relative">
+                  <button
+                    onClick={() => setOpenMenu(openMenu?.key === meta.key && openMenu.kind === 'share' ? null : { key: meta.key, kind: 'share' })}
+                    className="p-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors"
+                    title="Share"
+                  >
+                    <Share2 className="w-3.5 h-3.5" />
+                  </button>
+                  {openMenu?.key === meta.key && openMenu.kind === 'share' && (
+                    <div ref={menuRef} className="absolute right-0 top-full mt-1 z-20 bg-white border border-slate-200 rounded-lg shadow-lg py-1 w-32">
+                      <button onClick={() => handleShare(meta, 'excel')} className="w-full text-left px-3 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer flex items-center gap-1.5">
+                        <FileSpreadsheet className="w-3 h-3 text-emerald-600" /> Excel
+                      </button>
+                      <button onClick={() => handleShare(meta, 'pdf')} className="w-full text-left px-3 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer flex items-center gap-1.5">
+                        <FileText className="w-3 h-3 text-rose-600" /> PDF
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
-          ))}
-        </div>
-
-        {/* Detail tables, one per section */}
-        {report.sections.map((section, idx) => (
-          <div key={idx} className="space-y-1.5">
-            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
-              <Download className="w-3 h-3 text-slate-400" /> {section.heading} ({section.rows.length})
-            </h3>
-            <div className="overflow-x-auto overflow-y-auto max-h-[360px] border border-slate-200 rounded-xl shadow-2xs">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
-                  <tr>{section.columns.map((c, i) => <th key={i} className="px-3 py-2.5 whitespace-nowrap">{c}</th>)}</tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
-                  {section.rows.length === 0 ? (
-                    <tr><td colSpan={section.columns.length} className="text-center py-8 text-slate-400 font-mono text-[11px]">No records in this range.</td></tr>
-                  ) : section.rows.map((row, rIdx) => (
-                    <tr key={rIdx} className="hover:bg-slate-50/70 transition-colors text-[11px]">
-                      {row.map((cell, cIdx) => (
-                        <td key={cIdx} className={`px-3 py-2 whitespace-nowrap ${typeof cell === 'number' ? 'text-right font-mono' : ''}`}>
-                          {typeof cell === 'number' ? cell.toLocaleString('en-IN') : cell}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
+
+      {/* View modal - full report for one module */}
+      {viewingMeta && viewingReport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            <div className={`p-4 flex items-center justify-between text-white ${MODULE_THEMES[viewingMeta.key].btn.split(' ')[0]}`}>
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <viewingMeta.icon className="w-4 h-4" /> {viewingMeta.label} Report
+                <span className="text-[10px] font-mono font-normal opacity-80">({exportMetaFor(viewingMeta).subtitle})</span>
+              </h3>
+              <div className="flex items-center gap-1.5">
+                <button onClick={() => handleDownload(viewingMeta, 'excel')} className="p-1.5 bg-white/15 hover:bg-white/25 rounded-lg cursor-pointer transition-colors" title="Download Excel"><FileSpreadsheet className="w-4 h-4" /></button>
+                <button onClick={() => handleDownload(viewingMeta, 'pdf')} className="p-1.5 bg-white/15 hover:bg-white/25 rounded-lg cursor-pointer transition-colors" title="Download PDF"><FileText className="w-4 h-4" /></button>
+                <button onClick={() => handleShare(viewingMeta, 'pdf')} className="p-1.5 bg-white/15 hover:bg-white/25 rounded-lg cursor-pointer transition-colors" title="Share PDF"><Share2 className="w-4 h-4" /></button>
+                <button onClick={() => setViewingModule(null)} className="p-1.5 bg-white/15 hover:bg-white/25 rounded-lg cursor-pointer transition-colors"><X className="w-4 h-4" /></button>
+              </div>
+            </div>
+
+            <div className="p-5 overflow-y-auto flex-1 space-y-4 text-xs bg-slate-50/50">
+              {viewingMeta.note && (
+                <p className="text-[10px] text-amber-700 font-mono bg-amber-50 border border-amber-100 rounded-lg p-2.5">{viewingMeta.note}</p>
+              )}
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                {viewingReport.summary.map((s, idx) => (
+                  <div key={idx} className="bg-white p-3 rounded-xl border border-slate-200">
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide truncate" title={s.label}>{s.label}</p>
+                    <p className="text-sm font-black text-slate-800 font-mono mt-0.5">{s.value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {viewingReport.sections.map((section, idx) => (
+                <div key={idx} className="space-y-1.5">
+                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">{section.heading} ({section.rows.length})</h4>
+                  <div className="overflow-x-auto overflow-y-auto max-h-[320px] border border-slate-200 rounded-xl shadow-2xs bg-white">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
+                        <tr>{section.columns.map((c, i) => <th key={i} className="px-3 py-2.5 whitespace-nowrap">{c}</th>)}</tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                        {section.rows.length === 0 ? (
+                          <tr><td colSpan={section.columns.length} className="text-center py-8 text-slate-400 font-mono text-[11px]">No records in this range.</td></tr>
+                        ) : section.rows.map((row, rIdx) => (
+                          <tr key={rIdx} className="hover:bg-slate-50/70 transition-colors text-[11px]">
+                            {row.map((cell, cIdx) => (
+                              <td key={cIdx} className={`px-3 py-2 whitespace-nowrap ${typeof cell === 'number' ? 'text-right font-mono' : ''}`}>
+                                {typeof cell === 'number' ? cell.toLocaleString('en-IN') : cell}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
