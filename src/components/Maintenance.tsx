@@ -78,7 +78,11 @@ export default function Maintenance(props: MaintenanceProps) {
     .sort((a, b) => (a.status === 'overdue' ? -1 : 1) - (b.status === 'overdue' ? -1 : 1));
 
   // Wheel Alignment widget - same KM-driven pattern, per tyre position.
+  // Replaced/removed tires (isCurrent: false - see Tire & Alignment's Bulk
+  // Tire Entry) are excluded so a superseded tire's old alignment history
+  // never keeps generating alerts.
   const alignmentVehicles = tireRecords
+    .filter(tire => tire.isCurrent !== false)
     .map(tire => {
       const currentKm = latestOdometerFor(tire.regNo, mileageReports);
       const status = computeAlignmentStatus(tire.lastAlignmentKm, currentKm);

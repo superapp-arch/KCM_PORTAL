@@ -340,6 +340,15 @@ export interface TireRecord {
   installedDate?: string;
   installedKm?: number;
   lastAlignmentKm?: number;
+  // Replacement history (Bulk Tire Entry): when a tire at a position is
+  // replaced, the old row is kept with isCurrent set false and its
+  // removed*/ fields filled, rather than being overwritten - same
+  // history-via-flag convention as BatteryRecord.isCurrent. Absent on
+  // legacy rows saved before this existed - always treat missing/undefined
+  // as current (isCurrent !== false), never as "not current".
+  isCurrent?: boolean;
+  removedDate?: string;
+  removedKm?: number; // odometer (Closing KM) at the time this tire was taken off
 }
 
 // One row per battery ever fitted to a vehicle - a history, not just the

@@ -723,7 +723,7 @@ async function startServer() {
       alerts.push({ vehicleRegNo: schedule.regNo, category: 'Service Due', checkLabel: 'Scheduled Service', expiryDate: projectedDateLabel(projected), diffDays });
     });
 
-    tires.forEach(tire => {
+    tires.filter(tire => tire.isCurrent !== false).forEach(tire => {
       if (tire.lastAlignmentKm == null) return;
       const currentKm = latestOdometerFor(tire.regNo, mileage as any);
       if (currentKm == null) return;
@@ -1349,7 +1349,7 @@ async function startServer() {
       });
     });
 
-    tires.forEach(tire => {
+    tires.filter(tire => tire.isCurrent !== false).forEach(tire => {
       const alertId = `align-due-${tire.regNo}-${tire.position}`;
       if (resolvedIds.has(alertId)) return;
       const currentKm = latestOdometerFor(tire.regNo, mileage as any);
