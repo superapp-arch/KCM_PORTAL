@@ -40,8 +40,10 @@ interface PettyCashProps {
   onAddVoucher: (voucher: Omit<PettyCashVoucher, 'id'>) => Promise<void>;
   onUpdateVoucher: (id: string, voucher: Partial<PettyCashVoucher>) => Promise<void>;
   onDeleteVoucher: (id: string) => Promise<void>;
+  // Read-only: Fleet & Vehicles is the sole source of truth for registered
+  // vehicles - this module (and every other one) only ever reads this list,
+  // never writes to it.
   vehicles: Vehicle[];
-  onUpdateVehicle: (vehicle: Vehicle) => Promise<void>;
   drivers: DriverEmployee[];
   vendors: Vendor[];
   marketPodEntries: MarketPodEntry[];
@@ -145,7 +147,6 @@ export default function PettyCash({
   onUpdateVoucher,
   onDeleteVoucher,
   vehicles,
-  onUpdateVehicle,
   drivers,
   vendors,
   marketPodEntries,
@@ -369,13 +370,14 @@ export default function PettyCash({
     }
     setMpIsSubmitting(true);
     try {
+      // Fleet & Vehicles is the sole source of truth for what counts as a
+      // registered vehicle - every other module (Fuel Management, Mileage
+      // Report, Warehouse Details, Loan Management, and this one) only ever
+      // reads that list, never writes to it. A vehicle number typed here
+      // that Fleet & Vehicles doesn't have yet is still accepted on this
+      // entry (free text), it just won't show up as a *registered* vehicle
+      // anywhere else until someone adds it in Fleet & Vehicles directly.
       const regNo = mpVehicleNumber.toUpperCase().trim();
-      // Vehicle Number auto-register: if this vehicle isn't in Fleet &
-      // Vehicles yet, register it now so it appears in every vehicle
-      // dropdown/datalist across the portal from here on.
-      if (!vehicleByRegNo(regNo)) {
-        await onUpdateVehicle({ id: regNo, regNo, 'Reg. No.': regNo } as Vehicle);
-      }
       const payload = {
         entryNo: mpEditingId ? marketPodEntries.find(e => e.id === mpEditingId)?.entryNo || nextMarketPodEntryNo() : nextMarketPodEntryNo(),
         vehicleNumber: regNo,
@@ -2502,10 +2504,11 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   </div>
 
                   {/* Vehicle Number - autocomplete against Fleet & Vehicles,
-                      but free-text entry is allowed; an unmatched number gets
-                      auto-registered into Fleet & Vehicles on save (see
-                      handleMarketPodSubmit) so it's available everywhere
-                      afterward. */}
+                      but free-text entry is allowed for a number Fleet &
+                      Vehicles doesn't have yet. It is NOT auto-registered
+                      there on save - Fleet & Vehicles is the sole source of
+                      truth for registered vehicles, only ever added to
+                      directly in that module. */}
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1 flex items-center gap-1">
                       <Truck className="w-3.5 h-3.5 text-teal-600" /> Vehicle Number *
@@ -2524,7 +2527,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       {mpVehicleList.map(v => <option key={v} value={v} />)}
                     </datalist>
                     {mpVehicleNumber.trim() && !vehicleByRegNo(mpVehicleNumber) && (
-                      <p className="text-[9px] text-amber-600 font-semibold mt-1">Not in Fleet &amp; Vehicles yet - saving will auto-register it.</p>
+                      <p className="text-[9px] text-amber-600 font-semibold mt-1">Not in Fleet &amp; Vehicles yet - this entry will save, but add it there directly to have it show up as a registered vehicle elsewhere.</p>
                     )}
                   </div>
 

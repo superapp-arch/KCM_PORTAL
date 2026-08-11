@@ -909,7 +909,6 @@ export default function Administration({
               onUpdateVoucher={onUpdateVoucher}
               onDeleteVoucher={onDeleteVoucher}
               vehicles={vehicles}
-              onUpdateVehicle={onUpdateVehicle}
               drivers={drivers}
               vendors={vendors}
               marketPodEntries={marketPodEntries}

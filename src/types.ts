@@ -232,7 +232,7 @@ export type MarketPodPaymentMode = 'Cash' | 'Petty Cash';
 export interface MarketPodEntry {
   id: string;
   entryNo: string; // auto e.g. "TRIP-000001", not editable
-  vehicleNumber: string; // from Fleet & Vehicles master; unmatched numbers are auto-registered there on save
+  vehicleNumber: string; // typically from Fleet & Vehicles master, but free text is allowed - never auto-registers there (Fleet & Vehicles is the sole source of truth, only ever added to directly)
   date: string; // YYYY-MM-DD
   from: string;
   to: string;
