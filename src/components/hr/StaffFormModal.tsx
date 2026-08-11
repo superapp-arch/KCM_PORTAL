@@ -65,6 +65,11 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
   const [pfMonth, setPfMonth] = useState(currentMonthKey());
   const [pfForm, setPfForm] = useState({ ...emptyPfForm });
   const [pfAttendance, setPfAttendance] = useState({ totalDays: 0, presentDays: 0, totalAbsent: 0, lopDays: 0 });
+  // Draft until HR explicitly finalizes (see handleFinalizePf below) - Salary
+  // Slip generation warns-and-confirms (or bulk-skips) anything not
+  // Finalized. Saving other field edits never reverts this back to Draft.
+  const [pfStatus, setPfStatus] = useState<'Draft' | 'Finalized'>('Draft');
+  const [pfFinalizing, setPfFinalizing] = useState(false);
 
   const loadAdvanceDeductions = () => {
     if (!employee) return;
@@ -116,7 +121,9 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
           esi: String(mine.esi ?? ''), fullAndFinal: String(mine.fullAndFinal ?? ''),
           otherDeductions: String(mine.otherDeductions ?? ''), advances: String(mine.advances ?? ''), incomeTax: String(mine.incomeTax ?? '')
         });
+        setPfStatus(mine.status || 'Draft');
       } else {
+        setPfStatus('Draft');
         // No entry yet for this month - carry forward the recurring, rarely-changing
         // figures (Basic/HRA/Conveyance/Medical/LTA/CCA and Professional Tax/EPF/ESI)
         // from the most recent earlier month so HR doesn't retype them every month.
@@ -196,7 +203,11 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
         cca: Number(pfForm.cca) || undefined, fuelAllowance: Number(pfForm.fuelAllowance) || undefined, otherAllowances: Number(pfForm.otherAllowances) || undefined,
         extraDays: Number(pfForm.extraDays) || undefined, professionalTax: Number(pfForm.professionalTax) || undefined, epf: Number(pfForm.epf) || undefined,
         esi: Number(pfForm.esi) || undefined, fullAndFinal: Number(pfForm.fullAndFinal) || undefined,
-        otherDeductions: Number(pfForm.otherDeductions) || undefined, advances: Number(pfForm.advances) || undefined, incomeTax: Number(pfForm.incomeTax) || undefined
+        otherDeductions: Number(pfForm.otherDeductions) || undefined, advances: Number(pfForm.advances) || undefined, incomeTax: Number(pfForm.incomeTax) || undefined,
+        // Always carry the current status forward - the regular Save must
+        // never silently revert an already-Finalized month back to Draft by
+        // simply omitting the field.
+        status: pfStatus
       };
       await authFetch('/api/staff/provident-fund', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pfPayload)
@@ -217,6 +228,34 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
       setError('Something went wrong while saving. Please try again.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // Explicit Finalize action, separate from the regular Save button - snapshots
+  // whatever is currently in the form (so a pending edit isn't lost) and
+  // immediately persists status: 'Finalized'. This is what Salary Slip
+  // generation checks before proceeding without a warn-and-confirm.
+  const handleFinalizePf = async () => {
+    if (!employee) return;
+    if (!confirm(`Finalize ${pfMonth}'s Salary Breakup for ${employee.name}? This is what allows a Salary Slip to be generated without a warning.`)) return;
+    setPfFinalizing(true);
+    try {
+      const pfPayload = {
+        id: `${basic.id}-${pfMonth}`, empId: basic.id, month: pfMonth,
+        basic: Number(pfForm.basic) || undefined, hra: Number(pfForm.hra) || undefined, conveyance: Number(pfForm.conveyance) || undefined,
+        medicalAllowance: Number(pfForm.medicalAllowance) || undefined, lta: Number(pfForm.lta) || undefined,
+        cca: Number(pfForm.cca) || undefined, fuelAllowance: Number(pfForm.fuelAllowance) || undefined, otherAllowances: Number(pfForm.otherAllowances) || undefined,
+        extraDays: Number(pfForm.extraDays) || undefined, professionalTax: Number(pfForm.professionalTax) || undefined, epf: Number(pfForm.epf) || undefined,
+        esi: Number(pfForm.esi) || undefined, fullAndFinal: Number(pfForm.fullAndFinal) || undefined,
+        otherDeductions: Number(pfForm.otherDeductions) || undefined, advances: Number(pfForm.advances) || undefined, incomeTax: Number(pfForm.incomeTax) || undefined,
+        status: 'Finalized' as const
+      };
+      await authFetch('/api/staff/provident-fund', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pfPayload)
+      });
+      setPfStatus('Finalized');
+    } finally {
+      setPfFinalizing(false);
     }
   };
 
@@ -507,7 +546,23 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
 
           {tab === 'pf' && (
             <div className="space-y-3">
-              <input type="month" value={pfMonth} onChange={e => setPfMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <input type="month" value={pfMonth} onChange={e => setPfMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                <div className="flex items-center gap-2">
+                  <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase border ${
+                    pfStatus === 'Finalized' ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-amber-100 text-amber-800 border-amber-300'
+                  }`}>{pfStatus}</span>
+                  {isEditing && pfStatus === 'Draft' && (
+                    <button type="button" onClick={handleFinalizePf} disabled={pfFinalizing}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-lg text-[10px] uppercase cursor-pointer disabled:opacity-50 transition-all">
+                      {pfFinalizing ? 'Finalizing...' : 'Mark as Finalized'}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {pfStatus === 'Draft' && (
+                <p className="text-[10px] text-amber-600 font-mono">Salary Slip generation will warn before proceeding on a Draft month.</p>
+              )}
 
               <div className="grid grid-cols-4 gap-2">
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-center">

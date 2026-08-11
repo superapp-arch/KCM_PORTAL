@@ -109,6 +109,20 @@ export const staffHolidays = pgTable('staff_holidays', {
   data: text('data').notNull(), // JSON string representing the full StaffHoliday object
 });
 
+// Generated payslips - one row per slip (id = slipNumber). See SalarySlipRecord.
+export const salarySlips = pgTable('salary_slips', {
+  id: text('id').primaryKey(),
+  empId: text('emp_id'),
+  data: text('data').notNull(), // JSON string representing the full SalarySlipRecord object
+});
+
+// Append-only audit trail (Generated/Regenerated/Downloaded) for salary slips.
+export const salarySlipAudits = pgTable('salary_slip_audits', {
+  id: text('id').primaryKey(),
+  empId: text('emp_id'),
+  data: text('data').notNull(), // JSON string representing the full SalarySlipAuditRecord object
+});
+
 // Abnormal logins audit log table
 export const abnormalLogins = pgTable('abnormal_logins', {
   id: text('id').primaryKey(),

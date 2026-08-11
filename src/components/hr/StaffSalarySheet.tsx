@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle } from 'lucide-react';
-import { StaffEmployee, StaffSalaryDetail } from '../../types';
+import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, FileText, List } from 'lucide-react';
+import { StaffEmployee, StaffSalaryDetail, StaffBankDetail, SalarySlipRecord, User } from '../../types';
 import StaffFormModal from './StaffFormModal';
+import SalarySlipModal from './SalarySlipModal';
+import SalarySlipTabView from './SalarySlipTabView';
+import { EnrichedPfRecord } from '../../utils/salarySlipGenerate';
 import { authFetch } from '../../authFetch';
 
 interface StaffSalarySheetProps {
+  user: User;
   employees: StaffEmployee[];
   onAddEmployee: (emp: Omit<StaffEmployee, 'id'> & { id: string }) => Promise<void>;
   onUpdateEmployee: (id: string, emp: Partial<StaffEmployee>) => Promise<void>;
@@ -12,25 +16,29 @@ interface StaffSalarySheetProps {
 }
 
 type SalaryDetailWithEffective = StaffSalaryDetail & { effectiveSalary: number; advanceBalance: number };
-// Server-enriched Provident Fund record - includes netSalary computed from
-// this record's raw earnings/deductions plus that month's attendance-driven
-// LOP, mirroring StaffFormModal's Salary Breakup tab exactly (see
-// GET /api/staff/provident-fund).
-type EnrichedPFRecord = { empId: string; month: string; netSalary: number };
 
 function currentMonthKey(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmployee, onDeleteEmployee }: StaffSalarySheetProps) {
+export default function StaffSalarySheet({ user, employees, onAddEmployee, onUpdateEmployee, onDeleteEmployee }: StaffSalarySheetProps) {
   const [salaryDetails, setSalaryDetails] = useState<SalaryDetailWithEffective[]>([]);
   const [hikeCounts, setHikeCounts] = useState<Record<string, { count: number; total: number }>>({});
-  const [pfRecords, setPfRecords] = useState<EnrichedPFRecord[]>([]);
+  // Server-enriched Provident Fund records - includes netSalary/totalEarnings/
+  // totalDeductions/lopDays/status computed on read, mirroring StaffFormModal's
+  // Salary Breakup tab exactly (see GET /api/staff/provident-fund) - this is
+  // also everything the Salary Slip feature needs, so it's fetched once here
+  // and passed down rather than re-fetched per entry point.
+  const [pfRecords, setPfRecords] = useState<EnrichedPfRecord[]>([]);
+  const [bankDetails, setBankDetails] = useState<StaffBankDetail[]>([]);
+  const [salarySlips, setSalarySlips] = useState<SalarySlipRecord[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [locationFilter, setLocationFilter] = useState(''); // '' = All Locations
   const [statusFilter, setStatusFilter] = useState<'Active' | 'Inactive' | 'All'>('Active');
   const [modalEmployee, setModalEmployee] = useState<StaffEmployee | null | undefined>(undefined); // undefined = closed
+  const [slipView, setSlipView] = useState<{ employee: StaffEmployee; month: string } | null>(null); // name-click entry point
+  const [viewMode, setViewMode] = useState<'list' | 'slip'>('list'); // dedicated Salary Slip tab, beside Add Staff
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const triggerNotif = (message: string, type: 'success' | 'error') => {
@@ -55,19 +63,32 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
       }
       const pfRes = await authFetch('/api/staff/provident-fund');
       if (pfRes.ok) setPfRecords(await pfRes.json());
+      const bankRes = await authFetch('/api/staff/bank-detail');
+      if (bankRes.ok) setBankDetails(await bankRes.json());
+      const slipsRes = await authFetch('/api/staff/salary-slips');
+      if (slipsRes.ok) setSalarySlips(await slipsRes.json());
     } catch { /* keep prior state on transient failure */ }
   };
 
   useEffect(() => { loadSalaryData(); }, [employees.length]);
 
-  // Current month's Net Salary if a Salary Breakup record exists for it,
-  // else the most recent month on record - null if there's no PF record at all.
-  const netSalaryFor = (empId: string): number | null => {
+  // Current month's Salary Breakup record if one exists for it, else the
+  // most recent month on record - undefined if there's no PF record at all.
+  // This exact resolution is also what the Name-click Salary Slip entry
+  // point uses, so the month it generates for always matches the Net Salary
+  // this table is already showing for that row.
+  const pfRecordFor = (empId: string): EnrichedPfRecord | undefined => {
     const empRecords = pfRecords.filter(r => r.empId === empId);
-    if (empRecords.length === 0) return null;
+    if (empRecords.length === 0) return undefined;
     const thisMonth = currentMonthKey();
-    const match = empRecords.find(r => r.month === thisMonth) || [...empRecords].sort((a, b) => b.month.localeCompare(a.month))[0];
-    return match.netSalary;
+    return empRecords.find(r => r.month === thisMonth) || [...empRecords].sort((a, b) => b.month.localeCompare(a.month))[0];
+  };
+  const handleSlipSaved = (slip: SalarySlipRecord) => {
+    setSalarySlips(prev => {
+      const idx = prev.findIndex(s => s.id === slip.id);
+      if (idx === -1) return [...prev, slip];
+      const next = [...prev]; next[idx] = slip; return next;
+    });
   };
 
   // Location options are derived from whatever locations staff have actually
@@ -109,9 +130,23 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
           </h1>
           <p className="text-xs text-slate-500 font-mono mt-1">Master staff record, CTC, hikes &amp; bank details</p>
         </div>
-        <button onClick={() => setModalEmployee(null)} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all">
-          <Plus className="w-3.5 h-3.5" /> Add Staff
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg text-xs font-semibold">
+            <button onClick={() => setViewMode('list')}
+              className={`px-3 py-1.5 rounded-md flex items-center gap-1.5 cursor-pointer ${viewMode === 'list' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
+              <List className="w-3.5 h-3.5" /> Staff List
+            </button>
+            <button onClick={() => setViewMode('slip')}
+              className={`px-3 py-1.5 rounded-md flex items-center gap-1.5 cursor-pointer ${viewMode === 'slip' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
+              <FileText className="w-3.5 h-3.5" /> Salary Slip
+            </button>
+          </div>
+          {viewMode === 'list' && (
+            <button onClick={() => setModalEmployee(null)} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all">
+              <Plus className="w-3.5 h-3.5" /> Add Staff
+            </button>
+          )}
+        </div>
       </div>
 
       {notif && (
@@ -123,6 +158,17 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
         </div>
       )}
 
+      {viewMode === 'slip' ? (
+        <SalarySlipTabView
+          employees={employees}
+          pfRecords={pfRecords}
+          bankDetails={bankDetails}
+          salarySlips={salarySlips}
+          performedBy={user.username}
+          onSlipSaved={handleSlipSaved}
+        />
+      ) : (
+      <>
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex flex-wrap items-center gap-2 text-xs">
         <div className="flex items-center gap-2 border border-slate-300 rounded-lg px-2.5 py-1.5 flex-1 min-w-[200px]">
           <Search className="w-3.5 h-3.5 text-slate-400" />
@@ -167,11 +213,24 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
               ) : filtered.map(emp => {
                 const detail = salaryDetails.find(d => d.empId === emp.id);
                 const hikeInfo = hikeCounts[emp.id];
-                const netSalary = netSalaryFor(emp.id);
+                const pfRecord = pfRecordFor(emp.id);
+                const netSalary = pfRecord?.netSalary ?? null;
                 return (
                   <tr key={emp.id} className="hover:bg-slate-50">
                     <td className="px-3 py-2.5 font-mono font-bold text-slate-800">{emp.id}</td>
-                    <td className="px-3 py-2.5 font-semibold text-slate-700">{emp.name}</td>
+                    <td className="px-3 py-2.5">
+                      {pfRecord ? (
+                        <button
+                          onClick={() => setSlipView({ employee: emp, month: pfRecord.month })}
+                          title={`Generate/view ${emp.name}'s Salary Slip for ${pfRecord.month}`}
+                          className="font-semibold text-purple-700 hover:text-purple-900 hover:underline cursor-pointer"
+                        >
+                          {emp.name}
+                        </button>
+                      ) : (
+                        <span className="font-semibold text-slate-700" title="No Salary Breakup record yet - add one before a slip can be generated">{emp.name}</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2.5 text-slate-500">{emp.designation || '-'}</td>
                     <td className="px-3 py-2.5 text-slate-500">{emp.location || '-'}</td>
                     <td className="px-3 py-2.5">
@@ -206,6 +265,8 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
           </table>
         </div>
       </div>
+      </>
+      )}
 
       {modalEmployee !== undefined && (
         <StaffFormModal
@@ -214,6 +275,19 @@ export default function StaffSalarySheet({ employees, onAddEmployee, onUpdateEmp
           onUpdateEmployee={onUpdateEmployee}
           onClose={() => setModalEmployee(undefined)}
           onSaved={handleSaved}
+        />
+      )}
+
+      {slipView && (
+        <SalarySlipModal
+          employee={slipView.employee}
+          month={slipView.month}
+          pfRecord={pfRecords.find(p => p.empId === slipView.employee.id && p.month === slipView.month)}
+          bankDetail={bankDetails.find(b => b.empId === slipView.employee.id)}
+          existingSlips={salarySlips}
+          performedBy={user.username}
+          onClose={() => setSlipView(null)}
+          onSlipSaved={handleSlipSaved}
         />
       )}
     </div>

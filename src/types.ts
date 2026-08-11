@@ -486,6 +486,52 @@ export interface StaffProvidentFund {
   otherDeductions?: number;
   advances?: number;
   incomeTax?: number;
+  // Draft (default) until HR explicitly finalizes via its own action in the
+  // Salary Breakup tab, separate from the regular Save - Salary Slip
+  // generation only proceeds without a warn-and-confirm when this is
+  // 'Finalized'. Editing/re-saving other fields afterward does not revert
+  // this back to Draft.
+  status?: 'Draft' | 'Finalized';
+}
+
+// One row per generated payslip (id = slipNumber). Everything below is a
+// point-in-time SNAPSHOT taken at generation - a later edit to Basic Info,
+// Bank Details, or the source StaffProvidentFund record never retroactively
+// changes a slip that's already been issued.
+export interface SalarySlipRecord {
+  id: string; // = slipNumber
+  slipNumber: string; // SLIP-YYYYMM-NNN, auto-generated, sequential within that month
+  empId: string;
+  month: string; // YYYY-MM
+  employeeName: string;
+  department: string; // = the employee's Designation field - HR's own convention (Basic Info has no separate Department field)
+  bankAccountNumberMasked?: string; // last 4 digits only, same masking convention as the Bank Details tab
+  bankName?: string;
+  ifscCode?: string;
+  // Earnings/deductions snapshot from the StaffProvidentFund record used.
+  basic?: number; hra?: number; conveyance?: number; medicalAllowance?: number;
+  lta?: number; cca?: number; fuelAllowance?: number; otherAllowances?: number;
+  extraDays?: number; extraDaysAmount?: number;
+  professionalTax?: number; epf?: number; esi?: number; fullAndFinal?: number;
+  otherDeductions?: number; advances?: number; incomeTax?: number;
+  lopDays?: number; lopAmount?: number;
+  totalEarnings: number;
+  totalDeductions: number;
+  netSalary: number;
+  generatedDate: string; // YYYY-MM-DD
+  pdfUrl?: string; // /uploads/salary-slips/... - same generic upload endpoint every other module's documents already use
+  isDownloaded?: boolean;
+  lastDownloadedDate?: string;
+}
+
+export interface SalarySlipAuditRecord {
+  id: string;
+  slipNumber: string;
+  empId: string;
+  month: string;
+  action: 'Generated' | 'Regenerated' | 'Downloaded';
+  timestamp: string;
+  performedBy?: string; // username
 }
 
 // Lets HR manually override the attendance-derived LOP day count for a given

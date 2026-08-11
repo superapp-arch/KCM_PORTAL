@@ -14,7 +14,7 @@ interface HRProps {
 
 type ModuleTab = 'salary' | 'attendance';
 
-export default function HR({ employees, onAddEmployee, onUpdateEmployee, onDeleteEmployee }: HRProps) {
+export default function HR({ user, employees, onAddEmployee, onUpdateEmployee, onDeleteEmployee }: HRProps) {
   const [moduleTab, setModuleTab] = useState<ModuleTab>('salary');
 
   return (
@@ -34,7 +34,7 @@ export default function HR({ employees, onAddEmployee, onUpdateEmployee, onDelet
       </div>
 
       {moduleTab === 'salary' && (
-        <StaffSalarySheet employees={employees} onAddEmployee={onAddEmployee} onUpdateEmployee={onUpdateEmployee} onDeleteEmployee={onDeleteEmployee} />
+        <StaffSalarySheet user={user} employees={employees} onAddEmployee={onAddEmployee} onUpdateEmployee={onUpdateEmployee} onDeleteEmployee={onDeleteEmployee} />
       )}
       {moduleTab === 'attendance' && <StaffAttendanceSheet employees={employees} />}
     </div>

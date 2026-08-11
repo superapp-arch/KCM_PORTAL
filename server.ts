@@ -129,6 +129,10 @@ import {
   getStaffHolidays,
   saveStaffHoliday,
   deleteStaffHoliday,
+  getSalarySlips,
+  saveSalarySlipRecord,
+  getSalarySlipAudits,
+  saveSalarySlipAuditRecord,
   getAbnormalLogins,
   saveAbnormalLogin,
   resolveAllAbnormalLogins,
@@ -2000,6 +2004,25 @@ async function startServer() {
   });
   app.delete('/api/staff/holidays/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteStaffHoliday(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ===== SALARY SLIPS ===== (registered under /api/staff so it inherits
+  // requireHrAccess above - HR/Payroll admin + Super Admin only, same as
+  // every other staff route)
+  app.get('/api/staff/salary-slips', async (req, res) => {
+    try { res.json(await getSalarySlips()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/staff/salary-slips', async (req, res) => {
+    try { res.json({ success: true, data: await saveSalarySlipRecord(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/staff/salary-slips/:id', async (req, res) => {
+    try { res.json({ success: true, data: await saveSalarySlipRecord({ ...req.body, id: req.params.id }) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.get('/api/staff/salary-slip-audit', async (req, res) => {
+    try { res.json(await getSalarySlipAudits()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/staff/salary-slip-audit', async (req, res) => {
+    try { res.json({ success: true, data: await saveSalarySlipAuditRecord(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.get('/api/abnormal-logins', async (req, res) => {

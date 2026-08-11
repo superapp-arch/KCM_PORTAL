@@ -16,6 +16,8 @@ import {
   staffBankDetails,
   staffAttendance,
   staffHolidays,
+  salarySlips,
+  salarySlipAudits,
   abnormalLogins,
   notifications,
   warehouseEntries,
@@ -56,6 +58,8 @@ import {
   StaffBankDetail,
   StaffAttendance,
   StaffHoliday,
+  SalarySlipRecord,
+  SalarySlipAuditRecord,
   AbnormalLogin,
   DashboardNotification,
   WarehouseEntry,
@@ -1447,6 +1451,60 @@ export async function deleteStaffHoliday(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteStaffHoliday:", error);
     throw new Error("Failed to delete staff holiday.", { cause: error });
+  }
+}
+
+// --- SALARY SLIP OPERATIONS ---
+export async function getSalarySlips(): Promise<SalarySlipRecord[]> {
+  try {
+    const rows = await db.select().from(salarySlips);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getSalarySlips:", error);
+    throw new Error("Failed to retrieve salary slips.", { cause: error });
+  }
+}
+
+export async function saveSalarySlipRecord(slip: SalarySlipRecord) {
+  try {
+    const id = slip.id || slip.slipNumber;
+    const complete = { ...slip, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(salarySlips).where(eq(salarySlips.id, id));
+    if (existing.length > 0) {
+      await db.update(salarySlips).set({ data: dataString, empId: complete.empId }).where(eq(salarySlips.id, id));
+    } else {
+      await db.insert(salarySlips).values({ id, empId: complete.empId, data: dataString });
+    }
+    return await getSalarySlips();
+  } catch (error) {
+    console.error("Database action failed in saveSalarySlipRecord:", error);
+    throw new Error("Failed to save salary slip.", { cause: error });
+  }
+}
+
+// --- SALARY SLIP AUDIT OPERATIONS (append-only) ---
+export async function getSalarySlipAudits(): Promise<SalarySlipAuditRecord[]> {
+  try {
+    const rows = await db.select().from(salarySlipAudits);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getSalarySlipAudits:", error);
+    throw new Error("Failed to retrieve salary slip audit trail.", { cause: error });
+  }
+}
+
+export async function saveSalarySlipAuditRecord(entry: SalarySlipAuditRecord) {
+  try {
+    const id = entry.id || String(Date.now());
+    const complete = { ...entry, id };
+    const dataString = JSON.stringify(complete);
+    await db.insert(salarySlipAudits).values({ id, empId: complete.empId, data: dataString });
+    return await getSalarySlipAudits();
+  } catch (error) {
+    console.error("Database action failed in saveSalarySlipAuditRecord:", error);
+    throw new Error("Failed to write salary slip audit entry.", { cause: error });
   }
 }
 
