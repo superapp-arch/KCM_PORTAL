@@ -303,7 +303,7 @@ export default function TireAlignmentTab({
       {/* Bulk "one vehicle, all tires, one save" configuration modal */}
       {showConfigForm && (
         <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-3xl md:max-w-6xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-4 bg-gradient-to-r from-slate-900 to-blue-950 text-white flex items-center justify-between sticky top-0 z-10">
               <h3 className="font-extrabold text-sm flex items-center gap-2"><CircleDot className="w-4 h-4 text-blue-400" /> Tire Configuration</h3>
               <button onClick={resetConfigForm} className="p-1.5 rounded-lg hover:bg-white/10 text-white cursor-pointer"><X className="w-4 h-4" /></button>
@@ -326,80 +326,148 @@ export default function TireAlignmentTab({
                 )}
               </div>
 
-              {matchedVehicle && (
-                <div className="space-y-3 pt-1">
-                  {configRows.map((row, idx) => {
-                    const isRequiredPosition = REQUIRED_POSITIONS.includes(row.position);
-                    const installedKmNum = row.installedKm ? parseInt(row.installedKm, 10) : undefined;
-                    const kmRun = currentOdometer != null && installedKmNum != null ? currentOdometer - installedKmNum : undefined;
-                    const lastAlignNum = row.lastAlignmentKm ? parseInt(row.lastAlignmentKm, 10) : undefined;
-                    const nextDue = nextAlignmentDueKm(lastAlignNum);
-                    const remaining = nextDue != null && currentOdometer != null ? nextDue - currentOdometer : undefined;
-                    const status = computeAlignmentStatus(lastAlignNum, currentOdometer);
-                    return (
-                      <div key={row.position} className={`border rounded-xl p-3 ${row.error ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'}`}>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="font-bold text-slate-700">{row.position}</span>
-                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${isRequiredPosition ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-500 border border-slate-300'}`}>
-                            {isRequiredPosition ? 'Required' : 'Optional'}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2 mb-2">
-                          <div>
-                            <label className="block text-slate-400 mb-0.5">Brand/Company{isRequiredPosition && ' *'}</label>
-                            <input type="text" value={row.tireBrand} onChange={(e) => updateConfigRow(idx, { tireBrand: e.target.value })} autoComplete="off"
-                              className="w-full border border-slate-300 rounded-lg px-2 py-1.5" />
-                          </div>
-                          <div>
-                            <label className="block text-slate-400 mb-0.5">Serial Number{isRequiredPosition && ' *'}</label>
-                            <input type="text" value={row.tireSerialNumber} onChange={(e) => updateConfigRow(idx, { tireSerialNumber: e.target.value })} autoComplete="off"
-                              className="w-full border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2 mb-2">
-                          <div>
-                            <label className="block text-slate-400 mb-0.5">Installed Date{isRequiredPosition && ' *'}</label>
-                            <DateInput value={row.installedDate} onChange={(e) => updateConfigRow(idx, { installedDate: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
-                          </div>
-                          <div>
-                            <label className="block text-slate-400 mb-0.5">Installed Odometer (km){isRequiredPosition && ' *'}</label>
-                            <input type="number" value={row.installedKm} onChange={(e) => updateConfigRow(idx, { installedKm: e.target.value })} autoComplete="off"
-                              className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
-                          </div>
-                        </div>
-                        <div>
-                          <label className="block text-slate-400 mb-0.5">Last Alignment Odometer (km)</label>
-                          <input type="number" value={row.lastAlignmentKm} onChange={(e) => updateConfigRow(idx, { lastAlignmentKm: e.target.value })} autoComplete="off"
-                            className="no-spinner w-full max-w-[calc(50%-4px)] border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
-                        </div>
+              {matchedVehicle && (() => {
+                // Shared per-row calc, reused by both the desktop table and
+                // the mobile card fallback below so the two views can never
+                // drift out of sync with each other.
+                const computedRows = configRows.map((row, idx) => {
+                  const isRequiredPosition = REQUIRED_POSITIONS.includes(row.position);
+                  const installedKmNum = row.installedKm ? parseInt(row.installedKm, 10) : undefined;
+                  const kmRun = currentOdometer != null && installedKmNum != null ? currentOdometer - installedKmNum : undefined;
+                  const lastAlignNum = row.lastAlignmentKm ? parseInt(row.lastAlignmentKm, 10) : undefined;
+                  const nextDue = nextAlignmentDueKm(lastAlignNum);
+                  const status = computeAlignmentStatus(lastAlignNum, currentOdometer);
+                  return { row, idx, isRequiredPosition, kmRun, nextDue, status };
+                });
 
-                        <div className="grid grid-cols-4 gap-2 mt-2 pt-2 border-t border-slate-100 text-center">
-                          <div className="bg-slate-50 border border-slate-200 rounded-lg p-1.5">
-                            <p className="text-slate-400 uppercase text-[8px] font-bold">KM Run</p>
-                            <p className="font-black text-slate-700">{kmRun != null ? kmRun.toLocaleString('en-IN') : '-'}</p>
-                          </div>
-                          <div className="bg-slate-50 border border-slate-200 rounded-lg p-1.5">
-                            <p className="text-slate-400 uppercase text-[8px] font-bold">Next Due (km)</p>
-                            <p className="font-black text-slate-700">{nextDue != null ? nextDue.toLocaleString('en-IN') : '-'}</p>
-                          </div>
-                          <div className="bg-slate-50 border border-slate-200 rounded-lg p-1.5">
-                            <p className="text-slate-400 uppercase text-[8px] font-bold">Remaining</p>
-                            <p className="font-black text-slate-700">{remaining != null ? remaining.toLocaleString('en-IN') : '-'}</p>
-                          </div>
-                          <div className="bg-slate-50 border border-slate-200 rounded-lg p-1.5 flex flex-col items-center justify-center">
-                            <p className="text-slate-400 uppercase text-[8px] font-bold mb-0.5">Status</p>
-                            {statusBadge(status)}
-                          </div>
-                        </div>
+                const positionLabel = (row: TireRowForm, isRequiredPosition: boolean) => (
+                  <>
+                    {row.position}
+                    {isRequiredPosition
+                      ? <span className="text-rose-500"> *</span>
+                      : <span className="text-slate-400 font-normal normal-case text-[9px]"> (optional)</span>}
+                  </>
+                );
 
-                        {row.error && (
-                          <p className="text-rose-600 font-semibold mt-2 flex items-center gap-1"><AlertTriangle className="w-3 h-3 shrink-0" /> {row.error}</p>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                return (
+                  <div className="pt-1">
+                    {/* Desktop/tablet: compact all-positions-visible table, tabbable left-to-right then down a row */}
+                    <div className="hidden md:block border border-slate-200 rounded-xl overflow-x-auto">
+                      <table className="w-full text-left text-[11px] min-w-[880px]">
+                        <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
+                          <tr>
+                            <th className="px-2.5 py-2">Position</th>
+                            <th className="px-2.5 py-2">Brand</th>
+                            <th className="px-2.5 py-2">Serial No.</th>
+                            <th className="px-2.5 py-2">Installed Date</th>
+                            <th className="px-2.5 py-2">Installed Odo</th>
+                            <th className="px-2.5 py-2">Last Alignment</th>
+                            <th className="px-2.5 py-2 text-right">Next Due</th>
+                            <th className="px-2.5 py-2 text-right">KM Run</th>
+                            <th className="px-2.5 py-2">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {computedRows.map(({ row, idx, isRequiredPosition, kmRun, nextDue, status }) => (
+                            <React.Fragment key={row.position}>
+                              <tr className={row.error ? 'bg-rose-50/60' : 'hover:bg-slate-50/60'}>
+                                <td className="px-2.5 py-1.5 align-top font-bold text-slate-700 whitespace-nowrap">
+                                  {positionLabel(row, isRequiredPosition)}
+                                </td>
+                                <td className="px-2.5 py-1.5 align-top">
+                                  <input type="text" value={row.tireBrand} onChange={(e) => updateConfigRow(idx, { tireBrand: e.target.value })} autoComplete="off"
+                                    className="w-full min-w-[90px] border border-slate-300 rounded-lg px-2 py-1.5" />
+                                </td>
+                                <td className="px-2.5 py-1.5 align-top">
+                                  <input type="text" value={row.tireSerialNumber} onChange={(e) => updateConfigRow(idx, { tireSerialNumber: e.target.value })} autoComplete="off"
+                                    className="w-full min-w-[100px] border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
+                                </td>
+                                <td className="px-2.5 py-1.5 align-top">
+                                  <DateInput value={row.installedDate} onChange={(e) => updateConfigRow(idx, { installedDate: e.target.value })} className="w-full min-w-[100px] border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
+                                </td>
+                                <td className="px-2.5 py-1.5 align-top">
+                                  <input type="number" value={row.installedKm} onChange={(e) => updateConfigRow(idx, { installedKm: e.target.value })} autoComplete="off"
+                                    className="no-spinner w-full min-w-[90px] border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
+                                </td>
+                                <td className="px-2.5 py-1.5 align-top">
+                                  <input type="number" value={row.lastAlignmentKm} onChange={(e) => updateConfigRow(idx, { lastAlignmentKm: e.target.value })} autoComplete="off"
+                                    className="no-spinner w-full min-w-[90px] border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
+                                </td>
+                                <td className="px-2.5 py-1.5 align-top text-right font-mono text-slate-600 whitespace-nowrap">{nextDue != null ? nextDue.toLocaleString('en-IN') : '-'}</td>
+                                <td className="px-2.5 py-1.5 align-top text-right font-mono text-slate-600 whitespace-nowrap">{kmRun != null ? kmRun.toLocaleString('en-IN') : '-'}</td>
+                                <td className="px-2.5 py-1.5 align-top">{statusBadge(status)}</td>
+                              </tr>
+                              {row.error && (
+                                <tr className="bg-rose-50/60">
+                                  <td colSpan={9} className="px-2.5 pb-2 text-rose-600 font-semibold">
+                                    <span className="flex items-center gap-1"><AlertTriangle className="w-3 h-3 shrink-0" /> {row.error}</span>
+                                  </td>
+                                </tr>
+                              )}
+                            </React.Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Small/mobile screens: same fields as a stacked card per position, since a 9-column table doesn't fit */}
+                    <div className="md:hidden space-y-3">
+                      {computedRows.map(({ row, idx, isRequiredPosition, kmRun, nextDue, status }) => (
+                        <div key={row.position} className={`border rounded-xl p-3 ${row.error ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'}`}>
+                          <div className="font-bold text-slate-700 mb-2">{positionLabel(row, isRequiredPosition)}</div>
+                          <div className="grid grid-cols-2 gap-2 mb-2">
+                            <div>
+                              <label className="block text-slate-400 mb-0.5">Brand/Company{isRequiredPosition && ' *'}</label>
+                              <input type="text" value={row.tireBrand} onChange={(e) => updateConfigRow(idx, { tireBrand: e.target.value })} autoComplete="off"
+                                className="w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+                            </div>
+                            <div>
+                              <label className="block text-slate-400 mb-0.5">Serial Number{isRequiredPosition && ' *'}</label>
+                              <input type="text" value={row.tireSerialNumber} onChange={(e) => updateConfigRow(idx, { tireSerialNumber: e.target.value })} autoComplete="off"
+                                className="w-full border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 mb-2">
+                            <div>
+                              <label className="block text-slate-400 mb-0.5">Installed Date{isRequiredPosition && ' *'}</label>
+                              <DateInput value={row.installedDate} onChange={(e) => updateConfigRow(idx, { installedDate: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
+                            </div>
+                            <div>
+                              <label className="block text-slate-400 mb-0.5">Installed Odometer (km){isRequiredPosition && ' *'}</label>
+                              <input type="number" value={row.installedKm} onChange={(e) => updateConfigRow(idx, { installedKm: e.target.value })} autoComplete="off"
+                                className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
+                            </div>
+                          </div>
+                          <div className="mb-2">
+                            <label className="block text-slate-400 mb-0.5">Last Alignment Odometer (km)</label>
+                            <input type="number" value={row.lastAlignmentKm} onChange={(e) => updateConfigRow(idx, { lastAlignmentKm: e.target.value })} autoComplete="off"
+                              className="no-spinner w-full max-w-[calc(50%-4px)] border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-100 text-center">
+                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-1.5">
+                              <p className="text-slate-400 uppercase text-[8px] font-bold">Next Due (km)</p>
+                              <p className="font-black text-slate-700">{nextDue != null ? nextDue.toLocaleString('en-IN') : '-'}</p>
+                            </div>
+                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-1.5">
+                              <p className="text-slate-400 uppercase text-[8px] font-bold">KM Run</p>
+                              <p className="font-black text-slate-700">{kmRun != null ? kmRun.toLocaleString('en-IN') : '-'}</p>
+                            </div>
+                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-1.5 flex flex-col items-center justify-center">
+                              <p className="text-slate-400 uppercase text-[8px] font-bold mb-0.5">Status</p>
+                              {statusBadge(status)}
+                            </div>
+                          </div>
+
+                          {row.error && (
+                            <p className="text-rose-600 font-semibold mt-2 flex items-center gap-1"><AlertTriangle className="w-3 h-3 shrink-0" /> {row.error}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-2 sticky bottom-0">
