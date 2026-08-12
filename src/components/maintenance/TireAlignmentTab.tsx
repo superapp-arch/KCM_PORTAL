@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Vehicle, TireRecord, MileageReport } from '../../types';
+import { Vehicle, TireRecord, TireBrand, MileageReport } from '../../types';
 import { CircleDot, Search, Edit2, Trash2, Plus, X, Gauge, AlertTriangle } from 'lucide-react';
 import DateInput from '../DateInput';
 import { latestOdometerFor, computeAlignmentStatus, nextAlignmentDueKm, ALIGNMENT_INTERVAL_KM, KmStatus } from '../../utils/maintenanceDates';
@@ -7,9 +7,66 @@ import { latestOdometerFor, computeAlignmentStatus, nextAlignmentDueKm, ALIGNMEN
 interface TireAlignmentTabProps {
   vehicles: Vehicle[];
   mileageReports: MileageReport[];
+  tireBrands: TireBrand[];
+  onAddTireBrand: (name: string) => Promise<void>;
   tireRecords: TireRecord[];
   onSaveTireRecord: (record: TireRecord | Omit<TireRecord, 'id'>) => Promise<void>;
   onDeleteTireRecord: (id: string) => Promise<void>;
+}
+
+// Sentinel option value for "Add new brand..." - never a real brand name, so
+// it can't collide with anything a user types.
+const ADD_NEW_BRAND = '__add_new_brand__';
+
+// Brand/Company field for one Tire Configuration row - a dropdown sourced
+// from the shared, ordered TireBrand list (see types.ts), with an inline
+// "Add new brand..." affordance (not a browser popup) that appends to that
+// list. Shared by both the desktop table and the mobile card layout so the
+// two can never drift apart.
+function BrandField({
+  value, tireBrands, isAdding, draft, onSelect, onStartAdd, onDraftChange, onConfirmAdd, onCancelAdd, className
+}: {
+  value: string;
+  tireBrands: TireBrand[];
+  isAdding: boolean;
+  draft: string;
+  onSelect: (name: string) => void;
+  onStartAdd: () => void;
+  onDraftChange: (v: string) => void;
+  onConfirmAdd: () => void;
+  onCancelAdd: () => void;
+  className: string;
+}) {
+  if (isAdding) {
+    return (
+      <div className="flex items-center gap-1">
+        <input
+          autoFocus type="text" value={draft} onChange={(e) => onDraftChange(e.target.value)} autoComplete="off"
+          placeholder="New brand name"
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onConfirmAdd(); } else if (e.key === 'Escape') onCancelAdd(); }}
+          className={className}
+        />
+        <button type="button" onClick={onConfirmAdd} title="Add brand" className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white cursor-pointer shrink-0"><Plus className="w-3.5 h-3.5" /></button>
+        <button type="button" onClick={onCancelAdd} title="Cancel" className="p-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-100 cursor-pointer shrink-0"><X className="w-3.5 h-3.5" /></button>
+      </div>
+    );
+  }
+  // A pre-existing record's brand that isn't (yet) in the shared list - e.g.
+  // legacy free-text data from before this dropdown existed - stays visible
+  // and selected rather than silently blanking out.
+  const isKnown = !value || tireBrands.some(b => b.name === value);
+  return (
+    <select
+      value={value}
+      onChange={(e) => e.target.value === ADD_NEW_BRAND ? onStartAdd() : onSelect(e.target.value)}
+      className={className}
+    >
+      <option value="">Select brand...</option>
+      {!isKnown && <option value={value}>{value}</option>}
+      {tireBrands.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+      <option value={ADD_NEW_BRAND}>+ Add new brand...</option>
+    </select>
+  );
 }
 
 // Fixed positions for the bulk "one vehicle, all tires" entry screen - not
@@ -51,7 +108,7 @@ const emptyRow = (position: string): TireRowForm => ({
 });
 
 export default function TireAlignmentTab({
-  vehicles, mileageReports, tireRecords, onSaveTireRecord, onDeleteTireRecord
+  vehicles, mileageReports, tireBrands, onAddTireBrand, tireRecords, onSaveTireRecord, onDeleteTireRecord
 }: TireAlignmentTabProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [notif, setNotif] = useState<string | null>(null);
@@ -131,20 +188,43 @@ export default function TireAlignmentTab({
         lastAlignmentKm: existing.lastAlignmentKm != null ? String(existing.lastAlignmentKm) : ''
       };
     }));
+    setAddingBrandPosition(null);
+    setBrandDraft('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchedVehicle]);
 
   const updateConfigRow = (index: number, patch: Partial<TireRowForm>) =>
     setConfigRows(prev => prev.map((r, i) => i === index ? { ...r, ...patch, error: undefined } : r));
 
+  // Brand dropdown's inline "Add new brand..." - only one row at a time, per
+  // position (position is unique within a single vehicle's configRows).
+  const [addingBrandPosition, setAddingBrandPosition] = useState<string | null>(null);
+  const [brandDraft, setBrandDraft] = useState('');
+  const startAddBrand = (position: string) => { setAddingBrandPosition(position); setBrandDraft(''); };
+  const cancelAddBrand = () => { setAddingBrandPosition(null); setBrandDraft(''); };
+  // Case-insensitive dedupe against the shared list: a match reuses the
+  // existing entry as-is (whatever casing it was first added with) instead
+  // of creating a near-duplicate; a genuinely new name is persisted via
+  // onAddTireBrand (appended to the end of the shared, ordered list) and
+  // used for this row immediately, without waiting on that round trip.
+  const confirmAddBrand = async (index: number) => {
+    const trimmed = brandDraft.trim();
+    if (!trimmed) { cancelAddBrand(); return; }
+    const existing = tireBrands.find(b => b.name.toLowerCase() === trimmed.toLowerCase());
+    if (!existing) await onAddTireBrand(trimmed);
+    updateConfigRow(index, { tireBrand: existing ? existing.name : trimmed });
+    cancelAddBrand();
+  };
+
   const resetConfigForm = () => {
     setShowConfigForm(false);
     setVehicleInput('');
     setConfigRows(ALL_POSITIONS.map(emptyRow));
+    cancelAddBrand();
   };
 
-  const openAddConfig = () => { setVehicleInput(''); setConfigRows(ALL_POSITIONS.map(emptyRow)); setShowConfigForm(true); };
-  const openEditConfigForVehicle = (regNo: string) => { setVehicleInput(regNo); setShowConfigForm(true); };
+  const openAddConfig = () => { setVehicleInput(''); setConfigRows(ALL_POSITIONS.map(emptyRow)); setShowConfigForm(true); cancelAddBrand(); };
+  const openEditConfigForVehicle = (regNo: string) => { setVehicleInput(regNo); setShowConfigForm(true); cancelAddBrand(); };
 
   // Validates every row up front - if anything required fails, nothing is
   // saved at all (the "atomic" bulk save the spec asks for isn't a real DB
@@ -375,8 +455,16 @@ export default function TireAlignmentTab({
                                   {positionLabel(row, isRequiredPosition)}
                                 </td>
                                 <td className="px-2.5 py-1.5 align-top">
-                                  <input type="text" value={row.tireBrand} onChange={(e) => updateConfigRow(idx, { tireBrand: e.target.value })} autoComplete="off"
-                                    className="w-full min-w-[90px] border border-slate-300 rounded-lg px-2 py-1.5" />
+                                  <BrandField
+                                    value={row.tireBrand} tireBrands={tireBrands}
+                                    isAdding={addingBrandPosition === row.position} draft={brandDraft}
+                                    onSelect={(name) => updateConfigRow(idx, { tireBrand: name })}
+                                    onStartAdd={() => startAddBrand(row.position)}
+                                    onDraftChange={setBrandDraft}
+                                    onConfirmAdd={() => confirmAddBrand(idx)}
+                                    onCancelAdd={cancelAddBrand}
+                                    className="w-full min-w-[120px] border border-slate-300 rounded-lg px-2 py-1.5"
+                                  />
                                 </td>
                                 <td className="px-2.5 py-1.5 align-top">
                                   <input type="text" value={row.tireSerialNumber} onChange={(e) => updateConfigRow(idx, { tireSerialNumber: e.target.value })} autoComplete="off"
@@ -418,8 +506,16 @@ export default function TireAlignmentTab({
                           <div className="grid grid-cols-2 gap-2 mb-2">
                             <div>
                               <label className="block text-slate-400 mb-0.5">Brand/Company{isRequiredPosition && ' *'}</label>
-                              <input type="text" value={row.tireBrand} onChange={(e) => updateConfigRow(idx, { tireBrand: e.target.value })} autoComplete="off"
-                                className="w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+                              <BrandField
+                                value={row.tireBrand} tireBrands={tireBrands}
+                                isAdding={addingBrandPosition === row.position} draft={brandDraft}
+                                onSelect={(name) => updateConfigRow(idx, { tireBrand: name })}
+                                onStartAdd={() => startAddBrand(row.position)}
+                                onDraftChange={setBrandDraft}
+                                onConfirmAdd={() => confirmAddBrand(idx)}
+                                onCancelAdd={cancelAddBrand}
+                                className="w-full border border-slate-300 rounded-lg px-2 py-1.5"
+                              />
                             </div>
                             <div>
                               <label className="block text-slate-400 mb-0.5">Serial Number{isRequiredPosition && ' *'}</label>

@@ -327,6 +327,18 @@ export interface VehicleServiceSchedule {
   remarks?: string;
 }
 
+// Tire Brand master list for the Tire Configuration Brand dropdown - a
+// simple ordered lookup (BrandId/BrandName/DisplayOrder), not free text.
+// Apollo/MRF/JK Tyre/Bridgestone are seeded with displayOrder 1-4 fixed at
+// the top; every brand added afterward (via the dropdown's "Add new
+// brand..." option) is appended with the next integer, in the order added -
+// never alphabetized, never inserted between existing entries.
+export interface TireBrand {
+  id: string;
+  name: string;
+  displayOrder: number;
+}
+
 // One row per tyre position per vehicle. AlignmentStatus/NextAlignmentDueKm
 // are always computed (see computeAlignmentStatus in maintenanceDates.ts),
 // never stored - NextAlignmentDueKm = lastAlignmentKm + ALIGNMENT_INTERVAL_KM
@@ -335,7 +347,7 @@ export interface TireRecord {
   id: string;
   regNo: string;
   position: string; // e.g. "Front Left", "Rear Right Outer" - free text, axle configs vary by vehicle type
-  tireBrand: string; // Company/Brand - required
+  tireBrand: string; // Company/Brand - required, selected from the TireBrand master list
   tireSerialNumber?: string;
   installedDate?: string;
   installedKm?: number;

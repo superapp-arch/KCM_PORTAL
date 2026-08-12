@@ -234,6 +234,15 @@ export const vehicleServiceSchedules = pgTable('vehicle_service_schedules', {
   data: text('data').notNull(), // JSON string representing the full VehicleServiceSchedule object
 });
 
+// Tire Brand master list for the Tire Configuration Brand dropdown (see
+// TireBrand) - a simple ordered lookup, not free text. The seeded 4 keep
+// displayOrder 1-4 fixed at the top; every brand added afterward appends
+// with the next integer, in the order added.
+export const tireBrands = pgTable('tire_brands', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full TireBrand object
+});
+
 // One row per tyre position per vehicle (see TireRecord).
 export const tireRecords = pgTable('tire_records', {
   id: text('id').primaryKey(),

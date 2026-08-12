@@ -23,6 +23,7 @@ import {
   MaintenanceServiceStation,
   BreakdownReport,
   VehicleServiceSchedule,
+  TireBrand,
   TireRecord,
   BatteryRecord,
   ToolsChecklistRecord
@@ -58,6 +59,7 @@ const DRIVER_ACCESS_EMAILS = [
   'nagaraju.linga@kcmlogistics.in',
   'ramesh@kcmlogistics.in',
   'saneel@kcmlogistics.in',
+  'hemanth@kcmlogistics.in',
   'vinod@kcmlogistics.in',
   'bhagya@kcmlogistics.in',
   'divya@kcmlogistics.in'
@@ -133,6 +135,8 @@ interface AdministrationProps {
   onDeleteBreakdownReport: (id: string) => Promise<void>;
   vehicleServiceSchedules: VehicleServiceSchedule[];
   onSaveVehicleServiceSchedule: (schedule: VehicleServiceSchedule) => Promise<void>;
+  tireBrands: TireBrand[];
+  onAddTireBrand: (name: string) => Promise<void>;
   tireRecords: TireRecord[];
   onSaveTireRecord: (record: TireRecord | Omit<TireRecord, 'id'>) => Promise<void>;
   onDeleteTireRecord: (id: string) => Promise<void>;
@@ -220,6 +224,8 @@ export default function Administration({
   onDeleteMaintenanceRecord,
   vehicleServiceSchedules,
   onSaveVehicleServiceSchedule,
+  tireBrands,
+  onAddTireBrand,
   tireRecords,
   onSaveTireRecord,
   onDeleteTireRecord,
@@ -939,6 +945,8 @@ export default function Administration({
               onDeleteBreakdownReport={onDeleteBreakdownReport}
               vehicleServiceSchedules={vehicleServiceSchedules}
               onSaveVehicleServiceSchedule={onSaveVehicleServiceSchedule}
+              tireBrands={tireBrands}
+              onAddTireBrand={onAddTireBrand}
               tireRecords={tireRecords}
               onSaveTireRecord={onSaveTireRecord}
               onDeleteTireRecord={onDeleteTireRecord}

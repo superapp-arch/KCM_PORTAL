@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
-import { DriverEmployee, DriverAttendance, AttendanceStatusCode } from '../../types';
+import { DriverEmployee, DriverAttendance, AttendanceStatusCode, DriverLocationCategory } from '../../types';
 import { authFetch } from '../../authFetch';
 import DriverAttendanceSummaryModal from './DriverAttendanceSummaryModal';
 
 interface DriverAttendanceSheetProps {
   drivers: DriverEmployee[];
+  writableLocations: DriverLocationCategory[] | 'ALL'; // locations this user may mark/edit attendance for - others show read-only
 }
 
 const QUICK_CODES: { status: AttendanceStatusCode; label: string }[] = [
@@ -65,7 +66,7 @@ function dayLabel(month: string, day: number): string {
   return `${MONTH_ABBR[d.getMonth()]}${d.getDate()}`;
 }
 
-export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheetProps) {
+export default function DriverAttendanceSheet({ drivers, writableLocations }: DriverAttendanceSheetProps) {
   const [month, setMonth] = useState(currentMonthKey());
   const [attendance, setAttendance] = useState<DriverAttendance[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -80,11 +81,18 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
   const totalDays = daysInMonth(month);
   const monthAttendance = useMemo(() => attendance.filter(a => a.date.startsWith(month)), [attendance, month]);
 
+  // e.g. Vinod: can view every location's attendance, but only mark/edit
+  // within his own writableLocations - those rows sort first so his own
+  // locations don't get lost below everyone else's read-only rows.
+  const canWrite = (driver: DriverEmployee) => writableLocations === 'ALL' || writableLocations.includes(driver.location);
+
   const filteredDrivers = useMemo(() => {
-    if (!searchTerm) return drivers;
     const q = searchTerm.toLowerCase();
-    return drivers.filter(d => d.id.toLowerCase().includes(q) || d.name.toLowerCase().includes(q) || (d.vehicleNo || '').toLowerCase().includes(q));
-  }, [drivers, searchTerm]);
+    const base = !searchTerm ? drivers : drivers.filter(d => d.id.toLowerCase().includes(q) || d.name.toLowerCase().includes(q) || (d.vehicleNo || '').toLowerCase().includes(q));
+    if (writableLocations === 'ALL') return base;
+    return [...base].sort((a, b) => Number(canWrite(b)) - Number(canWrite(a)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drivers, searchTerm, writableLocations]);
 
   // LOP/Exemption Leave/Working Days summary columns - mirrors the server's
   // computeDriverMonthlyAttendanceSummary so this and the Salary Breakup tab
@@ -180,31 +188,34 @@ export default function DriverAttendanceSheet({ drivers }: DriverAttendanceSheet
                 <tr><td colSpan={totalDays + 4} className="text-center py-10 text-slate-400">No driver records found.</td></tr>
               ) : filteredDrivers.map(driver => {
                 const { lopDays, exemptionLeaveDays, workingDays } = driverMonthSummary(driver.id);
+                const writable = canWrite(driver);
                 return (
-                  <tr key={driver.id} className="hover:bg-purple-50/40">
+                  <tr key={driver.id} className={`hover:bg-purple-50/40 ${writable ? '' : 'opacity-70'}`}>
                     <td
                       className="px-2 py-1 font-semibold text-teal-700 hover:underline cursor-pointer sticky left-0 bg-white whitespace-nowrap"
                       onClick={() => setSummaryDriver(driver)}
                       title="Click to view monthly summary"
                     >
                       {driver.name}
+                      {!writable && <span className="ml-1.5 text-[8px] font-bold uppercase text-slate-400 border border-slate-200 rounded px-1 py-0.5 align-middle">View only</span>}
                     </td>
                     {Array.from({ length: totalDays }, (_, i) => i + 1).map(day => {
                       const record = cellRecord(driver.id, day);
                       return (
                         <td key={day} className="p-0.5 relative group">
-                          <button onClick={() => handleCellClick(driver.id, day)}
-                            title={record?.remarks || undefined}
-                            className={`w-9 h-6 rounded text-[9px] font-bold border cursor-pointer ${record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}>
+                          <button onClick={() => writable && handleCellClick(driver.id, day)}
+                            disabled={!writable}
+                            title={!writable ? 'View only - outside your assigned locations' : (record?.remarks || undefined)}
+                            className={`w-9 h-6 rounded text-[9px] font-bold border ${writable ? 'cursor-pointer' : 'cursor-not-allowed'} ${record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}>
                             {record ? STATUS_ABBR[record.status] : '-'}
                           </button>
-                          <button
+                          {writable && <button
                             onClick={e => openPopover(e, driver.id, day)}
                             className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-slate-700 text-white text-[8px] opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer"
                             title="More statuses & remarks"
                           >
                             &#8230;
-                          </button>
+                          </button>}
                         </td>
                       );
                     })}

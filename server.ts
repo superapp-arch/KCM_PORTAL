@@ -50,6 +50,7 @@ import {
   MaintenanceServiceStation,
   BreakdownReport,
   VehicleServiceSchedule,
+  TireBrand,
   TireRecord,
   BatteryRecord,
   ToolsChecklistRecord
@@ -93,6 +94,8 @@ import {
   getVehicleServiceSchedules,
   saveVehicleServiceSchedule,
   deleteVehicleServiceSchedule,
+  getTireBrands,
+  addTireBrand,
   getTireRecords,
   saveTireRecord,
   deleteTireRecord,
@@ -535,21 +538,28 @@ function canModifyAdvance(row: PettyCashAdvance | undefined, sessionUser?: Retur
 
 // Driver Details is location-scoped rather than a single fixed access group -
 // each regional handler only sees/manages drivers in their assigned
-// location(s); Super Admins see every location. Unassigned categories (HSK
-// RIL F&V Drivers, Walkes & Parking Drivers HYD, Cold Star BLR, Swiggy DHL,
-// KCM Service Station) stay Super-Admin-only since nobody is scoped to them yet.
+// location(s); Super Admins see every location. This is the WRITE scope
+// (add/edit/delete drivers, mark/edit attendance) - see DRIVER_VIEW_ALL_EMAILS
+// below for the separate, broader read scope.
 const DRIVER_LOCATION_SCOPES: Record<string, DriverLocationCategory[]> = {
   'rajeshwar@kcmlogistics.in': ['Hyd Swiggy', 'Swiggy - Vizag Driver'],
-  'nagaraju.linga@kcmlogistics.in': ['Hyd Swiggy', 'Swiggy - Vizag Driver'],
-  'ramesh@kcmlogistics.in': ['Nelmangala Reliance', 'Nidaghatta Reliance', 'Chennai Hybrid'],
-  'saneel@kcmlogistics.in': ['BLR Swiggy', 'Goa Vehicle'],
-  'vinod@kcmlogistics.in': ['BLR Swiggy', 'Vijayawada Drivers Details', 'Market Vehicle Driver Details']
+  'nagaraju.linga@kcmlogistics.in': ['Hyd Swiggy', 'Swiggy - Vizag Driver', 'Walkes & Parking Drivers HYD', 'Vijayawada Drivers Details'],
+  'ramesh@kcmlogistics.in': ['Nelmangala Reliance', 'Nidaghatta Reliance', 'Chennai Hybrid', 'Swiggy DHL'],
+  'saneel@kcmlogistics.in': ['BLR Swiggy', 'Goa Vehicle', 'Cold Star BLR', 'Belgaum Drivers Details'],
+  'hemanth@kcmlogistics.in': ['BLR Swiggy', 'Goa Vehicle', 'Cold Star BLR', 'Belgaum Drivers Details'],
+  'vinod@kcmlogistics.in': ['Market Vehicle Driver Details', 'HSK RIL F&V Drivers', 'KCM Service Station']
 };
 
 // Bhagya and Divya get every location (like a super admin) rather than a
 // single region - their roles already span HR/Billing/Fleet/Vendor admin
-// duties.
+// duties. Both read and write everywhere.
 const DRIVER_ALL_LOCATIONS_EMAILS = ['bhagya@kcmlogistics.in', 'divya@kcmlogistics.in'];
+
+// Vinod: can VIEW every Driver Details location (drivers + attendance,
+// read-only outside his own scope), but may only ADD/EDIT/DELETE drivers and
+// mark/edit attendance within his own DRIVER_LOCATION_SCOPES entry above -
+// a view-all/write-scoped tier distinct from DRIVER_ALL_LOCATIONS_EMAILS.
+const DRIVER_VIEW_ALL_EMAILS = ['vinod@kcmlogistics.in'];
 
 function requireDriverAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
@@ -559,6 +569,7 @@ function requireDriverAccess(req: express.Request, res: express.Response, next: 
   if (
     sessionUser.department !== 'super_admin' &&
     !DRIVER_ALL_LOCATIONS_EMAILS.includes(sessionUser.email || '') &&
+    !DRIVER_VIEW_ALL_EMAILS.includes(sessionUser.email || '') &&
     !DRIVER_LOCATION_SCOPES[sessionUser.email || '']
   ) {
     return res.status(403).json({ error: 'You do not have access to Driver Details.' });
@@ -566,16 +577,35 @@ function requireDriverAccess(req: express.Request, res: express.Response, next: 
   next();
 }
 
-// Super admins (and Bhagya) see every location; everyone else only their
-// assigned set.
-function getAllowedDriverLocations(sessionUser?: ReturnType<typeof getSessionUser>): DriverLocationCategory[] | 'ALL' {
+// Read scope: which locations' drivers/attendance a GET returns. Super
+// admins, Bhagya/Divya, and Vinod (view-all) get every location; everyone
+// else only their assigned DRIVER_LOCATION_SCOPES set.
+function getAllowedDriverViewLocations(sessionUser?: ReturnType<typeof getSessionUser>): DriverLocationCategory[] | 'ALL' {
+  if (!sessionUser) return [];
+  if (
+    sessionUser.department === 'super_admin' ||
+    DRIVER_ALL_LOCATIONS_EMAILS.includes(sessionUser.email || '') ||
+    DRIVER_VIEW_ALL_EMAILS.includes(sessionUser.email || '')
+  ) return 'ALL';
+  return DRIVER_LOCATION_SCOPES[sessionUser.email || ''] || [];
+}
+
+// Write scope: which locations a user may add/edit/delete drivers in, or
+// mark/edit attendance for. Narrower than view scope for DRIVER_VIEW_ALL_EMAILS
+// (Vinod sees every location but can only write within his own).
+function getAllowedDriverWriteLocations(sessionUser?: ReturnType<typeof getSessionUser>): DriverLocationCategory[] | 'ALL' {
   if (!sessionUser) return [];
   if (sessionUser.department === 'super_admin' || DRIVER_ALL_LOCATIONS_EMAILS.includes(sessionUser.email || '')) return 'ALL';
   return DRIVER_LOCATION_SCOPES[sessionUser.email || ''] || [];
 }
 
-function canAccessDriverLocation(location: string, sessionUser?: ReturnType<typeof getSessionUser>): boolean {
-  const allowed = getAllowedDriverLocations(sessionUser);
+function canViewDriverLocation(location: string, sessionUser?: ReturnType<typeof getSessionUser>): boolean {
+  const allowed = getAllowedDriverViewLocations(sessionUser);
+  return allowed === 'ALL' || allowed.includes(location as DriverLocationCategory);
+}
+
+function canWriteDriverLocation(location: string, sessionUser?: ReturnType<typeof getSessionUser>): boolean {
+  const allowed = getAllowedDriverWriteLocations(sessionUser);
   return allowed === 'ALL' || allowed.includes(location as DriverLocationCategory);
 }
 
@@ -1688,6 +1718,19 @@ async function startServer() {
     try { res.json({ success: true, data: await deleteVehicleServiceSchedule(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
+  app.get('/api/tire-brands', async (req, res) => {
+    try { res.json(await getTireBrands()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/tire-brands', async (req, res) => {
+    try {
+      const { name } = req.body as { name?: string };
+      if (!name || !name.trim()) return res.status(400).json({ error: 'Brand name is required.' });
+      res.json({ success: true, data: await addTireBrand(name) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/tire-records', async (req, res) => {
     try { res.json(await getTireRecords()); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
@@ -2274,7 +2317,7 @@ async function startServer() {
   app.get('/api/drivers/employees', async (req, res) => {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
-      const allowed = getAllowedDriverLocations(sessionUser);
+      const allowed = getAllowedDriverViewLocations(sessionUser);
       const all = await getDriverEmployees();
       res.json(allowed === 'ALL' ? all : all.filter(d => allowed.includes(d.location)));
     } catch (err: any) {
@@ -2286,11 +2329,11 @@ async function startServer() {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
       const entry: DriverEmployee = req.body;
-      if (!canAccessDriverLocation(entry.location, sessionUser)) {
+      if (!canWriteDriverLocation(entry.location, sessionUser)) {
         return res.status(403).json({ error: 'You cannot add a driver in this location.' });
       }
       const result = await saveDriverEmployee(entry);
-      const allowed = getAllowedDriverLocations(sessionUser);
+      const allowed = getAllowedDriverViewLocations(sessionUser);
       res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => allowed.includes(d.location)) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2302,11 +2345,11 @@ async function startServer() {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getDriverEmployees()).find(d => d.id === req.params.id);
       const targetLocation = req.body.location || existing?.location;
-      if (!existing || !canAccessDriverLocation(existing.location, sessionUser) || !canAccessDriverLocation(targetLocation, sessionUser)) {
+      if (!existing || !canWriteDriverLocation(existing.location, sessionUser) || !canWriteDriverLocation(targetLocation, sessionUser)) {
         return res.status(403).json({ error: 'You cannot modify this driver.' });
       }
       const result = await saveDriverEmployee({ ...req.body, id: req.params.id });
-      const allowed = getAllowedDriverLocations(sessionUser);
+      const allowed = getAllowedDriverViewLocations(sessionUser);
       res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => allowed.includes(d.location)) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2317,11 +2360,11 @@ async function startServer() {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getDriverEmployees()).find(d => d.id === req.params.id);
-      if (!existing || !canAccessDriverLocation(existing.location, sessionUser)) {
+      if (!existing || !canWriteDriverLocation(existing.location, sessionUser)) {
         return res.status(403).json({ error: 'You cannot delete this driver.' });
       }
       const result = await deleteDriverEmployee(req.params.id);
-      const allowed = getAllowedDriverLocations(sessionUser);
+      const allowed = getAllowedDriverViewLocations(sessionUser);
       res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => allowed.includes(d.location)) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2332,15 +2375,19 @@ async function startServer() {
   // location (attendance rows themselves don't carry a location).
   app.use('/api/drivers/attendance', requireDriverAccess);
 
-  async function assertDriverAccessible(driverId: string, sessionUser?: ReturnType<typeof getSessionUser>) {
+  // `mode: 'view'` allows read-only access outside the caller's write scope
+  // (i.e. for DRIVER_VIEW_ALL_EMAILS like Vinod); `mode: 'write'` (default)
+  // is the stricter check used before actually marking/editing/deleting.
+  async function assertDriverAccessible(driverId: string, sessionUser: ReturnType<typeof getSessionUser> | undefined, mode: 'view' | 'write' = 'write') {
     const driver = (await getDriverEmployees()).find(d => d.id === driverId);
-    return !!driver && canAccessDriverLocation(driver.location, sessionUser);
+    if (!driver) return false;
+    return mode === 'view' ? canViewDriverLocation(driver.location, sessionUser) : canWriteDriverLocation(driver.location, sessionUser);
   }
 
   app.get('/api/drivers/attendance', async (req, res) => {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
-      const allowed = getAllowedDriverLocations(sessionUser);
+      const allowed = getAllowedDriverViewLocations(sessionUser);
       const [rows, drivers] = await Promise.all([getDriverAttendance(), getDriverEmployees()]);
       if (allowed === 'ALL') return res.json(rows);
       const allowedDriverIds = new Set(drivers.filter(d => allowed.includes(d.location)).map(d => d.id));
@@ -2393,7 +2440,7 @@ async function startServer() {
         return res.status(403).json({ error: 'You cannot delete this attendance record.' });
       }
       const [rows, drivers] = await Promise.all([deleteDriverAttendanceRecord(req.params.id), getDriverEmployees()]);
-      const allowed = getAllowedDriverLocations(sessionUser);
+      const allowed = getAllowedDriverViewLocations(sessionUser);
       if (allowed === 'ALL') {
         res.json({ success: true, data: rows });
       } else {
@@ -2409,7 +2456,7 @@ async function startServer() {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
       const { driverId, month } = req.params;
-      if (!(await assertDriverAccessible(driverId, sessionUser))) {
+      if (!(await assertDriverAccessible(driverId, sessionUser, 'view'))) {
         return res.status(403).json({ success: false, error: 'You cannot view this driver.' });
       }
       res.json({ success: true, data: await computeDriverMonthlyAttendanceSummary(driverId, month) });

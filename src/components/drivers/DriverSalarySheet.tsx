@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Download } from 'lucide-react';
-import { DriverEmployee, DRIVER_LOCATION_CATEGORIES } from '../../types';
+import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Download, Lock } from 'lucide-react';
+import { DriverEmployee, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES } from '../../types';
 import DriverFormModal from './DriverFormModal';
 import SortHeader from '../SortHeader';
 import { SortState, SortDirection, compareText } from '../../utils/sort';
@@ -40,12 +40,13 @@ const toDriverRow = (driver: DriverEmployee, i: number) => ({
 
 interface DriverSalarySheetProps {
   drivers: DriverEmployee[];
+  writableLocations: DriverLocationCategory[] | 'ALL'; // locations this user may add/edit/delete drivers in - view is broader, handled server-side
   onAddDriver: (driver: Omit<DriverEmployee, 'id'> & { id: string }) => Promise<void>;
   onUpdateDriver: (id: string, driver: Partial<DriverEmployee>) => Promise<void>;
   onDeleteDriver: (id: string) => Promise<void>;
 }
 
-export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver, onDeleteDriver }: DriverSalarySheetProps) {
+export default function DriverSalarySheet({ drivers, writableLocations, onAddDriver, onUpdateDriver, onDeleteDriver }: DriverSalarySheetProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [locationFilter, setLocationFilter] = useState(''); // '' = All Locations
   const [sort, setSort] = useState<SortState | null>(null);
@@ -82,6 +83,12 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
     });
     return sorted;
   }, [drivers, locationFilter, searchTerm, sort]);
+
+  // e.g. Vinod: view every location's drivers, but only add/edit/delete
+  // within his own writableLocations - everyone else's writable set is the
+  // same as what they can see, so this is a no-op distinction for them.
+  const canWrite = (driver: DriverEmployee) => writableLocations === 'ALL' || writableLocations.includes(driver.location);
+  const canAddAnywhere = writableLocations === 'ALL' || writableLocations.length > 0;
 
   const handleDelete = async (driver: DriverEmployee) => {
     if (!confirm(`Delete driver ${driver.id} - ${driver.name}? This cannot be undone.`)) return;
@@ -123,9 +130,11 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
           <button onClick={handleDownloadAll} className="bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all">
             <Download className="w-3.5 h-3.5 text-teal-600" /> Download All
           </button>
-          <button onClick={() => setModalDriver(null)} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all">
-            <Plus className="w-3.5 h-3.5" /> Add Driver
-          </button>
+          {canAddAnywhere && (
+            <button onClick={() => setModalDriver(null)} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all">
+              <Plus className="w-3.5 h-3.5" /> Add Driver
+            </button>
+          )}
         </div>
       </div>
 
@@ -190,8 +199,14 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
                   <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">Rs. {payableAmount(driver).toLocaleString('en-IN')}</td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
                     <button onClick={() => handleDownloadOne(driver)} title="Download this driver" className="p-1 text-slate-400 hover:text-teal-600 hover:bg-slate-100 rounded cursor-pointer"><Download className="w-3.5 h-3.5" /></button>
-                    <button onClick={() => setModalDriver(driver)} className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
-                    <button onClick={() => handleDelete(driver)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                    {canWrite(driver) ? (
+                      <>
+                        <button onClick={() => setModalDriver(driver)} className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => handleDelete(driver)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </>
+                    ) : (
+                      <span title="View only - outside your assigned locations" className="inline-flex p-1 text-slate-300"><Lock className="w-3.5 h-3.5" /></span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -203,6 +218,7 @@ export default function DriverSalarySheet({ drivers, onAddDriver, onUpdateDriver
       {modalDriver !== undefined && (
         <DriverFormModal
           driver={modalDriver}
+          writableLocations={writableLocations}
           onAddDriver={onAddDriver}
           onUpdateDriver={onUpdateDriver}
           onClose={() => setModalDriver(undefined)}

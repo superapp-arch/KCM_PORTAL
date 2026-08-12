@@ -6,6 +6,7 @@ import { authFetch } from '../../authFetch';
 
 interface DriverFormModalProps {
   driver: DriverEmployee | null; // null = creating a new driver
+  writableLocations: DriverLocationCategory[] | 'ALL'; // locations this user may save a driver into
   onAddDriver: (driver: Omit<DriverEmployee, 'id'> & { id: string }) => Promise<void>;
   onUpdateDriver: (id: string, driver: Partial<DriverEmployee>) => Promise<void>;
   onClose: () => void;
@@ -19,17 +20,26 @@ function currentMonthKey(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, onClose, onSaved }: DriverFormModalProps) {
+export default function DriverFormModal({ driver, writableLocations, onAddDriver, onUpdateDriver, onClose, onSaved }: DriverFormModalProps) {
   const isEditing = !!driver;
   const [tab, setTab] = useState<FormTab>('basic');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
 
+  // Only offer locations this user can actually save into - if editing a
+  // driver whose existing location falls outside that scope (shouldn't
+  // normally happen, since DriverSalarySheet only opens Edit for writable
+  // rows), keep it in the list so an unrelated field edit can't silently
+  // reassign the driver's location.
+  const locationOptions: DriverLocationCategory[] = writableLocations === 'ALL'
+    ? DRIVER_LOCATION_CATEGORIES
+    : (driver && !writableLocations.includes(driver.location) ? [driver.location, ...writableLocations] : writableLocations);
+
   const [basic, setBasic] = useState({
     id: driver?.id || '', name: driver?.name || '', driverNo: driver?.driverNo || '',
     vehicleNo: driver?.vehicleNo || '', accountNumber: driver?.accountNumber || '', ifscCode: driver?.ifscCode || '',
     reporting: driver?.reporting || '', remark: driver?.remark || '',
-    location: driver?.location || DRIVER_LOCATION_CATEGORIES[0] as DriverLocationCategory
+    location: driver?.location || (locationOptions[0] || DRIVER_LOCATION_CATEGORIES[0]) as DriverLocationCategory
   });
   const [aadharDocuments, setAadharDocuments] = useState<VehicleDocument[]>(driver?.aadharDocuments || []);
   const [drivingLicenseDocuments, setDrivingLicenseDocuments] = useState<VehicleDocument[]>(driver?.drivingLicenseDocuments || []);
@@ -170,7 +180,7 @@ export default function DriverFormModal({ driver, onAddDriver, onUpdateDriver, o
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Location</label>
                   <select value={basic.location} onChange={e => setBasic({ ...basic, location: e.target.value as DriverLocationCategory })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5">
-                    {DRIVER_LOCATION_CATEGORIES.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+                    {locationOptions.map(loc => <option key={loc} value={loc}>{loc}</option>)}
                   </select>
                 </div>
               </div>

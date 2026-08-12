@@ -26,6 +26,7 @@ import {
   MaintenanceServiceStation,
   BreakdownReport,
   VehicleServiceSchedule,
+  TireBrand,
   TireRecord,
   BatteryRecord,
   ToolsChecklistRecord
@@ -48,6 +49,7 @@ export default function App() {
   const [maintenanceServiceStations, setMaintenanceServiceStations] = useState<MaintenanceServiceStation[]>([]);
   const [breakdownReports, setBreakdownReports] = useState<BreakdownReport[]>([]);
   const [vehicleServiceSchedules, setVehicleServiceSchedules] = useState<VehicleServiceSchedule[]>([]);
+  const [tireBrands, setTireBrands] = useState<TireBrand[]>([]);
   const [tireRecords, setTireRecords] = useState<TireRecord[]>([]);
   const [batteryRecords, setBatteryRecords] = useState<BatteryRecord[]>([]);
   const [toolsChecklistRecords, setToolsChecklistRecords] = useState<ToolsChecklistRecord[]>([]);
@@ -112,6 +114,7 @@ export default function App() {
         maintenanceServiceStationsRes,
         breakdownReportsRes,
         vehicleServiceSchedulesRes,
+        tireBrandsRes,
         tireRecordsRes,
         batteryRecordsRes,
         toolsChecklistRecordsRes,
@@ -137,6 +140,7 @@ export default function App() {
         fetch('/api/maintenance-service-stations'),
         fetch('/api/breakdown-reports'),
         fetch('/api/vehicle-service-schedules'),
+        fetch('/api/tire-brands'),
         fetch('/api/tire-records'),
         fetch('/api/battery-records'),
         fetch('/api/tools-checklist-records'),
@@ -163,6 +167,7 @@ export default function App() {
       if (maintenanceServiceStationsRes.ok) setMaintenanceServiceStations(await maintenanceServiceStationsRes.json());
       if (breakdownReportsRes.ok) setBreakdownReports(await breakdownReportsRes.json());
       if (vehicleServiceSchedulesRes.ok) setVehicleServiceSchedules(await vehicleServiceSchedulesRes.json());
+      if (tireBrandsRes.ok) setTireBrands(await tireBrandsRes.json());
       if (tireRecordsRes.ok) setTireRecords(await tireRecordsRes.json());
       if (batteryRecordsRes.ok) setBatteryRecords(await batteryRecordsRes.json());
       if (toolsChecklistRecordsRes.ok) setToolsChecklistRecords(await toolsChecklistRecordsRes.json());
@@ -363,6 +368,21 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(schedule)
+      });
+      if (res.ok) {
+        await fetchAllData();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleAddTireBrand = async (name: string) => {
+    try {
+      const res = await fetch('/api/tire-brands', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
       });
       if (res.ok) {
         await fetchAllData();
@@ -1157,6 +1177,8 @@ export default function App() {
         onDeleteMaintenanceRecord={handleDeleteMaintenanceRecord}
         vehicleServiceSchedules={vehicleServiceSchedules}
         onSaveVehicleServiceSchedule={handleSaveVehicleServiceSchedule}
+        tireBrands={tireBrands}
+        onAddTireBrand={handleAddTireBrand}
         tireRecords={tireRecords}
         onSaveTireRecord={handleSaveTireRecord}
         onDeleteTireRecord={handleDeleteTireRecord}

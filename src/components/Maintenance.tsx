@@ -7,6 +7,7 @@ import {
   MaintenanceServiceStation,
   BreakdownReport,
   VehicleServiceSchedule,
+  TireBrand,
   TireRecord,
   BatteryRecord,
   ToolsChecklistRecord
@@ -37,6 +38,8 @@ interface MaintenanceProps {
   onDeleteBreakdownReport: (id: string) => Promise<void>;
   vehicleServiceSchedules: VehicleServiceSchedule[];
   onSaveVehicleServiceSchedule: (schedule: VehicleServiceSchedule) => Promise<void>;
+  tireBrands: TireBrand[];
+  onAddTireBrand: (name: string) => Promise<void>;
   tireRecords: TireRecord[];
   onSaveTireRecord: (record: TireRecord | Omit<TireRecord, 'id'>) => Promise<void>;
   onDeleteTireRecord: (id: string) => Promise<void>;
@@ -257,6 +260,8 @@ export default function Maintenance(props: MaintenanceProps) {
         <TireAlignmentTab
           vehicles={props.vehicles}
           mileageReports={props.mileageReports}
+          tireBrands={props.tireBrands}
+          onAddTireBrand={props.onAddTireBrand}
           tireRecords={props.tireRecords}
           onSaveTireRecord={props.onSaveTireRecord}
           onDeleteTireRecord={props.onDeleteTireRecord}

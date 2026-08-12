@@ -35,6 +35,7 @@ import {
   maintenanceServiceStations,
   breakdownReports,
   vehicleServiceSchedules,
+  tireBrands,
   tireRecords,
   batteryRecords,
   toolsChecklistRecords
@@ -77,6 +78,7 @@ import {
   MaintenanceServiceStation,
   BreakdownReport,
   VehicleServiceSchedule,
+  TireBrand,
   TireRecord,
   BatteryRecord,
   ToolsChecklistRecord
@@ -98,6 +100,7 @@ export const DEFAULT_USERS = [
   { username: 'rajeshwar', name: 'Rajeshwar', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'rajeshwar@kcmlogistics.in', pass: 'KCM@rajeshwar498' },
   { username: 'rakshina', name: 'Rakshina', department: 'accounts_finance', departmentLabel: 'Accounts & Finance', email: 'finance@kcmlogistics.in', pass: 'KCM@finance337' },
   { username: 'nagaraju', name: 'Nagaraju Linga', department: 'maintenance', departmentLabel: 'Driver Coordination', email: 'nagaraju.linga@kcmlogistics.in', pass: 'KCM@nagaraju471' },
+  { username: 'hemanth', name: 'Hemanth', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'hemanth@kcmlogistics.in', pass: 'KCM@hemanth729' },
   { username: 'super2', name: 'Super Admin Principal', department: 'super_admin', departmentLabel: 'Super Administration', email: 'superapp@kcmlogistics.in', pass: 'super123' },
 ];
 
@@ -299,6 +302,14 @@ const initialWarehouseEntries: WarehouseEntry[] = [
   }
 ];
 
+// Tire Brand dropdown - fixed display order, not alphabetical (see TireBrand).
+export const DEFAULT_TIRE_BRANDS: TireBrand[] = [
+  { id: 'apollo', name: 'Apollo', displayOrder: 1 },
+  { id: 'mrf', name: 'MRF', displayOrder: 2 },
+  { id: 'jk-tyre', name: 'JK Tyre', displayOrder: 3 },
+  { id: 'bridgestone', name: 'Bridgestone', displayOrder: 4 }
+];
+
 // Seed databases helper
 export async function seedDatabase() {
   try {
@@ -364,6 +375,13 @@ export async function seedDatabase() {
     if (existingNotifs.length === 0) {
       for (const n of initialNotifications) {
         await db.insert(notifications).values({ id: n.id, data: JSON.stringify(n) });
+      }
+    }
+
+    const existingTireBrands = await db.select().from(tireBrands);
+    if (existingTireBrands.length === 0) {
+      for (const b of DEFAULT_TIRE_BRANDS) {
+        await db.insert(tireBrands).values({ id: b.id, data: JSON.stringify(b) });
       }
     }
 
@@ -865,6 +883,40 @@ export async function deleteVehicleServiceSchedule(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteVehicleServiceSchedule:", error);
     throw new Error("Failed to delete vehicle service schedule.", { cause: error });
+  }
+}
+
+// --- TIRE BRAND OPERATIONS ---
+export async function getTireBrands(): Promise<TireBrand[]> {
+  try {
+    const rows = await db.select().from(tireBrands);
+    return rows.map(r => JSON.parse(r.data) as TireBrand).sort((a, b) => a.displayOrder - b.displayOrder);
+  } catch (error) {
+    console.error("Database query failed in getTireBrands:", error);
+    throw new Error("Failed to retrieve tire brands.", { cause: error });
+  }
+}
+
+// Case-insensitive dedupe: an existing match (however it was cased) is
+// reused as-is rather than creating a near-duplicate entry. A genuinely new
+// name is appended after the current highest displayOrder - never
+// alphabetized, never inserted between existing entries - so the seeded
+// Apollo/MRF/JK Tyre/Bridgestone stay fixed at the top in that order.
+export async function addTireBrand(name: string): Promise<TireBrand[]> {
+  try {
+    const trimmed = name.trim();
+    const existingList = await getTireBrands();
+    if (!trimmed) return existingList;
+    const dup = existingList.find(b => b.name.toLowerCase() === trimmed.toLowerCase());
+    if (dup) return existingList;
+
+    const nextOrder = existingList.reduce((max, b) => Math.max(max, b.displayOrder), 0) + 1;
+    const brand: TireBrand = { id: String(Date.now()), name: trimmed, displayOrder: nextOrder };
+    await db.insert(tireBrands).values({ id: brand.id, data: JSON.stringify(brand) });
+    return await getTireBrands();
+  } catch (error) {
+    console.error("Database action failed in addTireBrand:", error);
+    throw new Error("Failed to add tire brand.", { cause: error });
   }
 }
 
