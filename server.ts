@@ -14,6 +14,7 @@ import { createSession, getSessionUser, destroySession, extractBearerToken } fro
 import { issueOtp, verifyOtp } from './src/auth/otp.ts';
 import { istTimestamp, istDateKey, istHour, istMonthDayKey } from './src/auth/time.ts';
 import { computeDueDateRaw } from './src/utils/loanDates.ts';
+import { extractTrailingNumber } from './src/utils/sort.ts';
 import { latestOdometerFor, computeKmStatus, computeAlignmentStatus, nextAlignmentDueKm, projectDueDate, daysUntil } from './src/utils/maintenanceDates.ts';
 import {
   User,
@@ -476,6 +477,32 @@ function nextPettyCashEntryNo(vouchers: PettyCashVoucher[]): string {
     candidate = `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
   }
   return candidate;
+}
+
+// Entry No. must be unique - enforced here, not just client-side, since a
+// direct API call or a race between two near-simultaneous saves could
+// otherwise slip a duplicate past the auto-generator's own collision check
+// above. Only ever rejects a genuinely new-to-this-id entryNo; resubmitting
+// a record's own unchanged value (the normal edit path, since Entry Number
+// is read-only in the UI) always passes, so any duplicates already sitting
+// in the database from before this check existed stay fully viewable and
+// editable - nothing here touches or blocks them.
+function findDuplicateEntryNo<T extends { id?: string; entryNo?: string }>(rows: T[], entryNo: string | undefined, excludeId?: string): boolean {
+  const target = (entryNo || '').trim().toUpperCase();
+  if (!target) return false;
+  return rows.some(r => r.id !== excludeId && (r.entryNo || '').trim().toUpperCase() === target);
+}
+
+// Newest-first by default (Petty Cash Ledger / Market POD Trip Ledger) -
+// sorted here, server-side, not left to the client, so the order is correct
+// no matter what the UI later filters/searches on top. Ties (same date)
+// break on Entry No, newest sequence first - mirrors PettyCash.tsx's own
+// tie-break rule exactly, so the two never disagree.
+function sortEntriesByDate<T extends { date: string; entryNo?: string }>(rows: T[]): T[] {
+  return [...rows].sort((a, b) => {
+    if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+    return extractTrailingNumber(b.entryNo) - extractTrailingNumber(a.entryNo);
+  });
 }
 
 function nextMarketPodEntryNo(entries: MarketPodEntry[]): string {
@@ -1563,13 +1590,17 @@ async function startServer() {
   app.get('/api/petty-cash', async (req, res) => {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
-      res.json(filterEntryRowsForViewer(await getPettyCashVouchers(), sessionUser));
+      res.json(sortEntriesByDate(filterEntryRowsForViewer(await getPettyCashVouchers(), sessionUser)));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/petty-cash', async (req, res) => {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
-      const entryNo = nextPettyCashEntryNo(await getPettyCashVouchers());
+      const allVouchers = await getPettyCashVouchers();
+      const entryNo = nextPettyCashEntryNo(allVouchers);
+      if (findDuplicateEntryNo(allVouchers, entryNo)) {
+        return res.status(409).json({ error: `Entry No. ${entryNo} already exists.` });
+      }
       const result = await savePettyCashVoucher({ ...req.body, entryNo, enteredBy: sessionUser?.username });
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -1577,8 +1608,12 @@ async function startServer() {
   app.put('/api/petty-cash/:id', async (req, res) => {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
-      const existing = (await getPettyCashVouchers()).find(v => v.id === req.params.id);
+      const allVouchers = await getPettyCashVouchers();
+      const existing = allVouchers.find(v => v.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
+      if (req.body.entryNo && findDuplicateEntryNo(allVouchers, req.body.entryNo, req.params.id)) {
+        return res.status(409).json({ error: `Entry No. ${req.body.entryNo} already exists.` });
+      }
       const result = await savePettyCashVoucher({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -1596,13 +1631,17 @@ async function startServer() {
   app.get('/api/market-pod', async (req, res) => {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
-      res.json(filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser));
+      res.json(sortEntriesByDate(filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser)));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/market-pod', async (req, res) => {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
-      const entryNo = nextMarketPodEntryNo(await getMarketPodEntries());
+      const allEntries = await getMarketPodEntries();
+      const entryNo = nextMarketPodEntryNo(allEntries);
+      if (findDuplicateEntryNo(allEntries, entryNo)) {
+        return res.status(409).json({ error: `Entry No. ${entryNo} already exists.` });
+      }
       const result = await saveMarketPodEntry({ ...req.body, entryNo, enteredBy: sessionUser?.username } as MarketPodEntry);
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -1610,8 +1649,12 @@ async function startServer() {
   app.put('/api/market-pod/:id', async (req, res) => {
     try {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
-      const existing = (await getMarketPodEntries()).find(e => e.id === req.params.id);
+      const allEntries = await getMarketPodEntries();
+      const existing = allEntries.find(e => e.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
+      if (req.body.entryNo && findDuplicateEntryNo(allEntries, req.body.entryNo, req.params.id)) {
+        return res.status(409).json({ error: `Entry No. ${req.body.entryNo} already exists.` });
+      }
       const result = await saveMarketPodEntry({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy } as MarketPodEntry);
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }

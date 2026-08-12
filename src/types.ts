@@ -245,8 +245,8 @@ export interface MarketPodEntry {
   status: MarketPodStatus;
   remarks: string;
   driverId?: string; // auto-fetched from Driver Details (DriverEmployee.id) by matching vehicleNumber; read-only except for super admin override
-  paymentMode?: MarketPodPaymentMode;
-  extraTripAmount?: number; // separate ad-hoc/extra-trip amount, distinct from the regular freight fields above - this is what routes to the Cash tab when paymentMode is "Cash"
+  paymentMode?: MarketPodPaymentMode; // 'Cash' displays as "Company Account" in the UI (PAYMENT_MODE_LABELS) - the stored value itself is unchanged, for old records/reports
+  extraTripAmount?: number; // [Deprecated] separate ad-hoc/extra-trip amount, distinct from the regular freight fields above - no longer editable from the Add/Edit Market POD Trip form (its dashboard "Cash tab" destination was removed), kept only so existing records don't lose this figure
   enteredBy?: string; // username, stamped server-side; row-level-filtered to the 3 Petty Cash logins, visible only to super admins
 }
 

@@ -3,15 +3,7 @@ import * as XLSX from 'xlsx';
 import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Download, Lock } from 'lucide-react';
 import { DriverEmployee, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES } from '../../types';
 import DriverFormModal from './DriverFormModal';
-
-// IDs are "KCMDRV" + digits (e.g. KCMDRV19102) but aren't strictly sequential
-// by entry, so sort on the numeric value of the trailing digits rather than
-// a plain string compare - a string compare would put "KCMDRV9" after
-// "KCMDRV10" (wrong) whenever digit-counts differ; numeric compare doesn't.
-const driverIdSortValue = (id: string): number => {
-  const match = id.match(/(\d+)\s*$/);
-  return match ? parseInt(match[1], 10) : Number.MAX_SAFE_INTEGER;
-};
+import { compareTrailingNumber } from '../../utils/sort';
 
 // Payable Amount = Gross Salary + Other Additions - (Petty Cash/Advance +
 // Loan Deduction + Recovery Amount + Driver Welfare + BATA) - LOP Amount -
@@ -84,7 +76,7 @@ export default function DriverSalarySheet({ drivers, writableLocations, onAddDri
       .filter(loc => byLocation.has(loc))
       .map(loc => ({
         location: loc,
-        drivers: [...byLocation.get(loc)!].sort((a, b) => driverIdSortValue(a.id) - driverIdSortValue(b.id) || a.id.localeCompare(b.id))
+        drivers: [...byLocation.get(loc)!].sort((a, b) => compareTrailingNumber(a.id, b.id) || a.id.localeCompare(b.id))
       }));
   }, [drivers, searchTerm]);
 

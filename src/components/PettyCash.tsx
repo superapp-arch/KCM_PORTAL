@@ -26,8 +26,7 @@ import {
   Unlock,
   Wallet,
   AlertTriangle,
-  Trash2,
-  Banknote
+  Trash2
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
@@ -59,6 +58,14 @@ interface PettyCashProps {
 }
 
 const MARKET_POD_STATUSES: MarketPodStatus[] = ['Pending', 'Closed'];
+
+// Display-only relabel: the stored/compared value is still exactly 'Cash'
+// (old records, filters, and reports keep working unchanged) - only what's
+// shown to the user changed, from "Cash" to "Company Account".
+const PAYMENT_MODE_LABELS: Record<MarketPodPaymentMode, string> = {
+  'Cash': 'Company Account',
+  'Petty Cash': 'Petty Cash'
+};
 
 // The 3 Petty Cash logins - mirrors PETTY_CASH_ACCESS_EMAILS in
 // Administration.tsx/server.ts. Used to label/select whose ledger a Super
@@ -175,11 +182,10 @@ export default function PettyCash({
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('All');
   const [selectedVendorFilter, setSelectedVendorFilter] = useState('All');
-  // Defaults to Entry No ascending (by trailing digits, e.g. ENT-2026-2525)
-  // rather than raw/insertion order, so the ledger's order stays consistent
-  // and predictable on every page load/refresh instead of appearing to
-  // shuffle - still fully overridable via the column sort dropdowns.
-  const [sort, setSort] = useState<SortState | null>({ key: 'entryNo', direction: 'asc' });
+  // Defaults to newest-first by Date (the "Sort by" dropdown's default) so
+  // the most recent entry is always on top when the module opens fresh -
+  // still fully overridable via the column sort headers or the dropdown.
+  const [sort, setSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
 
   // Date range filter for staff to access historical data
@@ -245,7 +251,9 @@ export default function PettyCash({
   const [mpSearchTerm, setMpSearchTerm] = useState('');
   // Same rationale as the Ledger's `sort` default above - Entry No ascending
   // by default so the table doesn't appear to reshuffle on every refresh.
-  const [mpSort, setMpSort] = useState<SortState | null>({ key: 'entryNo', direction: 'asc' });
+  // Same newest-first-by-default convention as the Petty Cash Ledger's `sort`
+  // above.
+  const [mpSort, setMpSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
   const handleMpSort = (key: string, direction: SortDirection) => setMpSort({ key, direction });
 
   // --- Petty Cash Balance Net / Amount Received state ---
@@ -258,13 +266,6 @@ export default function PettyCash({
   // for a Super Admin/Principal (everyone else only ever sees their own rows,
   // so there's nothing to pick).
   const [balanceUserFilter, setBalanceUserFilter] = useState<string>(user.username);
-  // Cash tab date filter - '' shows the all-time cumulative total; picking a
-  // date narrows the breakdown to that day's Cash-mode Market POD entries.
-  const [cashDateFilter, setCashDateFilter] = useState('');
-  // Traceability list toggle for the Cash tab - shows the individual Market
-  // POD Cash-mode entries (vehicle, date, freight, advance, balance) feeding
-  // the all-time totals, rather than just the blind aggregate.
-  const [showCashEntries, setShowCashEntries] = useState(false);
 
   const mpBalance = (parseFloat(mpTotalFreight) || 0) - (parseFloat(mpReceivedAdvance) || 0) - (parseFloat(mpOtherExpenses) || 0);
 
@@ -406,7 +407,7 @@ export default function PettyCash({
       resetMarketPodForm();
     } catch (err) {
       console.error(err);
-      triggerNotif('Failed to save Market POD entry.', 'error');
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save Market POD entry.', 'error');
     } finally {
       setMpIsSubmitting(false);
     }
@@ -430,6 +431,8 @@ export default function PettyCash({
           case 'vehicleNumber': cmp = extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber); break;
           case 'customer': cmp = compareText(a.customer, b.customer); break;
           case 'entryNo': cmp = extractTrailingNumber(a.entryNo) - extractTrailingNumber(b.entryNo); break;
+          // Ties (same date) break on Entry No, newest sequence first.
+          case 'date': cmp = a.date === b.date ? extractTrailingNumber(a.entryNo) - extractTrailingNumber(b.entryNo) : (a.date < b.date ? -1 : 1); break;
         }
         return mpSort.direction === 'asc' ? cmp : -cmp;
       })
@@ -628,7 +631,7 @@ export default function PettyCash({
       setShowSidebar(false);
     } catch (err) {
       console.error(err);
-      triggerNotif('Failed to write voucher to ledger.', 'error');
+      triggerNotif(err instanceof Error ? err.message : 'Failed to write voucher to ledger.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -676,37 +679,6 @@ export default function PettyCash({
   // Admin/Principal (who sees every user's rows), just the current user
   // otherwise (server-filtered data means there's nothing else to show).
   const dashboardSummaryUsers = isSuperAdmin ? PETTY_CASH_USERS : [{ username: user.username, label: user.name }];
-
-  // Cash tab (Market POD's Payment Mode = Cash auto-routing) - same
-  // isSuperAdmin-scoping pattern as vouchersFor/advancesFor above, since
-  // marketPodEntries is likewise already server-filtered per viewer.
-  const marketPodEntriesFor = (username: string): MarketPodEntry[] =>
-    isSuperAdmin ? marketPodEntries.filter(e => e.enteredBy === username) : marketPodEntries;
-  const cashEntriesFor = (username: string): MarketPodEntry[] =>
-    marketPodEntriesFor(username).filter(e => e.paymentMode === 'Cash');
-
-  // Every Cash-mode Market POD entry across the users the dashboard is
-  // scoped to (see dashboardSummaryUsers above), tagged with whose ledger it
-  // came from - this is the traceable list the Cash tab now shows underneath
-  // its totals, not just a blind aggregate. Optionally narrowed to one date.
-  const allCashEntries = (dateFilter?: string): (MarketPodEntry & { ownerLabel: string })[] =>
-    dashboardSummaryUsers.flatMap(u =>
-      cashEntriesFor(u.username)
-        .filter(e => !dateFilter || e.date === dateFilter)
-        .map(e => ({ ...e, ownerLabel: u.label }))
-    );
-
-  // Total Freight / Total Received Advance / Total Balance across a set of
-  // Cash-mode Market POD entries - these are the 3 figures now on the Cash
-  // tab (previously just a single extraTripAmount sum).
-  const cashTotals = (entries: MarketPodEntry[]) => entries.reduce(
-    (acc, e) => ({
-      freight: acc.freight + (e.totalFreight || 0),
-      advance: acc.advance + (e.receivedAdvance || 0),
-      balance: acc.balance + (e.balance || 0)
-    }),
-    { freight: 0, advance: 0, balance: 0 }
-  );
 
   // Balance Net as of one specific voucher (for the table's "Balance Net"
   // column) - same formula, but only summing that user's cash paid up to and
@@ -783,6 +755,10 @@ export default function PettyCash({
     ? [...filteredVouchersUnsorted].sort((a, b) => {
         const cmp = sort.key === 'entryNo'
           ? extractTrailingNumber(a.entryNo) - extractTrailingNumber(b.entryNo)
+          : sort.key === 'date'
+          // Ties (same date) break on Entry No, newest sequence first, so
+          // the "Sort by" dropdown's order is stable and predictable.
+          ? (a.date === b.date ? extractTrailingNumber(a.entryNo) - extractTrailingNumber(b.entryNo) : a.date < b.date ? -1 : 1)
           : extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber);
         return sort.direction === 'asc' ? cmp : -cmp;
       })
@@ -1081,16 +1057,8 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
         const totalReceived = dashboardSummaryUsers.reduce((s, u) => s + receivedFor(u.username), 0);
         const totalDisbursed = dashboardSummaryUsers.reduce((s, u) => s + disbursedFor(u.username), 0);
         const totalNetBalance = totalReceived - totalDisbursed;
-        const allTimeCashEntries = allCashEntries();
-        const allTimeCashTotals = cashTotals(allTimeCashEntries);
-        const onDateCashEntries = cashDateFilter ? allCashEntries(cashDateFilter) : null;
-        const onDateCashTotals = onDateCashEntries ? cashTotals(onDateCashEntries) : null;
-        // The list underneath shows whichever scope is currently selected -
-        // the date-filtered entries when a date is picked, all-time otherwise
-        // - newest first so the most recent trip is always on top.
-        const displayedCashEntries = [...(onDateCashEntries || allTimeCashEntries)].sort((a, b) => (a.date < b.date ? 1 : -1));
         return (
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
             <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
               <span className="text-[10px] text-slate-400 font-bold uppercase flex items-center gap-1"><Wallet className="w-3 h-3" /> Total Received Float</span>
               <div className="text-sm font-black text-slate-800 font-mono mt-0.5">₹{totalReceived.toLocaleString('en-IN')}</div>
@@ -1146,75 +1114,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     </div>
                   );
                 })}
-              </div>
-            </div>
-
-            {/* Cash - Market POD entries with Payment Mode = Cash (the
-                "empty return, made a trip via a broker instead" side income).
-                Shows all-time Total Freight / Total Advance / Total Balance,
-                an optional date drill-down, and a traceable list of the
-                individual trips feeding those totals. Updates immediately -
-                it's computed live from marketPodEntries, no separate entry
-                needed here. */}
-            <div className="bg-teal-50/30 p-3 rounded-xl border border-teal-100">
-              <span className="text-[10px] text-teal-600 font-bold uppercase flex items-center gap-1"><Banknote className="w-3 h-3" /> Cash (All-time, from Market POD)</span>
-              <div className="grid grid-cols-3 gap-1.5 mt-1">
-                <div>
-                  <div className="text-[8px] text-teal-500/80 font-bold uppercase">Freight</div>
-                  <div className="text-xs font-black text-teal-700 font-mono">₹{allTimeCashTotals.freight.toLocaleString('en-IN')}</div>
-                </div>
-                <div>
-                  <div className="text-[8px] text-teal-500/80 font-bold uppercase">Advance</div>
-                  <div className="text-xs font-black text-teal-700 font-mono">₹{allTimeCashTotals.advance.toLocaleString('en-IN')}</div>
-                </div>
-                <div>
-                  <div className="text-[8px] text-teal-500/80 font-bold uppercase">Balance</div>
-                  <div className="text-xs font-black text-teal-700 font-mono">₹{allTimeCashTotals.balance.toLocaleString('en-IN')}</div>
-                </div>
-              </div>
-              <div className="mt-2 pt-2 border-t border-teal-100 space-y-1.5">
-                <div className="flex items-center gap-1">
-                  <DateInput value={cashDateFilter} onChange={(e) => setCashDateFilter(e.target.value)} className="flex-1 min-w-0 bg-white border border-teal-200 rounded px-1.5 py-1 text-[10px] font-mono text-teal-800" />
-                  {cashDateFilter && (
-                    <button type="button" onClick={() => setCashDateFilter('')} title="Clear date filter" className="text-teal-400 hover:text-rose-500 cursor-pointer shrink-0">
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-                {onDateCashTotals && (
-                  <div className="text-[10px] font-mono text-teal-700 font-bold space-y-0.5">
-                    <div className="font-sans font-semibold text-teal-600">On {cashDateFilter}</div>
-                    <div className="flex items-center justify-between"><span>Freight</span><span>₹{onDateCashTotals.freight.toLocaleString('en-IN')}</span></div>
-                    <div className="flex items-center justify-between"><span>Advance</span><span>₹{onDateCashTotals.advance.toLocaleString('en-IN')}</span></div>
-                    <div className="flex items-center justify-between"><span>Balance</span><span>₹{onDateCashTotals.balance.toLocaleString('en-IN')}</span></div>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setShowCashEntries(s => !s)}
-                  className="text-[9px] font-bold text-teal-600 hover:text-teal-800 cursor-pointer uppercase tracking-wide"
-                >
-                  {showCashEntries ? 'Hide' : 'View'} trip-by-trip breakdown ({displayedCashEntries.length})
-                </button>
-                {showCashEntries && (
-                  <div className="space-y-1 max-h-40 overflow-y-auto pt-1 border-t border-teal-100">
-                    {displayedCashEntries.length === 0 ? (
-                      <p className="text-teal-400/80 text-[10px]">No Cash-mode Market POD entries{cashDateFilter ? ' on this date' : ''}.</p>
-                    ) : displayedCashEntries.map(e => (
-                      <div key={e.id} className="bg-white border border-teal-100 rounded px-1.5 py-1 text-[9px] font-mono text-teal-800">
-                        <div className="flex items-center justify-between font-bold">
-                          <span>{e.vehicleNumber}</span>
-                          <span className="text-teal-500 font-sans font-normal">{e.date}{isSuperAdmin ? ` · ${e.ownerLabel}` : ''}</span>
-                        </div>
-                        <div className="flex items-center justify-between text-teal-600">
-                          <span>F ₹{(e.totalFreight || 0).toLocaleString('en-IN')}</span>
-                          <span>A ₹{(e.receivedAdvance || 0).toLocaleString('en-IN')}</span>
-                          <span>B ₹{(e.balance || 0).toLocaleString('en-IN')}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
           </div>
@@ -1315,7 +1214,23 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 <span className="flex items-center gap-1"><Filter className="w-3 h-3 text-teal-600" /> Filters & Historical Lookup</span>
                 <span>Matches: {filteredVouchers.length} entries</span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-5 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-6 gap-2.5">
+                {/* Sort By - Newest First (default) / Oldest First. Reuses
+                    the same `sort` state the column headers drive, so it's
+                    always exactly what's currently applied - re-sorts the
+                    already-filtered list instantly, no extra fetch needed. */}
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Sort By</label>
+                  <select
+                    value={sort?.key === 'date' && sort.direction === 'asc' ? 'oldest' : 'newest'}
+                    onChange={(e) => setSort({ key: 'date', direction: e.target.value === 'oldest' ? 'asc' : 'desc' })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-semibold text-slate-700"
+                  >
+                    <option value="newest">Newest First</option>
+                    <option value="oldest">Oldest First</option>
+                  </select>
+                </div>
+
                 {/* Year Dropdown */}
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Year Lookup</label>
@@ -1672,17 +1587,30 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
               <span className="flex items-center gap-1"><Filter className="w-3 h-3 text-teal-600" /> Search</span>
               <span>Matches: {filteredMarketPod.length} entries</span>
             </div>
-            <div className="relative">
-              <input
-                type="text"
-                placeholder="e.g. entry no, vehicle, customer, coordinator"
-                value={mpSearchTerm}
-                onChange={(e) => setMpSearchTerm(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-7 pr-2 py-1.5 font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500"
-              />
-              <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400">
-                <Search className="w-3 h-3" />
-              </span>
+            <div className="flex flex-col sm:flex-row gap-2.5">
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  placeholder="e.g. entry no, vehicle, customer, coordinator"
+                  value={mpSearchTerm}
+                  onChange={(e) => setMpSearchTerm(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-7 pr-2 py-1.5 font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                />
+                <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400">
+                  <Search className="w-3 h-3" />
+                </span>
+              </div>
+              {/* Sort By - same Newest/Oldest First convention as the
+                  Petty Cash Ledger, reusing mpSort so it's always exactly
+                  what's currently applied. */}
+              <select
+                value={mpSort?.key === 'date' && mpSort.direction === 'asc' ? 'oldest' : 'newest'}
+                onChange={(e) => setMpSort({ key: 'date', direction: e.target.value === 'oldest' ? 'asc' : 'desc' })}
+                className="bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-semibold text-slate-700 sm:w-44"
+              >
+                <option value="newest">Newest First</option>
+                <option value="oldest">Oldest First</option>
+              </select>
             </div>
           </div>
 
@@ -1737,7 +1665,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border ${
                           (entry.paymentMode || 'Petty Cash') === 'Cash' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-600 border-slate-300'
                         }`}>
-                          {entry.paymentMode || 'Petty Cash'}
+                          {PAYMENT_MODE_LABELS[entry.paymentMode || 'Petty Cash']}
                         </span>
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-slate-600">{entry.extraTripAmount ? `₹${entry.extraTripAmount.toLocaleString('en-IN')}` : '-'}</td>
@@ -2657,37 +2585,25 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <span className="font-black text-amber-800 font-mono">₹{mpBalance.toLocaleString('en-IN')}</span>
                   </div>
 
-                  {/* Payment Mode + Extra Trip - Cash auto-routes the Extra
-                      Trip amount into the Petty Cash Dashboard's Cash tab,
-                      tagged with this entry's date; Petty Cash needs no
-                      extra routing (accounted normally). */}
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Payment Mode</label>
-                      <select
-                        value={mpPaymentMode}
-                        onChange={(e) => setMpPaymentMode(e.target.value as MarketPodPaymentMode)}
-                        className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-800 font-semibold focus:outline-none focus:ring-1 focus:ring-teal-500"
-                      >
-                        <option value="Petty Cash">Petty Cash</option>
-                        <option value="Cash">Cash</option>
-                      </select>
-                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                        {mpPaymentMode === 'Cash'
-                          ? 'Extra Trip amount below flows into the Petty Cash Dashboard\'s Cash tab, dated to this entry.'
-                          : 'Accounted as petty cash normally - no extra routing.'}
-                      </p>
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-600 mb-0.5 text-[9px] uppercase">Extra Trip</label>
-                      <input
-                        type="number"
-                        placeholder="₹"
-                        value={mpExtraTripAmount}
-                        onChange={(e) => setMpExtraTripAmount(e.target.value)}
-                        className="w-full bg-white border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-slate-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
-                      />
-                    </div>
+                  {/* Payment Mode - "Cash" stores/compares as 'Cash' exactly as
+                      before (old records and reports keep working), only the
+                      displayed label changed to "Company Account" (see
+                      PAYMENT_MODE_LABELS). Extra Trip amount used to live here
+                      too, routing into the Petty Cash Dashboard's Cash tab -
+                      that tab no longer exists, so the field was removed from
+                      this form; its stored value on existing entries is left
+                      untouched (still round-trips on edit, just not shown or
+                      editable here anymore). */}
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                    <label className="block font-semibold text-slate-700 mb-1">Payment Mode</label>
+                    <select
+                      value={mpPaymentMode}
+                      onChange={(e) => setMpPaymentMode(e.target.value as MarketPodPaymentMode)}
+                      className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-800 font-semibold focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    >
+                      <option value="Petty Cash">{PAYMENT_MODE_LABELS['Petty Cash']}</option>
+                      <option value="Cash">{PAYMENT_MODE_LABELS['Cash']}</option>
+                    </select>
                   </div>
 
                   {/* Co-Ordinator - manual text entry */}

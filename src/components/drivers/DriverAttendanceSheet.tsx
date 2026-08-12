@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
-import { DriverEmployee, DriverAttendance, AttendanceStatusCode, DriverLocationCategory } from '../../types';
+import { DriverEmployee, DriverAttendance, AttendanceStatusCode, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES } from '../../types';
 import { authFetch } from '../../authFetch';
+import { compareTrailingNumber } from '../../utils/sort';
 import DriverAttendanceSummaryModal from './DriverAttendanceSummaryModal';
 
 interface DriverAttendanceSheetProps {
@@ -81,17 +82,28 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
   const totalDays = daysInMonth(month);
   const monthAttendance = useMemo(() => attendance.filter(a => a.date.startsWith(month)), [attendance, month]);
 
-  // e.g. Vinod: can view every location's attendance, but only mark/edit
-  // within his own writableLocations - those rows sort first so his own
-  // locations don't get lost below everyone else's read-only rows.
-  const canWrite = (driver: DriverEmployee) => writableLocations === 'ALL' || writableLocations.includes(driver.location);
-
-  const filteredDrivers = useMemo(() => {
-    const q = searchTerm.toLowerCase();
-    const base = !searchTerm ? drivers : drivers.filter(d => d.id.toLowerCase().includes(q) || d.name.toLowerCase().includes(q) || (d.vehicleNo || '').toLowerCase().includes(q));
-    if (writableLocations === 'ALL') return base;
-    return [...base].sort((a, b) => Number(canWrite(b)) - Number(canWrite(a)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Grouped by location, one colored section header per group - same
+  // treatment as Driver Salary. Writability (e.g. Vinod: can view every
+  // location's attendance, but only mark/edit within his own
+  // writableLocations) is uniform within a group since it's keyed off
+  // location, so it's decided once per group rather than per row.
+  const groupedDrivers = useMemo(() => {
+    const base = !searchTerm ? drivers : drivers.filter(d => {
+      const q = searchTerm.toLowerCase();
+      return d.id.toLowerCase().includes(q) || d.name.toLowerCase().includes(q) || (d.vehicleNo || '').toLowerCase().includes(q);
+    });
+    const byLocation = new Map<DriverLocationCategory, DriverEmployee[]>();
+    for (const d of base) {
+      if (!byLocation.has(d.location)) byLocation.set(d.location, []);
+      byLocation.get(d.location)!.push(d);
+    }
+    return DRIVER_LOCATION_CATEGORIES
+      .filter(loc => byLocation.has(loc))
+      .map(loc => ({
+        location: loc,
+        writable: writableLocations === 'ALL' || writableLocations.includes(loc),
+        drivers: [...byLocation.get(loc)!].sort((a, b) => compareTrailingNumber(a.id, b.id) || a.id.localeCompare(b.id))
+      }));
   }, [drivers, searchTerm, writableLocations]);
 
   // LOP/Exemption Leave/Working Days summary columns - mirrors the server's
@@ -184,59 +196,69 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredDrivers.length === 0 ? (
+              {groupedDrivers.length === 0 ? (
                 <tr><td colSpan={totalDays + 4} className="text-center py-10 text-slate-400">No driver records found.</td></tr>
-              ) : filteredDrivers.map(driver => {
-                const { lopDays, exemptionLeaveDays, workingDays } = driverMonthSummary(driver.id);
-                const writable = canWrite(driver);
-                return (
-                  <tr key={driver.id} className={`hover:bg-purple-50/40 ${writable ? '' : 'opacity-70'}`}>
-                    <td
-                      className="px-2 py-1 cursor-pointer sticky left-0 bg-white whitespace-nowrap"
-                      onClick={() => setSummaryDriver(driver)}
-                      title="Click to view monthly summary"
-                    >
-                      <div className="font-semibold text-teal-700 hover:underline">
-                        {driver.name}
-                        {!writable && <span className="ml-1.5 text-[8px] font-bold uppercase text-slate-400 border border-slate-200 rounded px-1 py-0.5 align-middle">View only</span>}
-                      </div>
-                      {/* Vehicle No is read straight off the driver record (same field Driver
-                          Salary edits, see DriverFormModal) - not a separate copy, so a change
-                          made in Driver Salary shows here immediately with no extra sync step. */}
-                      {driver.vehicleNo && <div className="text-[9px] font-mono font-normal text-slate-400">{driver.vehicleNo}</div>}
-                    </td>
-                    {Array.from({ length: totalDays }, (_, i) => i + 1).map(day => {
-                      const record = cellRecord(driver.id, day);
-                      return (
-                        <td key={day} className="p-0.5 relative group">
-                          <button onClick={() => writable && handleCellClick(driver.id, day)}
-                            disabled={!writable}
-                            title={!writable ? 'View only - outside your assigned locations' : (record?.remarks || undefined)}
-                            className={`w-9 h-6 rounded text-[9px] font-bold border ${writable ? 'cursor-pointer' : 'cursor-not-allowed'} ${record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}>
-                            {record ? STATUS_ABBR[record.status] : '-'}
-                          </button>
-                          {writable && <button
-                            onClick={e => openPopover(e, driver.id, day)}
-                            className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-slate-700 text-white text-[8px] opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer"
-                            title="More statuses & remarks"
-                          >
-                            &#8230;
-                          </button>}
-                        </td>
-                      );
-                    })}
-                    <td className="px-2 py-1 text-center">
-                      <span className="inline-block bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-2 py-0.5 font-bold">{workingDays}</span>
-                    </td>
-                    <td className="px-2 py-1 text-center">
-                      <span className="inline-block bg-orange-50 text-orange-700 border border-orange-200 rounded-full px-2 py-0.5 font-bold">{lopDays}</span>
-                    </td>
-                    <td className="px-2 py-1 text-center">
-                      <span className="inline-block bg-sky-50 text-sky-700 border border-sky-200 rounded-full px-2 py-0.5 font-bold">{exemptionLeaveDays}</span>
+              ) : groupedDrivers.map(group => (
+                <React.Fragment key={group.location}>
+                  <tr className="bg-gradient-to-r from-emerald-600 to-emerald-700">
+                    <td colSpan={totalDays + 4} className="px-2 py-2 text-white font-extrabold uppercase tracking-wide text-[11px]">
+                      {group.location}
+                      <span className="ml-2 font-semibold normal-case text-emerald-100 text-[10px]">
+                        ({group.drivers.length} driver{group.drivers.length === 1 ? '' : 's'})
+                      </span>
+                      {!group.writable && <span className="ml-2 text-[9px] font-bold uppercase bg-white/20 rounded px-1.5 py-0.5">View only</span>}
                     </td>
                   </tr>
-                );
-              })}
+                  {group.drivers.map(driver => {
+                    const { lopDays, exemptionLeaveDays, workingDays } = driverMonthSummary(driver.id);
+                    const writable = group.writable;
+                    return (
+                      <tr key={driver.id} className={`hover:bg-purple-50/40 ${writable ? '' : 'opacity-70'}`}>
+                        <td
+                          className="px-2 py-1 cursor-pointer sticky left-0 bg-white whitespace-nowrap"
+                          onClick={() => setSummaryDriver(driver)}
+                          title="Click to view monthly summary"
+                        >
+                          <div className="font-semibold text-teal-700 hover:underline">{driver.name}</div>
+                          {/* Vehicle No is read straight off the driver record (same field Driver
+                              Salary edits, see DriverFormModal) - not a separate copy, so a change
+                              made in Driver Salary shows here immediately with no extra sync step. */}
+                          {driver.vehicleNo && <div className="text-[9px] font-mono font-normal text-slate-400">{driver.vehicleNo}</div>}
+                        </td>
+                        {Array.from({ length: totalDays }, (_, i) => i + 1).map(day => {
+                          const record = cellRecord(driver.id, day);
+                          return (
+                            <td key={day} className="p-0.5 relative group">
+                              <button onClick={() => writable && handleCellClick(driver.id, day)}
+                                disabled={!writable}
+                                title={!writable ? 'View only - outside your assigned locations' : (record?.remarks || undefined)}
+                                className={`w-9 h-6 rounded text-[9px] font-bold border ${writable ? 'cursor-pointer' : 'cursor-not-allowed'} ${record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}>
+                                {record ? STATUS_ABBR[record.status] : '-'}
+                              </button>
+                              {writable && <button
+                                onClick={e => openPopover(e, driver.id, day)}
+                                className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-slate-700 text-white text-[8px] opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer"
+                                title="More statuses & remarks"
+                              >
+                                &#8230;
+                              </button>}
+                            </td>
+                          );
+                        })}
+                        <td className="px-2 py-1 text-center">
+                          <span className="inline-block bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-2 py-0.5 font-bold">{workingDays}</span>
+                        </td>
+                        <td className="px-2 py-1 text-center">
+                          <span className="inline-block bg-orange-50 text-orange-700 border border-orange-200 rounded-full px-2 py-0.5 font-bold">{lopDays}</span>
+                        </td>
+                        <td className="px-2 py-1 text-center">
+                          <span className="inline-block bg-sky-50 text-sky-700 border border-sky-200 rounded-full px-2 py-0.5 font-bold">{exemptionLeaveDays}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </React.Fragment>
+              ))}
             </tbody>
           </table>
         </div>

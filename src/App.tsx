@@ -234,32 +234,33 @@ export default function App() {
   };
 
   const handleAddVoucher = async (voucher: Omit<PettyCashVoucher, 'id'>) => {
-    try {
-      const res = await authFetch('/api/petty-cash', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(voucher)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await authFetch('/api/petty-cash', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(voucher)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      // Surface the server's message (e.g. a duplicate Entry No. rejection)
+      // to the caller instead of failing silently - PettyCash.tsx's
+      // handleSubmit catch block shows it to the user.
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save the voucher.');
     }
   };
 
   const handleUpdateVoucher = async (id: string, voucher: Partial<PettyCashVoucher>) => {
-    try {
-      const res = await authFetch(`/api/petty-cash/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(voucher)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await authFetch(`/api/petty-cash/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(voucher)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save the voucher.');
     }
   };
 
@@ -277,32 +278,33 @@ export default function App() {
   };
 
   const handleAddMarketPodEntry = async (entry: Omit<MarketPodEntry, 'id'>) => {
-    try {
-      const res = await authFetch('/api/market-pod', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(entry)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await authFetch('/api/market-pod', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      // Surface the server's message (e.g. a duplicate Entry No. rejection)
+      // to the caller instead of failing silently - PettyCash.tsx's
+      // handleMarketPodSubmit catch block shows it to the user.
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save the Market POD entry.');
     }
   };
 
   const handleUpdateMarketPodEntry = async (id: string, entry: Partial<MarketPodEntry>) => {
-    try {
-      const res = await authFetch(`/api/market-pod/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(entry)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await authFetch(`/api/market-pod/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save the Market POD entry.');
     }
   };
 
