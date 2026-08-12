@@ -26,12 +26,14 @@ import {
   Unlock,
   Wallet,
   AlertTriangle,
-  Trash2
+  Trash2,
+  Clock
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
 import SortHeader from './SortHeader';
 import { SortState, SortDirection, extractLeadingNumber, extractTrailingNumber, compareText } from '../utils/sort';
+import { exportReportToExcel, exportReportToPdf, ReportTableSection } from '../utils/reportExport';
 
 interface PettyCashProps {
   user: User;
@@ -49,6 +51,7 @@ interface PettyCashProps {
   onAddMarketPodEntry: (entry: Omit<MarketPodEntry, 'id'>) => Promise<void>;
   onUpdateMarketPodEntry: (id: string, entry: Partial<MarketPodEntry>) => Promise<void>;
   onDeleteMarketPodEntry: (id: string) => Promise<void>;
+  onMarketPodBalanceReceipt: (id: string, amount: number, date: string) => Promise<void>;
   // Amount Received / Balance Net tracking was removed from the UI (see
   // handleSubmit et al below) but these stay in the prop contract so
   // Administration.tsx doesn't need to change what it passes down.
@@ -160,6 +163,7 @@ export default function PettyCash({
   onAddMarketPodEntry,
   onUpdateMarketPodEntry,
   onDeleteMarketPodEntry,
+  onMarketPodBalanceReceipt,
   pettyCashAdvances,
   onAddPettyCashAdvance,
   onDeletePettyCashAdvance
@@ -194,6 +198,11 @@ export default function PettyCash({
 
   // Summary Report year state
   const [summaryYear, setSummaryYear] = useState('2026');
+
+  // Combined Petty Cash + Market POD report (Consolidated Summary, below the
+  // Audit Calculation Note) - '' means no lower/upper bound.
+  const [combinedFrom, setCombinedFrom] = useState('');
+  const [combinedTo, setCombinedTo] = useState('');
 
   // Form State
   const [date, setDate] = useState('2026-07-09');
@@ -248,9 +257,15 @@ export default function PettyCash({
   // admin can flip this to manually override it.
   const [mpDriverOverride, setMpDriverOverride] = useState(false);
   const [mpIsSubmitting, setMpIsSubmitting] = useState(false);
+  // Balance Settlement mini-form (Petty Cash change request part 2, point 2)
+  // - records one receipt at a time against the currently-edited trip's
+  // Balance via onMarketPodBalanceReceipt; only meaningful once the trip
+  // itself has been saved (needs a real id), same "save first" gating as
+  // Driver Salary's Salary Breakup tab.
+  const [mpBalanceReceiptAmount, setMpBalanceReceiptAmount] = useState('');
+  const [mpBalanceReceiptDate, setMpBalanceReceiptDate] = useState(new Date().toISOString().slice(0, 10));
+  const [mpBalanceReceiptSubmitting, setMpBalanceReceiptSubmitting] = useState(false);
   const [mpSearchTerm, setMpSearchTerm] = useState('');
-  // Same rationale as the Ledger's `sort` default above - Entry No ascending
-  // by default so the table doesn't appear to reshuffle on every refresh.
   // Same newest-first-by-default convention as the Petty Cash Ledger's `sort`
   // above.
   const [mpSort, setMpSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
@@ -268,6 +283,41 @@ export default function PettyCash({
   const [balanceUserFilter, setBalanceUserFilter] = useState<string>(user.username);
 
   const mpBalance = (parseFloat(mpTotalFreight) || 0) - (parseFloat(mpReceivedAdvance) || 0) - (parseFloat(mpOtherExpenses) || 0);
+
+  // Balance Settlement derived state - read from the live saved record (not
+  // the in-progress form fields), since receipts are recorded against
+  // whatever's actually persisted.
+  const editingMpEntry = mpEditingId ? marketPodEntries.find(e => e.id === mpEditingId) : undefined;
+  const mpBalanceReceipts = editingMpEntry?.balanceReceipts || [];
+  const mpBalanceReceivedTotal = mpBalanceReceipts.reduce((s, r) => s + r.amount, 0);
+  const mpBalancePending = Math.max(0, (editingMpEntry?.balance ?? mpBalance) - mpBalanceReceivedTotal);
+  const mpSettlementStatus: 'Pending' | 'Partially Received' | 'Received' =
+    mpBalanceReceivedTotal <= 0 ? 'Pending' : mpBalancePending <= 0.01 ? 'Received' : 'Partially Received';
+  // Point 2's "flag the mismatch rather than silently recalculate a settled
+  // amount" - true once the trip's Freight/Advance/Balance have drifted from
+  // whatever they were at the moment the first balance receipt was recorded.
+  const mpSettlementMismatch = !!editingMpEntry?.balanceSettledSnapshot && (
+    editingMpEntry.balanceSettledSnapshot.totalFreight !== editingMpEntry.totalFreight ||
+    editingMpEntry.balanceSettledSnapshot.receivedAdvance !== editingMpEntry.receivedAdvance ||
+    editingMpEntry.balanceSettledSnapshot.balance !== editingMpEntry.balance
+  );
+
+  const handleRecordBalanceReceipt = async () => {
+    if (!mpEditingId) return;
+    const amt = parseFloat(mpBalanceReceiptAmount);
+    if (!amt || amt <= 0) { triggerNotif('Enter a valid amount received.', 'error'); return; }
+    if (!mpBalanceReceiptDate) { triggerNotif('Enter the date received.', 'error'); return; }
+    setMpBalanceReceiptSubmitting(true);
+    try {
+      await onMarketPodBalanceReceipt(mpEditingId, amt, mpBalanceReceiptDate);
+      setMpBalanceReceiptAmount('');
+      triggerNotif('Balance receipt recorded and added to the Petty Cash float.', 'success');
+    } catch (err) {
+      triggerNotif(err instanceof Error ? err.message : 'Failed to record the balance receipt.', 'error');
+    } finally {
+      setMpBalanceReceiptSubmitting(false);
+    }
+  };
 
   const mpVehicleList = Array.from(new Set(vehicles.map(v => v.regNo || v['Reg. No.'] || '').filter(Boolean))).sort();
 
@@ -336,6 +386,8 @@ export default function PettyCash({
     setMpRemarks('');
     setMpDriverId('');
     setMpDriverOverride(false);
+    setMpBalanceReceiptAmount('');
+    setMpBalanceReceiptDate(new Date().toISOString().slice(0, 10));
     setShowMarketPodSidebar(false);
   };
 
@@ -942,6 +994,86 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
   };
 
   const { reportData, grandTotals } = generateSummaryReport();
+
+  // --- Combined Petty Cash + Market POD report, and per-handler breakdown
+  // (Consolidated Summary, below the Audit Calculation Note - Petty Cash
+  // change request part 2, points 1 & 4) ---
+  const handlerLabel = (username?: string): string =>
+    PETTY_CASH_USERS.find(u => u.username === username)?.label || username || '-';
+
+  const combinedReportRows = (() => {
+    const inRange = (d: string) => (!combinedFrom || d >= combinedFrom) && (!combinedTo || d <= combinedTo);
+    const pcRows = vouchers.filter(v => v.date && inRange(v.date)).map(v => ({
+      id: `pc-${v.id}`,
+      date: v.date,
+      source: 'Petty Cash' as const,
+      entryNo: v.entryNo,
+      handler: handlerLabel(v.enteredBy),
+      description: v.category || '-',
+      amount: v.cashPaid || 0
+    }));
+    const mpRows = marketPodEntries.filter(e => e.date && inRange(e.date)).map(e => ({
+      id: `mp-${e.id}`,
+      date: e.date,
+      source: 'Market POD' as const,
+      entryNo: e.entryNo,
+      handler: handlerLabel(e.enteredBy),
+      description: `${e.from || '-'} → ${e.to || '-'} (${e.customer || '-'})`,
+      amount: e.totalFreight || 0
+    }));
+    // Each row sorts by its own date field (a voucher's entry date, a trip's
+    // own trip date) - newest first, oldest last.
+    return [...pcRows, ...mpRows].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  })();
+  const combinedReportTotal = combinedReportRows.reduce((s, r) => s + r.amount, 0);
+
+  // Float = every PettyCashAdvance for that handler, manual or auto (from a
+  // Market POD trip's Received Advance/Balance Settlement - see
+  // syncMarketPodPettyCashLinks) - identical to the Ledger tab's own Total
+  // Received Float card. Balance Received is broken out separately as the
+  // Market-POD-balance-settlement portion specifically, since that's the new
+  // figure this feature introduces.
+  const handlerBreakdown = dashboardSummaryUsers.map(u => {
+    const float = receivedFor(u.username);
+    const disbursed = disbursedFor(u.username);
+    const balanceReceived = advancesFor(u.username).filter(a => a.source === 'market-pod-balance').reduce((s, a) => s + (a.amount || 0), 0);
+    return { username: u.username, label: u.label, float, disbursed, balanceReceived, net: float - disbursed };
+  });
+  const handlerBreakdownTotal = handlerBreakdown.reduce((acc, h) => ({
+    float: acc.float + h.float,
+    disbursed: acc.disbursed + h.disbursed,
+    balanceReceived: acc.balanceReceived + h.balanceReceived,
+    net: acc.net + h.net
+  }), { float: 0, disbursed: 0, balanceReceived: 0, net: 0 });
+
+  // Downloads mirror exactly what's on screen - same rows, same sort order,
+  // same date filter - via the shared Reports & Analytics export utility so
+  // Excel/PDF stay in lockstep with any future formatting change there.
+  const buildCombinedReportSections = (): ReportTableSection[] => {
+    const sections: ReportTableSection[] = [{
+      heading: 'Combined Report',
+      columns: ['Date', 'Source', 'Entry No', 'Handler', 'Description', 'Amount'],
+      rows: [
+        ...combinedReportRows.map(r => [r.date, r.source, r.entryNo, r.handler, r.description, r.amount]),
+        ['', '', '', '', 'TOTAL', combinedReportTotal]
+      ]
+    }];
+    if (isSuperAdmin) {
+      sections.push({
+        heading: 'Per-Handler Breakdown',
+        columns: ['Handler', 'Float (Total Received)', 'Disbursed', 'Balance Received', 'Net Balance'],
+        rows: [
+          ...handlerBreakdown.map(h => [h.label, h.float, h.disbursed, h.balanceReceived, h.net]),
+          ['COMBINED TOTAL', handlerBreakdownTotal.float, handlerBreakdownTotal.disbursed, handlerBreakdownTotal.balanceReceived, handlerBreakdownTotal.net]
+        ]
+      });
+    }
+    return sections;
+  };
+  const combinedReportFilename = `KCM_Combined_Report_${combinedFrom || 'all'}_to_${combinedTo || 'all'}`;
+  const combinedReportSubtitle = `${combinedFrom || 'All dates'} to ${combinedTo || 'All dates'}`;
+  const handleDownloadCombinedReportExcel = () => exportReportToExcel(combinedReportFilename, buildCombinedReportSections());
+  const handleDownloadCombinedReportPdf = () => exportReportToPdf(combinedReportFilename, 'KCM Logistics - Combined Petty Cash & Market POD Report', combinedReportSubtitle, buildCombinedReportSections());
 
   // Export summary matrix as Excel
   const handleExportSummaryCSV = () => {
@@ -1563,6 +1695,124 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
               </ul>
             </div>
           </div>
+
+          {/* Per-Handler Breakdown (Super Admin/Principal only) - Petty Cash
+              change request part 2, point 4. Everyone else's own figures are
+              already the single row they'd see anyway (row-level filtering
+              means they only ever have one handler's worth of data), so this
+              section only earns its place for admins comparing across all 3. */}
+          {isSuperAdmin && (
+            <div className="border border-slate-200 rounded-xl overflow-hidden">
+              <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                <Wallet className="w-3.5 h-3.5 text-indigo-600" /> Per-Handler Breakdown
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-[#0f172a] text-slate-200 uppercase text-[9px] tracking-wider">
+                    <tr>
+                      <th className="px-3 py-2">Handler</th>
+                      <th className="px-3 py-2 text-right">Float (Total Received)</th>
+                      <th className="px-3 py-2 text-right">Disbursed</th>
+                      <th className="px-3 py-2 text-right">Balance Received</th>
+                      <th className="px-3 py-2 text-right">Net Balance</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {handlerBreakdown.map(h => (
+                      <tr key={h.username} className="hover:bg-slate-50">
+                        <td className="px-3 py-2 font-semibold text-slate-700">{h.label}</td>
+                        <td className="px-3 py-2 text-right font-mono text-slate-700">₹{h.float.toLocaleString('en-IN')}</td>
+                        <td className="px-3 py-2 text-right font-mono text-rose-600">₹{h.disbursed.toLocaleString('en-IN')}</td>
+                        <td className="px-3 py-2 text-right font-mono text-indigo-600">₹{h.balanceReceived.toLocaleString('en-IN')}</td>
+                        <td className={`px-3 py-2 text-right font-mono font-bold ${h.net < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>₹{h.net.toLocaleString('en-IN')}</td>
+                      </tr>
+                    ))}
+                    <tr className="bg-slate-900 text-white font-bold">
+                      <td className="px-3 py-2 uppercase text-[10px] tracking-wide">Combined Total</td>
+                      <td className="px-3 py-2 text-right font-mono">₹{handlerBreakdownTotal.float.toLocaleString('en-IN')}</td>
+                      <td className="px-3 py-2 text-right font-mono text-rose-300">₹{handlerBreakdownTotal.disbursed.toLocaleString('en-IN')}</td>
+                      <td className="px-3 py-2 text-right font-mono text-indigo-300">₹{handlerBreakdownTotal.balanceReceived.toLocaleString('en-IN')}</td>
+                      <td className={`px-3 py-2 text-right font-mono ${handlerBreakdownTotal.net < 0 ? 'text-rose-300' : 'text-emerald-300'}`}>₹{handlerBreakdownTotal.net.toLocaleString('en-IN')}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Combined Report - Petty Cash + Market POD merged into one list,
+              newest first (Petty Cash change request part 2, point 1). */}
+          <div className="border border-slate-200 rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                <FileSpreadsheet className="w-3.5 h-3.5 text-teal-600" /> Combined Report ({combinedReportRows.length} entries)
+              </span>
+              <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                <DateInput value={combinedFrom} onChange={(e) => setCombinedFrom(e.target.value)} className="bg-white border border-slate-200 rounded-lg px-2 py-1 font-mono text-slate-700" />
+                <span className="text-slate-400">to</span>
+                <DateInput value={combinedTo} onChange={(e) => setCombinedTo(e.target.value)} className="bg-white border border-slate-200 rounded-lg px-2 py-1 font-mono text-slate-700" />
+                {(combinedFrom || combinedTo) && (
+                  <button type="button" onClick={() => { setCombinedFrom(''); setCombinedTo(''); }} title="Clear date filter" className="text-slate-400 hover:text-rose-500 cursor-pointer">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                <button
+                  onClick={handleDownloadCombinedReportExcel}
+                  className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 cursor-pointer"
+                >
+                  <Download className="w-3 h-3" /> Excel
+                </button>
+                <button
+                  onClick={handleDownloadCombinedReportPdf}
+                  className="bg-slate-800 hover:bg-slate-900 text-white font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 cursor-pointer"
+                >
+                  <Download className="w-3 h-3" /> PDF
+                </button>
+              </div>
+            </div>
+            <div className="overflow-x-auto max-h-[420px]">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[#0f172a] text-slate-200 uppercase text-[9px] tracking-wider sticky top-0 z-10">
+                  <tr>
+                    <th className="px-3 py-2">Date</th>
+                    <th className="px-3 py-2">Source</th>
+                    <th className="px-3 py-2">Entry No</th>
+                    <th className="px-3 py-2">Handler</th>
+                    <th className="px-3 py-2">Description</th>
+                    <th className="px-3 py-2 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {combinedReportRows.length === 0 ? (
+                    <tr><td colSpan={6} className="text-center py-8 text-slate-400">No entries in this range.</td></tr>
+                  ) : combinedReportRows.map(r => (
+                    <tr key={r.id} className="hover:bg-slate-50">
+                      <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{r.date}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase border ${
+                          r.source === 'Petty Cash' ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-amber-50 text-amber-700 border-amber-200'
+                        }`}>
+                          {r.source}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 font-mono font-bold text-slate-800 whitespace-nowrap">{r.entryNo}</td>
+                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{r.handler}</td>
+                      <td className="px-3 py-2 text-slate-600">{r.description}</td>
+                      <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">₹{r.amount.toLocaleString('en-IN')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                {combinedReportRows.length > 0 && (
+                  <tfoot className="sticky bottom-0">
+                    <tr className="bg-slate-900 text-white font-bold">
+                      <td colSpan={5} className="px-3 py-2.5 uppercase text-[10px] tracking-wide text-right">Total</td>
+                      <td className="px-3 py-2.5 text-right font-mono">₹{combinedReportTotal.toLocaleString('en-IN')}</td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          </div>
         </div>
       ) : (
         /* Section 3 Market POD: freight trip ledger */
@@ -2048,16 +2298,25 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           <div className="min-w-0">
                             <span className="font-mono font-bold text-slate-800">₹{a.amount.toLocaleString('en-IN')}</span>
                             <span className="text-slate-400 font-mono ml-1.5">{a.date}</span>
+                            {a.source && (
+                              <span className="ml-1.5 px-1 py-0.5 rounded text-[8px] font-black uppercase bg-indigo-100 text-indigo-700 border border-indigo-200 align-middle">Auto</span>
+                            )}
                             {a.remarks && <p className="text-slate-500 truncate">{a.remarks}</p>}
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => onDeletePettyCashAdvance(a.id)}
-                            title="Delete this entry"
-                            className="text-rose-400 hover:text-rose-600 cursor-pointer shrink-0"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {a.source ? (
+                            <span title="Auto-generated from a Market POD trip - manage it there (Payment Mode) instead of deleting it directly, or it'll just reappear the next time that trip is saved" className="text-slate-300 shrink-0">
+                              <Lock className="w-3.5 h-3.5" />
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => onDeletePettyCashAdvance(a.id)}
+                              title="Delete this entry"
+                              className="text-rose-400 hover:text-rose-600 cursor-pointer shrink-0"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       ))}
                   </div>
@@ -2579,11 +2838,96 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     </div>
                   </div>
 
-                  {/* Balance - auto computed */}
+                  {/* Balance - auto computed. Never touched by Balance
+                      Settlement below - that section only reads this figure,
+                      it doesn't feed back into it. */}
                   <div className="p-3 bg-amber-50/50 border border-amber-200 rounded-lg flex items-center justify-between">
                     <span className="text-amber-600 uppercase text-[9px] font-bold">Balance (auto = Freight - Advance - Expenses)</span>
                     <span className="font-black text-amber-800 font-mono">₹{mpBalance.toLocaleString('en-IN')}</span>
                   </div>
+
+                  {/* Balance Settlement - the outstanding Balance above is
+                      settled (possibly in more than one partial receipt)
+                      after the trip completes. Only actionable once the trip
+                      itself has been saved (a real id is required by the
+                      dedicated balance-receipt endpoint). */}
+                  {mpEditingId && mpBalance > 0 && (
+                    <div className="p-3 bg-indigo-50/50 border border-indigo-200 rounded-lg space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-indigo-600 uppercase text-[9px] font-bold">Balance Settlement</span>
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase flex items-center gap-1 ${
+                          mpSettlementStatus === 'Received' ? 'bg-emerald-100 text-emerald-700 border border-emerald-300' :
+                          mpSettlementStatus === 'Partially Received' ? 'bg-amber-100 text-amber-700 border border-amber-300' :
+                          'bg-slate-100 text-slate-500 border border-slate-300'
+                        }`}>
+                          {mpSettlementStatus === 'Received' ? <CheckCircle2 className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                          {mpSettlementStatus}
+                        </span>
+                      </div>
+
+                      {mpSettlementMismatch && (
+                        <div className="p-2 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-[10px] font-semibold flex items-start gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          <span>
+                            Freight/Advance was edited after part of the balance was already recorded as received on{' '}
+                            {editingMpEntry?.balanceSettledSnapshot && `₹${editingMpEntry.balanceSettledSnapshot.balance.toLocaleString('en-IN')}`}.
+                            The settled amount was NOT recalculated - please reconcile manually.
+                          </span>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-2 gap-2 text-center">
+                        <div className="bg-white border border-indigo-100 rounded-lg p-1.5">
+                          <p className="text-slate-400 uppercase text-[8px] font-bold">Received So Far</p>
+                          <p className="font-black text-emerald-700 font-mono">₹{mpBalanceReceivedTotal.toLocaleString('en-IN')}</p>
+                        </div>
+                        <div className="bg-white border border-indigo-100 rounded-lg p-1.5">
+                          <p className="text-slate-400 uppercase text-[8px] font-bold">Still Pending</p>
+                          <p className="font-black text-amber-700 font-mono">₹{mpBalancePending.toLocaleString('en-IN')}</p>
+                        </div>
+                      </div>
+
+                      {mpBalanceReceipts.length > 0 && (
+                        <div className="space-y-1 pt-1.5 border-t border-indigo-100">
+                          {mpBalanceReceipts.map(r => (
+                            <div key={r.id} className="flex items-center justify-between text-[9.5px] font-mono text-indigo-700">
+                              <span>{r.date}</span>
+                              <span className="font-bold">₹{r.amount.toLocaleString('en-IN')}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {mpBalancePending > 0 && (
+                        <div className="flex items-end gap-1.5 pt-1.5 border-t border-indigo-100">
+                          <div className="flex-1">
+                            <label className="block text-slate-400 mb-0.5 text-[9px] uppercase font-bold">Amount Received</label>
+                            <input
+                              type="number" placeholder="₹" value={mpBalanceReceiptAmount}
+                              onChange={(e) => setMpBalanceReceiptAmount(e.target.value)}
+                              className="w-full bg-white border border-indigo-200 rounded-lg p-1.5 font-mono font-bold text-indigo-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            />
+                          </div>
+                          <div className="flex-1">
+                            <label className="block text-slate-400 mb-0.5 text-[9px] uppercase font-bold">Date Received</label>
+                            <DateInput value={mpBalanceReceiptDate} onChange={(e) => setMpBalanceReceiptDate(e.target.value)} className="w-full bg-white border border-indigo-200 rounded-lg p-1.5 font-mono text-indigo-800 text-[11px]" />
+                          </div>
+                          <button
+                            type="button" onClick={handleRecordBalanceReceipt} disabled={mpBalanceReceiptSubmitting}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-lg text-[10px] uppercase cursor-pointer disabled:opacity-50 shrink-0"
+                          >
+                            {mpBalanceReceiptSubmitting ? '...' : 'Mark Received'}
+                          </button>
+                        </div>
+                      )}
+
+                      {mpPaymentMode !== 'Petty Cash' && (
+                        <p className="text-[9px] text-slate-400 font-mono">
+                          Payment Mode is Company Account - settlement is tracked here but won't affect the Petty Cash float.
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   {/* Payment Mode - "Cash" stores/compares as 'Cash' exactly as
                       before (old records and reports keep working), only the

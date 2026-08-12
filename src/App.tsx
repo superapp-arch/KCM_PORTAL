@@ -321,6 +321,22 @@ export default function App() {
     }
   };
 
+  // Balance Settlement - records one partial (or full) receipt against a
+  // Market POD trip's Balance (Petty Cash change request part 2, point 2).
+  const handleMarketPodBalanceReceipt = async (id: string, amount: number, date: string) => {
+    const res = await authFetch(`/api/market-pod/${id}/balance-receipt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount, date })
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to record the balance receipt.');
+    }
+  };
+
   const handleAddPettyCashAdvance = async (advance: Omit<PettyCashAdvance, 'id'>) => {
     try {
       const res = await authFetch('/api/petty-cash-advances', {
@@ -1171,6 +1187,7 @@ export default function App() {
         onAddMarketPodEntry={handleAddMarketPodEntry}
         onUpdateMarketPodEntry={handleUpdateMarketPodEntry}
         onDeleteMarketPodEntry={handleDeleteMarketPodEntry}
+        onMarketPodBalanceReceipt={handleMarketPodBalanceReceipt}
         pettyCashAdvances={pettyCashAdvances}
         onAddPettyCashAdvance={handleAddPettyCashAdvance}
         onDeletePettyCashAdvance={handleDeletePettyCashAdvance}

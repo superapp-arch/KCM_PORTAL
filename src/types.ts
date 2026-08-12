@@ -209,21 +209,42 @@ export interface PettyCashVoucher {
 // One-off (or top-up) cash-advance entry for a Petty Cash user's running
 // Balance Net ledger (see PettyCash.tsx). Never overwritten - a later
 // top-up for the same user is a new row, not an edit of the old one.
+// `source`/`marketPodEntryId` mark one auto-generated from a Market POD trip
+// (Payment Mode = Petty Cash) rather than manually logged by the user - see
+// server.ts's syncMarketPodPettyCashLinks. Auto ones use a deterministic id
+// (`mp-adv-<tripId>` / `mp-bal-<tripId>-<receiptId>`) so they can be
+// found-and-updated or found-and-deleted again without needing a separate
+// link field on the trip itself.
 export interface PettyCashAdvance {
   id: string;
   username: string; // the Petty Cash login this advance belongs to
   amount: number;
   date: string; // YYYY-MM-DD
   remarks?: string;
+  source?: 'market-pod-advance' | 'market-pod-balance';
+  marketPodEntryId?: string;
 }
 
 export type MarketPodStatus = 'Pending' | 'Closed';
 
-// How this trip's Extra Trip amount was paid. "Cash" auto-routes that amount
-// into the Petty Cash Dashboard's "Cash" tab, tagged with this entry's date;
-// "Petty Cash" needs no extra routing (accounted normally). Defaults to
-// "Petty Cash" for entries saved before this field existed.
+// How this trip's money was paid. When "Petty Cash": the Received Advance,
+// plus any Balance Settlement receipts (see MarketPodBalanceReceipt), flow
+// automatically into the Petty Cash module's Total Received Float as real
+// PettyCashAdvance rows (source: 'market-pod-advance'/'market-pod-balance') -
+// identical treatment to a manually logged Amount Received entry in every
+// calculation. "Cash" (displayed as "Company Account" - see
+// PAYMENT_MODE_LABELS in PettyCash.tsx) does not touch the float at all.
+// Defaults to "Petty Cash" for entries saved before this field existed.
 export type MarketPodPaymentMode = 'Cash' | 'Petty Cash';
+
+// One partial (or full) receipt against a trip's Balance (see
+// MarketPodEntry.balanceReceipts) - supports settling in more than one
+// payment (e.g. ₹1,500 today, ₹500 later) rather than an all-or-nothing flag.
+export interface MarketPodBalanceReceipt {
+  id: string;
+  amount: number;
+  date: string; // YYYY-MM-DD
+}
 
 // A freight trip ledger nested inside the Petty Cash module ("Market POD"
 // tab). Entry No is auto-generated/sequential (see nextMarketPodEntryNo in
@@ -248,6 +269,20 @@ export interface MarketPodEntry {
   paymentMode?: MarketPodPaymentMode; // 'Cash' displays as "Company Account" in the UI (PAYMENT_MODE_LABELS) - the stored value itself is unchanged, for old records/reports
   extraTripAmount?: number; // [Deprecated] separate ad-hoc/extra-trip amount, distinct from the regular freight fields above - no longer editable from the Add/Edit Market POD Trip form (its dashboard "Cash tab" destination was removed), kept only so existing records don't lose this figure
   enteredBy?: string; // username, stamped server-side; row-level-filtered to the 3 Petty Cash logins, visible only to super admins
+  // Balance Settlement (separate from the auto-calculated Balance above,
+  // which stays untouched) - tracks the outstanding trip balance actually
+  // being paid/received after the trip completes, possibly in more than one
+  // partial receipt. Status is derived (never stored): no receipts yet =
+  // Pending, received < balance = Partially Received, received >= balance =
+  // Received.
+  balanceReceipts?: MarketPodBalanceReceipt[];
+  // Snapshot of totalFreight/receivedAdvance/balance taken at the moment the
+  // FIRST balance receipt was recorded - if a later edit changes any of
+  // those figures, comparing against this snapshot is how the UI detects
+  // and flags the mismatch (see point 2's "flag rather than silently
+  // recalculate a settled amount" rule) instead of ever adjusting a
+  // settled amount on its own.
+  balanceSettledSnapshot?: { totalFreight: number; receivedAdvance: number; balance: number };
 }
 
 // A single line item within a maintenance visit (item 10: costs must be

@@ -363,19 +363,32 @@ export default function FuelManagement({
 
   // Opening KM: auto-fill from this vehicle's last mileage report's Closing
   // KM; first-ever entry for a vehicle is entered manually.
+  //
+  // The "don't clobber it while editing the same vehicle" guard only holds
+  // when there's actually a saved Opening KM to protect. A fuel entry is
+  // routinely saved *before* its Mileage section is filled in (diesel logged
+  // at fill-up, trip details added afterward) - editing that entry later has
+  // editingId set and the vehicle unchanged, but mOpeningKm is still blank,
+  // so the old guard skipped auto-fill entirely and this field just sat
+  // empty forever. Checking mOpeningKm too means it only skips when there's
+  // a real previously-saved/auto-filled value worth preserving.
   useEffect(() => {
     if (!vehicleNumber) return;
+    const editingSameVehicleWithOpeningKm =
+      editingId && logs.find(l => l.id === editingId)?.vehicleNumber === vehicleNumber && mOpeningKm;
+    if (editingSameVehicleWithOpeningKm) return;
     const vehicleReports = mileageReports
       .filter(r => (r.vehicleNo || '').trim().toUpperCase() === vehicleNumber.trim().toUpperCase())
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     if (vehicleReports.length > 0) {
       const lastReport = vehicleReports[vehicleReports.length - 1];
-      if (!editingId || (editingId && logs.find(l => l.id === editingId)?.vehicleNumber !== vehicleNumber)) {
-        setMOpeningKm(String(lastReport.closingKm));
-      }
+      setMOpeningKm(String(lastReport.closingKm));
     } else if (!editingId) {
       setMOpeningKm('');
     }
+    // mOpeningKm deliberately excluded - it's only read here to decide
+    // whether to skip, not something this effect should re-run for.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vehicleNumber, mileageReports, editingId, logs]);
 
   // Actual Mileage = the vehicle's fixed reference rating (per-vehicle

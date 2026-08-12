@@ -46,6 +46,7 @@ import {
   VehicleLoan,
   BusinessLoan,
   MarketPodEntry,
+  MarketPodBalanceReceipt,
   PettyCashAdvance,
   VehicleMaintenanceProfile,
   MaintenanceServiceStation,
@@ -503,6 +504,66 @@ function sortEntriesByDate<T extends { date: string; entryNo?: string }>(rows: T
     if (a.date !== b.date) return a.date < b.date ? 1 : -1;
     return extractTrailingNumber(b.entryNo) - extractTrailingNumber(a.entryNo);
   });
+}
+
+// Keeps a Market POD trip's Received Advance and any recorded Balance
+// Settlement receipts in sync with the Petty Cash module's Total Received
+// Float, as real PettyCashAdvance rows - identical treatment to a manually
+// logged Amount Received entry in every downstream calculation (receivedFor,
+// currentBalanceFor, the Consolidated Summary, the combined report), rather
+// than a parallel figure that has to be kept consistent by hand.
+//
+// Deterministic ids (`mp-adv-<tripId>` for the advance, `mp-bal-<tripId>-
+// <receiptId>` per balance receipt) mean this can just be called after every
+// save with the trip's current state - no separate link field to track, and
+// calling it twice is always safe (upsert-or-delete, never duplicates).
+// Handles every case point 3 asks for from one place: initial creation,
+// amount edits, and Payment Mode flips in either direction (an existing
+// linked advance is deleted the moment the trip stops being 'Petty Cash',
+// so the float only ever reflects money that's actually routed there).
+async function syncMarketPodPettyCashLinks(entry: MarketPodEntry, ownerUsername: string): Promise<void> {
+  const isPettyCash = entry.paymentMode === 'Petty Cash';
+  const advanceId = `mp-adv-${entry.id}`;
+  if (isPettyCash && (entry.receivedAdvance || 0) > 0) {
+    await savePettyCashAdvance({
+      id: advanceId,
+      username: ownerUsername,
+      amount: entry.receivedAdvance || 0,
+      date: entry.date,
+      remarks: `Auto - Market POD Trip ${entry.entryNo} (Received Advance)`,
+      source: 'market-pod-advance',
+      marketPodEntryId: entry.id
+    });
+  } else {
+    await deletePettyCashAdvance(advanceId);
+  }
+
+  for (const receipt of entry.balanceReceipts || []) {
+    const balanceAdvanceId = `mp-bal-${entry.id}-${receipt.id}`;
+    if (isPettyCash) {
+      await savePettyCashAdvance({
+        id: balanceAdvanceId,
+        username: ownerUsername,
+        amount: receipt.amount,
+        date: receipt.date,
+        remarks: `Auto - Market POD Trip ${entry.entryNo} (Balance Settlement)`,
+        source: 'market-pod-balance',
+        marketPodEntryId: entry.id
+      });
+    } else {
+      await deletePettyCashAdvance(balanceAdvanceId);
+    }
+  }
+}
+
+// Reverses every float impact a trip ever had - called before it's deleted,
+// per point 3's "if a trip is deleted after its balance was received,
+// reverse the float impact" (and the same for its Received Advance, if any).
+async function removeMarketPodPettyCashLinks(entry: MarketPodEntry): Promise<void> {
+  await deletePettyCashAdvance(`mp-adv-${entry.id}`);
+  for (const receipt of entry.balanceReceipts || []) {
+    await deletePettyCashAdvance(`mp-bal-${entry.id}-${receipt.id}`);
+  }
 }
 
 function nextMarketPodEntryNo(entries: MarketPodEntry[]): string {
@@ -1642,8 +1703,13 @@ async function startServer() {
       if (findDuplicateEntryNo(allEntries, entryNo)) {
         return res.status(409).json({ error: `Entry No. ${entryNo} already exists.` });
       }
-      const result = await saveMarketPodEntry({ ...req.body, entryNo, enteredBy: sessionUser?.username } as MarketPodEntry);
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+      // id generated up front (mirrors saveMarketPodEntry's own fallback) so
+      // syncMarketPodPettyCashLinks' deterministic mp-adv-<id>/mp-bal-<id>-*
+      // ids are known immediately, without a second round trip to look it up.
+      const newEntry: MarketPodEntry = { ...req.body, id: req.body.id || String(Date.now()), entryNo, enteredBy: sessionUser?.username };
+      await saveMarketPodEntry(newEntry);
+      await syncMarketPodPettyCashLinks(newEntry, sessionUser?.username || '');
+      res.json({ success: true, data: filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/market-pod/:id', async (req, res) => {
@@ -1655,8 +1721,21 @@ async function startServer() {
       if (req.body.entryNo && findDuplicateEntryNo(allEntries, req.body.entryNo, req.params.id)) {
         return res.status(409).json({ error: `Entry No. ${req.body.entryNo} already exists.` });
       }
-      const result = await saveMarketPodEntry({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy } as MarketPodEntry);
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+      // balanceReceipts/balanceSettledSnapshot aren't fields the Add/Edit
+      // Market POD Trip form manages (only the dedicated balance-receipt
+      // endpoint below does) - preserved from the existing record here so a
+      // routine freight/advance edit can never silently wipe out settlement
+      // history the client's payload doesn't even know about.
+      const updatedEntry: MarketPodEntry = {
+        ...req.body,
+        id: req.params.id,
+        enteredBy: existing?.enteredBy,
+        balanceReceipts: req.body.balanceReceipts ?? existing?.balanceReceipts,
+        balanceSettledSnapshot: req.body.balanceSettledSnapshot ?? existing?.balanceSettledSnapshot
+      };
+      await saveMarketPodEntry(updatedEntry);
+      await syncMarketPodPettyCashLinks(updatedEntry, existing?.enteredBy || sessionUser?.username || '');
+      res.json({ success: true, data: filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/market-pod/:id', async (req, res) => {
@@ -1664,8 +1743,53 @@ async function startServer() {
       const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getMarketPodEntries()).find(e => e.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
+      if (existing) await removeMarketPodPettyCashLinks(existing);
       const result = await deleteMarketPodEntry(req.params.id);
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Balance Settlement - records one partial (or full) receipt against a
+  // trip's already-auto-calculated Balance (see point 2 of the Petty Cash
+  // change request). Separate from the main PUT above since it's a distinct
+  // action ("mark received"), not a form edit, and needs its own
+  // over-payment guard + first-receipt snapshot logic.
+  app.post('/api/market-pod/:id/balance-receipt', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getMarketPodEntries()).find(e => e.id === req.params.id);
+      if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
+      if (!existing) return res.status(404).json({ error: 'Trip not found.' });
+
+      const amount = parseFloat(req.body.amount);
+      const date = req.body.date;
+      if (!amount || amount <= 0) return res.status(400).json({ error: 'Enter a valid amount received.' });
+      if (!date) return res.status(400).json({ error: 'Enter the date received.' });
+
+      const receivedSoFar = (existing.balanceReceipts || []).reduce((s, r) => s + r.amount, 0);
+      const pending = (existing.balance || 0) - receivedSoFar;
+      // Small epsilon for floating-point amounts, not a real allowance to
+      // over-collect - "leaving 500 pending" only works if receipts can
+      // never sum past the balance in the first place.
+      if (amount > pending + 0.01) {
+        return res.status(400).json({ error: `Amount exceeds the pending balance of ₹${pending.toLocaleString('en-IN')}.` });
+      }
+
+      const receipt: MarketPodBalanceReceipt = { id: String(Date.now()), amount, date };
+      const updatedEntry: MarketPodEntry = {
+        ...existing,
+        balanceReceipts: [...(existing.balanceReceipts || []), receipt],
+        // Snapshot only taken once, on the very first receipt - a later
+        // partial receipt doesn't reset what "the settled figures" were.
+        balanceSettledSnapshot: existing.balanceSettledSnapshot || {
+          totalFreight: existing.totalFreight,
+          receivedAdvance: existing.receivedAdvance,
+          balance: existing.balance
+        }
+      };
+      await saveMarketPodEntry(updatedEntry);
+      await syncMarketPodPettyCashLinks(updatedEntry, existing.enteredBy || sessionUser?.username || '');
+      res.json({ success: true, data: filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
