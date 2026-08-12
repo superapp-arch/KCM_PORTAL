@@ -192,12 +192,18 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
                 return (
                   <tr key={driver.id} className={`hover:bg-purple-50/40 ${writable ? '' : 'opacity-70'}`}>
                     <td
-                      className="px-2 py-1 font-semibold text-teal-700 hover:underline cursor-pointer sticky left-0 bg-white whitespace-nowrap"
+                      className="px-2 py-1 cursor-pointer sticky left-0 bg-white whitespace-nowrap"
                       onClick={() => setSummaryDriver(driver)}
                       title="Click to view monthly summary"
                     >
-                      {driver.name}
-                      {!writable && <span className="ml-1.5 text-[8px] font-bold uppercase text-slate-400 border border-slate-200 rounded px-1 py-0.5 align-middle">View only</span>}
+                      <div className="font-semibold text-teal-700 hover:underline">
+                        {driver.name}
+                        {!writable && <span className="ml-1.5 text-[8px] font-bold uppercase text-slate-400 border border-slate-200 rounded px-1 py-0.5 align-middle">View only</span>}
+                      </div>
+                      {/* Vehicle No is read straight off the driver record (same field Driver
+                          Salary edits, see DriverFormModal) - not a separate copy, so a change
+                          made in Driver Salary shows here immediately with no extra sync step. */}
+                      {driver.vehicleNo && <div className="text-[9px] font-mono font-normal text-slate-400">{driver.vehicleNo}</div>}
                     </td>
                     {Array.from({ length: totalDays }, (_, i) => i + 1).map(day => {
                       const record = cellRecord(driver.id, day);
