@@ -461,10 +461,49 @@ function requireVendorManagementAccess(req: express.Request, res: express.Respon
 // before insert, shrinks that window to a single request, and the
 // while-loop below is a belt-and-suspenders check against the (much
 // smaller) remaining chance of two inserts landing back-to-back.
+// Numbering scheme (per direct instruction, effective 2026-08-13):
+// - Aug 2026 and earlier: flat ENT-<year>-<4-digit-seq>, continuing from
+//   2673 for the rest of Aug 2026 specifically - the existing sequence had
+//   accumulated duplicate/out-of-order numbers (confusing the Ledger's
+//   Balance Net running total, which assumes Entry No order = real entry
+//   order), and this floor skips past that mess without touching any
+//   already-saved record.
+// - Sep 2026 onward: ENT-<year>-<2-digit-month><2-digit-seq>, e.g.
+//   ENT-2026-0901, 0902... - the 2-digit seq is a running count of entries
+//   within that real calendar month (however many get entered per day),
+//   resetting to 01 at the start of each new month. Month is always the
+//   real calendar month the entry is being saved in, not the voucher's own
+//   (possibly backdated) Date field - same "today's real date" convention
+//   the year prefix already used before this change.
 function nextPettyCashEntryNo(vouchers: PettyCashVoucher[]): string {
-  const prefix = `ENT-${new Date().getFullYear()}-`;
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1; // 1-12
+  const useMonthlyFormat = year > 2026 || (year === 2026 && month >= 9);
   const existing = new Set(vouchers.map(v => (v.entryNo || '').toUpperCase()));
-  let maxNum = 0;
+
+  if (useMonthlyFormat) {
+    const prefix = `ENT-${year}-${String(month).padStart(2, '0')}`;
+    let maxNum = 0;
+    for (const v of vouchers) {
+      const upper = (v.entryNo || '').toUpperCase();
+      // Length check matters here - an old flat-format entry can share the
+      // same "ENT-<year>-<MM>" characters as a coincidental substring
+      // (e.g. old #0950 vs new month "09") without actually being one.
+      if (!upper.startsWith(prefix) || upper.length !== prefix.length + 2) continue;
+      const n = parseInt(upper.slice(prefix.length), 10);
+      if (!isNaN(n) && n > maxNum) maxNum = n;
+    }
+    let candidate = `${prefix}${String(maxNum + 1).padStart(2, '0')}`;
+    while (existing.has(candidate)) {
+      maxNum++;
+      candidate = `${prefix}${String(maxNum + 1).padStart(2, '0')}`;
+    }
+    return candidate;
+  }
+
+  const prefix = `ENT-${year}-`;
+  let maxNum = (year === 2026 && month === 8) ? 2672 : 0;
   for (const v of vouchers) {
     const upper = (v.entryNo || '').toUpperCase();
     if (!upper.startsWith(prefix)) continue;
@@ -2473,6 +2512,27 @@ async function startServer() {
       const { id } = req.params;
       const result = await deleteVendor(id);
       res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Vehicle -> Driver lookup for auto-matching outside the Driver Details
+  // module (e.g. Petty Cash's Market POD trip form, Receiver auto-fill) -
+  // deliberately NOT behind requireDriverAccess/DRIVER_LOCATION_SCOPES.
+  // Those modules need to match ANY vehicle to its driver company-wide
+  // regardless of the caller's own Driver Details location scope (a Petty
+  // Cash handler logging a trip for a vehicle outside their own scoped
+  // locations should still get the right driver, not "no driver mapped"
+  // just because their Driver Details access doesn't cover that location).
+  // Every field with payroll/bank/document data is deliberately left out -
+  // this is a company-wide lookup, not a Driver Details view.
+  app.get('/api/drivers/vehicle-lookup', async (req, res) => {
+    try {
+      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser) return res.status(401).json({ error: 'Authentication required.' });
+      const all = await getDriverEmployees();
+      res.json(all.map(d => ({ id: d.id, name: d.name, vehicleNo: d.vehicleNo || '' })));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

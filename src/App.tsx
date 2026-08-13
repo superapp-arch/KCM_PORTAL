@@ -19,6 +19,7 @@ import {
   VehicleMileage,
   Vendor,
   DriverEmployee,
+  DriverVehicleLookup,
   VehicleLoan,
   BusinessLoan,
   MarketPodEntry,
@@ -62,6 +63,7 @@ export default function App() {
   const [vehicleMileages, setVehicleMileages] = useState<VehicleMileage[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [drivers, setDrivers] = useState<DriverEmployee[]>([]);
+  const [driverVehicleLookup, setDriverVehicleLookup] = useState<DriverVehicleLookup[]>([]);
   const [vehicleLoans, setVehicleLoans] = useState<VehicleLoan[]>([]);
   const [businessLoans, setBusinessLoans] = useState<BusinessLoan[]>([]);
 
@@ -127,6 +129,7 @@ export default function App() {
         vehicleMileagesRes,
         vendorsRes,
         driversRes,
+        driverVehicleLookupRes,
         vehicleLoansRes,
         businessLoansRes
       ] = await Promise.all([
@@ -153,6 +156,7 @@ export default function App() {
         authFetch('/api/vehicle-mileage'),
         authFetch('/api/vendors'),
         authFetch('/api/drivers/employees'),
+        authFetch('/api/drivers/vehicle-lookup'),
         authFetch('/api/vehicle-loans'),
         authFetch('/api/business-loans')
       ]);
@@ -180,6 +184,7 @@ export default function App() {
       if (vehicleMileagesRes.ok) setVehicleMileages(await vehicleMileagesRes.json());
       if (vendorsRes.ok) setVendors(await vendorsRes.json());
       if (driversRes.ok) setDrivers(await driversRes.json());
+      if (driverVehicleLookupRes.ok) setDriverVehicleLookup(await driverVehicleLookupRes.json());
       if (vehicleLoansRes.ok) setVehicleLoans(await vehicleLoansRes.json());
       if (businessLoansRes.ok) setBusinessLoans(await businessLoansRes.json());
     } catch (err) {
@@ -1240,6 +1245,7 @@ export default function App() {
         onUpdateVendor={handleUpdateVendor}
         onDeleteVendor={handleDeleteVendor}
         drivers={drivers}
+        driverVehicleLookup={driverVehicleLookup}
         onAddDriver={handleAddDriver}
         onUpdateDriver={handleUpdateDriver}
         onDeleteDriver={handleDeleteDriver}

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
-import { PettyCashVoucher, VehicleDocument, Vehicle, MarketPodEntry, MarketPodStatus, MarketPodPaymentMode, User, DriverEmployee, Vendor, PettyCashAdvance } from '../types';
+import { PettyCashVoucher, VehicleDocument, Vehicle, MarketPodEntry, MarketPodStatus, MarketPodPaymentMode, User, DriverVehicleLookup, Vendor, PettyCashAdvance } from '../types';
 import {
   Landmark,
   Plus,
@@ -45,7 +45,12 @@ interface PettyCashProps {
   // vehicles - this module (and every other one) only ever reads this list,
   // never writes to it.
   vehicles: Vehicle[];
-  drivers: DriverEmployee[];
+  // Company-wide, unrestricted vehicle -> driver lookup (see
+  // /api/drivers/vehicle-lookup) - NOT the same list as Driver Details'
+  // own `drivers` state elsewhere in the app, which is location-scoped per
+  // viewer. Petty Cash needs to match ANY vehicle to its driver regardless
+  // of the current handler's own Driver Details location access.
+  driverVehicleLookup: DriverVehicleLookup[];
   vendors: Vendor[];
   marketPodEntries: MarketPodEntry[];
   onAddMarketPodEntry: (entry: Omit<MarketPodEntry, 'id'>) => Promise<void>;
@@ -157,7 +162,7 @@ export default function PettyCash({
   onUpdateVoucher,
   onDeleteVoucher,
   vehicles,
-  drivers,
+  driverVehicleLookup,
   vendors,
   marketPodEntries,
   onAddMarketPodEntry,
@@ -329,12 +334,13 @@ export default function PettyCash({
   const vehicleByRegNo = (regNo: string): Vehicle | undefined =>
     vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === regNo.trim().toUpperCase());
 
-  // Auto-fetch Driver ID: matches Market POD's Vehicle Number against Driver
-  // Details (DriverEmployee.vehicleNo), same source Fuel Entry/Mileage Report
-  // read their own vehicle lists from. Read-only unless a super admin flips
-  // the override toggle.
+  // Auto-fetch Driver ID: matches Market POD's Vehicle Number against the
+  // company-wide driverVehicleLookup - unrestricted by the current handler's
+  // own Driver Details location scope, so this still finds the right driver
+  // even for a vehicle/location they don't personally have Driver Details
+  // access to. Read-only unless a super admin flips the override toggle.
   const matchedDriver = mpVehicleNumber.trim()
-    ? drivers.find(d => (d.vehicleNo || '').trim().toUpperCase() === mpVehicleNumber.trim().toUpperCase())
+    ? driverVehicleLookup.find(d => (d.vehicleNo || '').trim().toUpperCase() === mpVehicleNumber.trim().toUpperCase())
     : undefined;
 
   useEffect(() => {
@@ -353,19 +359,43 @@ export default function PettyCash({
     return `TRIP-${String(maxNum + 1).padStart(6, '0')}`;
   };
 
-  // Ledger Entry No is likewise auto-generated and never user-editable, e.g.
-  // "ENT-2026-2525" - continues from that year's highest existing trailing
-  // 4-digit sequence (never resets/skips within a year), same live-max-plus-
-  // one convention as nextMarketPodEntryNo above.
+  // Ledger Entry No is likewise auto-generated and never user-editable - this
+  // is only a display preview of what the server will assign (the actual
+  // save always regenerates it server-side, see server.ts's own
+  // nextPettyCashEntryNo, which this mirrors exactly so the preview shown
+  // before saving matches what actually gets saved).
+  //
+  // Numbering scheme (per direct instruction, effective 2026-08-13):
+  // - Aug 2026 and earlier: flat ENT-<year>-<4-digit-seq>, continuing from
+  //   2673 for the rest of Aug 2026 specifically, skipping past the
+  //   duplicate/out-of-order zone that had built up.
+  // - Sep 2026 onward: ENT-<year>-<2-digit-month><2-digit-seq>, e.g.
+  //   ENT-2026-0901, 0902... - seq resets to 01 each new month, based on
+  //   the real calendar month (not the voucher's own Date field).
   const nextPettyCashEntryNo = () => {
-    const currentYear = new Date().getFullYear();
-    const prefix = `ENT-${currentYear}-`;
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1; // 1-12
+    const useMonthlyFormat = year > 2026 || (year === 2026 && month >= 9);
+
+    if (useMonthlyFormat) {
+      const prefix = `ENT-${year}-${String(month).padStart(2, '0')}`;
+      const maxNum = vouchers.reduce((max, v) => {
+        const upper = (v.entryNo || '').toUpperCase();
+        if (!upper.startsWith(prefix) || upper.length !== prefix.length + 2) return max;
+        const n = parseInt(upper.slice(prefix.length), 10);
+        return !isNaN(n) && n > max ? n : max;
+      }, 0);
+      return `${prefix}${String(maxNum + 1).padStart(2, '0')}`;
+    }
+
+    const prefix = `ENT-${year}-`;
     const maxNum = vouchers.reduce((max, v) => {
       if (!(v.entryNo || '').toUpperCase().startsWith(prefix)) return max;
       const match = (v.entryNo || '').match(/(\d+)$/);
       const n = match ? parseInt(match[1], 10) : 0;
       return n > max ? n : max;
-    }, 0);
+    }, year === 2026 && month === 8 ? 2672 : 0);
     return `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
   };
 
@@ -410,7 +440,7 @@ export default function PettyCash({
     // If the saved driverId doesn't match what auto-fetch would now produce,
     // treat it as a standing override so re-opening this entry doesn't
     // silently discard it.
-    const autoMatch = drivers.find(d => (d.vehicleNo || '').trim().toUpperCase() === entry.vehicleNumber.trim().toUpperCase());
+    const autoMatch = driverVehicleLookup.find(d => (d.vehicleNo || '').trim().toUpperCase() === entry.vehicleNumber.trim().toUpperCase());
     setMpDriverOverride(!!entry.driverId && entry.driverId !== (autoMatch?.id || ''));
     setShowMarketPodSidebar(true);
   };
@@ -518,12 +548,12 @@ export default function PettyCash({
       if (!regNo) return undefined;
       const matchedVendor = vendors.find(v => (v.vehicleNumbers || []).some(num => (num || '').trim().toUpperCase() === regNo));
       if (matchedVendor) return matchedVendor.code;
-      const matchedDriverRecord = drivers.find(d => (d.vehicleNo || '').trim().toUpperCase() === regNo);
+      const matchedDriverRecord = driverVehicleLookup.find(d => (d.vehicleNo || '').trim().toUpperCase() === regNo);
       return matchedDriverRecord ? matchedDriverRecord.id : undefined;
     };
 
     setVendorId(matchFor(vNo) || matchFor(vvNo) || '');
-  }, [vehicleNumber, vendorVehicleNumber, vendors, drivers]);
+  }, [vehicleNumber, vendorVehicleNumber, vendors, driverVehicleLookup]);
 
   // Location -> Client Name auto-fill (Nelamangala/Nidagatta => Reliance
   // F&V, DHL Attibele/Chennai or a TN Vehicle Number => Swiggy). Applied from
@@ -559,7 +589,7 @@ export default function PettyCash({
       setLocation(newLocation);
       applyLocationAutoClient(newLocation, trimmed);
     }
-    const matchedDriverRecord = drivers.find(d => (d.vehicleNo || '').trim().toUpperCase() === trimmed);
+    const matchedDriverRecord = driverVehicleLookup.find(d => (d.vehicleNo || '').trim().toUpperCase() === trimmed);
     if (matchedDriverRecord?.name) {
       setReceiver(matchedDriverRecord.name);
     }
@@ -738,10 +768,15 @@ export default function PettyCash({
   // Ordered by Entry No (the sequence entries were actually created in, see
   // nextPettyCashEntryNo) rather than the user-editable Date field - Date can
   // be backdated independently of when an entry was actually logged, which
-  // made this column look like it was jumping around at random whenever the
-  // ledger (now sorted by Entry No by default) didn't happen to match Date
-  // order too. Entry No order always matches the ledger's default sort, so
-  // Balance Net now reads as a clean, steadily-moving running total.
+  // made this column look like it was jumping around at random.
+  // Known gap: nextPettyCashEntryNo's numbering format changes at the Sep
+  // 2026 cutover (flat ENT-2026-NNNN before, monthly ENT-2026-MMNN from
+  // then on) - extractTrailingNumber alone can't distinguish an old flat
+  // number from a new monthly one just by digit value (e.g. Sep's "0901"
+  // reads as 901, numerically less than Aug's "2673"), so a list mixing
+  // entries from both sides of that boundary could still order strangely
+  // right at the seam. Not fixed here since it wasn't part of what was
+  // asked - flag if it turns out to matter in practice.
   const balanceNetAt = (voucher: PettyCashVoucher): number => {
     const owner = voucher.enteredBy || user.username;
     const totalAdvances = advancesFor(owner).reduce((s, a) => s + (a.amount || 0), 0);
@@ -1935,7 +1970,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           <span className="font-mono font-bold text-slate-700">
                             {entry.driverId}
                             {(() => {
-                              const d = drivers.find(dr => dr.id === entry.driverId);
+                              const d = driverVehicleLookup.find(dr => dr.id === entry.driverId);
                               return d ? <span className="text-slate-400 font-sans font-normal"> ({d.name})</span> : null;
                             })()}
                           </span>

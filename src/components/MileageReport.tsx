@@ -67,7 +67,11 @@ export default function MileageReportModule({
   // Filter conditions
   const [selectedLocationFilter, setSelectedLocationFilter] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
-  const [sort, setSort] = useState<SortState | null>(null);
+  // Defaults to newest-first by Date, same "Sort by" convention as the Petty
+  // Cash Ledger/Market POD tables - still fully overridable via the column
+  // sort headers or the dropdown, and resets to this default every time the
+  // module is opened fresh (plain component state, not persisted).
+  const [sort, setSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
 
   // Form inputs
@@ -439,6 +443,8 @@ export default function MileageReportModule({
         switch (sort.key) {
           case 'driverName': cmp = compareText(a.driverName, b.driverName); break;
           case 'difference': cmp = compareNumber(a.difference, b.difference); break;
+          // Ties (same date) break on Vehicle No so the order stays stable.
+          case 'date': cmp = a.date === b.date ? extractLeadingNumber(a.vehicleNo) - extractLeadingNumber(b.vehicleNo) : (a.date < b.date ? -1 : 1); break;
           default: cmp = extractLeadingNumber(a.vehicleNo) - extractLeadingNumber(b.vehicleNo);
         }
         return sort.direction === 'asc' ? cmp : -cmp;
@@ -524,7 +530,21 @@ export default function MileageReportModule({
             </span>
             <span>Matches: {filteredReports.length} entries</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Sort By - Newest First (default) / Oldest First. Reuses the
+                same `sort` state the column headers drive. */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Sort By</label>
+              <select
+                value={sort?.key === 'date' && sort.direction === 'asc' ? 'oldest' : 'newest'}
+                onChange={(e) => setSort({ key: 'date', direction: e.target.value === 'oldest' ? 'asc' : 'desc' })}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-bold text-slate-700 text-[11px]"
+              >
+                <option value="newest">Newest First</option>
+                <option value="oldest">Oldest First</option>
+              </select>
+            </div>
+
             {/* Location Selector */}
             <div>
               <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Filter by Location</label>

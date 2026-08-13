@@ -16,6 +16,7 @@ import {
   VehicleMileage,
   Vendor,
   DriverEmployee,
+  DriverVehicleLookup,
   VehicleLoan,
   BusinessLoan,
   MarketPodEntry,
@@ -183,6 +184,7 @@ interface AdministrationProps {
   onUpdateVendor: (id: string, vendor: Partial<Vendor>) => Promise<void>;
   onDeleteVendor: (id: string) => Promise<void>;
   drivers: DriverEmployee[];
+  driverVehicleLookup: DriverVehicleLookup[];
   onAddDriver: (driver: Omit<DriverEmployee, 'id'> & { id: string }) => Promise<void>;
   onUpdateDriver: (id: string, driver: Partial<DriverEmployee>) => Promise<void>;
   onDeleteDriver: (id: string) => Promise<void>;
@@ -279,6 +281,7 @@ export default function Administration({
   onUpdateVendor,
   onDeleteVendor,
   drivers,
+  driverVehicleLookup,
   onAddDriver,
   onUpdateDriver,
   onDeleteDriver,
@@ -917,7 +920,7 @@ export default function Administration({
               onUpdateVoucher={onUpdateVoucher}
               onDeleteVoucher={onDeleteVoucher}
               vehicles={vehicles}
-              drivers={drivers}
+              driverVehicleLookup={driverVehicleLookup}
               vendors={vendors}
               marketPodEntries={marketPodEntries}
               onAddMarketPodEntry={onAddMarketPodEntry}

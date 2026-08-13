@@ -744,6 +744,17 @@ export const DRIVER_LOCATION_CATEGORIES: DriverLocationCategory[] = [
   'Chennai Hybrid', 'Nelmangala Reliance', 'Nidaghatta Reliance', 'Swiggy DHL', 'KCM Service Station'
 ];
 
+// Minimal, company-wide vehicle -> driver lookup for modules outside Driver
+// Details that need to auto-match a vehicle to its driver (e.g. Petty Cash's
+// Market POD trip form) regardless of the caller's own Driver Details
+// location scope - see /api/drivers/vehicle-lookup. Deliberately excludes
+// every payroll/bank/document field DriverEmployee carries.
+export interface DriverVehicleLookup {
+  id: string;
+  name: string;
+  vehicleNo: string;
+}
+
 // "Sl.No" is a display-only row index, not persisted. "Wages Per Day" and
 // "Total" are pure computed/derived values (like HR's Per Day Salary/Net
 // Salary) - not stored. lopAmount IS stored as a snapshot (recomputed from
