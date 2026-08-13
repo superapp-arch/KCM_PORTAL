@@ -384,6 +384,7 @@ export default function MileageReportModule({
       triggerNotif('Vehicle mileage rating saved.', 'success');
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save vehicle mileage rating.', 'error');
     }
   };
 
@@ -661,10 +662,14 @@ export default function MileageReportModule({
                             <Edit2 className="w-3 h-3" />
                           </button>
                           <button
-                            onClick={() => {
-                              if (window.confirm(`Are you sure you want to delete mileage report entry sl.no ${i + 1}?`)) {
-                                onDeleteReport(r.id);
+                            onClick={async () => {
+                              if (!window.confirm(`Are you sure you want to delete mileage report entry sl.no ${i + 1}?`)) return;
+                              try {
+                                await onDeleteReport(r.id);
                                 triggerNotif('Entry deleted successfully!', 'success');
+                              } catch (err) {
+                                console.error(err);
+                                triggerNotif(err instanceof Error ? err.message : 'Failed to delete mileage report entry.', 'error');
                               }
                             }}
                             className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"

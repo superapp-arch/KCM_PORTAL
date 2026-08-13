@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import SplashScreen from './components/SplashScreen';
 import Login from './components/Login';
 import Administration from './components/Administration';
-import { authFetch } from './authFetch';
+import { authFetch, registerSessionExpiredHandler, resetSessionExpiredNotification } from './authFetch';
 import {
   User,
   Vehicle,
@@ -38,6 +38,12 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Set when authFetch detects a 401 on an authenticated request (session
+  // expired/invalidated) - shown once on the login screen the user gets
+  // dropped back to, so it reads as "you were logged out, please sign back
+  // in" rather than a blank form with no explanation. See
+  // registerSessionExpiredHandler below.
+  const [sessionExpiredNotice, setSessionExpiredNotice] = useState<string | null>(null);
 
   // Departmental Data Lists
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -194,47 +200,44 @@ export default function App() {
 
   // State mutation wrappers to talk directly to server
   const handleUpdateVehicle = async (vehicle: Vehicle) => {
-    try {
-      const res = await fetch('/api/fleet', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(vehicle)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error saving/updating vehicle:', err);
+    const res = await fetch('/api/fleet', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(vehicle)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save/update vehicle.');
     }
   };
 
   const handleAddFuelLog = async (log: Omit<FuelLog, 'id'>) => {
-    try {
-      const res = await authFetch('/api/fuel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(log)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await authFetch('/api/fuel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(log)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add fuel log.');
     }
   };
 
   const handleAddInvoice = async (inv: Omit<BillingInvoice, 'id'>) => {
-    try {
-      const res = await fetch('/api/billing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(inv)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch('/api/billing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(inv)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add invoice.');
     }
   };
 
@@ -270,15 +273,14 @@ export default function App() {
   };
 
   const handleDeleteVoucher = async (id: string) => {
-    try {
-      const res = await authFetch(`/api/petty-cash/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await authFetch(`/api/petty-cash/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete voucher.');
     }
   };
 
@@ -314,15 +316,14 @@ export default function App() {
   };
 
   const handleDeleteMarketPodEntry = async (id: string) => {
-    try {
-      const res = await authFetch(`/api/market-pod/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await authFetch(`/api/market-pod/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete market pod entry.');
     }
   };
 
@@ -343,564 +344,524 @@ export default function App() {
   };
 
   const handleAddPettyCashAdvance = async (advance: Omit<PettyCashAdvance, 'id'>) => {
-    try {
-      const res = await authFetch('/api/petty-cash-advances', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(advance)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await authFetch('/api/petty-cash-advances', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(advance)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add petty cash advance.');
     }
   };
 
   const handleDeletePettyCashAdvance = async (id: string) => {
-    try {
-      const res = await authFetch(`/api/petty-cash-advances/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await authFetch(`/api/petty-cash-advances/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete petty cash advance.');
     }
   };
 
   const handleAddMaintenanceRecord = async (record: Omit<MaintenanceRecord, 'id'>) => {
-    try {
-      const res = await fetch('/api/maintenance', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(record)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch('/api/maintenance', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add maintenance record.');
     }
   };
 
   const handleSaveVehicleServiceSchedule = async (schedule: VehicleServiceSchedule) => {
-    try {
-      const res = await fetch('/api/vehicle-service-schedules', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(schedule)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch('/api/vehicle-service-schedules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(schedule)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save vehicle service schedule.');
     }
   };
 
   const handleAddTireBrand = async (name: string) => {
-    try {
-      const res = await fetch('/api/tire-brands', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch('/api/tire-brands', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add tire brand.');
     }
   };
 
   const handleSaveTireRecord = async (record: TireRecord | Omit<TireRecord, 'id'>) => {
-    try {
-      const res = await fetch('/api/tire-records', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(record)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch('/api/tire-records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save tire record.');
     }
   };
 
   const handleDeleteTireRecord = async (id: string) => {
-    try {
-      const res = await fetch(`/api/tire-records/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch(`/api/tire-records/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete tire record.');
     }
   };
 
   const handleSaveBatteryRecord = async (record: BatteryRecord | Omit<BatteryRecord, 'id'>) => {
-    try {
-      const res = await fetch('/api/battery-records', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(record)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch('/api/battery-records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save battery record.');
     }
   };
 
   const handleDeleteBatteryRecord = async (id: string) => {
-    try {
-      const res = await fetch(`/api/battery-records/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch(`/api/battery-records/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete battery record.');
     }
   };
 
   const handleSaveToolsChecklistRecord = async (record: Omit<ToolsChecklistRecord, 'id'>) => {
-    try {
-      const res = await fetch('/api/tools-checklist-records', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(record)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch('/api/tools-checklist-records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save tools checklist record.');
     }
   };
 
   const handleDeleteToolsChecklistRecord = async (id: string) => {
-    try {
-      const res = await fetch(`/api/tools-checklist-records/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch(`/api/tools-checklist-records/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete tools checklist record.');
     }
   };
 
   const handleAddMaintenanceServiceStation = async (station: Omit<MaintenanceServiceStation, 'id'>) => {
-    try {
-      const res = await fetch('/api/maintenance-service-stations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(station)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch('/api/maintenance-service-stations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(station)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add maintenance service station.');
     }
   };
 
   const handleDeleteMaintenanceServiceStation = async (id: string) => {
-    try {
-      const res = await fetch(`/api/maintenance-service-stations/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch(`/api/maintenance-service-stations/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete maintenance service station.');
     }
   };
 
   const handleAddBreakdownReport = async (report: Omit<BreakdownReport, 'id'>) => {
-    try {
-      const res = await fetch('/api/breakdown-reports', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(report)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch('/api/breakdown-reports', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(report)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add breakdown report.');
     }
   };
 
   const handleUpdateBreakdownReport = async (id: string, report: Partial<BreakdownReport>) => {
-    try {
-      const res = await fetch(`/api/breakdown-reports/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(report)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch(`/api/breakdown-reports/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(report)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update breakdown report.');
     }
   };
 
   const handleDeleteBreakdownReport = async (id: string) => {
-    try {
-      const res = await fetch(`/api/breakdown-reports/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch(`/api/breakdown-reports/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete breakdown report.');
     }
   };
 
   const handleAddAccountsEntry = async (entry: Omit<AccountsEntry, 'id'>) => {
-    try {
-      const res = await fetch('/api/accounts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(entry)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch('/api/accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add accounts entry.');
     }
   };
 
   const handleUpdateEmployee = async (id: string, emp: Partial<StaffEmployee>) => {
-    try {
-      const res = await authFetch(`/api/staff/employees/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(emp)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error updating employee:', err);
+    const res = await authFetch(`/api/staff/employees/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(emp)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update employee.');
     }
   };
 
   const handleDeleteEmployee = async (id: string) => {
-    try {
-      const res = await authFetch(`/api/staff/employees/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting employee:', err);
+    const res = await authFetch(`/api/staff/employees/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete employee.');
     }
   };
 
   const handleAddEmployee = async (emp: Omit<StaffEmployee, 'id'> & { id: string }) => {
-    try {
-      const res = await authFetch('/api/staff/employees', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(emp)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(emp);
+    const res = await authFetch('/api/staff/employees', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(emp)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add employee.');
     }
   };
 
   const handleAddDriver = async (driver: Omit<DriverEmployee, 'id'> & { id: string }) => {
-    try {
-      const res = await authFetch('/api/drivers/employees', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(driver)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error adding driver:', err);
+    const res = await authFetch('/api/drivers/employees', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(driver)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add driver.');
     }
   };
 
   const handleUpdateDriver = async (id: string, driver: Partial<DriverEmployee>) => {
-    try {
-      const res = await authFetch(`/api/drivers/employees/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(driver)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error updating driver:', err);
+    const res = await authFetch(`/api/drivers/employees/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(driver)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update driver.');
     }
   };
 
   const handleDeleteDriver = async (id: string) => {
-    try {
-      const res = await authFetch(`/api/drivers/employees/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting driver:', err);
+    const res = await authFetch(`/api/drivers/employees/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete driver.');
     }
   };
 
   const handleAddVehicleLoan = async (loan: Omit<VehicleLoan, 'id'> & { id: string }) => {
-    try {
-      const res = await authFetch('/api/vehicle-loans', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(loan)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error adding vehicle loan:', err);
+    const res = await authFetch('/api/vehicle-loans', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(loan)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add vehicle loan.');
     }
   };
 
   const handleUpdateVehicleLoan = async (id: string, loan: Partial<VehicleLoan>) => {
-    try {
-      const res = await authFetch(`/api/vehicle-loans/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(loan)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error updating vehicle loan:', err);
+    const res = await authFetch(`/api/vehicle-loans/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(loan)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update vehicle loan.');
     }
   };
 
   const handleDeleteVehicleLoan = async (id: string) => {
-    try {
-      const res = await authFetch(`/api/vehicle-loans/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting vehicle loan:', err);
+    const res = await authFetch(`/api/vehicle-loans/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete vehicle loan.');
     }
   };
 
   const handleAddBusinessLoan = async (loan: Omit<BusinessLoan, 'id'>) => {
-    try {
-      const res = await authFetch('/api/business-loans', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(loan)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error adding business loan:', err);
+    const res = await authFetch('/api/business-loans', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(loan)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add business loan.');
     }
   };
 
   const handleUpdateBusinessLoan = async (id: string, loan: Partial<BusinessLoan>) => {
-    try {
-      const res = await authFetch(`/api/business-loans/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(loan)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error updating business loan:', err);
+    const res = await authFetch(`/api/business-loans/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(loan)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update business loan.');
     }
   };
 
   const handleDeleteBusinessLoan = async (id: string) => {
-    try {
-      const res = await authFetch(`/api/business-loans/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting business loan:', err);
+    const res = await authFetch(`/api/business-loans/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete business loan.');
     }
   };
 
   const handleDeleteVehicle = async (id: string) => {
-    try {
-      const res = await fetch(`/api/fleet/${encodeURIComponent(id)}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting vehicle:', err);
+    const res = await fetch(`/api/fleet/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete vehicle.');
     }
   };
 
   const handleUpdateFuelLog = async (id: string, log: Partial<FuelLog>) => {
-    try {
-      const res = await authFetch(`/api/fuel/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(log)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error updating fuel log:', err);
+    const res = await authFetch(`/api/fuel/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(log)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update fuel log.');
     }
   };
 
   // Divya's restricted RQ-ID-only update path - see requireFuelAccess/
   // FUEL_RQ_ID_ONLY_EMAILS in server.ts.
   const handleUpdateFuelLogRqId = async (id: string, rqId: string) => {
-    try {
-      const res = await authFetch(`/api/fuel/${id}/rq-id`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rqId })
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error updating fuel log RQ ID:', err);
+    const res = await authFetch(`/api/fuel/${id}/rq-id`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rqId })
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update fuel log RQ ID.');
     }
   };
 
   const handleDeleteFuelLog = async (id: string) => {
-    try {
-      const res = await authFetch(`/api/fuel/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting fuel log:', err);
+    const res = await authFetch(`/api/fuel/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete fuel log.');
     }
   };
 
   const handleUpdateInvoice = async (id: string, inv: Partial<BillingInvoice>) => {
-    try {
-      const res = await fetch(`/api/billing/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(inv)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error updating invoice:', err);
+    const res = await fetch(`/api/billing/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(inv)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update invoice.');
     }
   };
 
   const handleDeleteInvoice = async (id: string) => {
-    try {
-      const res = await fetch(`/api/billing/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting invoice:', err);
+    const res = await fetch(`/api/billing/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete invoice.');
     }
   };
 
   const handleUpdateMaintenanceRecord = async (id: string, record: Partial<MaintenanceRecord>) => {
-    try {
-      const res = await fetch(`/api/maintenance/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(record)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error updating maintenance record:', err);
+    const res = await fetch(`/api/maintenance/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update maintenance record.');
     }
   };
 
   const handleDeleteMaintenanceRecord = async (id: string) => {
-    try {
-      const res = await fetch(`/api/maintenance/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting maintenance record:', err);
+    const res = await fetch(`/api/maintenance/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete maintenance record.');
     }
   };
 
   const handleUpdateAccountsEntry = async (id: string, entry: Partial<AccountsEntry>) => {
-    try {
-      const res = await fetch(`/api/accounts/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(entry)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error updating accounts entry:', err);
+    const res = await fetch(`/api/accounts/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update accounts entry.');
     }
   };
 
   const handleDeleteAccountsEntry = async (id: string) => {
-    try {
-      const res = await fetch(`/api/accounts/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting accounts entry:', err);
+    const res = await fetch(`/api/accounts/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete accounts entry.');
     }
   };
 
   const handleResolveNotification = async (notifId: string) => {
-    try {
-      const res = await fetch('/api/notifications/resolve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: notifId })
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error(err);
+    const res = await fetch('/api/notifications/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: notifId })
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to resolve notification.');
     }
   };
 
@@ -922,45 +883,42 @@ export default function App() {
   };
 
   const handleAddWarehouseEntry = async (entry: Omit<WarehouseEntry, 'id'>) => {
-    try {
-      const res = await authFetch('/api/warehouse', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(entry)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error adding warehouse entry:', err);
+    const res = await authFetch('/api/warehouse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add warehouse entry.');
     }
   };
 
   const handleUpdateWarehouseEntry = async (id: string, entry: Partial<WarehouseEntry>) => {
-    try {
-      const res = await authFetch('/api/warehouse', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...entry, id })
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error updating warehouse entry:', err);
+    const res = await authFetch('/api/warehouse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...entry, id })
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update warehouse entry.');
     }
   };
 
   const handleDeleteWarehouseEntry = async (id: string) => {
-    try {
-      const res = await authFetch(`/api/warehouse/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting warehouse entry:', err);
+    const res = await authFetch(`/api/warehouse/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete warehouse entry.');
     }
   };
 
@@ -968,166 +926,155 @@ export default function App() {
   // back) - Fuel Entry's combined form needs this to link the fuel log it
   // saves alongside a mileage entry (see FuelLog.mileageReportId).
   const handleAddMileageReport = async (report: Omit<MileageReport, 'id'>): Promise<string | undefined> => {
-    try {
-      const res = await authFetch('/api/mileage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(report)
-      });
-      if (res.ok) {
-        const data = await res.json();
-        await fetchAllData();
-        return data.id as string | undefined;
-      }
-    } catch (err) {
-      console.error('Error adding mileage report:', err);
+    const res = await authFetch('/api/mileage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(report)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      await fetchAllData();
+      return data.id as string | undefined;
     }
-    return undefined;
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to add mileage report.');
   };
 
   const handleUpdateMileageReport = async (id: string, report: Partial<MileageReport>) => {
-    try {
-      const res = await authFetch('/api/mileage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...report, id })
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error updating mileage report:', err);
+    const res = await authFetch('/api/mileage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...report, id })
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update mileage report.');
     }
   };
 
   const handleDeleteMileageReport = async (id: string) => {
-    try {
-      const res = await authFetch(`/api/mileage/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting mileage report:', err);
+    const res = await authFetch(`/api/mileage/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete mileage report.');
     }
   };
 
   const handleAddFuelVendor = async (vendor: Omit<FuelVendor, 'id'>) => {
-    try {
-      const res = await authFetch('/api/fuel-vendors', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(vendor)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error adding fuel vendor:', err);
+    const res = await authFetch('/api/fuel-vendors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(vendor)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add fuel vendor.');
     }
   };
 
   const handleDeleteFuelVendor = async (id: string) => {
-    try {
-      const res = await authFetch(`/api/fuel-vendors/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting fuel vendor:', err);
+    const res = await authFetch(`/api/fuel-vendors/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete fuel vendor.');
     }
   };
 
   const handleAddVehicleMileage = async (entry: Omit<VehicleMileage, 'id'>) => {
-    try {
-      const res = await authFetch('/api/vehicle-mileage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(entry)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error adding vehicle mileage:', err);
+    const res = await authFetch('/api/vehicle-mileage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add vehicle mileage.');
     }
   };
 
   const handleUpdateVehicleMileage = async (id: string, entry: Partial<VehicleMileage>) => {
-    try {
-      const res = await authFetch(`/api/vehicle-mileage/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(entry)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error updating vehicle mileage:', err);
+    const res = await authFetch(`/api/vehicle-mileage/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update vehicle mileage.');
     }
   };
 
   const handleDeleteVehicleMileage = async (id: string) => {
-    try {
-      const res = await authFetch(`/api/vehicle-mileage/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting vehicle mileage:', err);
+    const res = await authFetch(`/api/vehicle-mileage/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete vehicle mileage.');
     }
   };
 
   const handleAddVendor = async (vendor: Omit<Vendor, 'id'>) => {
-    try {
-      const res = await authFetch('/api/vendors', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(vendor)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error adding vendor:', err);
+    const res = await authFetch('/api/vendors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(vendor)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to add vendor.');
     }
   };
 
   const handleUpdateVendor = async (id: string, vendor: Partial<Vendor>) => {
-    try {
-      const res = await authFetch(`/api/vendors/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(vendor)
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error updating vendor:', err);
+    const res = await authFetch(`/api/vendors/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(vendor)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update vendor.');
     }
   };
 
   const handleDeleteVendor = async (id: string) => {
-    try {
-      const res = await authFetch(`/api/vendors/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Error deleting vendor:', err);
+    const res = await authFetch(`/api/vendors/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete vendor.');
     }
   };
 
   const handleLoginSuccess = async (loggedInUser: User, sessionToken?: string) => {
+    setSessionExpiredNotice(null);
+    resetSessionExpiredNotification(); // a fresh login can trigger the expiry flow again if it happens a second time
     setUser(loggedInUser);
     if (sessionToken) setToken(sessionToken);
     await fetchAllData();
@@ -1139,6 +1086,18 @@ export default function App() {
     localStorage.removeItem('kcm_session_user');
     localStorage.removeItem('kcm_session_token');
   };
+
+  // Fires once, globally, the moment any authFetch call comes back 401 (see
+  // authFetch.ts) - drops the user straight back to the login screen with a
+  // clear explanation instead of letting whatever they were doing quietly
+  // fail while looking like it worked.
+  useEffect(() => {
+    registerSessionExpiredHandler(() => {
+      setSessionExpiredNotice('Your session has expired. Please log in again to continue - anything you were about to save was NOT saved.');
+      handleLogout();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 3. Render State Selector
   if (showSplash) {
@@ -1157,7 +1116,7 @@ export default function App() {
   }
 
   if (!user) {
-    return <Login onLoginSuccess={handleLoginSuccess} />;
+    return <Login onLoginSuccess={handleLoginSuccess} initialNotice={sessionExpiredNotice || undefined} />;
   }
 
   return (

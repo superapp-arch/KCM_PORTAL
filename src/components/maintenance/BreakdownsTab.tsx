@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   BreakdownReport, Vehicle, DriverEmployee, MaintenanceServiceStation, MaintenanceRecord, MaintenanceWorkItem, VehicleDocument
 } from '../../types';
-import { AlertTriangle, Plus, X, Wrench, CheckCircle2, Trash2, Zap, Truck as TruckIcon } from 'lucide-react';
+import { AlertTriangle, Plus, X, Wrench, CheckCircle2, AlertCircle, Trash2, Zap, Truck as TruckIcon } from 'lucide-react';
 import DateInput from '../DateInput';
 import DocumentAttachment from '../DocumentAttachment';
 
@@ -30,8 +30,8 @@ export default function BreakdownsTab({
   breakdownReports, onAddBreakdownReport, onUpdateBreakdownReport, onDeleteBreakdownReport,
   vehicles, drivers, serviceStations, onAddServiceStation, onAddRecord
 }: BreakdownsTabProps) {
-  const [notif, setNotif] = useState<string | null>(null);
-  const triggerNotif = (msg: string) => { setNotif(msg); setTimeout(() => setNotif(null), 4000); };
+  const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
 
   const vehicleList = Array.from(new Set(vehicles.map(v => v.regNo || v['Reg. No.'] || '').filter(Boolean))).sort();
   const driverNameList = Array.from(new Set(drivers.map(d => d.name).filter(Boolean))).sort();
@@ -65,7 +65,7 @@ export default function BreakdownsTab({
 
   const handleReportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!regNo.trim()) { triggerNotif('Vehicle Number is required.'); return; }
+    if (!regNo.trim()) { triggerNotif('Vehicle Number is required.', 'error'); return; }
     setIsSubmitting(true);
     try {
       await onAddBreakdownReport({
@@ -78,6 +78,7 @@ export default function BreakdownsTab({
       resetReportForm();
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to report breakdown.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -85,8 +86,13 @@ export default function BreakdownsTab({
 
   const handleDeleteReport = async (b: BreakdownReport) => {
     if (!confirm(`Delete the breakdown report for ${b.regNo}?`)) return;
-    await onDeleteBreakdownReport(b.id);
-    triggerNotif('Breakdown report deleted.');
+    try {
+      await onDeleteBreakdownReport(b.id);
+      triggerNotif('Breakdown report deleted.');
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to delete breakdown report.', 'error');
+    }
   };
 
   // Log Workshop Visit modal - links a new MaintenanceRecord (breakdownReportId
@@ -112,15 +118,20 @@ export default function BreakdownsTab({
 
   const handleAddStationInline = async () => {
     if (!newStationName.trim()) return;
-    await onAddServiceStation({ name: newStationName.trim() });
-    setNewStationName('');
+    try {
+      await onAddServiceStation({ name: newStationName.trim() });
+      setNewStationName('');
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save service station.', 'error');
+    }
   };
 
   const handleLogWorkshopVisit = async () => {
     if (!visitFor) return;
     const validItems = visitWorkItems.filter(w => w.description.trim() || w.cost);
     if (!visitStationId || validItems.length === 0) {
-      triggerNotif('Pick a Service Station and at least one work item.');
+      triggerNotif('Pick a Service Station and at least one work item.', 'error');
       return;
     }
     setVisitSubmitting(true);
@@ -146,6 +157,7 @@ export default function BreakdownsTab({
       setVisitFor(null);
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to log workshop visit.', 'error');
     } finally {
       setVisitSubmitting(false);
     }
@@ -157,8 +169,10 @@ export default function BreakdownsTab({
   return (
     <div className="space-y-4">
       {notif && (
-        <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-semibold flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />{notif}
+        <div className={`p-3 border rounded-lg text-xs font-semibold flex items-center gap-2 ${
+          notif.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
+        }`}>
+          {notif.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}{notif.message}
         </div>
       )}
 

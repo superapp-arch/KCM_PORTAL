@@ -10,7 +10,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 import { createServer as createViteServer } from 'vite';
 import { verifyPassword } from './src/auth/password.ts';
-import { createSession, getSessionUser, destroySession, extractBearerToken } from './src/auth/session.ts';
+import { createSession, getSessionUser, destroySession, extractBearerToken, startSessionCleanup } from './src/auth/session.ts';
 import { issueOtp, verifyOtp } from './src/auth/otp.ts';
 import { istTimestamp, istDateKey, istHour, istMonthDayKey } from './src/auth/time.ts';
 import { computeDueDateRaw } from './src/utils/loanDates.ts';
@@ -324,8 +324,8 @@ async function computeDriverMonthlyAttendanceSummary(driverId: string, month: st
 // actual enforcement: without it, anyone with a valid session token could
 // call /api/staff/* directly (e.g. via devtools) and read or edit employee/
 // salary data regardless of what the UI shows them.
-function requireHrAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+async function requireHrAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
@@ -353,8 +353,8 @@ const FUEL_RQ_ID_ONLY_EMAILS = ['divya@kcmlogistics.in'];
 // Within that, see the row-level enteredBy filtering applied inside the
 // /api/fuel and /api/mileage handlers themselves (this middleware only gates
 // the module as a whole, the same two-layer pattern as requireHrAccess above).
-function requireFuelAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+async function requireFuelAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
@@ -378,8 +378,8 @@ const PETTY_CASH_ACCESS_EMAILS = ['vinod@kcmlogistics.in', 'ramesh@kcmlogistics.
 // is restricted to the 3 Petty Cash logins and super admins. Within that, each
 // of the 3 only ever sees/modifies their own rows - see filterEntryRowsForViewer/
 // canModifyEntryRow and their PettyCashAdvance-specific counterparts below.
-function requirePettyCashAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+async function requirePettyCashAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
@@ -391,8 +391,8 @@ function requirePettyCashAccess(req: express.Request, res: express.Response, nex
 
 // Warehouse Details is super-admin-only for now (the user may open it up to
 // specific other roles later - this is the one place to widen that).
-function requireWarehouseAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+async function requireWarehouseAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
@@ -410,8 +410,8 @@ function requireWarehouseAccess(req: express.Request, res: express.Response, nex
 // also allowed here.
 const LOAN_ACCESS_EMAILS = ['finance@kcmlogistics.in'];
 
-function requireLoanAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+async function requireLoanAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
@@ -428,8 +428,8 @@ const VENDOR_MANAGEMENT_EMAILS = ['divya@kcmlogistics.in', 'finance@kcmlogistics
 const VENDOR_READ_ONLY_EMAILS = [...VENDOR_MANAGEMENT_EMAILS, ...FUEL_ENTRY_USER_EMAILS];
 
 // GET /api/vendors: Divya, Rakshina, Chandan, Praveen, or super admin.
-function requireVendorReadAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+async function requireVendorReadAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
@@ -441,8 +441,8 @@ function requireVendorReadAccess(req: express.Request, res: express.Response, ne
 
 // POST/PUT/DELETE /api/vendors*: Divya, Rakshina, or super admin only - the
 // full Vendor Management module (Aadhar/PAN/bank fields included).
-function requireVendorManagementAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+async function requireVendorManagementAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
@@ -630,7 +630,7 @@ function nextMarketPodEntryNo(entries: MarketPodEntry[]): string {
 // specific non-super-admin to see every row too (e.g. Divya on /api/fuel, to
 // manage RQ IDs across the whole ledger) - every other caller (petty-cash,
 // market-pod, mileage) omits it and keeps the plain super-admin-only rule.
-function filterEntryRowsForViewer<T extends { enteredBy?: string }>(rows: T[], sessionUser?: ReturnType<typeof getSessionUser>, fullViewEmails: string[] = []): T[] {
+function filterEntryRowsForViewer<T extends { enteredBy?: string }>(rows: T[], sessionUser?: Awaited<ReturnType<typeof getSessionUser>>, fullViewEmails: string[] = []): T[] {
   if (!sessionUser) return [];
   if (sessionUser.department === 'super_admin' || fullViewEmails.includes(sessionUser.email || '')) return rows;
   return rows
@@ -640,7 +640,7 @@ function filterEntryRowsForViewer<T extends { enteredBy?: string }>(rows: T[], s
 
 // A non-super-admin may only modify (update/delete) a row they themselves
 // created - mirrors the read-side filtering above for write operations.
-function canModifyEntryRow(row: { enteredBy?: string } | undefined, sessionUser?: ReturnType<typeof getSessionUser>): boolean {
+function canModifyEntryRow(row: { enteredBy?: string } | undefined, sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): boolean {
   if (!sessionUser) return false;
   if (sessionUser.department === 'super_admin') return true;
   return !!row && row.enteredBy === sessionUser.username;
@@ -651,13 +651,13 @@ function canModifyEntryRow(row: { enteredBy?: string } | undefined, sessionUser?
 // (who happened to log the row) - the two normally coincide for Petty Cash's
 // 3 logins, but `username` is what actually matters for whose balance an
 // advance counts toward.
-function filterAdvancesForViewer(rows: PettyCashAdvance[], sessionUser?: ReturnType<typeof getSessionUser>): PettyCashAdvance[] {
+function filterAdvancesForViewer(rows: PettyCashAdvance[], sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): PettyCashAdvance[] {
   if (!sessionUser) return [];
   if (sessionUser.department === 'super_admin') return rows;
   return rows.filter(r => r.username === sessionUser.username);
 }
 
-function canModifyAdvance(row: PettyCashAdvance | undefined, sessionUser?: ReturnType<typeof getSessionUser>): boolean {
+function canModifyAdvance(row: PettyCashAdvance | undefined, sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): boolean {
   if (!sessionUser) return false;
   if (sessionUser.department === 'super_admin') return true;
   return !!row && row.username === sessionUser.username;
@@ -688,8 +688,8 @@ const DRIVER_ALL_LOCATIONS_EMAILS = ['bhagya@kcmlogistics.in', 'divya@kcmlogisti
 // a view-all/write-scoped tier distinct from DRIVER_ALL_LOCATIONS_EMAILS.
 const DRIVER_VIEW_ALL_EMAILS = ['vinod@kcmlogistics.in'];
 
-function requireDriverAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+async function requireDriverAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
@@ -707,7 +707,7 @@ function requireDriverAccess(req: express.Request, res: express.Response, next: 
 // Read scope: which locations' drivers/attendance a GET returns. Super
 // admins, Bhagya/Divya, and Vinod (view-all) get every location; everyone
 // else only their assigned DRIVER_LOCATION_SCOPES set.
-function getAllowedDriverViewLocations(sessionUser?: ReturnType<typeof getSessionUser>): DriverLocationCategory[] | 'ALL' {
+function getAllowedDriverViewLocations(sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): DriverLocationCategory[] | 'ALL' {
   if (!sessionUser) return [];
   if (
     sessionUser.department === 'super_admin' ||
@@ -720,18 +720,18 @@ function getAllowedDriverViewLocations(sessionUser?: ReturnType<typeof getSessio
 // Write scope: which locations a user may add/edit/delete drivers in, or
 // mark/edit attendance for. Narrower than view scope for DRIVER_VIEW_ALL_EMAILS
 // (Vinod sees every location but can only write within his own).
-function getAllowedDriverWriteLocations(sessionUser?: ReturnType<typeof getSessionUser>): DriverLocationCategory[] | 'ALL' {
+function getAllowedDriverWriteLocations(sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): DriverLocationCategory[] | 'ALL' {
   if (!sessionUser) return [];
   if (sessionUser.department === 'super_admin' || DRIVER_ALL_LOCATIONS_EMAILS.includes(sessionUser.email || '')) return 'ALL';
   return DRIVER_LOCATION_SCOPES[sessionUser.email || ''] || [];
 }
 
-function canViewDriverLocation(location: string, sessionUser?: ReturnType<typeof getSessionUser>): boolean {
+function canViewDriverLocation(location: string, sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): boolean {
   const allowed = getAllowedDriverViewLocations(sessionUser);
   return allowed === 'ALL' || allowed.includes(location as DriverLocationCategory);
 }
 
-function canWriteDriverLocation(location: string, sessionUser?: ReturnType<typeof getSessionUser>): boolean {
+function canWriteDriverLocation(location: string, sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): boolean {
   const allowed = getAllowedDriverWriteLocations(sessionUser);
   return allowed === 'ALL' || allowed.includes(location as DriverLocationCategory);
 }
@@ -747,6 +747,11 @@ async function startServer() {
   // passwords left over from before hashing was introduced.
   await seedDatabase();
   await migratePlaintextPasswords();
+  // Sessions are DB-backed (see src/auth/session.ts) - this just sweeps out
+  // rows nobody has touched in a while so the table doesn't grow forever.
+  // Not required for correctness (getSessionUser already rejects expired
+  // sessions on lookup regardless of whether the row still exists).
+  startSessionCleanup();
   // Fleet Maintenance rebuild: one-time conversion of any pre-existing
   // combined Vehicle Maintenance Profiles into the new Service Schedule /
   // Tire / Battery / Tools Checklist tables (no-op once already migrated).
@@ -1100,7 +1105,7 @@ async function startServer() {
   // birthday. Still respects the per-employee/day dedup marker.
   app.post('/api/birthday-check/send-now', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       if (!sessionUser || sessionUser.department !== 'super_admin') {
         return res.status(403).json({ success: false, error: 'Only Super Admin can trigger the birthday check.' });
       }
@@ -1138,8 +1143,8 @@ async function startServer() {
   });
 
   // Current session endpoint - resolves strictly from this client's own token
-  app.get('/api/session', (req, res) => {
-    res.json(getSessionUser(extractBearerToken(req.headers.authorization)) || null);
+  app.get('/api/session', async (req, res) => {
+    res.json((await getSessionUser(extractBearerToken(req.headers.authorization))) || null);
   });
 
   // Request Login OTP
@@ -1248,7 +1253,7 @@ async function startServer() {
           departmentLabel: matchedUser.departmentLabel,
           email: matchedUser.email || undefined
         };
-        const token = createSession(userSession);
+        const token = await createSession(userSession);
         return res.json({ success: true, user: userSession, token });
       }
 
@@ -1265,7 +1270,7 @@ async function startServer() {
         departmentLabel: matchedUser.departmentLabel,
         email: matchedUser.email || undefined
       };
-      const token = createSession(userSession);
+      const token = await createSession(userSession);
       return res.json({ success: true, user: userSession, token });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -1345,7 +1350,7 @@ async function startServer() {
   // Change Password for currently logged in session user
   app.post('/api/change-password', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       if (!sessionUser) {
         return res.status(401).json({ success: false, error: 'Unauthorized. No active session.' });
       }
@@ -1375,8 +1380,8 @@ async function startServer() {
   });
 
   // Logout endpoint - invalidates only this client's own token
-  app.post('/api/logout', (req, res) => {
-    destroySession(extractBearerToken(req.headers.authorization));
+  app.post('/api/logout', async (req, res) => {
+    await destroySession(extractBearerToken(req.headers.authorization));
     res.json({ success: true });
   });
 
@@ -1533,7 +1538,7 @@ async function startServer() {
   // bypassing the once-per-day automatic gate.
   app.post('/api/compliance-digest/send-now', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       if (!sessionUser || sessionUser.department !== 'super_admin') {
         return res.status(403).json({ success: false, error: 'Only Super Admin can send the compliance digest.' });
       }
@@ -1617,13 +1622,13 @@ async function startServer() {
 
   app.get('/api/fuel', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       res.json(filterEntryRowsForViewer(await getFuelLogs(), sessionUser, FUEL_RQ_ID_ONLY_EMAILS));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/fuel', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       // Divya never creates entries - guard even though the UI never offers
       // her an Add Entry button.
       if (sessionUser?.department !== 'super_admin' && FUEL_RQ_ID_ONLY_EMAILS.includes(sessionUser?.email || '')) {
@@ -1635,7 +1640,7 @@ async function startServer() {
   });
   app.put('/api/fuel/:id', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getFuelLogs()).find(l => l.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
       const result = await saveFuelLog({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
@@ -1646,7 +1651,7 @@ async function startServer() {
   // entry, regardless of what else is in the request body.
   app.put('/api/fuel/:id/rq-id', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       if (sessionUser?.department !== 'super_admin' && !FUEL_RQ_ID_ONLY_EMAILS.includes(sessionUser?.email || '')) {
         return res.status(403).json({ error: 'You cannot edit this entry.' });
       }
@@ -1658,7 +1663,7 @@ async function startServer() {
   });
   app.delete('/api/fuel/:id', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getFuelLogs()).find(l => l.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
       const result = await deleteFuelLog(req.params.id);
@@ -1689,13 +1694,13 @@ async function startServer() {
 
   app.get('/api/petty-cash', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       res.json(sortEntriesByDate(filterEntryRowsForViewer(await getPettyCashVouchers(), sessionUser)));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/petty-cash', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const allVouchers = await getPettyCashVouchers();
       const entryNo = nextPettyCashEntryNo(allVouchers);
       if (findDuplicateEntryNo(allVouchers, entryNo)) {
@@ -1707,7 +1712,7 @@ async function startServer() {
   });
   app.put('/api/petty-cash/:id', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const allVouchers = await getPettyCashVouchers();
       const existing = allVouchers.find(v => v.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
@@ -1720,7 +1725,7 @@ async function startServer() {
   });
   app.delete('/api/petty-cash/:id', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getPettyCashVouchers()).find(v => v.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
       const result = await deletePettyCashVoucher(req.params.id);
@@ -1730,13 +1735,13 @@ async function startServer() {
 
   app.get('/api/market-pod', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       res.json(sortEntriesByDate(filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser)));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/market-pod', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const allEntries = await getMarketPodEntries();
       const entryNo = nextMarketPodEntryNo(allEntries);
       if (findDuplicateEntryNo(allEntries, entryNo)) {
@@ -1753,7 +1758,7 @@ async function startServer() {
   });
   app.put('/api/market-pod/:id', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const allEntries = await getMarketPodEntries();
       const existing = allEntries.find(e => e.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
@@ -1779,7 +1784,7 @@ async function startServer() {
   });
   app.delete('/api/market-pod/:id', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getMarketPodEntries()).find(e => e.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
       if (existing) await removeMarketPodPettyCashLinks(existing);
@@ -1795,7 +1800,7 @@ async function startServer() {
   // over-payment guard + first-receipt snapshot logic.
   app.post('/api/market-pod/:id/balance-receipt', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getMarketPodEntries()).find(e => e.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
       if (!existing) return res.status(404).json({ error: 'Trip not found.' });
@@ -1837,13 +1842,13 @@ async function startServer() {
   // (whose ledger it belongs to) via filterAdvancesForViewer/canModifyAdvance.
   app.get('/api/petty-cash-advances', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       res.json(filterAdvancesForViewer(await getPettyCashAdvances(), sessionUser));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/petty-cash-advances', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       // A regular Petty Cash user can only ever add an advance to their own
       // ledger; only a super admin may specify a different `username` (e.g.
       // logging a top-up on someone else's behalf).
@@ -1854,7 +1859,7 @@ async function startServer() {
   });
   app.delete('/api/petty-cash-advances/:id', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getPettyCashAdvances()).find(a => a.id === req.params.id);
       if (!canModifyAdvance(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
       const result = await deletePettyCashAdvance(req.params.id);
@@ -2355,7 +2360,7 @@ async function startServer() {
 
   app.get('/api/mileage', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       res.json(filterEntryRowsForViewer(await getMileageReports(), sessionUser));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2364,7 +2369,7 @@ async function startServer() {
 
   app.post('/api/mileage', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const entry: MileageReport = req.body;
       if (entry.id) {
         const existing = (await getMileageReports()).find(r => r.id === entry.id);
@@ -2388,7 +2393,7 @@ async function startServer() {
 
   app.delete('/api/mileage/:id', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const { id } = req.params;
       const existing = (await getMileageReports()).find(r => r.id === id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
@@ -2529,7 +2534,7 @@ async function startServer() {
   // this is a company-wide lookup, not a Driver Details view.
   app.get('/api/drivers/vehicle-lookup', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       if (!sessionUser) return res.status(401).json({ error: 'Authentication required.' });
       const all = await getDriverEmployees();
       res.json(all.map(d => ({ id: d.id, name: d.name, vehicleNo: d.vehicleNo || '' })));
@@ -2543,7 +2548,7 @@ async function startServer() {
 
   app.get('/api/drivers/employees', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const allowed = getAllowedDriverViewLocations(sessionUser);
       const all = await getDriverEmployees();
       res.json(allowed === 'ALL' ? all : all.filter(d => allowed.includes(d.location)));
@@ -2554,7 +2559,7 @@ async function startServer() {
 
   app.post('/api/drivers/employees', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const entry: DriverEmployee = req.body;
       if (!canWriteDriverLocation(entry.location, sessionUser)) {
         return res.status(403).json({ error: 'You cannot add a driver in this location.' });
@@ -2569,7 +2574,7 @@ async function startServer() {
 
   app.put('/api/drivers/employees/:id', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getDriverEmployees()).find(d => d.id === req.params.id);
       const targetLocation = req.body.location || existing?.location;
       if (!existing || !canWriteDriverLocation(existing.location, sessionUser) || !canWriteDriverLocation(targetLocation, sessionUser)) {
@@ -2585,7 +2590,7 @@ async function startServer() {
 
   app.delete('/api/drivers/employees/:id', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getDriverEmployees()).find(d => d.id === req.params.id);
       if (!existing || !canWriteDriverLocation(existing.location, sessionUser)) {
         return res.status(403).json({ error: 'You cannot delete this driver.' });
@@ -2605,7 +2610,7 @@ async function startServer() {
   // `mode: 'view'` allows read-only access outside the caller's write scope
   // (i.e. for DRIVER_VIEW_ALL_EMAILS like Vinod); `mode: 'write'` (default)
   // is the stricter check used before actually marking/editing/deleting.
-  async function assertDriverAccessible(driverId: string, sessionUser: ReturnType<typeof getSessionUser> | undefined, mode: 'view' | 'write' = 'write') {
+  async function assertDriverAccessible(driverId: string, sessionUser: Awaited<ReturnType<typeof getSessionUser>> | undefined, mode: 'view' | 'write' = 'write') {
     const driver = (await getDriverEmployees()).find(d => d.id === driverId);
     if (!driver) return false;
     return mode === 'view' ? canViewDriverLocation(driver.location, sessionUser) : canWriteDriverLocation(driver.location, sessionUser);
@@ -2613,7 +2618,7 @@ async function startServer() {
 
   app.get('/api/drivers/attendance', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const allowed = getAllowedDriverViewLocations(sessionUser);
       const [rows, drivers] = await Promise.all([getDriverAttendance(), getDriverEmployees()]);
       if (allowed === 'ALL') return res.json(rows);
@@ -2626,7 +2631,7 @@ async function startServer() {
 
   app.post('/api/drivers/attendance/mark', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const { driverId, date, status, remarks } = req.body;
       if (!(await assertDriverAccessible(driverId, sessionUser))) {
         return res.status(403).json({ success: false, error: 'You cannot mark attendance for this driver.' });
@@ -2642,7 +2647,7 @@ async function startServer() {
 
   app.post('/api/drivers/attendance/bulk', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const entries = req.body as Array<{ driverId: string; date: string; status: string }>;
       if (!Array.isArray(entries)) return res.status(400).json({ success: false, error: 'Request body must be an array of attendance entries.' });
       const results: DriverAttendance[] = [];
@@ -2661,7 +2666,7 @@ async function startServer() {
 
   app.delete('/api/drivers/attendance/:id', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getDriverAttendance()).find(r => r.id === req.params.id);
       if (!existing || !(await assertDriverAccessible(existing.driverId, sessionUser))) {
         return res.status(403).json({ error: 'You cannot delete this attendance record.' });
@@ -2681,7 +2686,7 @@ async function startServer() {
 
   app.get('/api/drivers/attendance/monthly/:driverId/:month', async (req, res) => {
     try {
-      const sessionUser = getSessionUser(extractBearerToken(req.headers.authorization));
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const { driverId, month } = req.params;
       if (!(await assertDriverAccessible(driverId, sessionUser, 'view'))) {
         return res.status(403).json({ success: false, error: 'You cannot view this driver.' });

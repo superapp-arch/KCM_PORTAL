@@ -4,8 +4,9 @@ import {
   Landmark, 
   Plus, 
   Search, 
-  CheckCircle2, 
-  TrendingUp, 
+  CheckCircle2,
+  AlertCircle,
+  TrendingUp,
   TrendingDown, 
   DollarSign, 
   Edit2, 
@@ -39,7 +40,7 @@ export default function Accounts({ entries, onAddEntry, onUpdateEntry, onDeleteE
   const [reference, setReference] = useState('');
   const [newEntryDocs, setNewEntryDocs] = useState<VehicleDocument[]>([]);
 
-  const [notif, setNotif] = useState<string | null>(null);
+  const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   // Modal / Management State
   const [selectedEntryForManage, setSelectedEntryForManage] = useState<AccountsEntry | null>(null);
@@ -51,8 +52,8 @@ export default function Accounts({ entries, onAddEntry, onUpdateEntry, onDeleteE
   const [editAmount, setEditAmount] = useState('');
   const [editReference, setEditReference] = useState('');
 
-  const triggerNotif = (msg: string) => {
-    setNotif(msg);
+  const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => {
+    setNotif({ message, type });
     setTimeout(() => setNotif(null), 4000);
   };
 
@@ -81,6 +82,7 @@ export default function Accounts({ entries, onAddEntry, onUpdateEntry, onDeleteE
       triggerNotif('💰 Financial ledger updated and balanced successfully!');
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save the transaction.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -119,6 +121,7 @@ export default function Accounts({ entries, onAddEntry, onUpdateEntry, onDeleteE
       triggerNotif('✏️ Ledger entry updated successfully!');
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to update the ledger entry.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -135,6 +138,7 @@ export default function Accounts({ entries, onAddEntry, onUpdateEntry, onDeleteE
       triggerNotif('📎 Documents updated successfully.');
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to update documents.', 'error');
     }
   };
 
@@ -145,6 +149,7 @@ export default function Accounts({ entries, onAddEntry, onUpdateEntry, onDeleteE
       triggerNotif('🗑️ Transaction successfully removed.');
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to delete the transaction.', 'error');
     }
   };
 
@@ -179,9 +184,11 @@ export default function Accounts({ entries, onAddEntry, onUpdateEntry, onDeleteE
       </div>
 
       {notif && (
-        <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-semibold flex items-center gap-2 animate-pulse">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-          {notif}
+        <div className={`p-3 border rounded-lg text-xs font-semibold flex items-center gap-2 animate-pulse ${
+          notif.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
+        }`}>
+          {notif.type === 'success' ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />}
+          {notif.message}
         </div>
       )}
 

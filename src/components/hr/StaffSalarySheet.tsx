@@ -111,8 +111,13 @@ export default function StaffSalarySheet({ user, employees, onAddEmployee, onUpd
 
   const handleDelete = async (emp: StaffEmployee) => {
     if (!confirm(`Delete employee ${emp.id} - ${emp.name}? This cannot be undone.`)) return;
-    await onDeleteEmployee(emp.id);
-    triggerNotif(`Employee ${emp.id} removed.`, 'success');
+    try {
+      await onDeleteEmployee(emp.id);
+      triggerNotif(`Employee ${emp.id} removed.`, 'success');
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to delete employee.', 'error');
+    }
   };
 
   const handleSaved = async () => {

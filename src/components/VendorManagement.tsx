@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { Vendor, VehicleDocument } from '../types';
-import { Building2, Plus, Search, Edit2, Trash2, X, Car, Download } from 'lucide-react';
+import { Building2, Plus, Search, Edit2, Trash2, X, Car, Download, CheckCircle2, AlertCircle } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import SortHeader from './SortHeader';
 import { SortState, SortDirection, compareText, extractLeadingNumber } from '../utils/sort';
@@ -56,6 +56,11 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const triggerNotif = (message: string, type: 'success' | 'error') => {
+    setNotif({ message, type });
+    setTimeout(() => setNotif(null), 4000);
+  };
 
   const [form, setForm] = useState(emptyForm);
   const [active, setActive] = useState(true);
@@ -170,15 +175,24 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
       } else {
         await onAddVendor(payload);
       }
+      triggerNotif('Vendor saved successfully.', 'success');
       resetForm();
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save vendor.', 'error');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleDelete = async (vendor: Vendor) => {
-    if (window.confirm(`Delete vendor "${vendor.name}"? This action is irreversible.`)) {
+    if (!window.confirm(`Delete vendor "${vendor.name}"? This action is irreversible.`)) return;
+    try {
       await onDeleteVendor(vendor.id);
+      triggerNotif('Vendor deleted.', 'success');
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to delete vendor.', 'error');
     }
   };
 
@@ -187,7 +201,12 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
   // here would wipe every other field (name, code, documents, etc.) from
   // this vendor's stored data.
   const toggleActive = async (vendor: Vendor) => {
-    await onUpdateVendor(vendor.id, { ...vendor, active: !isVendorActive(vendor) });
+    try {
+      await onUpdateVendor(vendor.id, { ...vendor, active: !isVendorActive(vendor) });
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to update vendor status.', 'error');
+    }
   };
 
   // Dynamically listed (not hardcoded to Swiggy/Reliance) so any other
@@ -253,6 +272,15 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
           <Plus className="w-4 h-4" /> Add Vendor
         </button>
       </div>
+
+      {notif && (
+        <div className={`p-3 border rounded-lg text-xs font-semibold flex items-center gap-2 ${
+          notif.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
+        }`}>
+          {notif.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+          <span>{notif.message}</span>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex flex-wrap items-center gap-2">
         <Search className="w-3.5 h-3.5 text-slate-400" />

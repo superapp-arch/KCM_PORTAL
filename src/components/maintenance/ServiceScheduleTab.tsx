@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Vehicle, VehicleServiceSchedule, MileageReport } from '../../types';
-import { CalendarClock, Search, Edit2, X, ShieldCheck, Gauge } from 'lucide-react';
+import { CalendarClock, Search, Edit2, X, ShieldCheck, Gauge, CheckCircle2, AlertCircle } from 'lucide-react';
 import DateInput from '../DateInput';
 import { latestOdometerFor, computeKmStatus, computeWarrantyStatus, KmStatus } from '../../utils/maintenanceDates';
 
@@ -40,9 +40,9 @@ export default function ServiceScheduleTab({
   const [editingRegNo, setEditingRegNo] = useState<string | null>(null);
   const [form, setForm] = useState<VehicleServiceSchedule | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [notif, setNotif] = useState<string | null>(null);
+  const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
-  const triggerNotif = (msg: string) => { setNotif(msg); setTimeout(() => setNotif(null), 4000); };
+  const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
 
   const vehicleList = Array.from(new Set(vehicles.map(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase()).filter(Boolean))).sort();
   const filteredVehicles = vehicleList.filter(v => v.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -65,6 +65,7 @@ export default function ServiceScheduleTab({
       closeEdit();
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save service schedule.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -72,7 +73,14 @@ export default function ServiceScheduleTab({
 
   return (
     <div className="space-y-4">
-      {notif && <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-semibold">{notif}</div>}
+      {notif && (
+        <div className={`p-3 border rounded-lg text-xs font-semibold flex items-center gap-2 ${
+          notif.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
+        }`}>
+          {notif.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+          {notif.message}
+        </div>
+      )}
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
         <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-100">

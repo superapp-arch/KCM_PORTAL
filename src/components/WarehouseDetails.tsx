@@ -361,6 +361,7 @@ export default function WarehouseDetails({
       triggerNotif('📎 Warehouse entry documents updated.');
     } catch (err) {
       console.error(err);
+      alert(err instanceof Error ? err.message : 'Failed to update warehouse entry documents.');
     }
   };
 
@@ -385,6 +386,7 @@ export default function WarehouseDetails({
       triggerNotif('🗑️ Warehouse entry log removed.');
     } catch (err) {
       console.error(err);
+      alert(err instanceof Error ? err.message : 'Failed to delete warehouse entry log.');
     }
   };
 

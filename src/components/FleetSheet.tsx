@@ -461,11 +461,16 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
             await onAddVehicleMileage({ vehicleNo: regNo, mileage: mileageValue });
           }
         }
-        setEditForm(null);
         await onUpdateVehicle(finalVehicle);
+        setEditForm(null);
+        triggerNotif('Vehicle saved successfully.', 'success');
+      } else {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || 'Failed to save vehicle.');
       }
     } catch (err) {
       console.error('Error saving vehicle:', err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save vehicle.', 'error');
     } finally {
       setIsUpdating(false);
     }

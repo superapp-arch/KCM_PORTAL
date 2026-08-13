@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import * as XLSX from 'xlsx';
-import { Landmark, Plus, Search, Edit2, Trash2, X, Download } from 'lucide-react';
+import { Landmark, Plus, Search, Edit2, Trash2, X, Download, CheckCircle2, AlertCircle } from 'lucide-react';
 import { BusinessLoan, LoanStatus } from '../../types';
 import { computeMonthsCompleted, computeDueDate, computeLoanStatus, resolveLoanStatus } from '../../utils/loanDates';
 import DateInput from '../DateInput';
@@ -50,6 +50,11 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const triggerNotif = (message: string, type: 'success' | 'error') => {
+    setNotif({ message, type });
+    setTimeout(() => setNotif(null), 4000);
+  };
 
   // Loan Status auto-fill: recomputed from EMI Date + Tenure whenever either
   // changes, same "auto, editable" convention as Fuel Entry's Amount field -
@@ -107,15 +112,24 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
       } else {
         await onAddBusinessLoan(payload);
       }
+      triggerNotif('Business loan record saved.', 'success');
       resetForm();
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save business loan record.', 'error');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleDelete = async (loan: BusinessLoan) => {
-    if (window.confirm(`Delete the business loan "${loan.loanNumber}"? This cannot be undone.`)) {
+    if (!window.confirm(`Delete the business loan "${loan.loanNumber}"? This cannot be undone.`)) return;
+    try {
       await onDeleteBusinessLoan(loan.id);
+      triggerNotif('Loan record deleted.', 'success');
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to delete loan record.', 'error');
     }
   };
 
@@ -140,6 +154,15 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
 
   return (
     <div className="space-y-4">
+      {notif && (
+        <div className={`p-3 border rounded-lg text-xs font-semibold flex items-center gap-2 ${
+          notif.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
+        }`}>
+          {notif.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+          <span>{notif.message}</span>
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2 border border-slate-300 rounded-lg px-2.5 py-1.5 flex-1 min-w-[200px] bg-white text-xs">
           <Search className="w-3.5 h-3.5 text-slate-400" />

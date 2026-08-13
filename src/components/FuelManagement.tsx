@@ -10,6 +10,7 @@ import {
   Search,
   Landmark,
   CheckCircle2,
+  AlertCircle,
   Edit2,
   Trash2,
   Paperclip,
@@ -187,7 +188,7 @@ export default function FuelManagement({
   const [sort, setSort] = useState<SortState | null>({ key: 'indentNumber', direction: 'asc' });
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [notif, setNotif] = useState<string | null>(null);
+  const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   // Period-based report download - reference date + day/month/year-till-date dropdown.
   const [downloadDate, setDownloadDate] = useState(new Date().toISOString().slice(0, 10));
@@ -245,8 +246,8 @@ export default function FuelManagement({
   // Bunk Summary panel (below the Fuel Entry ledger): Till Date vs This Month
   const [bunkSummaryPeriod, setBunkSummaryPeriod] = useState<'all' | 'month'>('all');
 
-  const triggerNotif = (msg: string) => {
-    setNotif(msg);
+  const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => {
+    setNotif({ message, type });
     setTimeout(() => setNotif(null), 4000);
   };
 
@@ -472,6 +473,7 @@ export default function FuelManagement({
       triggerNotif('Vehicle mileage rating saved.');
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save vehicle mileage rating.', 'error');
     }
   };
 
@@ -688,6 +690,7 @@ export default function FuelManagement({
       triggerNotif('Fuel entry deleted successfully.');
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to delete fuel entry.', 'error');
     }
   };
 
@@ -873,9 +876,11 @@ export default function FuelManagement({
       </div>
 
       {notif && (
-        <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-semibold flex items-center gap-2 animate-pulse">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-          {notif}
+        <div className={`p-3 border rounded-lg text-xs font-semibold flex items-center gap-2 animate-pulse ${
+          notif.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
+        }`}>
+          {notif.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+          {notif.message}
         </div>
       )}
 

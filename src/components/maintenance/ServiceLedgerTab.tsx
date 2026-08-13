@@ -10,7 +10,7 @@ import {
   VehicleDocument
 } from '../../types';
 import {
-  Plus, Search, CheckCircle2, Settings, Edit2, Trash2, Paperclip, X, Filter
+  Plus, Search, CheckCircle2, AlertCircle, Settings, Edit2, Trash2, Paperclip, X, Filter
 } from 'lucide-react';
 import DocumentAttachment from '../DocumentAttachment';
 import DateInput from '../DateInput';
@@ -42,7 +42,7 @@ export default function ServiceLedgerTab({
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<'All' | MaintenanceRecord['serviceType']>('All');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [notif, setNotif] = useState<string | null>(null);
+  const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   // Form state
   const [regNo, setRegNo] = useState('');
@@ -59,8 +59,8 @@ export default function ServiceLedgerTab({
   const [showSidebar, setShowSidebar] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  const triggerNotif = (msg: string) => {
-    setNotif(msg);
+  const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => {
+    setNotif({ message, type });
     setTimeout(() => setNotif(null), 4000);
   };
 
@@ -117,16 +117,21 @@ export default function ServiceLedgerTab({
 
   const handleAddStation = async () => {
     if (!newStationName.trim()) return;
-    await onAddServiceStation({ name: newStationName.trim() });
-    setNewStationName('');
-    triggerNotif('Service station saved.');
+    try {
+      await onAddServiceStation({ name: newStationName.trim() });
+      setNewStationName('');
+      triggerNotif('Service station saved.');
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save service station.', 'error');
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const validItems = workItems.filter(w => w.description.trim() || w.cost);
     if (!regNo.trim() || !(serviceStationId || garageName.trim()) || validItems.length === 0) {
-      triggerNotif('Please fill Vehicle, Service Station, and at least one work item.');
+      triggerNotif('Please fill Vehicle, Service Station, and at least one work item.', 'error');
       return;
     }
     setIsSubmitting(true);
@@ -155,6 +160,7 @@ export default function ServiceLedgerTab({
       resetForm();
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save maintenance record.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -167,6 +173,7 @@ export default function ServiceLedgerTab({
       triggerNotif('🗑️ Maintenance log successfully deleted from server.');
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to delete maintenance log.', 'error');
     }
   };
 
@@ -200,9 +207,11 @@ export default function ServiceLedgerTab({
   return (
     <div className="space-y-4">
       {notif && (
-        <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-semibold flex items-center gap-2 animate-pulse">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-          {notif}
+        <div className={`p-3 border rounded-lg text-xs font-semibold flex items-center gap-2 animate-pulse ${
+          notif.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
+        }`}>
+          {notif.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+          {notif.message}
         </div>
       )}
 

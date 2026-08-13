@@ -38,7 +38,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
   const [description, setDescription] = useState('');
   const [newEntryDocs, setNewEntryDocs] = useState<VehicleDocument[]>([]);
 
-  const [notif, setNotif] = useState<string | null>(null);
+  const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   // Modal / Management State
   const [selectedInvoiceForManage, setSelectedInvoiceForManage] = useState<BillingInvoice | null>(null);
@@ -51,8 +51,8 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
   const [editStatus, setEditStatus] = useState<'Paid' | 'Pending' | 'Overdue'>('Pending');
   const [editDescription, setEditDescription] = useState('');
 
-  const triggerNotif = (msg: string) => {
-    setNotif(msg);
+  const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => {
+    setNotif({ message, type });
     setTimeout(() => setNotif(null), 4000);
   };
 
@@ -84,6 +84,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
       triggerNotif('🧾 Billing invoice posted successfully & dispatched to ledger!');
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to post billing invoice.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -124,6 +125,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
       triggerNotif('✏️ Invoice details updated successfully!');
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to update invoice.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -140,6 +142,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
       triggerNotif('📎 Documents updated successfully.');
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to update documents.', 'error');
     }
   };
 
@@ -150,6 +153,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
       triggerNotif('🗑️ Invoice successfully deleted.');
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to delete invoice.', 'error');
     }
   };
 
@@ -178,9 +182,11 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
       </div>
 
       {notif && (
-        <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-semibold flex items-center gap-2 animate-pulse">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-          {notif}
+        <div className={`p-3 border rounded-lg text-xs font-semibold flex items-center gap-2 animate-pulse ${
+          notif.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
+        }`}>
+          {notif.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+          {notif.message}
         </div>
       )}
 

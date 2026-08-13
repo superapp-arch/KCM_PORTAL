@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import * as XLSX from 'xlsx';
-import { Truck, Plus, Search, Edit2, Trash2, X, ChevronDown, AlertTriangle, Download } from 'lucide-react';
+import { Truck, Plus, Search, Edit2, Trash2, X, ChevronDown, AlertTriangle, Download, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Vehicle, VehicleLoan, VehicleDocument, LoanStatus, NOCStatus, VEHICLE_LOAN_FINANCERS } from '../../types';
 import { computeMonthsCompleted, computeDueDate, computeDueDateRaw, computeLoanStatus, resolveLoanStatus } from '../../utils/loanDates';
 import DateInput from '../DateInput';
@@ -77,6 +77,11 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [documents, setDocuments] = useState<VehicleDocument[]>([]);
+  const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const triggerNotif = (message: string, type: 'success' | 'error') => {
+    setNotif({ message, type });
+    setTimeout(() => setNotif(null), 4000);
+  };
 
   // Loan Status auto-fill: recomputed from EMI Start Date + Tenure whenever
   // either changes, same "auto, editable" convention as Fuel Entry's Amount
@@ -166,15 +171,24 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
         // overwrite its existing entry.
         await onAddVehicleLoan({ ...payload, id: String(Date.now()) });
       }
+      triggerNotif('Vehicle loan record saved.', 'success');
       resetForm();
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save vehicle loan record.', 'error');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleDelete = async (loan: VehicleLoan) => {
-    if (window.confirm(`Delete the loan record for ${loan.regNo}? This cannot be undone.`)) {
+    if (!window.confirm(`Delete the loan record for ${loan.regNo}? This cannot be undone.`)) return;
+    try {
       await onDeleteVehicleLoan(loan.id);
+      triggerNotif('Loan record deleted.', 'success');
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to delete loan record.', 'error');
     }
   };
 
@@ -258,6 +272,15 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
 
   return (
     <div className="space-y-4">
+      {notif && (
+        <div className={`p-3 border rounded-lg text-xs font-semibold flex items-center gap-2 ${
+          notif.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
+        }`}>
+          {notif.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+          <span>{notif.message}</span>
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 border border-slate-300 rounded-lg px-2.5 py-1.5 flex-1 min-w-45 bg-white text-xs">
           <Search className="w-3.5 h-3.5 text-slate-400" />

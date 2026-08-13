@@ -1,4 +1,4 @@
-import { pgTable, serial, text } from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, bigint } from 'drizzle-orm/pg-core';
 
 // Users table for application authentication and authorization
 export const users = pgTable('users', {
@@ -9,6 +9,21 @@ export const users = pgTable('users', {
   departmentLabel: text('department_label').notNull(),
   email: text('email'),
   pass: text('pass'),
+});
+
+// Login sessions - persisted so a PM2/Node restart or redeploy never
+// silently invalidates every logged-in employee mid-shift (see
+// src/auth/session.ts). token is the bearer credential itself, so it's the
+// primary key rather than a separate id. lastActivityAt drives a rolling
+// idle timeout (extended on each authenticated request); createdAt enforces
+// a hard absolute cap regardless of activity - see SESSION_IDLE_TTL_MS /
+// SESSION_ABSOLUTE_TTL_MS in session.ts for the actual values.
+export const sessions = pgTable('sessions', {
+  token: text('token').primaryKey(),
+  username: text('username').notNull(),
+  userData: text('user_data').notNull(), // JSON string of the User object
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  lastActivityAt: bigint('last_activity_at', { mode: 'number' }).notNull(),
 });
 
 // Vehicles table

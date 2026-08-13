@@ -849,7 +849,10 @@ export default function Administration({
                           </div>
 
                           <button
-                            onClick={() => onResolveNotification(notif.id)}
+                            onClick={() => onResolveNotification(notif.id).catch((err: unknown) => {
+                              console.error(err);
+                              alert(err instanceof Error ? err.message : 'Failed to resolve this notification. Please try again.');
+                            })}
                             className="bg-slate-950 hover:bg-slate-800 text-white font-extrabold px-3 py-1.5 rounded-lg text-[9px] uppercase cursor-pointer transition-colors shrink-0"
                           >
                             Resolve

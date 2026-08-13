@@ -9,16 +9,20 @@ import Watermark from './Watermark';
 
 interface LoginProps {
   onLoginSuccess: (user: UserType, token?: string) => void;
+  // Shown once, in the same banner as a login error - used to explain why
+  // the user landed back here (e.g. their session expired) rather than just
+  // silently dropping them at a blank login form with no explanation.
+  initialNotice?: string;
 }
 
-export default function Login({ onLoginSuccess }: LoginProps) {
+export default function Login({ onLoginSuccess, initialNotice }: LoginProps) {
   const [emailInput, setEmailInput] = useState('');
   const [password, setPassword] = useState('');
   const [otp, setOtp] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signin'>('login');
   const [otpSentMsg, setOtpSentMsg] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialNotice || null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);

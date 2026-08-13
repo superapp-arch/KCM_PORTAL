@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Vehicle, BatteryRecord } from '../../types';
-import { Battery, Search, Edit2, Trash2, Plus, X, CheckCircle2 } from 'lucide-react';
+import { Battery, Search, Edit2, Trash2, Plus, X, CheckCircle2, AlertCircle } from 'lucide-react';
 import DateInput from '../DateInput';
 
 interface BatteryTabProps {
@@ -19,9 +19,9 @@ export default function BatteryTab({ vehicles, batteryRecords, onSaveBatteryReco
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<Omit<BatteryRecord, 'id'> & { id?: string }>(emptyForm());
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [notif, setNotif] = useState<string | null>(null);
+  const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
-  const triggerNotif = (msg: string) => { setNotif(msg); setTimeout(() => setNotif(null), 4000); };
+  const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
 
   const vehicleList = Array.from(new Set(vehicles.map(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase()).filter(Boolean))).sort();
 
@@ -45,7 +45,7 @@ export default function BatteryTab({ vehicles, batteryRecords, onSaveBatteryReco
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.regNo.trim() || !form.batteryNumber.trim()) {
-      triggerNotif('Vehicle and Battery Number are required.');
+      triggerNotif('Vehicle and Battery Number are required.', 'error');
       return;
     }
     setIsSubmitting(true);
@@ -56,25 +56,43 @@ export default function BatteryTab({ vehicles, batteryRecords, onSaveBatteryReco
       resetForm();
     } catch (err) {
       console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save battery record.', 'error');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleMarkCurrent = async (b: BatteryRecord) => {
-    await onSaveBatteryRecord({ ...b, isCurrent: true });
-    triggerNotif(`${b.batteryNumber} marked as the current battery for ${b.regNo}.`);
+    try {
+      await onSaveBatteryRecord({ ...b, isCurrent: true });
+      triggerNotif(`${b.batteryNumber} marked as the current battery for ${b.regNo}.`);
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to update battery record.', 'error');
+    }
   };
 
   const handleDelete = async (b: BatteryRecord) => {
     if (!confirm(`Delete the battery record ${b.batteryNumber} for ${b.regNo}?`)) return;
-    await onDeleteBatteryRecord(b.id);
-    triggerNotif('Battery record deleted.');
+    try {
+      await onDeleteBatteryRecord(b.id);
+      triggerNotif('Battery record deleted.');
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to delete battery record.', 'error');
+    }
   };
 
   return (
     <div className="space-y-4">
-      {notif && <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-semibold">{notif}</div>}
+      {notif && (
+        <div className={`p-3 border rounded-lg text-xs font-semibold flex items-center gap-2 ${
+          notif.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
+        }`}>
+          {notif.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+          {notif.message}
+        </div>
+      )}
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-2 border-b border-slate-100">
