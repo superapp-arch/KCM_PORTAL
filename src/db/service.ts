@@ -18,6 +18,8 @@ import {
   staffHolidays,
   salarySlips,
   salarySlipAudits,
+  serviceInvoices,
+  serviceInvoiceAudits,
   abnormalLogins,
   notifications,
   warehouseEntries,
@@ -61,6 +63,8 @@ import {
   StaffHoliday,
   SalarySlipRecord,
   SalarySlipAuditRecord,
+  ServiceInvoiceRecord,
+  ServiceInvoiceAuditRecord,
   AbnormalLogin,
   DashboardNotification,
   WarehouseEntry,
@@ -1557,6 +1561,60 @@ export async function saveSalarySlipAuditRecord(entry: SalarySlipAuditRecord) {
   } catch (error) {
     console.error("Database action failed in saveSalarySlipAuditRecord:", error);
     throw new Error("Failed to write salary slip audit entry.", { cause: error });
+  }
+}
+
+// --- SERVICE INVOICE OPERATIONS ---
+export async function getServiceInvoices(): Promise<ServiceInvoiceRecord[]> {
+  try {
+    const rows = await db.select().from(serviceInvoices);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getServiceInvoices:", error);
+    throw new Error("Failed to retrieve service invoices.", { cause: error });
+  }
+}
+
+export async function saveServiceInvoiceRecord(invoice: ServiceInvoiceRecord) {
+  try {
+    const id = invoice.id || invoice.maintenanceRecordId;
+    const complete = { ...invoice, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(serviceInvoices).where(eq(serviceInvoices.id, id));
+    if (existing.length > 0) {
+      await db.update(serviceInvoices).set({ data: dataString, regNo: complete.regNo }).where(eq(serviceInvoices.id, id));
+    } else {
+      await db.insert(serviceInvoices).values({ id, regNo: complete.regNo, data: dataString });
+    }
+    return await getServiceInvoices();
+  } catch (error) {
+    console.error("Database action failed in saveServiceInvoiceRecord:", error);
+    throw new Error("Failed to save service invoice.", { cause: error });
+  }
+}
+
+// --- SERVICE INVOICE AUDIT OPERATIONS (append-only) ---
+export async function getServiceInvoiceAudits(): Promise<ServiceInvoiceAuditRecord[]> {
+  try {
+    const rows = await db.select().from(serviceInvoiceAudits);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getServiceInvoiceAudits:", error);
+    throw new Error("Failed to retrieve service invoice audit trail.", { cause: error });
+  }
+}
+
+export async function saveServiceInvoiceAuditRecord(entry: ServiceInvoiceAuditRecord) {
+  try {
+    const id = entry.id || String(Date.now());
+    const complete = { ...entry, id };
+    const dataString = JSON.stringify(complete);
+    await db.insert(serviceInvoiceAudits).values({ id, regNo: complete.regNo, data: dataString });
+    return await getServiceInvoiceAudits();
+  } catch (error) {
+    console.error("Database action failed in saveServiceInvoiceAuditRecord:", error);
+    throw new Error("Failed to write service invoice audit entry.", { cause: error });
   }
 }
 

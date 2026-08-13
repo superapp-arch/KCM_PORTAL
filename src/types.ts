@@ -290,18 +290,22 @@ export interface MarketPodEntry {
 export interface MaintenanceWorkItem {
   description: string;
   cost: number;
+  type?: 'Spare' | 'Labour'; // itemised category shown on the Service Invoice; optional so records saved before this field existed still render fine (listed with a blank Type)
 }
 
 export interface MaintenanceRecord {
   id: string;
   regNo: string;
   date: string;
+  time?: string; // HH:MM the work order was actually raised - defaults to "now" on new entries but stays editable; this (not today's system date/time) is what the Service Invoice header is built from
   serviceType: 'Scheduled Servicing' | 'Breakdown Repair' | 'Parts Replacement' | 'Electrical Repair' | 'Tire Service' | 'Battery Service' | 'Tools Check';
   description: string;
   cost: number; // legacy lump-sum field; once workItems is set, this is always the computed sum of workItems - kept for old records saved before workItems existed
   workItems?: MaintenanceWorkItem[]; // per-work-item costing for this visit
   garageName: string; // legacy free-text; new entries prefer serviceStationId
   serviceStationId?: string; // from the Authorised Service Station master (MaintenanceServiceStation)
+  odometer?: number; // auto-fetched from Mileage Report's latest Closing KM for regNo when the work order was raised; kept editable since Mileage Report may not be updated yet for a brand-new entry
+  invoiceNumber?: string; // denormalized copy of the linked ServiceInvoiceRecord.invoiceNumber for quick display in the ledger table - source of truth is still ServiceInvoiceRecord
   driverName?: string; // who was driving/responsible for the vehicle at the time of this service
   driverId?: string; // auto-fetched from Driver Details when driverName matches exactly one registered driver; manual entry allowed otherwise
   breakdownReportId?: string; // links this record back to the BreakdownReport it resolves, when logged as a Workshop Visit
@@ -360,6 +364,47 @@ export interface VehicleServiceSchedule {
   warrantyExpiryDate?: string; // optional manual tracking, nullable
   warrantyExpiryKm?: number; // optional manual tracking, nullable
   remarks?: string;
+}
+
+// A downloadable PDF invoice/slip generated from one Garage Work Order
+// (MaintenanceRecord) - one invoice per work order, same "resolve or
+// generate" spirit as SalarySlipRecord. Auto-numbered (KCM-YYYY-NNNN,
+// sequential) only when the work order's Authorised Service Station is
+// exactly "KCM Service Station"; for every other (external) station,
+// invoiceNumber is whatever the handler typed manually into the work
+// order's own Invoice Number field, and isAutoNumbered is false.
+export interface ServiceInvoiceRecord {
+  id: string; // = maintenanceRecordId - one invoice per work order
+  maintenanceRecordId: string;
+  invoiceNumber: string;
+  isAutoNumbered: boolean; // true only for KCM Service Station work orders
+  regNo: string;
+  workOrderDate: string; // YYYY-MM-DD, copied from the work order's own Date field (not today's date)
+  workOrderTime?: string; // HH:MM, copied from the work order's own Time field
+  vehicleModel?: string; // auto-fetched from Fleet & Vehicles at generation time
+  vehicleOwnership?: string; // auto-fetched from Fleet & Vehicles at generation time
+  odometer?: number; // copied from the work order's Odometer field
+  garageName: string;
+  serviceStationId?: string;
+  workItems: MaintenanceWorkItem[];
+  totalAmount: number;
+  paidAmount?: number;
+  nextServiceDueNote?: string; // computed from VehicleServiceSchedule at generation time, e.g. "Next service due at 45,000 km"
+  generatedDate: string; // YYYY-MM-DD - when the PDF/slip was actually generated, distinct from workOrderDate
+  generatedTime?: string; // HH:MM
+  pdfUrl?: string; // /uploads/service-invoices/... - same generic upload endpoint every other module's documents already use
+  isDownloaded?: boolean;
+  lastDownloadedDate?: string;
+}
+
+export interface ServiceInvoiceAuditRecord {
+  id: string;
+  invoiceNumber: string;
+  maintenanceRecordId: string;
+  regNo: string;
+  action: 'Generated' | 'Regenerated' | 'Downloaded';
+  timestamp: string;
+  performedBy?: string; // username
 }
 
 // Tire Brand master list for the Tire Configuration Brand dropdown - a

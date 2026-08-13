@@ -938,6 +938,7 @@ export default function Administration({
 
           {activeTab === 'maintenance' && hasAccess('maintenance') && (
             <Maintenance
+              performedBy={user.username}
               records={records}
               onAddRecord={onAddMaintenanceRecord}
               onUpdateRecord={onUpdateMaintenanceRecord}

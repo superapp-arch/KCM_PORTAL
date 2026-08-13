@@ -7,16 +7,20 @@ import {
   MileageReport,
   VehicleServiceSchedule,
   MaintenanceServiceStation,
-  VehicleDocument
+  VehicleDocument,
+  ServiceInvoiceRecord
 } from '../../types';
 import {
-  Plus, Search, CheckCircle2, AlertCircle, Settings, Edit2, Trash2, Paperclip, X, Filter
+  Plus, Search, CheckCircle2, AlertCircle, Settings, Edit2, Trash2, Paperclip, X, Filter, Receipt, Gauge
 } from 'lucide-react';
 import DocumentAttachment from '../DocumentAttachment';
 import DateInput from '../DateInput';
+import ServiceInvoiceModal from './ServiceInvoiceModal';
+import { authFetch } from '../../authFetch';
 import { latestOdometerFor, computeKmStatus, computeWarrantyStatus } from '../../utils/maintenanceDates';
 
 interface ServiceLedgerTabProps {
+  performedBy: string; // current user's username - for the Service Invoice audit trail
   records: MaintenanceRecord[];
   onAddRecord: (record: Omit<MaintenanceRecord, 'id'>) => Promise<void>;
   onUpdateRecord: (id: string, record: Partial<MaintenanceRecord>) => Promise<void>;
@@ -30,12 +34,19 @@ interface ServiceLedgerTabProps {
   onDeleteServiceStation: (id: string) => Promise<void>;
 }
 
+// Auto-numbering (Service Invoice generation) only applies when the work
+// order's Authorised Service Station is exactly this name - every other
+// station needs its Invoice Number typed in manually. Kept in one place so
+// the form's field-visibility logic and serviceInvoiceGenerate.ts's numbering
+// rule can never drift apart.
+const KCM_STATION_NAME = 'kcm service station';
+
 const SERVICE_TYPES: MaintenanceRecord['serviceType'][] = [
   'Scheduled Servicing', 'Breakdown Repair', 'Parts Replacement', 'Electrical Repair', 'Tire Service', 'Battery Service', 'Tools Check'
 ];
 
 export default function ServiceLedgerTab({
-  records, onAddRecord, onUpdateRecord, onDeleteRecord,
+  performedBy, records, onAddRecord, onUpdateRecord, onDeleteRecord,
   vehicles, drivers, mileageReports, vehicleServiceSchedules,
   serviceStations, onAddServiceStation, onDeleteServiceStation
 }: ServiceLedgerTabProps) {
@@ -47,22 +58,51 @@ export default function ServiceLedgerTab({
   // Form state
   const [regNo, setRegNo] = useState('');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [time, setTime] = useState(new Date().toTimeString().slice(0, 5));
   const [serviceType, setServiceType] = useState<MaintenanceRecord['serviceType']>('Scheduled Servicing');
   const [serviceStationId, setServiceStationId] = useState('');
   const [garageName, setGarageName] = useState('');
   const [driverName, setDriverName] = useState('');
   const [driverId, setDriverId] = useState('');
   const [workItems, setWorkItems] = useState<MaintenanceWorkItem[]>([{ description: '', cost: 0 }]);
+  const [invoiceNumberInput, setInvoiceNumberInput] = useState(''); // manual entry, only used/shown for non-KCM (external) service stations
   const [docs, setDocs] = useState<VehicleDocument[]>([]);
   const [showStationManager, setShowStationManager] = useState(false);
   const [newStationName, setNewStationName] = useState('');
   const [showSidebar, setShowSidebar] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  // Service Invoice generation - self-contained data flow (fetched directly
+  // here rather than threaded through App.tsx's central Promise.all), same
+  // pattern the Salary Slip feature already established for HR.
+  const [serviceInvoices, setServiceInvoices] = useState<ServiceInvoiceRecord[]>([]);
+  const [invoiceModalRecord, setInvoiceModalRecord] = useState<MaintenanceRecord | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await authFetch('/api/service-invoices');
+        if (res.ok) setServiceInvoices(await res.json());
+      } catch (err) {
+        console.error('Failed to load service invoices:', err);
+      }
+    })();
+  }, []);
+
   const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => {
     setNotif({ message, type });
     setTimeout(() => setNotif(null), 4000);
   };
+
+  // Odometer is always auto-fetched from Mileage Report's latest Closing KM
+  // for the selected vehicle - never manually typed (per spec). Same
+  // "No fuel/mileage entries yet" fallback convention as Tire Configuration.
+  const matchedVehicleForOdometer = vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === regNo.trim().toUpperCase());
+  const autoOdometer = matchedVehicleForOdometer ? latestOdometerFor(regNo.trim().toUpperCase(), mileageReports) : undefined;
+
+  const selectedStation = serviceStations.find(s => s.id === serviceStationId);
+  const selectedStationName = (selectedStation?.name || (serviceStations.length === 0 ? garageName : '')).trim();
+  const isKcmStationSelected = selectedStationName.toLowerCase() === KCM_STATION_NAME;
 
   const vehicleList = Array.from(new Set(vehicles.map(v => v.regNo || v['Reg. No.'] || '').filter(Boolean))).sort();
   const driverNameList = Array.from(new Set(drivers.map(d => d.name).filter(Boolean))).sort();
@@ -89,12 +129,14 @@ export default function ServiceLedgerTab({
     setEditingId(null);
     setRegNo('');
     setDate(new Date().toISOString().slice(0, 10));
+    setTime(new Date().toTimeString().slice(0, 5));
     setServiceType('Scheduled Servicing');
     setServiceStationId('');
     setGarageName('');
     setDriverName('');
     setDriverId('');
     setWorkItems([{ description: '', cost: 0 }]);
+    setInvoiceNumberInput('');
     setDocs([]);
     setShowStationManager(false);
     setNewStationName('');
@@ -105,12 +147,17 @@ export default function ServiceLedgerTab({
     setEditingId(r.id);
     setRegNo(r.regNo);
     setDate(r.date);
+    // Leave blank rather than defaulting to "now" for a legacy record that
+    // never captured a time - silently backfilling a plausible-looking but
+    // invented time would misrepresent when the work order actually happened.
+    setTime(r.time || '');
     setServiceType(r.serviceType);
     setServiceStationId(r.serviceStationId || '');
     setGarageName(r.garageName || '');
     setDriverName(r.driverName || '');
     setDriverId(r.driverId || '');
     setWorkItems(r.workItems && r.workItems.length > 0 ? r.workItems : [{ description: r.description || '', cost: r.cost || 0 }]);
+    setInvoiceNumberInput(r.invoiceNumber || '');
     setDocs(r.documents || []);
     setShowSidebar(true);
   };
@@ -137,17 +184,29 @@ export default function ServiceLedgerTab({
     setIsSubmitting(true);
     try {
       const station = serviceStations.find(s => s.id === serviceStationId);
+      // Only external (non-KCM Service Station) work orders take a manual
+      // Invoice Number here - KCM Service Station's number is only ever
+      // generated later, in Service History, and synced back onto this
+      // field then; preserve whatever's already there across edits so
+      // re-saving the work order after generating an invoice doesn't wipe it.
+      const originalRecord = editingId ? records.find(r => r.id === editingId) : undefined;
+      const invoiceNumber = !isKcmStationSelected
+        ? (invoiceNumberInput.trim() || undefined)
+        : (originalRecord?.invoiceNumber || undefined);
       const payload = {
         regNo: regNo.trim().toUpperCase(),
         date,
+        time: time || undefined,
         serviceType,
         serviceStationId: serviceStationId || undefined,
         garageName: station?.name || garageName.trim(),
+        odometer: autoOdometer,
         driverName: driverName.trim() || undefined,
         driverId: driverId.trim() || undefined,
         workItems: validItems,
         description: validItems.map(w => w.description).filter(Boolean).join('; '),
         cost: validItems.reduce((s, w) => s + (w.cost || 0), 0),
+        invoiceNumber,
         documents: docs
       };
       if (editingId) {
@@ -271,12 +330,13 @@ export default function ServiceLedgerTab({
                 <th className="px-3 py-2.5">Work Items</th>
                 <th className="px-3 py-2.5 text-right">Total Cost</th>
                 <th className="px-3 py-2.5 text-center">Docs</th>
+                <th className="px-3 py-2.5">Invoice</th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
               {filteredRecords.length === 0 ? (
-                <tr><td colSpan={10} className="text-center py-10 text-slate-400 font-mono">NO FLEET GARAGE ENTRIES FOUND.</td></tr>
+                <tr><td colSpan={11} className="text-center py-10 text-slate-400 font-mono">NO FLEET GARAGE ENTRIES FOUND.</td></tr>
               ) : (
                 filteredRecords.map((r) => {
                   const due = dueStatusFor(r.regNo);
@@ -334,6 +394,13 @@ export default function ServiceLedgerTab({
                           </span>
                         ) : <span className="text-slate-300">-</span>}
                       </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        <button onClick={() => setInvoiceModalRecord(r)}
+                          className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-[10px] font-bold cursor-pointer"
+                          title={r.invoiceNumber ? 'View / re-download invoice' : 'Generate invoice'}>
+                          <Receipt className="w-3 h-3" /> {r.invoiceNumber || 'Generate'}
+                        </button>
+                      </td>
                       <td className="px-3 py-2.5 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end space-x-1">
                           <button onClick={() => startEdit(r)} className="p-1 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer" title="Edit"><Edit2 className="w-3.5 h-3.5" /></button>
@@ -373,10 +440,29 @@ export default function ServiceLedgerTab({
                     <DateInput required value={date} onChange={(e) => setDate(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-mono" />
                   </div>
                   <div>
+                    <label className="block font-semibold text-slate-600 mb-1">Time of Work Order</label>
+                    <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-mono" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
                     <label className="block font-semibold text-slate-600 mb-1">Maintenance Scope</label>
                     <select value={serviceType} onChange={(e) => setServiceType(e.target.value as any)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-semibold">
                       {SERVICE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-600 mb-1 flex items-center gap-1"><Gauge className="w-3 h-3 text-slate-400" /> Odometer</label>
+                    <div className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-700 min-h-[34px] flex items-center">
+                      {!matchedVehicleForOdometer ? (
+                        <span className="text-slate-400">Select a vehicle first</span>
+                      ) : autoOdometer != null ? (
+                        <span className="font-bold">{autoOdometer.toLocaleString('en-IN')} km</span>
+                      ) : (
+                        <span className="text-slate-400">No fuel/mileage entries yet</span>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -410,6 +496,24 @@ export default function ServiceLedgerTab({
                   )}
                 </div>
 
+                {/* Invoice Number - auto-generated (KCM-YYYY-NNNN) only for
+                    KCM Service Station, from Service History once this work
+                    order is saved. Every other station needs it typed in
+                    manually here, from their own physical invoice. */}
+                {selectedStationName && (
+                  isKcmStationSelected ? (
+                    <p className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-2.5 py-1.5 flex items-center gap-1.5">
+                      <Receipt className="w-3 h-3 shrink-0" /> Invoice Number will be auto-generated (KCM-YYYY-NNNN) after saving - use "Generate Invoice" in the ledger table.
+                    </p>
+                  ) : (
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1">Invoice Number (from {selectedStationName})</label>
+                      <input type="text" placeholder="e.g. INV-1234" value={invoiceNumberInput} onChange={(e) => setInvoiceNumberInput(e.target.value)} autoComplete="off"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
+                    </div>
+                  )
+                )}
+
                 {/* Driver Name / Driver ID - item 7 */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
@@ -435,6 +539,12 @@ export default function ServiceLedgerTab({
                     <div key={idx} className="flex items-center gap-1.5">
                       <input type="text" placeholder="e.g. Oil change, brake pads" value={w.description} onChange={(e) => updateWorkItem(idx, { description: e.target.value })} autoComplete="off"
                         className="flex-1 bg-white border border-slate-200 rounded-lg p-1.5 text-[11px] text-slate-800" />
+                      <select value={w.type || ''} onChange={(e) => updateWorkItem(idx, { type: (e.target.value || undefined) as MaintenanceWorkItem['type'] })}
+                        className="w-20 bg-white border border-slate-200 rounded-lg p-1.5 text-[11px] font-semibold text-slate-700">
+                        <option value="">Type</option>
+                        <option value="Spare">Spare</option>
+                        <option value="Labour">Labour</option>
+                      </select>
                       <input type="number" step="0.01" placeholder="₹" value={w.cost || ''} onChange={(e) => updateWorkItem(idx, { cost: parseFloat(e.target.value) || 0 })}
                         className="w-24 bg-white border border-slate-200 rounded-lg p-1.5 text-[11px] font-mono font-bold text-slate-800" />
                       {workItems.length > 1 && (
@@ -460,6 +570,28 @@ export default function ServiceLedgerTab({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Service Invoice generation/download modal - opened per work order
+          from the Invoice column above */}
+      {invoiceModalRecord && (
+        <ServiceInvoiceModal
+          record={invoiceModalRecord}
+          vehicles={vehicles}
+          vehicleServiceSchedules={vehicleServiceSchedules}
+          serviceStations={serviceStations}
+          existingInvoices={serviceInvoices}
+          performedBy={performedBy}
+          onClose={() => setInvoiceModalRecord(null)}
+          onInvoiceSaved={(inv) => setServiceInvoices(prev => {
+            const idx = prev.findIndex(i => i.id === inv.id);
+            if (idx === -1) return [...prev, inv];
+            const copy = [...prev]; copy[idx] = inv; return copy;
+          })}
+          onRecordInvoiceNumberSet={(invoiceNumber) => {
+            onUpdateRecord(invoiceModalRecord.id, { invoiceNumber }).catch(err => console.error('Failed to sync invoice number onto work order:', err));
+          }}
+        />
       )}
     </div>
   );

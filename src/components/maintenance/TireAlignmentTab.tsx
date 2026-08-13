@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { motion } from 'motion/react';
 import { Vehicle, TireRecord, TireBrand, MileageReport } from '../../types';
-import { CircleDot, Search, Edit2, Trash2, Plus, X, Gauge, AlertTriangle } from 'lucide-react';
+import { CircleDot, Search, Edit2, Trash2, Plus, X, Gauge, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import DateInput from '../DateInput';
 import { latestOdometerFor, computeAlignmentStatus, nextAlignmentDueKm, ALIGNMENT_INTERVAL_KM, KmStatus } from '../../utils/maintenanceDates';
 
@@ -139,6 +140,29 @@ export default function TireAlignmentTab({
     r.tire.position.toLowerCase().includes(searchTerm.toLowerCase()) ||
     r.tire.tireBrand.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  // One row per vehicle for the primary tracking table (same expand/collapse
+  // spirit as Fleet & Vehicles) - each group carries every currently-fitted
+  // tire for that Reg. No., plus a single worst-case status so the collapsed
+  // row can still flag "needs attention" without opening it.
+  const vehicleRows = useMemo(() => {
+    const map = new Map<string, typeof filteredRows>();
+    filteredRows.forEach(r => {
+      const list = map.get(r.tire.regNo);
+      if (list) list.push(r); else map.set(r.tire.regNo, [r]);
+    });
+    return Array.from(map.entries()).map(([regNo, tires]) => {
+      const worstStatus: KmStatus | null =
+        tires.some(t => t.status === 'overdue') ? 'overdue' :
+        tires.some(t => t.status === 'due-soon') ? 'due-soon' :
+        tires.some(t => t.status === 'ok') ? 'ok' : null;
+      const currentKm = tires.find(t => t.currentKm != null)?.currentKm;
+      return { regNo, tires, worstStatus, currentKm };
+    }).sort((a, b) => a.regNo.localeCompare(b.regNo));
+  }, [filteredRows]);
+
+  const [expandedRegNo, setExpandedRegNo] = useState<string | null>(null);
+  const toggleExpand = (regNo: string) => setExpandedRegNo(prev => prev === regNo ? null : regNo);
 
   // Wheel rotation/alignment pop-up: fires once when this tab is opened
   // (i.e. on mount, not on every re-render) if any tire is currently Due or
@@ -337,40 +361,78 @@ export default function TireAlignmentTab({
             <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
               <tr>
                 <th className="px-3 py-2.5">Reg. No.</th>
-                <th className="px-3 py-2.5">Position</th>
-                <th className="px-3 py-2.5">Company/Brand</th>
-                <th className="px-3 py-2.5">Serial No.</th>
-                <th className="px-3 py-2.5">Installed</th>
+                <th className="px-3 py-2.5 text-center">Tires Tracked</th>
                 <th className="px-3 py-2.5 text-right">Current Odometer</th>
-                <th className="px-3 py-2.5 text-right">Last Alignment (km)</th>
-                <th className="px-3 py-2.5 text-right">Next Due (km)</th>
                 <th className="px-3 py-2.5">Alignment Status</th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-              {filteredRows.length === 0 ? (
-                <tr><td colSpan={10} className="text-center py-10 text-slate-400 font-mono">NO TIRE RECORDS FOUND.</td></tr>
-              ) : filteredRows.map(({ tire, currentKm, dueAt, status }) => (
-                <tr key={tire.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="px-3 py-2.5 font-bold font-mono text-slate-900 uppercase whitespace-nowrap">{tire.regNo}</td>
-                  <td className="px-3 py-2.5 text-slate-700 whitespace-nowrap">{tire.position}</td>
-                  <td className="px-3 py-2.5 text-slate-700 font-semibold whitespace-nowrap">{tire.tireBrand}</td>
-                  <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{tire.tireSerialNumber || '-'}</td>
-                  <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">
-                    {tire.installedDate || '-'} {tire.installedKm != null && <span className="text-slate-400">({tire.installedKm.toLocaleString('en-IN')} km)</span>}
-                  </td>
-                  <td className="px-3 py-2.5 text-right font-mono text-slate-600">{currentKm != null ? currentKm.toLocaleString('en-IN') : '-'}</td>
-                  <td className="px-3 py-2.5 text-right font-mono text-slate-600">{tire.lastAlignmentKm != null ? tire.lastAlignmentKm.toLocaleString('en-IN') : '-'}</td>
-                  <td className="px-3 py-2.5 text-right font-mono text-slate-600">{dueAt != null ? dueAt.toLocaleString('en-IN') : '-'}</td>
-                  <td className="px-3 py-2.5">{statusBadge(status)}</td>
-                  <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                    <div className="flex items-center justify-end gap-1">
-                      <button onClick={() => openEditConfigForVehicle(tire.regNo)} className="p-1 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer" title="Edit this vehicle's tires"><Edit2 className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => handleDelete(tire)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
-                    </div>
-                  </td>
-                </tr>
+              {vehicleRows.length === 0 ? (
+                <tr><td colSpan={5} className="text-center py-10 text-slate-400 font-mono">NO TIRE RECORDS FOUND.</td></tr>
+              ) : vehicleRows.map(({ regNo, tires, worstStatus, currentKm }) => (
+                <React.Fragment key={regNo}>
+                  <tr
+                    onClick={() => toggleExpand(regNo)}
+                    className={`hover:bg-slate-50/50 transition-colors cursor-pointer ${expandedRegNo === regNo ? 'bg-slate-50/70 border-b-0' : ''}`}
+                  >
+                    <td className="px-3 py-2.5 font-bold font-mono text-slate-900 uppercase whitespace-nowrap">{regNo}</td>
+                    <td className="px-3 py-2.5 text-center font-mono text-slate-600">{tires.length}</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-slate-600">{currentKm != null ? currentKm.toLocaleString('en-IN') : '-'}</td>
+                    <td className="px-3 py-2.5">{statusBadge(worstStatus)}</td>
+                    <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                      <div className="flex items-center justify-end gap-1">
+                        <button onClick={(e) => { e.stopPropagation(); openEditConfigForVehicle(regNo); }} className="p-1 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer" title="Edit this vehicle's tires"><Edit2 className="w-3.5 h-3.5" /></button>
+                        <button className="p-1 text-slate-400 hover:text-slate-600 rounded" title="Expand tire breakdown">
+                          {expandedRegNo === regNo ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+
+                  {expandedRegNo === regNo && (
+                    <tr>
+                      <td colSpan={5} className="bg-slate-50/50 p-4 border-t border-slate-100">
+                        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="overflow-x-auto">
+                          <table className="w-full text-left text-xs bg-white rounded-lg border border-slate-200 overflow-hidden">
+                            <thead className="bg-slate-100 text-slate-500 font-sans tracking-wide uppercase text-[9px]">
+                              <tr>
+                                <th className="px-3 py-2">Position</th>
+                                <th className="px-3 py-2">Company/Brand</th>
+                                <th className="px-3 py-2">Serial No.</th>
+                                <th className="px-3 py-2">Installed</th>
+                                <th className="px-3 py-2 text-right">Last Alignment (km)</th>
+                                <th className="px-3 py-2 text-right">Next Due (km)</th>
+                                <th className="px-3 py-2">Alignment Status</th>
+                                <th className="px-3 py-2 text-right">Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                              {tires.map(({ tire, dueAt, status }) => (
+                                <tr key={tire.id} className="hover:bg-slate-50/50 transition-colors">
+                                  <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{tire.position}</td>
+                                  <td className="px-3 py-2 text-slate-700 font-semibold whitespace-nowrap">{tire.tireBrand}</td>
+                                  <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{tire.tireSerialNumber || '-'}</td>
+                                  <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">
+                                    {tire.installedDate || '-'} {tire.installedKm != null && <span className="text-slate-400">({tire.installedKm.toLocaleString('en-IN')} km)</span>}
+                                  </td>
+                                  <td className="px-3 py-2 text-right font-mono text-slate-600">{tire.lastAlignmentKm != null ? tire.lastAlignmentKm.toLocaleString('en-IN') : '-'}</td>
+                                  <td className="px-3 py-2 text-right font-mono text-slate-600">{dueAt != null ? dueAt.toLocaleString('en-IN') : '-'}</td>
+                                  <td className="px-3 py-2">{statusBadge(status)}</td>
+                                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                                    <div className="flex items-center justify-end gap-1">
+                                      <button onClick={() => handleDelete(tire)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </motion.div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>

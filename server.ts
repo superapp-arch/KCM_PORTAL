@@ -138,6 +138,10 @@ import {
   saveSalarySlipRecord,
   getSalarySlipAudits,
   saveSalarySlipAuditRecord,
+  getServiceInvoices,
+  saveServiceInvoiceRecord,
+  getServiceInvoiceAudits,
+  saveServiceInvoiceAuditRecord,
   getAbnormalLogins,
   saveAbnormalLogin,
   resolveAllAbnormalLogins,
@@ -1927,6 +1931,22 @@ async function startServer() {
   });
   app.delete('/api/vehicle-service-schedules/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteVehicleServiceSchedule(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/service-invoices', async (req, res) => {
+    try { res.json(await getServiceInvoices()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/service-invoices', async (req, res) => {
+    try { res.json({ success: true, data: await saveServiceInvoiceRecord(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/service-invoices/:id', async (req, res) => {
+    try { res.json({ success: true, data: await saveServiceInvoiceRecord({ ...req.body, id: req.params.id }) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.get('/api/service-invoice-audit', async (req, res) => {
+    try { res.json(await getServiceInvoiceAudits()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/service-invoice-audit', async (req, res) => {
+    try { res.json({ success: true, data: await saveServiceInvoiceAuditRecord(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.get('/api/tire-brands', async (req, res) => {

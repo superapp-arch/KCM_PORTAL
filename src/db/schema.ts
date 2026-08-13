@@ -138,6 +138,21 @@ export const salarySlipAudits = pgTable('salary_slip_audits', {
   data: text('data').notNull(), // JSON string representing the full SalarySlipAuditRecord object
 });
 
+// Generated Garage Work Order invoices - one row per work order (id =
+// maintenanceRecordId). See ServiceInvoiceRecord.
+export const serviceInvoices = pgTable('service_invoices', {
+  id: text('id').primaryKey(),
+  regNo: text('reg_no'),
+  data: text('data').notNull(), // JSON string representing the full ServiceInvoiceRecord object
+});
+
+// Append-only audit trail (Generated/Regenerated/Downloaded) for service invoices.
+export const serviceInvoiceAudits = pgTable('service_invoice_audits', {
+  id: text('id').primaryKey(),
+  regNo: text('reg_no'),
+  data: text('data').notNull(), // JSON string representing the full ServiceInvoiceAuditRecord object
+});
+
 // Abnormal logins audit log table
 export const abnormalLogins = pgTable('abnormal_logins', {
   id: text('id').primaryKey(),
