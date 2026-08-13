@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Vehicle, ToolsChecklistRecord } from '../../types';
 import { Wrench, Search, Trash2, Plus, X, Check, CheckCircle2, AlertCircle } from 'lucide-react';
 import DateInput from '../DateInput';
+import SortHeader from '../SortHeader';
+import { SortState, compareText } from '../../utils/sort';
 
 interface ToolsChecklistTabProps {
   vehicles: Vehicle[];
@@ -29,12 +31,27 @@ export default function ToolsChecklistTab({ vehicles, toolsChecklistRecords, onS
   const [form, setForm] = useState(emptyForm());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  // Newest-first by Check Date was already this table's default - now
+  // exposed as the same Sort By dropdown convention used elsewhere.
+  const [sort, setSort] = useState<SortState | null>({ key: 'checkDate', direction: 'desc' });
+  const handleSort = (key: string, direction: SortState['direction']) => setSort({ key, direction });
 
   const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
 
   const vehicleList = Array.from(new Set(vehicles.map(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase()).filter(Boolean))).sort();
 
-  const rows = [...toolsChecklistRecords].sort((a, b) => (b.checkDate || '').localeCompare(a.checkDate || '') || a.regNo.localeCompare(b.regNo));
+  const rows = sort
+    ? [...toolsChecklistRecords].sort((a, b) => {
+        let cmp = 0;
+        switch (sort.key) {
+          case 'regNo': cmp = compareText(a.regNo, b.regNo); break;
+          // Ties (same date) break on Reg No so the order stays stable.
+          case 'checkDate': cmp = (a.checkDate || '') === (b.checkDate || '') ? compareText(a.regNo, b.regNo) : ((a.checkDate || '') < (b.checkDate || '') ? -1 : 1); break;
+          default: cmp = 0;
+        }
+        return sort.direction === 'asc' ? cmp : -cmp;
+      })
+    : [...toolsChecklistRecords].sort((a, b) => (b.checkDate || '').localeCompare(a.checkDate || '') || a.regNo.localeCompare(b.regNo));
   const filteredRows = rows.filter(r =>
     r.regNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (r.checkedBy || '').toLowerCase().includes(searchTerm.toLowerCase())
@@ -95,6 +112,14 @@ export default function ToolsChecklistTab({ vehicles, toolsChecklistRecords, onS
               <input type="text" placeholder="Search Reg No, checked by" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off"
                 className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-7 pr-3 py-1.5 focus:outline-none text-slate-800 font-medium" />
             </div>
+            <select
+              value={sort?.key === 'checkDate' && sort.direction === 'asc' ? 'oldest' : 'newest'}
+              onChange={(e) => setSort({ key: 'checkDate', direction: e.target.value === 'oldest' ? 'asc' : 'desc' })}
+              className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-700"
+            >
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+            </select>
             <button onClick={openAdd} className="bg-gradient-to-r from-blue-600 to-slate-800 hover:shadow-md text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap">
               <Plus className="w-4 h-4" /> Log Check
             </button>
@@ -105,8 +130,8 @@ export default function ToolsChecklistTab({ vehicles, toolsChecklistRecords, onS
           <table className="w-full text-left text-xs">
             <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
               <tr>
-                <th className="px-3 py-2.5">Check Date</th>
-                <th className="px-3 py-2.5">Reg. No.</th>
+                <th className="px-3 py-2.5"><SortHeader label="Check Date" sortKey="checkDate" sort={sort} onSort={handleSort} type="numeric" /></th>
+                <th className="px-3 py-2.5"><SortHeader label="Reg. No." sortKey="regNo" sort={sort} onSort={handleSort} /></th>
                 {TOOL_FIELDS.map(t => <th key={t.key} className="px-3 py-2.5 text-center">{t.label}</th>)}
                 <th className="px-3 py-2.5">Checked By</th>
                 <th className="px-3 py-2.5">Remarks</th>

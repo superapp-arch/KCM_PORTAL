@@ -138,6 +138,10 @@ import {
   saveSalarySlipRecord,
   getSalarySlipAudits,
   saveSalarySlipAuditRecord,
+  getDriverSalarySlips,
+  saveDriverSalarySlipRecord,
+  getDriverSalarySlipAudits,
+  saveDriverSalarySlipAuditRecord,
   getServiceInvoices,
   saveServiceInvoiceRecord,
   getServiceInvoiceAudits,
@@ -320,6 +324,34 @@ async function computeDriverMonthlyAttendanceSummary(driverId: string, month: st
     // used by the Salary tab's Working Days stat (see DriverFormModal.tsx).
     salaryWorkingDays: counts.Present + counts.PaidLeave,
     attendancePercentage, rows
+  };
+}
+
+// Same math as computeDriverMonthlyAttendanceSummary above, but scoped to an
+// arbitrary [from, to] date range instead of a fixed calendar month - powers
+// the Driver Salary Slip's Date From/To pro-ration (a driver who only worked
+// part of a month still gets a slip covering just that period). Wages Per
+// Day still divides by the number of days in the *month `from` falls in*
+// (not the range length) - a range spanning more than one calendar month is
+// an edge case this doesn't specially handle, since Driver Salary's Gross
+// Salary figure is itself always a single month's number.
+async function computeDriverRangeAttendanceSummary(driverId: string, from: string, to: string) {
+  const attendanceRows = await getDriverAttendance();
+  const rows = attendanceRows.filter(a => a.driverId === driverId && a.date >= from && a.date <= to);
+  const totalDaysInRange = Math.max(1, Math.round((new Date(to).getTime() - new Date(from).getTime()) / (1000 * 60 * 60 * 24)) + 1);
+  const counts: Record<string, number> = {
+    Present: 0, AbsentNoInfo: 0, AbsentLOP: 0, PaidLeave: 0, LeaveWithPermission: 0,
+    HalfDay: 0, MedicalLeave: 0, Holiday: 0, WeekOff: 0
+  };
+  rows.forEach(r => { counts[r.status] = (counts[r.status] || 0) + 1; });
+
+  return {
+    driverId, from, to, totalDaysInRange,
+    presentDays: counts.Present + counts.PaidLeave, // "worked" for salary purposes, same as salaryWorkingDays above
+    lopDays: counts.AbsentLOP,
+    exemptionLeaveDays: counts.LeaveWithPermission,
+    daysInFromMonth: daysInMonth(from.slice(0, 7)),
+    rows
   };
 }
 
@@ -609,6 +641,46 @@ async function removeMarketPodPettyCashLinks(entry: MarketPodEntry): Promise<voi
   }
 }
 
+// One-time backfill (safe to run on every startup - cheap no-op once caught
+// up): syncMarketPodPettyCashLinks only ever ran on a trip's own
+// add/edit/delete/balance-receipt action, so any trip saved with Payment
+// Mode = Petty Cash *before* that sync existed, and never touched since, was
+// missing its float entry entirely. This walks every Market POD trip once
+// and syncs whichever ones are still missing their deterministic
+// mp-adv-<id>/mp-bal-<id>-<receiptId> link, so historical advances count
+// toward the float exactly like this session's Change Request part 2 asked -
+// "identical treatment to a manually logged Amount Received entry".
+async function backfillMarketPodPettyCashFloats(): Promise<void> {
+  try {
+    const [entries, advances] = await Promise.all([getMarketPodEntries(), getPettyCashAdvances()]);
+    const advanceIds = new Set(advances.map(a => a.id));
+    let synced = 0;
+    const skippedNoOwner: string[] = [];
+
+    for (const entry of entries) {
+      if (entry.paymentMode !== 'Petty Cash') continue;
+      const needsAdvance = (entry.receivedAdvance || 0) > 0 && !advanceIds.has(`mp-adv-${entry.id}`);
+      const needsBalance = (entry.balanceReceipts || []).some(r => !advanceIds.has(`mp-bal-${entry.id}-${r.id}`));
+      if (!needsAdvance && !needsBalance) continue;
+
+      // enteredBy is the only signal for which of the 3 Petty Cash logins
+      // this trip's money belongs to - a handful of very old trips saved
+      // before that field was stamped have none, and there's no safe way to
+      // guess whose float to credit, so those are skipped (logged) rather
+      // than attributed to the wrong person.
+      if (!entry.enteredBy) { skippedNoOwner.push(entry.entryNo); continue; }
+
+      await syncMarketPodPettyCashLinks(entry, entry.enteredBy);
+      synced++;
+    }
+
+    if (synced > 0) console.log(`Backfilled Petty Cash float for ${synced} pre-existing Market POD trip(s).`);
+    if (skippedNoOwner.length > 0) console.warn(`Skipped Petty Cash float backfill for ${skippedNoOwner.length} Market POD trip(s) with no recorded handler (enteredBy): ${skippedNoOwner.join(', ')}`);
+  } catch (error) {
+    console.error('Market POD -> Petty Cash float backfill failed:', error);
+  }
+}
+
 function nextMarketPodEntryNo(entries: MarketPodEntry[]): string {
   const existing = new Set(entries.map(e => (e.entryNo || '').toUpperCase()));
   let maxNum = 0;
@@ -640,6 +712,16 @@ function filterEntryRowsForViewer<T extends { enteredBy?: string }>(rows: T[], s
   return rows
     .filter(r => r.enteredBy === sessionUser.username)
     .map(r => { const { enteredBy, ...rest } = r; return rest as T; });
+}
+
+// Lighter cousin of filterEntryRowsForViewer, for shared team ledgers (Fleet
+// Maintenance work orders, Driver Attendance) where every row must stay
+// visible to everyone within scope - only the "who entered/marked it"
+// metadata field itself is Super-Admin-only, unlike Fuel/Petty Cash/Market
+// POD/Mileage where the whole ROW is restricted to its own entrant.
+function maskAttributionField<T extends Record<string, any>>(rows: T[], field: keyof T, sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): T[] {
+  if (sessionUser?.department === 'super_admin') return rows;
+  return rows.map(r => { const copy = { ...r }; delete copy[field]; return copy; });
 }
 
 // A non-super-admin may only modify (update/delete) a row they themselves
@@ -760,6 +842,11 @@ async function startServer() {
   // combined Vehicle Maintenance Profiles into the new Service Schedule /
   // Tire / Battery / Tools Checklist tables (no-op once already migrated).
   await migrateLegacyMaintenanceProfiles();
+  // Petty Cash / Market POD change request part 2: backfill pre-existing
+  // Petty-Cash-mode trips that predate the float-sync logic (see
+  // backfillMarketPodPettyCashFloats above) - no-op once every trip's
+  // already synced.
+  await backfillMarketPodPettyCashFloats();
 
   // Sessions, OTPs, and password hashing/verification are handled by the
   // dedicated modules under src/auth - see session.ts, otp.ts, password.ts.
@@ -1872,13 +1959,28 @@ async function startServer() {
   });
 
   app.get('/api/maintenance', async (req, res) => {
-    try { res.json(await getMaintenanceRecords()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      res.json(maskAttributionField(await getMaintenanceRecords(), 'enteredBy', sessionUser));
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/maintenance', async (req, res) => {
-    try { res.json({ success: true, data: await saveMaintenanceRecord(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const result = await saveMaintenanceRecord({ ...req.body, enteredBy: sessionUser?.username });
+      res.json({ success: true, data: maskAttributionField(result, 'enteredBy', sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/maintenance/:id', async (req, res) => {
-    try { res.json({ success: true, data: await saveMaintenanceRecord({ ...req.body, id: req.params.id }) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      // enteredBy is never re-stamped on an edit - it always stays whoever
+      // first created this work order, same convention as Fuel/Petty Cash/
+      // Market POD/Mileage.
+      const existing = (await getMaintenanceRecords()).find(r => r.id === req.params.id);
+      const result = await saveMaintenanceRecord({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
+      res.json({ success: true, data: maskAttributionField(result, 'enteredBy', sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/maintenance/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteMaintenanceRecord(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -2641,9 +2743,11 @@ async function startServer() {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const allowed = getAllowedDriverViewLocations(sessionUser);
       const [rows, drivers] = await Promise.all([getDriverAttendance(), getDriverEmployees()]);
-      if (allowed === 'ALL') return res.json(rows);
-      const allowedDriverIds = new Set(drivers.filter(d => allowed.includes(d.location)).map(d => d.id));
-      res.json(rows.filter(r => allowedDriverIds.has(r.driverId)));
+      const scoped = allowed === 'ALL' ? rows : (() => {
+        const allowedDriverIds = new Set(drivers.filter(d => allowed.includes(d.location)).map(d => d.id));
+        return rows.filter(r => allowedDriverIds.has(r.driverId));
+      })();
+      res.json(maskAttributionField(scoped, 'markedBy', sessionUser));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2657,9 +2761,12 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'You cannot mark attendance for this driver.' });
       }
       const id = `${driverId}-${date}`;
-      const record: DriverAttendance = { id, driverId, date, status, remarks };
+      // markedBy always reflects whoever most recently set *this* day's
+      // status (unlike a flat ledger's enteredBy) - each driver+date cell is
+      // its own record, independently re-stamped every time it's re-marked.
+      const record: DriverAttendance = { id, driverId, date, status, remarks, markedBy: sessionUser?.username };
       await saveDriverAttendanceRecord(record);
-      res.json({ success: true, data: record });
+      res.json({ success: true, data: maskAttributionField([record], 'markedBy', sessionUser)[0] });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -2674,11 +2781,11 @@ async function startServer() {
       for (const entry of entries) {
         if (!(await assertDriverAccessible(entry.driverId, sessionUser))) continue;
         const id = `${entry.driverId}-${entry.date}`;
-        const record: DriverAttendance = { id, driverId: entry.driverId, date: entry.date, status: entry.status as DriverAttendance['status'] };
+        const record: DriverAttendance = { id, driverId: entry.driverId, date: entry.date, status: entry.status as DriverAttendance['status'], markedBy: sessionUser?.username };
         await saveDriverAttendanceRecord(record);
         results.push(record);
       }
-      res.json({ success: true, data: results });
+      res.json({ success: true, data: maskAttributionField(results, 'markedBy', sessionUser) });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -2711,10 +2818,71 @@ async function startServer() {
       if (!(await assertDriverAccessible(driverId, sessionUser, 'view'))) {
         return res.status(403).json({ success: false, error: 'You cannot view this driver.' });
       }
-      res.json({ success: true, data: await computeDriverMonthlyAttendanceSummary(driverId, month) });
+      const summary = await computeDriverMonthlyAttendanceSummary(driverId, month);
+      res.json({ success: true, data: { ...summary, rows: maskAttributionField(summary.rows, 'markedBy', sessionUser) } });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
+  });
+
+  // Own path prefixes, so each needs its own requireDriverAccess - Express's
+  // app.use('/api/drivers/attendance', ...) above only covers that exact
+  // prefix, and /api/drivers/salary-slips etc. are siblings of it, not
+  // sub-paths (and /api/drivers/vehicle-lookup deliberately stays
+  // unrestricted - see its own route - so a single blanket '/api/drivers'
+  // gate isn't an option here).
+  app.use('/api/drivers/attendance/range', requireDriverAccess);
+  app.use('/api/drivers/salary-slips', requireDriverAccess);
+  app.use('/api/drivers/salary-slip-audit', requireDriverAccess);
+
+  // Powers the Driver Salary Slip's Date From/To pro-ration - :from/:to are
+  // YYYY-MM-DD (no slashes, so they're safe as plain route segments).
+  app.get('/api/drivers/attendance/range/:driverId/:from/:to', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const { driverId, from, to } = req.params;
+      if (!(await assertDriverAccessible(driverId, sessionUser, 'view'))) {
+        return res.status(403).json({ success: false, error: 'You cannot view this driver.' });
+      }
+      const summary = await computeDriverRangeAttendanceSummary(driverId, from, to);
+      res.json({ success: true, data: { ...summary, rows: maskAttributionField(summary.rows, 'markedBy', sessionUser) } });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ===== DRIVER SALARY SLIPS ===== (requireDriverAccess registered above)
+  app.get('/api/drivers/salary-slips', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const allowed = getAllowedDriverViewLocations(sessionUser);
+      const slips = await getDriverSalarySlips();
+      res.json(allowed === 'ALL' ? slips : slips.filter(s => allowed.includes(s.location)));
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/drivers/salary-slips', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!(await assertDriverAccessible(req.body.driverId, sessionUser, 'view'))) {
+        return res.status(403).json({ error: 'You cannot generate a salary slip for this driver.' });
+      }
+      res.json({ success: true, data: await saveDriverSalarySlipRecord(req.body) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/drivers/salary-slips/:id', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!(await assertDriverAccessible(req.body.driverId, sessionUser, 'view'))) {
+        return res.status(403).json({ error: 'You cannot update this salary slip.' });
+      }
+      res.json({ success: true, data: await saveDriverSalarySlipRecord({ ...req.body, id: req.params.id }) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.get('/api/drivers/salary-slip-audit', async (req, res) => {
+    try { res.json(await getDriverSalarySlipAudits()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/drivers/salary-slip-audit', async (req, res) => {
+    try { res.json({ success: true, data: await saveDriverSalarySlipAuditRecord(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   // Loan Management: Vehicle Loan (one record per vehicle, id = Reg. No.) and

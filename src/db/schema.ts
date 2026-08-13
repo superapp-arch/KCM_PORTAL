@@ -138,6 +138,21 @@ export const salarySlipAudits = pgTable('salary_slip_audits', {
   data: text('data').notNull(), // JSON string representing the full SalarySlipAuditRecord object
 });
 
+// Generated driver payslips - one row per slip (id = slipNumber). See
+// DriverSalarySlipRecord.
+export const driverSalarySlips = pgTable('driver_salary_slips', {
+  id: text('id').primaryKey(),
+  driverId: text('driver_id'),
+  data: text('data').notNull(), // JSON string representing the full DriverSalarySlipRecord object
+});
+
+// Append-only audit trail (Generated/Regenerated/Downloaded) for driver salary slips.
+export const driverSalarySlipAudits = pgTable('driver_salary_slip_audits', {
+  id: text('id').primaryKey(),
+  driverId: text('driver_id'),
+  data: text('data').notNull(), // JSON string representing the full DriverSalarySlipAuditRecord object
+});
+
 // Generated Garage Work Order invoices - one row per work order (id =
 // maintenanceRecordId). See ServiceInvoiceRecord.
 export const serviceInvoices = pgTable('service_invoices', {

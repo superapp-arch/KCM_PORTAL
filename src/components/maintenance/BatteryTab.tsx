@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Vehicle, BatteryRecord } from '../../types';
 import { Battery, Search, Edit2, Trash2, Plus, X, CheckCircle2, AlertCircle } from 'lucide-react';
 import DateInput from '../DateInput';
+import SortHeader from '../SortHeader';
+import { SortState, compareText } from '../../utils/sort';
 
 interface BatteryTabProps {
   vehicles: Vehicle[];
@@ -20,17 +22,32 @@ export default function BatteryTab({ vehicles, batteryRecords, onSaveBatteryReco
   const [form, setForm] = useState<Omit<BatteryRecord, 'id'> & { id?: string }>(emptyForm());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  // No default (null) - keeps the original Reg No / current-first /
+  // most-recently-installed compound order until the user actively picks a
+  // sort, same convention as Service Schedule.
+  const [sort, setSort] = useState<SortState | null>(null);
+  const handleSort = (key: string, direction: SortState['direction']) => setSort({ key, direction });
 
   const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
 
   const vehicleList = Array.from(new Set(vehicles.map(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase()).filter(Boolean))).sort();
 
-  const rows = [...batteryRecords].sort((a, b) => {
-    if (a.regNo !== b.regNo) return a.regNo.localeCompare(b.regNo);
-    // Current battery first within a vehicle, then most recently installed.
-    if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
-    return (b.installedDate || '').localeCompare(a.installedDate || '');
-  });
+  const rows = sort
+    ? [...batteryRecords].sort((a, b) => {
+        let cmp = 0;
+        switch (sort.key) {
+          case 'regNo': cmp = compareText(a.regNo, b.regNo); break;
+          case 'installedDate': cmp = (a.installedDate || '') === (b.installedDate || '') ? 0 : ((a.installedDate || '') < (b.installedDate || '') ? -1 : 1); break;
+          default: cmp = 0;
+        }
+        return sort.direction === 'asc' ? cmp : -cmp;
+      })
+    : [...batteryRecords].sort((a, b) => {
+        if (a.regNo !== b.regNo) return a.regNo.localeCompare(b.regNo);
+        // Current battery first within a vehicle, then most recently installed.
+        if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+        return (b.installedDate || '').localeCompare(a.installedDate || '');
+      });
 
   const filteredRows = rows.filter(r =>
     r.regNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -115,10 +132,10 @@ export default function BatteryTab({ vehicles, batteryRecords, onSaveBatteryReco
           <table className="w-full text-left text-xs">
             <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
               <tr>
-                <th className="px-3 py-2.5">Reg. No.</th>
+                <th className="px-3 py-2.5"><SortHeader label="Reg. No." sortKey="regNo" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5">Battery Number</th>
                 <th className="px-3 py-2.5">Make</th>
-                <th className="px-3 py-2.5">Installed</th>
+                <th className="px-3 py-2.5"><SortHeader label="Installed" sortKey="installedDate" sort={sort} onSort={handleSort} type="numeric" /></th>
                 <th className="px-3 py-2.5">Warranty Expiry</th>
                 <th className="px-3 py-2.5">Current</th>
                 <th className="px-3 py-2.5 text-right">Actions</th>

@@ -18,6 +18,8 @@ import {
   staffHolidays,
   salarySlips,
   salarySlipAudits,
+  driverSalarySlips,
+  driverSalarySlipAudits,
   serviceInvoices,
   serviceInvoiceAudits,
   abnormalLogins,
@@ -63,6 +65,8 @@ import {
   StaffHoliday,
   SalarySlipRecord,
   SalarySlipAuditRecord,
+  DriverSalarySlipRecord,
+  DriverSalarySlipAuditRecord,
   ServiceInvoiceRecord,
   ServiceInvoiceAuditRecord,
   AbnormalLogin,
@@ -1561,6 +1565,60 @@ export async function saveSalarySlipAuditRecord(entry: SalarySlipAuditRecord) {
   } catch (error) {
     console.error("Database action failed in saveSalarySlipAuditRecord:", error);
     throw new Error("Failed to write salary slip audit entry.", { cause: error });
+  }
+}
+
+// --- DRIVER SALARY SLIP OPERATIONS ---
+export async function getDriverSalarySlips(): Promise<DriverSalarySlipRecord[]> {
+  try {
+    const rows = await db.select().from(driverSalarySlips);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getDriverSalarySlips:", error);
+    throw new Error("Failed to retrieve driver salary slips.", { cause: error });
+  }
+}
+
+export async function saveDriverSalarySlipRecord(slip: DriverSalarySlipRecord) {
+  try {
+    const id = slip.id || slip.slipNumber;
+    const complete = { ...slip, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(driverSalarySlips).where(eq(driverSalarySlips.id, id));
+    if (existing.length > 0) {
+      await db.update(driverSalarySlips).set({ data: dataString, driverId: complete.driverId }).where(eq(driverSalarySlips.id, id));
+    } else {
+      await db.insert(driverSalarySlips).values({ id, driverId: complete.driverId, data: dataString });
+    }
+    return await getDriverSalarySlips();
+  } catch (error) {
+    console.error("Database action failed in saveDriverSalarySlipRecord:", error);
+    throw new Error("Failed to save driver salary slip.", { cause: error });
+  }
+}
+
+// --- DRIVER SALARY SLIP AUDIT OPERATIONS (append-only) ---
+export async function getDriverSalarySlipAudits(): Promise<DriverSalarySlipAuditRecord[]> {
+  try {
+    const rows = await db.select().from(driverSalarySlipAudits);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getDriverSalarySlipAudits:", error);
+    throw new Error("Failed to retrieve driver salary slip audit trail.", { cause: error });
+  }
+}
+
+export async function saveDriverSalarySlipAuditRecord(entry: DriverSalarySlipAuditRecord) {
+  try {
+    const id = entry.id || String(Date.now());
+    const complete = { ...entry, id };
+    const dataString = JSON.stringify(complete);
+    await db.insert(driverSalarySlipAudits).values({ id, driverId: complete.driverId, data: dataString });
+    return await getDriverSalarySlipAudits();
+  } catch (error) {
+    console.error("Database action failed in saveDriverSalarySlipAuditRecord:", error);
+    throw new Error("Failed to write driver salary slip audit entry.", { cause: error });
   }
 }
 

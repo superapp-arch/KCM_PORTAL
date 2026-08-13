@@ -101,9 +101,13 @@ export default function DriverAttendanceSummaryModal({ driver, month, onClose }:
               {Array.from({ length: totalDays }, (_, i) => i + 1).map(day => {
                 const date = `${month}-${String(day).padStart(2, '0')}`;
                 const record = summary.rows.find(r => r.date === date);
+                // markedBy is Super-Admin-only (stripped server-side for
+                // everyone else), so this naturally shows nothing extra for
+                // regular users.
+                const title = record ? [record.status, record.markedBy ? `Marked by: ${record.markedBy}` : undefined].filter(Boolean).join(' • ') : 'Unmarked';
                 return (
                   <div key={day}
-                    title={record?.status || 'Unmarked'}
+                    title={title}
                     className={`h-8 rounded-md border flex items-center justify-center text-[9px] font-bold ${record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300'}`}>
                     {day}
                   </div>

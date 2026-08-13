@@ -59,7 +59,7 @@ export default function DriverDetails({ user, drivers, onAddDriver, onUpdateDriv
       </div>
 
       {moduleTab === 'salary' && (
-        <DriverSalarySheet drivers={drivers} writableLocations={writableLocations} onAddDriver={onAddDriver} onUpdateDriver={onUpdateDriver} onDeleteDriver={onDeleteDriver} />
+        <DriverSalarySheet performedBy={user.username} drivers={drivers} writableLocations={writableLocations} onAddDriver={onAddDriver} onUpdateDriver={onUpdateDriver} onDeleteDriver={onDeleteDriver} />
       )}
       {moduleTab === 'attendance' && <DriverAttendanceSheet drivers={drivers} writableLocations={writableLocations} />}
     </div>

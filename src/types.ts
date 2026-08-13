@@ -310,6 +310,12 @@ export interface MaintenanceRecord {
   driverId?: string; // auto-fetched from Driver Details when driverName matches exactly one registered driver; manual entry allowed otherwise
   breakdownReportId?: string; // links this record back to the BreakdownReport it resolves, when logged as a Workshop Visit
   documents?: VehicleDocument[];
+  // username, stamped server-side on create only (never overwritten by a
+  // later edit) - Fleet Maintenance is a shared team ledger, so unlike Fuel/
+  // Petty Cash/Market POD/Mileage this never restricts which ROWS a viewer
+  // sees, only whether the enteredBy field itself is included; server strips
+  // it out for anyone who isn't a Super Admin.
+  enteredBy?: string;
 }
 
 // Authorised Service Station master list - Service Station is a dropdown of
@@ -834,6 +840,65 @@ export interface DriverAttendance {
   date: string; // YYYY-MM-DD
   status: AttendanceStatusCode;
   remarks?: string;
+  // username, stamped server-side every time this specific driver+date cell
+  // is marked/re-marked (each cell is its own record, so - unlike a flat
+  // ledger's enteredBy - this always reflects whoever most recently set
+  // *this* day's status, not just who first created the row). Server strips
+  // it out for anyone who isn't a Super Admin.
+  markedBy?: string;
+}
+
+// A downloadable payslip for one driver over an arbitrary date range (not
+// necessarily a full calendar month - e.g. a driver who only worked 15 days)
+// - same "resolve or generate" spirit as HR & Payroll's SalarySlipRecord, but
+// keyed by dateFrom/dateTo instead of a fixed month. Earned pay is always
+// pro-rated: Wages Per Day (driver's monthly Gross Salary ÷ days in that
+// month) x days actually Present/Paid-Leave within the range - LOP days
+// within the range are simply excluded from that count (0 pay), not
+// subtracted a second time, so lopAmount below is informational only.
+export interface DriverSalarySlipRecord {
+  id: string; // = slipNumber
+  slipNumber: string; // DRVSLIP-YYYYMM-NNN (month = dateTo's month), auto-generated, sequential within that month
+  driverId: string;
+  driverName: string;
+  vehicleNo?: string;
+  location: DriverLocationCategory;
+  dateFrom: string; // YYYY-MM-DD
+  dateTo: string; // YYYY-MM-DD
+  bankAccountNumberMasked?: string; // last 4 digits only, same masking convention as HR's Salary Slip
+  ifscCode?: string;
+  totalDaysInRange: number; // calendar days from dateFrom to dateTo, inclusive
+  presentDays: number; // Present + Paid Leave within the range - what earnedAmount is paid for
+  lopDays: number; // AbsentLOP within the range - informational, already excluded from presentDays
+  exemptionLeaveDays: number;
+  grossSalaryMonthly?: number; // snapshot of the driver's monthly Gross Salary used to derive wagesPerDay
+  wagesPerDay: number; // grossSalaryMonthly / days in dateFrom's calendar month
+  earnedAmount: number; // wagesPerDay x presentDays - the pro-rated pay for this period
+  lopAmount: number; // wagesPerDay x lopDays - shown on the slip as unpaid, not subtracted again from netSalary
+  otherAdditions?: number;
+  pettyCashAdvance?: number;
+  loanDeduction?: number;
+  recoveryAmount?: number;
+  driverWelfare?: number;
+  bata?: number;
+  totalEarnings: number; // earnedAmount + otherAdditions
+  totalDeductions: number; // pettyCashAdvance + loanDeduction + recoveryAmount + driverWelfare + bata
+  netSalary: number; // totalEarnings - totalDeductions
+  generatedDate: string; // YYYY-MM-DD
+  pdfUrl?: string; // /uploads/driver-salary-slips/... - same generic upload endpoint every other module's documents already use
+  isDownloaded?: boolean;
+  lastDownloadedDate?: string;
+}
+
+export interface DriverSalarySlipAuditRecord {
+  id: string;
+  slipNumber: string;
+  driverId: string;
+  dateFrom: string;
+  dateTo: string;
+  action: 'Generated' | 'Regenerated' | 'Downloaded';
+  timestamp: string;
+  performedBy?: string; // username
 }
 
 export type LoanStatus = 'Active' | 'Closed';

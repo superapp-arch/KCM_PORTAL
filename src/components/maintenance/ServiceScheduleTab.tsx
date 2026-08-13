@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Vehicle, VehicleServiceSchedule, MileageReport } from '../../types';
 import { CalendarClock, Search, Edit2, X, ShieldCheck, Gauge, CheckCircle2, AlertCircle } from 'lucide-react';
 import DateInput from '../DateInput';
+import SortHeader from '../SortHeader';
+import { SortState } from '../../utils/sort';
 import { latestOdometerFor, computeKmStatus, computeWarrantyStatus, KmStatus } from '../../utils/maintenanceDates';
 
 interface ServiceScheduleTabProps {
@@ -41,14 +43,35 @@ export default function ServiceScheduleTab({
   const [form, setForm] = useState<VehicleServiceSchedule | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  // No default sort (null) - this is a per-vehicle master list, not a
+  // chronological ledger, so it keeps its original alphabetical-by-Reg-No
+  // order until the user actively picks Last Service Newest/Oldest.
+  const [sort, setSort] = useState<SortState | null>(null);
+  const handleSort = (key: string, direction: SortState['direction']) => setSort({ key, direction });
 
   const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
 
   const vehicleList = Array.from(new Set(vehicles.map(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase()).filter(Boolean))).sort();
-  const filteredVehicles = vehicleList.filter(v => v.toLowerCase().includes(searchTerm.toLowerCase()));
+  const filteredVehiclesUnsorted = vehicleList.filter(v => v.toLowerCase().includes(searchTerm.toLowerCase()));
 
   const scheduleFor = (regNo: string) => vehicleServiceSchedules.find(s => s.regNo === regNo);
   const vehicleFor = (regNo: string) => vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === regNo);
+
+  const filteredVehicles = sort
+    ? [...filteredVehiclesUnsorted].sort((a, b) => {
+        let cmp = 0;
+        switch (sort.key) {
+          case 'lastServiceDate': {
+            const da = scheduleFor(a)?.lastServiceDate || '';
+            const db = scheduleFor(b)?.lastServiceDate || '';
+            cmp = da === db ? a.localeCompare(b) : (da < db ? -1 : 1);
+            break;
+          }
+          default: cmp = a.localeCompare(b);
+        }
+        return sort.direction === 'asc' ? cmp : -cmp;
+      })
+    : filteredVehiclesUnsorted;
 
   const openEdit = (regNo: string) => {
     setEditingRegNo(regNo);
@@ -98,10 +121,10 @@ export default function ServiceScheduleTab({
           <table className="w-full text-left text-xs">
             <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
               <tr>
-                <th className="px-3 py-2.5">Reg. No.</th>
+                <th className="px-3 py-2.5"><SortHeader label="Reg. No." sortKey="regNo" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5">Warranty</th>
                 <th className="px-3 py-2.5 text-right">Current Odometer</th>
-                <th className="px-3 py-2.5">Last Service</th>
+                <th className="px-3 py-2.5"><SortHeader label="Last Service" sortKey="lastServiceDate" sort={sort} onSort={handleSort} type="numeric" /></th>
                 <th className="px-3 py-2.5 text-right">Interval (km)</th>
                 <th className="px-3 py-2.5 text-right">Next Due (km)</th>
                 <th className="px-3 py-2.5 text-right">Remaining</th>

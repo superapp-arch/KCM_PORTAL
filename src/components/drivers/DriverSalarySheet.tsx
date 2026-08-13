@@ -1,8 +1,12 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import * as XLSX from 'xlsx';
-import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Download, Lock } from 'lucide-react';
-import { DriverEmployee, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES } from '../../types';
+import { motion } from 'motion/react';
+import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Download, Lock, ChevronDown, ChevronUp, User as UserIcon, Paperclip, Receipt } from 'lucide-react';
+import { DriverEmployee, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES, VehicleDocument, DriverSalarySlipRecord } from '../../types';
 import DriverFormModal from './DriverFormModal';
+import DriverSalarySlipModal from './DriverSalarySlipModal';
+import DocumentAttachment from '../DocumentAttachment';
+import { authFetch } from '../../authFetch';
 import { compareTrailingNumber } from '../../utils/sort';
 
 // Payable Amount = Gross Salary + Other Additions - (Petty Cash/Advance +
@@ -38,6 +42,7 @@ const toDriverRow = (driver: DriverEmployee, i: number) => ({
 });
 
 interface DriverSalarySheetProps {
+  performedBy: string; // current user's username - for the Salary Slip audit trail
   drivers: DriverEmployee[];
   writableLocations: DriverLocationCategory[] | 'ALL'; // locations this user may add/edit/delete drivers in - view is broader, handled server-side
   onAddDriver: (driver: Omit<DriverEmployee, 'id'> & { id: string }) => Promise<void>;
@@ -45,10 +50,33 @@ interface DriverSalarySheetProps {
   onDeleteDriver: (id: string) => Promise<void>;
 }
 
-export default function DriverSalarySheet({ drivers, writableLocations, onAddDriver, onUpdateDriver, onDeleteDriver }: DriverSalarySheetProps) {
+export default function DriverSalarySheet({ performedBy, drivers, writableLocations, onAddDriver, onUpdateDriver, onDeleteDriver }: DriverSalarySheetProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [modalDriver, setModalDriver] = useState<DriverEmployee | null | undefined>(undefined); // undefined = closed
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  // Click-to-expand on the Driver ID cell (mirrors Fleet & Vehicles' row
+  // expand pattern) - shows basic info plus inline document upload, so
+  // Aadhar/Driving License/Other docs no longer require opening the full
+  // Edit modal just to view or attach them.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const toggleExpand = (id: string) => setExpandedId(prev => prev === id ? null : id);
+
+  // Driver Salary Slip generation - self-contained data flow (fetched
+  // directly here, not threaded through App.tsx's central Promise.all), same
+  // pattern the Service Invoice feature already established.
+  const [salarySlips, setSalarySlips] = useState<DriverSalarySlipRecord[]>([]);
+  const [slipModalDriver, setSlipModalDriver] = useState<DriverEmployee | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await authFetch('/api/drivers/salary-slips');
+        if (res.ok) setSalarySlips(await res.json());
+      } catch (err) {
+        console.error('Failed to load driver salary slips:', err);
+      }
+    })();
+  }, []);
 
   const triggerNotif = (message: string, type: 'success' | 'error') => {
     setNotif({ message, type });
@@ -114,6 +142,18 @@ export default function DriverSalarySheet({ drivers, writableLocations, onAddDri
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(flatFiltered.map(toDriverRow)), 'Drivers');
     XLSX.writeFile(workbook, `KCM_All_Drivers.xlsx`);
+  };
+
+  // Inline document upload from the expand panel - persists immediately
+  // (same "no separate Save button" convention DocumentAttachment's callers
+  // already use elsewhere) rather than waiting for the full Edit modal.
+  const handleUpdateDocs = async (driver: DriverEmployee, field: 'aadharDocuments' | 'drivingLicenseDocuments' | 'otherDocuments', docs: VehicleDocument[]) => {
+    try {
+      await onUpdateDriver(driver.id, { [field]: docs });
+    } catch (err) {
+      console.error(err);
+      triggerNotif('Failed to save document changes.', 'error');
+    }
   };
 
   return (
@@ -194,10 +234,16 @@ export default function DriverSalarySheet({ drivers, writableLocations, onAddDri
                     {group.drivers.map(driver => {
                       runningIndex += 1;
                       return (
-                        <tr key={driver.id} className="hover:bg-slate-50">
+                        <React.Fragment key={driver.id}>
+                        <tr className="hover:bg-slate-50">
                           <td className="px-3 py-2.5 font-mono text-slate-500">{runningIndex}</td>
                           <td className="px-3 py-2.5 font-semibold text-slate-700 whitespace-nowrap">{driver.name}</td>
-                          <td className="px-3 py-2.5 font-mono font-bold text-slate-800 whitespace-nowrap">{driver.id}</td>
+                          <td className="px-3 py-2.5 whitespace-nowrap">
+                            <button onClick={() => toggleExpand(driver.id)} className="flex items-center gap-1 font-mono font-bold text-slate-800 cursor-pointer hover:text-teal-700" title="Click to view details & documents">
+                              {driver.id}
+                              {expandedId === driver.id ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
+                            </button>
+                          </td>
                           <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{driver.driverNo}</td>
                           <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{driver.vehicleNo || '-'}</td>
                           <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{driver.accountNumber || '-'}</td>
@@ -210,6 +256,7 @@ export default function DriverSalarySheet({ drivers, writableLocations, onAddDri
                           <td className="px-3 py-2.5 text-right font-mono text-slate-700">{driver.grossSalary ? `Rs. ${driver.grossSalary.toLocaleString('en-IN')}` : '-'}</td>
                           <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">Rs. {payableAmount(driver).toLocaleString('en-IN')}</td>
                           <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                            <button onClick={() => setSlipModalDriver(driver)} title="Generate Salary Slip" className="p-1 text-slate-400 hover:text-purple-700 hover:bg-slate-100 rounded cursor-pointer"><Receipt className="w-3.5 h-3.5" /></button>
                             <button onClick={() => handleDownloadOne(driver)} title="Download this driver" className="p-1 text-slate-400 hover:text-teal-600 hover:bg-slate-100 rounded cursor-pointer"><Download className="w-3.5 h-3.5" /></button>
                             {canWrite(driver) ? (
                               <>
@@ -221,6 +268,60 @@ export default function DriverSalarySheet({ drivers, writableLocations, onAddDri
                             )}
                           </td>
                         </tr>
+
+                        {expandedId === driver.id && (
+                          <tr>
+                            <td colSpan={13} className="bg-slate-50/50 p-5 border-t border-slate-100">
+                              <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="grid grid-cols-1 lg:grid-cols-3 gap-4 text-slate-700">
+                                <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-xs">
+                                  <h4 className="text-xs font-bold text-slate-400 tracking-wider uppercase mb-3 flex items-center gap-1.5 pb-1 border-b border-slate-100">
+                                    <UserIcon className="w-3.5 h-3.5 text-teal-600" /> Basic Info
+                                  </h4>
+                                  <dl className="grid grid-cols-2 gap-y-2 gap-x-3 text-xs font-sans">
+                                    <dt className="text-slate-400">Driver No</dt>
+                                    <dd className="font-mono text-slate-800">{driver.driverNo || '-'}</dd>
+                                    <dt className="text-slate-400">Vehicle No</dt>
+                                    <dd className="font-mono text-slate-800">{driver.vehicleNo || '-'}</dd>
+                                    <dt className="text-slate-400">A/C No</dt>
+                                    <dd className="font-mono text-slate-800 break-all">{driver.accountNumber || '-'}</dd>
+                                    <dt className="text-slate-400">IFSC Code</dt>
+                                    <dd className="font-mono text-slate-800">{driver.ifscCode || '-'}</dd>
+                                    <dt className="text-slate-400">Reporting</dt>
+                                    <dd className="text-slate-800">{driver.reporting || '-'}</dd>
+                                    <dt className="text-slate-400">Location</dt>
+                                    <dd className="text-slate-800">{driver.location}</dd>
+                                    <dt className="text-slate-400">Remark</dt>
+                                    <dd className="text-slate-800 break-words col-span-2">{driver.remark || '-'}</dd>
+                                  </dl>
+                                </div>
+
+                                {/* Inline document upload - same DocumentAttachment component the
+                                    Edit modal's "Upload Documents" tab uses, wired straight to
+                                    onUpdateDriver so changes persist immediately without needing
+                                    the full modal, matching Fleet & Vehicles' inline expand pattern. */}
+                                <div className="lg:col-span-2 bg-white rounded-xl p-4 border border-slate-200 shadow-xs">
+                                  <h4 className="text-xs font-bold text-slate-400 tracking-wider uppercase mb-3 flex items-center gap-1.5 pb-1 border-b border-slate-100">
+                                    <Paperclip className="w-3.5 h-3.5 text-teal-600" /> Documents
+                                  </h4>
+                                  {canWrite(driver) ? (
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                      <DocumentAttachment documents={driver.aadharDocuments} onChange={(docs) => handleUpdateDocs(driver, 'aadharDocuments', docs)} label="Aadhar" hideDropzone maxFiles={1} />
+                                      <DocumentAttachment documents={driver.drivingLicenseDocuments} onChange={(docs) => handleUpdateDocs(driver, 'drivingLicenseDocuments', docs)} label="Driving License" hideDropzone maxFiles={1} />
+                                      <DocumentAttachment documents={driver.otherDocuments} onChange={(docs) => handleUpdateDocs(driver, 'otherDocuments', docs)} label="Others" />
+                                    </div>
+                                  ) : (
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                      <DocumentAttachment documents={driver.aadharDocuments} onChange={() => {}} label="Aadhar" isReadOnly />
+                                      <DocumentAttachment documents={driver.drivingLicenseDocuments} onChange={() => {}} label="Driving License" isReadOnly />
+                                      <DocumentAttachment documents={driver.otherDocuments} onChange={() => {}} label="Others" isReadOnly />
+                                    </div>
+                                  )}
+                                </div>
+                              </motion.div>
+                            </td>
+                          </tr>
+                        )}
+                        </React.Fragment>
                       );
                     })}
                   </React.Fragment>
@@ -239,6 +340,20 @@ export default function DriverSalarySheet({ drivers, writableLocations, onAddDri
           onUpdateDriver={onUpdateDriver}
           onClose={() => setModalDriver(undefined)}
           onSaved={handleSaved}
+        />
+      )}
+
+      {slipModalDriver && (
+        <DriverSalarySlipModal
+          driver={slipModalDriver}
+          existingSlips={salarySlips}
+          performedBy={performedBy}
+          onClose={() => setSlipModalDriver(null)}
+          onSlipSaved={(slip) => setSalarySlips(prev => {
+            const idx = prev.findIndex(s => s.id === slip.id);
+            if (idx === -1) return [...prev, slip];
+            const copy = [...prev]; copy[idx] = slip; return copy;
+          })}
         />
       )}
     </div>

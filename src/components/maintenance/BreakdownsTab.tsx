@@ -5,6 +5,8 @@ import {
 import { AlertTriangle, Plus, X, Wrench, CheckCircle2, AlertCircle, Trash2, Zap, Truck as TruckIcon } from 'lucide-react';
 import DateInput from '../DateInput';
 import DocumentAttachment from '../DocumentAttachment';
+import SortHeader from '../SortHeader';
+import { SortState } from '../../utils/sort';
 
 const BREAKDOWN_TYPES: { value: BreakdownReport['type']; label: string }[] = [
   { value: 'EnRouteBreakdown', label: 'En-Route Breakdown' },
@@ -163,8 +165,19 @@ export default function BreakdownsTab({
     }
   };
 
-  const openReports = breakdownReports.filter(b => b.status === 'Open').sort((a, b) => a.date < b.date ? 1 : -1);
-  const resolvedReports = breakdownReports.filter(b => b.status === 'Resolved').sort((a, b) => a.date < b.date ? 1 : -1);
+  // Newest-first by Date was already this table's default within each
+  // status group (Open reports always list before Resolved ones - that
+  // grouping is a meaningful status distinction, not just a sort artifact,
+  // so it's kept regardless of direction) - now exposed as the same Sort By
+  // dropdown convention used elsewhere.
+  const [sort, setSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
+  const handleSort = (key: string, direction: SortState['direction']) => setSort({ key, direction });
+  const dateCmp = (a: BreakdownReport, b: BreakdownReport) => {
+    const cmp = a.date === b.date ? 0 : (a.date < b.date ? -1 : 1);
+    return sort && sort.direction === 'asc' ? cmp : -cmp;
+  };
+  const openReports = breakdownReports.filter(b => b.status === 'Open').sort(dateCmp);
+  const resolvedReports = breakdownReports.filter(b => b.status === 'Resolved').sort(dateCmp);
 
   return (
     <div className="space-y-4">
@@ -181,16 +194,26 @@ export default function BreakdownsTab({
           <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
             <AlertTriangle className="w-4 h-4 text-rose-600" /> Breakdown Reports
           </h2>
-          <button onClick={() => setShowReportForm(true)} className="bg-gradient-to-r from-rose-600 to-slate-800 hover:shadow-md text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer">
-            <Plus className="w-4 h-4" /> Report Breakdown
-          </button>
+          <div className="flex items-center gap-2">
+            <select
+              value={sort?.key === 'date' && sort.direction === 'asc' ? 'oldest' : 'newest'}
+              onChange={(e) => setSort({ key: 'date', direction: e.target.value === 'oldest' ? 'asc' : 'desc' })}
+              className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-700"
+            >
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+            </select>
+            <button onClick={() => setShowReportForm(true)} className="bg-gradient-to-r from-rose-600 to-slate-800 hover:shadow-md text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer">
+              <Plus className="w-4 h-4" /> Report Breakdown
+            </button>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
               <tr>
-                <th className="px-3 py-2.5">Date</th>
+                <th className="px-3 py-2.5"><SortHeader label="Date" sortKey="date" sort={sort} onSort={handleSort} type="numeric" /></th>
                 <th className="px-3 py-2.5">Reg. No.</th>
                 <th className="px-3 py-2.5">Type</th>
                 <th className="px-3 py-2.5">Location</th>

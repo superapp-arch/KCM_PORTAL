@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion } from 'motion/react';
 import {
   MaintenanceRecord,
   MaintenanceWorkItem,
@@ -11,13 +12,16 @@ import {
   ServiceInvoiceRecord
 } from '../../types';
 import {
-  Plus, Search, CheckCircle2, AlertCircle, Settings, Edit2, Trash2, Paperclip, X, Filter, Receipt, Gauge
+  Plus, Search, CheckCircle2, AlertCircle, Settings, Edit2, Trash2, Paperclip, X, Filter, Receipt, Gauge,
+  ChevronDown, ChevronUp, Truck, FileCheck, Shield, UserCog
 } from 'lucide-react';
 import DocumentAttachment from '../DocumentAttachment';
 import DateInput from '../DateInput';
 import ServiceInvoiceModal from './ServiceInvoiceModal';
+import SortHeader from '../SortHeader';
 import { authFetch } from '../../authFetch';
 import { latestOdometerFor, computeKmStatus, computeWarrantyStatus } from '../../utils/maintenanceDates';
+import { SortState, compareText, compareNumber } from '../../utils/sort';
 
 interface ServiceLedgerTabProps {
   performedBy: string; // current user's username - for the Service Invoice audit trail
@@ -52,6 +56,16 @@ export default function ServiceLedgerTab({
 }: ServiceLedgerTabProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<'All' | MaintenanceRecord['serviceType']>('All');
+  // Newest-first by default, same convention as Petty Cash/Market POD/Mileage
+  // Report's "Sort By" dropdown - reuses the shared SortHeader/SortState.
+  const [sort, setSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
+  const handleSort = (key: string, direction: SortState['direction']) => setSort({ key, direction });
+
+  // Click-to-expand on the Reg. No. cell (mirrors Fleet & Vehicles' row
+  // expand pattern) - keyed by this specific work order's id, not by regNo,
+  // since the same vehicle can have many work order rows here.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const toggleExpand = (id: string) => setExpandedId(prev => prev === id ? null : id);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -236,12 +250,26 @@ export default function ServiceLedgerTab({
     }
   };
 
-  const filteredRecords = records.filter(r =>
+  const filteredRecordsUnsorted = records.filter(r =>
     (typeFilter === 'All' || r.serviceType === typeFilter) &&
     ((r?.regNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (r?.garageName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (r?.driverName || '').toLowerCase().includes(searchTerm.toLowerCase()))
   );
+
+  const filteredRecords = sort
+    ? [...filteredRecordsUnsorted].sort((a, b) => {
+        let cmp = 0;
+        switch (sort.key) {
+          case 'regNo': cmp = compareText(a.regNo, b.regNo); break;
+          case 'cost': cmp = compareNumber(a.cost, b.cost); break;
+          // Ties (same date) break on Reg No so the order stays stable.
+          case 'date': cmp = a.date === b.date ? compareText(a.regNo, b.regNo) : (a.date < b.date ? -1 : 1); break;
+          default: cmp = a.date === b.date ? compareText(a.regNo, b.regNo) : (a.date < b.date ? -1 : 1);
+        }
+        return sort.direction === 'asc' ? cmp : -cmp;
+      })
+    : filteredRecordsUnsorted;
 
   const totalCostAll = records.reduce((sum, r) => sum + (r.cost || 0), 0);
   const totalBreakdowns = records.filter(r => r.serviceType === 'Breakdown Repair').length;
@@ -262,6 +290,11 @@ export default function ServiceLedgerTab({
     const warranty = computeWarrantyStatus(schedule.warrantyStatus, currentKm, vehicle?.regDate || vehicle?.['Reg Date'] || '');
     return { warranty, status };
   };
+
+  // Fleet & Vehicles quick-view for the expand panel below - same vehicle
+  // record every other Fleet Maintenance figure already reads for specs.
+  const vehicleFor = (regNoVal: string) =>
+    vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === regNoVal.trim().toUpperCase());
 
   return (
     <div className="space-y-4">
@@ -308,6 +341,16 @@ export default function ServiceLedgerTab({
                 {SERVICE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
+            {/* Sort By - Newest First (default) / Oldest Last. Reuses the
+                same `sort` state the column headers drive. */}
+            <select
+              value={sort?.key === 'date' && sort.direction === 'asc' ? 'oldest' : 'newest'}
+              onChange={(e) => setSort({ key: 'date', direction: e.target.value === 'oldest' ? 'asc' : 'desc' })}
+              className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-700"
+            >
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+            </select>
             <button
               onClick={() => { resetForm(); setShowSidebar(true); }}
               className="bg-gradient-to-r from-blue-600 to-slate-800 hover:shadow-md text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
@@ -321,14 +364,14 @@ export default function ServiceLedgerTab({
           <table className="w-full text-left text-xs">
             <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
               <tr>
-                <th className="px-3 py-2.5">Date</th>
-                <th className="px-3 py-2.5">Reg. No.</th>
+                <th className="px-3 py-2.5"><SortHeader label="Date" sortKey="date" sort={sort} onSort={handleSort} type="numeric" /></th>
+                <th className="px-3 py-2.5"><SortHeader label="Reg. No." sortKey="regNo" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5">Status</th>
                 <th className="px-3 py-2.5">Type</th>
                 <th className="px-3 py-2.5">Service Station</th>
                 <th className="px-3 py-2.5">Driver</th>
                 <th className="px-3 py-2.5">Work Items</th>
-                <th className="px-3 py-2.5 text-right">Total Cost</th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="Total Cost" sortKey="cost" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-center">Docs</th>
                 <th className="px-3 py-2.5">Invoice</th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
@@ -340,10 +383,19 @@ export default function ServiceLedgerTab({
               ) : (
                 filteredRecords.map((r) => {
                   const due = dueStatusFor(r.regNo);
+                  const vehicle = vehicleFor(r.regNo);
+                  const otherWorkOrders = records.filter(o => o.id !== r.id && o.regNo.trim().toUpperCase() === r.regNo.trim().toUpperCase())
+                    .sort((a, b) => a.date === b.date ? 0 : (a.date < b.date ? 1 : -1));
                   return (
-                    <tr key={r.id} className="hover:bg-slate-50/50 transition-colors align-top">
+                    <React.Fragment key={r.id}>
+                    <tr className="hover:bg-slate-50/50 transition-colors align-top">
                       <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{r.date}</td>
-                      <td className="px-3 py-2.5 font-bold font-mono text-slate-900 uppercase whitespace-nowrap">{r.regNo}</td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        <button onClick={() => toggleExpand(r.id)} className="flex items-center gap-1 font-bold font-mono text-slate-900 uppercase cursor-pointer hover:text-blue-700" title="Click to view vehicle details">
+                          {r.regNo}
+                          {expandedId === r.id ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
+                        </button>
+                      </td>
                       <td className="px-3 py-2.5 whitespace-nowrap">
                         {due ? (
                           <div className="flex flex-col gap-0.5">
@@ -408,6 +460,79 @@ export default function ServiceLedgerTab({
                         </div>
                       </td>
                     </tr>
+
+                    {expandedId === r.id && (
+                      <tr>
+                        <td colSpan={11} className="bg-slate-50/50 p-5 border-t border-slate-100">
+                          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="grid grid-cols-1 md:grid-cols-3 gap-4 text-slate-700">
+                            {/* Vehicle specs, same quick-view spirit as Fleet & Vehicles' own row expand */}
+                            <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-xs">
+                              <h4 className="text-xs font-bold text-slate-400 tracking-wider uppercase mb-3 flex items-center gap-1.5 pb-1 border-b border-slate-100">
+                                <Truck className="w-3.5 h-3.5 text-blue-600" /> Fleet Specifications
+                              </h4>
+                              {vehicle ? (
+                                <dl className="grid grid-cols-2 gap-y-2 gap-x-3 text-xs font-sans">
+                                  <dt className="text-slate-400">Model</dt>
+                                  <dd className="font-bold text-slate-800">{vehicle.Model || vehicle.model || '-'}</dd>
+                                  <dt className="text-slate-400">Ownership</dt>
+                                  <dd className="font-bold text-slate-800">{vehicle.Ownership || vehicle.ownership || '-'}</dd>
+                                  <dt className="text-slate-400">Chassis No</dt>
+                                  <dd className="font-mono text-slate-800 break-all">{vehicle['Chassis No'] || vehicle.chassisNo || '-'}</dd>
+                                  <dt className="text-slate-400">Reg Year</dt>
+                                  <dd className="font-mono text-slate-800">{vehicle['Reg Year'] || vehicle.regYear || '-'}</dd>
+                                </dl>
+                              ) : <p className="text-slate-400 italic">Not found in Fleet &amp; Vehicles.</p>}
+                            </div>
+
+                            <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-xs">
+                              <h4 className="text-xs font-bold text-slate-400 tracking-wider uppercase mb-3 flex items-center gap-1.5 pb-1 border-b border-slate-100">
+                                <FileCheck className="w-3.5 h-3.5 text-blue-600" /> Compliance &amp; Insurance
+                              </h4>
+                              {vehicle ? (
+                                <dl className="grid grid-cols-2 gap-y-2 gap-x-3 text-xs font-sans">
+                                  <dt className="text-slate-400">Tax Expiry</dt>
+                                  <dd className="font-mono text-slate-800">{vehicle.Tax || vehicle.tax || '-'}</dd>
+                                  <dt className="text-slate-400">FC Expiry</dt>
+                                  <dd className="font-mono text-slate-800">{vehicle.FC || vehicle.fc || '-'}</dd>
+                                  <dt className="text-slate-400">Insurance Expiry</dt>
+                                  <dd className="font-mono text-slate-800">{vehicle.Insurance || vehicle.insurance || '-'}</dd>
+                                  <dt className="text-slate-400">Insurer</dt>
+                                  <dd className="font-mono text-slate-800 break-all">{vehicle['Insurance Company Name'] || vehicle.insuranceCompany || '-'}</dd>
+                                </dl>
+                              ) : <p className="text-slate-400 italic">-</p>}
+                              {r.enteredBy && (
+                                <p className="mt-3 pt-2 border-t border-slate-100 text-[10px] text-slate-400 font-mono flex items-center gap-1">
+                                  <UserCog className="w-3 h-3" /> Entered by: <span className="font-bold text-slate-600">{r.enteredBy}</span>
+                                </p>
+                              )}
+                            </div>
+
+                            <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-xs">
+                              <h4 className="text-xs font-bold text-slate-400 tracking-wider uppercase mb-3 flex items-center gap-1.5 pb-1 border-b border-slate-100">
+                                <Shield className="w-3.5 h-3.5 text-blue-600" /> Other Work Orders for {r.regNo}
+                              </h4>
+                              {otherWorkOrders.length === 0 ? (
+                                <p className="text-slate-400 italic text-xs">No other work orders on record for this vehicle.</p>
+                              ) : (
+                                <ul className="space-y-1.5 max-h-40 overflow-y-auto text-xs">
+                                  {otherWorkOrders.slice(0, 6).map(o => (
+                                    <li key={o.id} className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-100 rounded-lg px-2 py-1.5">
+                                      <span className="font-mono text-slate-500 shrink-0">{o.date}</span>
+                                      <span className="truncate flex-1 text-slate-600">{o.serviceType}</span>
+                                      <span className="font-mono font-bold text-slate-800 shrink-0">₹{(o.cost || 0).toLocaleString('en-IN')}</span>
+                                    </li>
+                                  ))}
+                                  {otherWorkOrders.length > 6 && (
+                                    <li className="text-[10px] text-slate-400 text-center pt-1">+{otherWorkOrders.length - 6} more - search "{r.regNo}" above to see all.</li>
+                                  )}
+                                </ul>
+                              )}
+                            </div>
+                          </motion.div>
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   );
                 })
               )}
@@ -589,7 +714,15 @@ export default function ServiceLedgerTab({
             const copy = [...prev]; copy[idx] = inv; return copy;
           })}
           onRecordInvoiceNumberSet={(invoiceNumber) => {
-            onUpdateRecord(invoiceModalRecord.id, { invoiceNumber }).catch(err => console.error('Failed to sync invoice number onto work order:', err));
+            // saveMaintenanceRecord overwrites the whole stored record with
+            // whatever's sent - it does NOT merge with what's already in the
+            // DB. Sending just { invoiceNumber } here would silently blank
+            // out every other field (regNo, date, workItems, cost...) on
+            // this work order the moment an invoice is generated, which is
+            // exactly the "entry disappears / can't edit it" bug this
+            // full-record spread fixes.
+            onUpdateRecord(invoiceModalRecord.id, { ...invoiceModalRecord, invoiceNumber })
+              .catch(err => console.error('Failed to sync invoice number onto work order:', err));
           }}
         />
       )}

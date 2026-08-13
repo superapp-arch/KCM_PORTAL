@@ -126,6 +126,18 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
     return monthAttendance.find(a => a.driverId === driverId && a.date === date) || null;
   };
 
+  // Each driver+day cell is its own record, so "who marked it" can only ever
+  // be shown per-cell (not as a single flat column) - a hover tooltip, same
+  // affordance as the existing remarks tooltip, scales to any number of
+  // drivers/days without new layout. markedBy is absent entirely for anyone
+  // who isn't a Super Admin (stripped server-side), so this naturally shows
+  // nothing extra for regular users.
+  const cellTitle = (record: DriverAttendance | null): string | undefined => {
+    if (!record) return undefined;
+    const parts = [record.remarks, record.markedBy ? `Marked by: ${record.markedBy}` : undefined].filter(Boolean);
+    return parts.length > 0 ? parts.join(' • ') : undefined;
+  };
+
   const markCell = async (driverId: string, day: number, status: AttendanceStatusCode, remarks?: string) => {
     const date = `${month}-${String(day).padStart(2, '0')}`;
     const res = await authFetch('/api/drivers/attendance/mark', {
@@ -231,7 +243,7 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
                             <td key={day} className="p-0.5 relative group">
                               <button onClick={() => writable && handleCellClick(driver.id, day)}
                                 disabled={!writable}
-                                title={!writable ? 'View only - outside your assigned locations' : (record?.remarks || undefined)}
+                                title={!writable ? 'View only - outside your assigned locations' : cellTitle(record)}
                                 className={`w-9 h-6 rounded text-[9px] font-bold border ${writable ? 'cursor-pointer' : 'cursor-not-allowed'} ${record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}>
                                 {record ? STATUS_ABBR[record.status] : '-'}
                               </button>
