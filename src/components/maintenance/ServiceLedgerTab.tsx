@@ -286,15 +286,20 @@ export default function ServiceLedgerTab({
     const remaining = (schedule.lastServiceKm + (schedule.serviceIntervalKm || 10000)) - currentKm;
     const status = computeKmStatus(remaining);
     if (!status) return null;
-    const vehicle = vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === regNoVal.trim().toUpperCase());
+    const vehicle = vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === (regNoVal || '').trim().toUpperCase());
     const warranty = computeWarrantyStatus(schedule.warrantyStatus, currentKm, vehicle?.regDate || vehicle?.['Reg Date'] || '');
     return { warranty, status };
   };
 
   // Fleet & Vehicles quick-view for the expand panel below - same vehicle
   // record every other Fleet Maintenance figure already reads for specs.
+  // regNoVal is guarded with `|| ''` (matching the vehicle side's own
+  // fallback just above) because MaintenanceRecord.regNo is required by the
+  // type but not by the DB - a handful of legacy/malformed work order rows
+  // can still have it missing, and this runs unconditionally for every row
+  // rendered, not just the one actually being expanded.
   const vehicleFor = (regNoVal: string) =>
-    vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === regNoVal.trim().toUpperCase());
+    vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === (regNoVal || '').trim().toUpperCase());
 
   return (
     <div className="space-y-4">
@@ -384,7 +389,7 @@ export default function ServiceLedgerTab({
                 filteredRecords.map((r) => {
                   const due = dueStatusFor(r.regNo);
                   const vehicle = vehicleFor(r.regNo);
-                  const otherWorkOrders = records.filter(o => o.id !== r.id && o.regNo.trim().toUpperCase() === r.regNo.trim().toUpperCase())
+                  const otherWorkOrders = records.filter(o => o.id !== r.id && (o.regNo || '').trim().toUpperCase() === (r.regNo || '').trim().toUpperCase())
                     .sort((a, b) => a.date === b.date ? 0 : (a.date < b.date ? 1 : -1));
                   return (
                     <React.Fragment key={r.id}>
