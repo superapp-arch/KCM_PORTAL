@@ -297,7 +297,7 @@ export default function App() {
       // to the caller instead of failing silently - PettyCash.tsx's
       // handleMarketPodSubmit catch block shows it to the user.
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || 'Failed to save the Market POD entry.');
+      throw new Error(body.error || 'Failed to save the Market Trip entry.');
     }
   };
 
@@ -311,7 +311,7 @@ export default function App() {
       await fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || 'Failed to save the Market POD entry.');
+      throw new Error(body.error || 'Failed to save the Market Trip entry.');
     }
   };
 

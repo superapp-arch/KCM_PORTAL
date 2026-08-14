@@ -481,15 +481,15 @@ export default function PettyCash({
       };
       if (mpEditingId) {
         await onUpdateMarketPodEntry(mpEditingId, payload);
-        triggerNotif('Market POD trip entry updated successfully!', 'success');
+        triggerNotif('Market Trip entry updated successfully!', 'success');
       } else {
         await onAddMarketPodEntry(payload);
-        triggerNotif('Market POD trip entry logged successfully!', 'success');
+        triggerNotif('Market Trip entry logged successfully!', 'success');
       }
       resetMarketPodForm();
     } catch (err) {
       console.error(err);
-      triggerNotif(err instanceof Error ? err.message : 'Failed to save Market POD entry.', 'error');
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save Market Trip entry.', 'error');
     } finally {
       setMpIsSubmitting(false);
     }
@@ -1050,7 +1050,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
     const mpRows = marketPodEntries.filter(e => e.date && inRange(e.date)).map(e => ({
       id: `mp-${e.id}`,
       date: e.date,
-      source: 'Market POD' as const,
+      source: 'Market Trip' as const,
       entryNo: e.entryNo,
       handler: handlerLabel(e.enteredBy),
       description: `${e.from || '-'} → ${e.to || '-'} (${e.customer || '-'})`,
@@ -1108,7 +1108,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
   const combinedReportFilename = `KCM_Combined_Report_${combinedFrom || 'all'}_to_${combinedTo || 'all'}`;
   const combinedReportSubtitle = `${combinedFrom || 'All dates'} to ${combinedTo || 'All dates'}`;
   const handleDownloadCombinedReportExcel = () => exportReportToExcel(combinedReportFilename, buildCombinedReportSections());
-  const handleDownloadCombinedReportPdf = () => exportReportToPdf(combinedReportFilename, 'KCM Logistics - Combined Petty Cash & Market POD Report', combinedReportSubtitle, buildCombinedReportSections());
+  const handleDownloadCombinedReportPdf = () => exportReportToPdf(combinedReportFilename, 'KCM Logistics - Combined Petty Cash & Market Trip Report', combinedReportSubtitle, buildCombinedReportSections());
 
   // Export summary matrix as Excel
   const handleExportSummaryCSV = () => {
@@ -1193,7 +1193,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Market POD
+              Market Trip
             </button>
           </div>
 
@@ -1855,7 +1855,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
           <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs">
             <div className="font-semibold text-slate-800 flex items-center gap-1">
               <Truck className="w-4 h-4 text-emerald-600" />
-              Market POD Trip Ledger:
+              Market Trip Ledger:
             </div>
             <button
               type="button"
@@ -1912,6 +1912,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   <th className="px-3 py-2.5 text-right">Total Freight</th>
                   <th className="px-3 py-2.5 text-right">Received Advance</th>
                   <th className="px-3 py-2.5 text-right">Other Expenses</th>
+                  <th className="px-3 py-2.5 text-right">Received</th>
                   <th className="px-3 py-2.5 text-right">Balance</th>
                   <th className="px-3 py-2.5">Payment Mode</th>
                   <th className="px-3 py-2.5 text-right">Extra Trip</th>
@@ -1926,13 +1927,25 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
                 {filteredMarketPod.length === 0 ? (
                   <tr>
-                    <td colSpan={17 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
-                      NO MARKET POD TRIP ENTRIES MATCH THE SELECTION.
+                    <td colSpan={18 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
+                      NO MARKET TRIP ENTRIES MATCH THE SELECTION.
                       <div className="text-[10px] text-slate-400 font-sans mt-1">Use "Add Trip Entry" above to log a new freight trip.</div>
                     </td>
                   </tr>
                 ) : (
-                  filteredMarketPod.map((entry) => (
+                  filteredMarketPod.map((entry) => {
+                    // Balance Settlement can receive the outstanding Balance
+                    // in more than one payment (see MarketPodEntry.balanceReceipts)
+                    // - the Received column is the running total of those
+                    // receipts, and Balance here always shows what's actually
+                    // still pending (never below zero), not the static
+                    // Freight-Advance-Expenses figure frozen at trip entry.
+                    // Same math as the edit sidebar's Balance Settlement panel
+                    // (mpBalanceReceivedTotal/mpBalancePending) so the two
+                    // views can never disagree.
+                    const receivedTotal = (entry.balanceReceipts || []).reduce((s, r) => s + (r.amount || 0), 0);
+                    const pendingBalance = Math.max(0, (entry.balance || 0) - receivedTotal);
+                    return (
                     <tr key={entry.id} className="hover:bg-slate-50/70 transition-colors text-[11px]">
                       <td className="px-3 py-2 font-bold font-mono text-slate-900 whitespace-nowrap">{entry.entryNo}</td>
                       <td className="px-3 py-2 font-mono font-bold text-slate-800 whitespace-nowrap">{entry.vehicleNumber}</td>
@@ -1943,8 +1956,11 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       <td className="px-3 py-2 text-right font-mono text-slate-600">₹{(entry.totalFreight || 0).toLocaleString('en-IN')}</td>
                       <td className="px-3 py-2 text-right font-mono text-slate-600">₹{(entry.receivedAdvance || 0).toLocaleString('en-IN')}</td>
                       <td className="px-3 py-2 text-right font-mono text-slate-600">₹{(entry.otherExpenses || 0).toLocaleString('en-IN')}</td>
-                      <td className={`px-3 py-2 text-right font-mono font-bold ${entry.balance < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`}>
-                        ₹{(entry.balance || 0).toLocaleString('en-IN')}
+                      <td className="px-3 py-2 text-right font-mono font-bold text-teal-700" title={receivedTotal > 0 ? `${entry.balanceReceipts?.length} receipt(s) recorded` : 'No balance receipts recorded yet'}>
+                        {receivedTotal > 0 ? `₹${receivedTotal.toLocaleString('en-IN')}` : '-'}
+                      </td>
+                      <td className={`px-3 py-2 text-right font-mono font-bold ${pendingBalance <= 0 ? 'text-emerald-700 bg-emerald-50/30' : 'text-rose-600 bg-rose-50/30'}`} title={receivedTotal > 0 ? `Original balance ₹${(entry.balance || 0).toLocaleString('en-IN')} minus ₹${receivedTotal.toLocaleString('en-IN')} received` : undefined}>
+                        ₹{pendingBalance.toLocaleString('en-IN')}
                       </td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border ${
@@ -2007,7 +2023,8 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         </div>
                       </td>
                     </tr>
-                  ))
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -2339,7 +2356,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                             {a.remarks && <p className="text-slate-500 truncate">{a.remarks}</p>}
                           </div>
                           {a.source ? (
-                            <span title="Auto-generated from a Market POD trip - manage it there (Payment Mode) instead of deleting it directly, or it'll just reappear the next time that trip is saved" className="text-slate-300 shrink-0">
+                            <span title="Auto-generated from a Market Trip - manage it there (Payment Mode) instead of deleting it directly, or it'll just reappear the next time that trip is saved" className="text-slate-300 shrink-0">
                               <Lock className="w-3.5 h-3.5" />
                             </span>
                           ) : (
@@ -2703,7 +2720,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
               <div className="p-4 bg-gradient-to-r from-slate-900 to-teal-950 text-white flex items-center justify-between">
                 <h3 className="font-extrabold text-sm flex items-center gap-2">
                   {mpEditingId ? <CheckCircle2 className="w-4 h-4 text-amber-400" /> : <Plus className="w-4 h-4 text-teal-400" />}
-                  {mpEditingId ? 'Edit Market POD Trip' : 'Add Market POD Trip'}
+                  {mpEditingId ? 'Edit Market Trip' : 'Add Market Trip'}
                 </h3>
                 <button onClick={resetMarketPodForm} className="p-1.5 rounded-lg hover:bg-white/10 text-slate-200 hover:text-white cursor-pointer">
                   <X className="w-4 h-4" />

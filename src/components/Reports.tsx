@@ -120,7 +120,7 @@ function buildReport(
           { label: 'Total Cash Paid', value: money(totalCashPaid) },
           { label: 'Total Amount Received', value: money(totalReceived) },
           { label: 'Net', value: money(totalReceived - totalCashPaid) },
-          { label: 'Market POD Cash Freight', value: money(totalPodFreight) },
+          { label: 'Market Trip Cash Freight', value: money(totalPodFreight) },
           ...perUser.map(u => ({ label: `${u.label} - Cash Paid`, value: money(u.cashPaid) }))
         ],
         sections: [
@@ -133,7 +133,7 @@ function buildReport(
             rows: advancesInRange.map(a => [a.date, a.username, a.amount || 0, a.remarks || '-'])
           },
           {
-            heading: 'Market POD - Cash Mode', columns: ['Date', 'Vehicle', 'Freight', 'Advance', 'Balance'],
+            heading: 'Market Trip - Cash Mode', columns: ['Date', 'Vehicle', 'Freight', 'Advance', 'Balance'],
             rows: cashPodInRange.map(e => [e.date, e.vehicleNumber, e.totalFreight || 0, e.receivedAdvance || 0, e.balance || 0])
           }
         ]

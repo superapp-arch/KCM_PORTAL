@@ -621,7 +621,7 @@ export async function getMarketPodEntries(): Promise<MarketPodEntry[]> {
     return rows.map(r => JSON.parse(r.data));
   } catch (error) {
     console.error("Database query failed in getMarketPodEntries:", error);
-    throw new Error("Failed to retrieve Market POD entries.", { cause: error });
+    throw new Error("Failed to retrieve Market Trip entries.", { cause: error });
   }
 }
 
@@ -640,7 +640,7 @@ export async function saveMarketPodEntry(entry: MarketPodEntry) {
     return await getMarketPodEntries();
   } catch (error) {
     console.error("Database action failed in saveMarketPodEntry:", error);
-    throw new Error("Failed to save Market POD entry.", { cause: error });
+    throw new Error("Failed to save Market Trip entry.", { cause: error });
   }
 }
 
@@ -650,7 +650,7 @@ export async function deleteMarketPodEntry(id: string) {
     return await getMarketPodEntries();
   } catch (error) {
     console.error("Database action failed in deleteMarketPodEntry:", error);
-    throw new Error("Failed to delete Market POD entry.", { cause: error });
+    throw new Error("Failed to delete Market Trip entry.", { cause: error });
   }
 }
 
