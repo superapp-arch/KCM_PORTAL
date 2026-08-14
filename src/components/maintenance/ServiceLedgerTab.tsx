@@ -188,6 +188,24 @@ export default function ServiceLedgerTab({
     }
   };
 
+  // Removes a station from the Authorised Service Station master list only -
+  // work orders that already reference it keep their own frozen garageName
+  // text (copied at save time, see handleSubmit's payload below), so past
+  // records stay intact; it just stops appearing as a choice for new/edited
+  // ones. If the currently-open form has this station selected, clear that
+  // selection so it can't silently keep pointing at a now-deleted station.
+  const handleDeleteStation = async (station: MaintenanceServiceStation) => {
+    if (!confirm(`Remove "${station.name}" from the Authorised Service Station list? Past work orders already logged against it are unaffected.`)) return;
+    try {
+      await onDeleteServiceStation(station.id);
+      if (serviceStationId === station.id) setServiceStationId('');
+      triggerNotif(`"${station.name}" removed from the station list.`);
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to remove service station.', 'error');
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const validItems = workItems.filter(w => w.description.trim() || w.cost);
@@ -618,10 +636,24 @@ export default function ServiceLedgerTab({
                       className="w-full mt-1.5 bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800" />
                   )}
                   {showStationManager && (
-                    <div className="mt-2 p-2.5 bg-slate-50 rounded-lg border border-slate-200 flex gap-2">
-                      <input type="text" placeholder="New station name" value={newStationName} onChange={(e) => setNewStationName(e.target.value)} autoComplete="off"
-                        className="flex-1 bg-white border border-slate-200 rounded-lg p-1.5 text-[11px] text-slate-800" />
-                      <button type="button" onClick={handleAddStation} className="bg-slate-800 hover:bg-slate-900 text-white rounded-lg px-3 text-[10px] font-bold uppercase cursor-pointer">Save</button>
+                    <div className="mt-2 p-2.5 bg-slate-50 rounded-lg border border-slate-200 space-y-2">
+                      <div className="flex gap-2">
+                        <input type="text" placeholder="New station name" value={newStationName} onChange={(e) => setNewStationName(e.target.value)} autoComplete="off"
+                          className="flex-1 bg-white border border-slate-200 rounded-lg p-1.5 text-[11px] text-slate-800" />
+                        <button type="button" onClick={handleAddStation} className="bg-slate-800 hover:bg-slate-900 text-white rounded-lg px-3 text-[10px] font-bold uppercase cursor-pointer">Save</button>
+                      </div>
+                      {serviceStations.length > 0 && (
+                        <div className="max-h-32 overflow-y-auto space-y-1 pt-1 border-t border-slate-200">
+                          {serviceStations.map(s => (
+                            <div key={s.id} className="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded-lg px-2 py-1">
+                              <span className="text-[11px] text-slate-700 truncate">{s.name}</span>
+                              <button type="button" onClick={() => handleDeleteStation(s)} className="p-0.5 text-slate-400 hover:text-rose-600 cursor-pointer shrink-0" title={`Remove "${s.name}"`}>
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
