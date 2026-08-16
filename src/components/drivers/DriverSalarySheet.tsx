@@ -18,12 +18,18 @@ const payableAmount = (driver: DriverEmployee): number =>
   - (driver.pettyCashAdvance || 0) - (driver.loanDeduction || 0) - (driver.recoveryAmount || 0) - (driver.driverWelfare || 0) - (driver.bata || 0)
   - (driver.lopAmount || 0);
 
+// A driver can cover more than one vehicle (DriverEmployee.vehicleNos) -
+// falls back to the legacy single vehicleNo for a driver saved before that
+// field existed. Used everywhere this sheet shows/exports "the" vehicle.
+const vehiclesLabel = (driver: DriverEmployee): string =>
+  (driver.vehicleNos && driver.vehicleNos.length > 0 ? driver.vehicleNos : (driver.vehicleNo ? [driver.vehicleNo] : [])).join(' / ');
+
 const toDriverRow = (driver: DriverEmployee, i: number) => ({
   'Sl.No': i + 1,
   'Driver Name': driver.name,
   'Driver ID': driver.id,
   'Driver No': driver.driverNo,
-  'Vehicle No': driver.vehicleNo || '',
+  'Vehicle No': vehiclesLabel(driver),
   'A/C No': driver.accountNumber || '',
   'IFSC Code': driver.ifscCode || '',
   'Reporting': driver.reporting || '',
@@ -245,7 +251,7 @@ export default function DriverSalarySheet({ performedBy, drivers, writableLocati
                             </button>
                           </td>
                           <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{driver.driverNo}</td>
-                          <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{driver.vehicleNo || '-'}</td>
+                          <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{vehiclesLabel(driver) || '-'}</td>
                           <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{driver.accountNumber || '-'}</td>
                           <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{driver.ifscCode || '-'}</td>
                           <td className="px-3 py-2.5 text-slate-500">{driver.reporting || '-'}</td>
@@ -281,7 +287,7 @@ export default function DriverSalarySheet({ performedBy, drivers, writableLocati
                                     <dt className="text-slate-400">Driver No</dt>
                                     <dd className="font-mono text-slate-800">{driver.driverNo || '-'}</dd>
                                     <dt className="text-slate-400">Vehicle No</dt>
-                                    <dd className="font-mono text-slate-800">{driver.vehicleNo || '-'}</dd>
+                                    <dd className="font-mono text-slate-800">{vehiclesLabel(driver) || '-'}</dd>
                                     <dt className="text-slate-400">A/C No</dt>
                                     <dd className="font-mono text-slate-800 break-all">{driver.accountNumber || '-'}</dd>
                                     <dt className="text-slate-400">IFSC Code</dt>

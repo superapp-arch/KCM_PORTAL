@@ -37,10 +37,24 @@ export default function DriverFormModal({ driver, writableLocations, onAddDriver
 
   const [basic, setBasic] = useState({
     id: driver?.id || '', name: driver?.name || '', driverNo: driver?.driverNo || '',
-    vehicleNo: driver?.vehicleNo || '', accountNumber: driver?.accountNumber || '', ifscCode: driver?.ifscCode || '',
+    accountNumber: driver?.accountNumber || '', ifscCode: driver?.ifscCode || '',
     reporting: driver?.reporting || '', remark: driver?.remark || '',
     location: driver?.location || (locationOptions[0] || DRIVER_LOCATION_CATEGORIES[0]) as DriverLocationCategory
   });
+  // A driver can legitimately cover more than one vehicle - chips instead of
+  // a single text field. Falls back to the legacy single vehicleNo for a
+  // driver saved before vehicleNos existed.
+  const [vehicleNos, setVehicleNos] = useState<string[]>(
+    driver?.vehicleNos && driver.vehicleNos.length > 0 ? driver.vehicleNos : (driver?.vehicleNo ? [driver.vehicleNo] : [])
+  );
+  const [vehicleInput, setVehicleInput] = useState('');
+  const addVehicleNo = () => {
+    const v = vehicleInput.trim().toUpperCase();
+    if (!v || vehicleNos.includes(v)) { setVehicleInput(''); return; }
+    setVehicleNos(prev => [...prev, v]);
+    setVehicleInput('');
+  };
+  const removeVehicleNo = (v: string) => setVehicleNos(prev => prev.filter(x => x !== v));
   const [aadharDocuments, setAadharDocuments] = useState<VehicleDocument[]>(driver?.aadharDocuments || []);
   const [drivingLicenseDocuments, setDrivingLicenseDocuments] = useState<VehicleDocument[]>(driver?.drivingLicenseDocuments || []);
   const [otherDocuments, setOtherDocuments] = useState<VehicleDocument[]>(driver?.otherDocuments || []);
@@ -89,6 +103,8 @@ export default function DriverFormModal({ driver, writableLocations, onAddDriver
     try {
       const payload = {
         ...basic,
+        vehicleNos,
+        vehicleNo: vehicleNos[0] || undefined, // kept in sync for old readers that only need "a" vehicle to show
         aadharDocuments,
         drivingLicenseDocuments,
         otherDocuments,
@@ -158,8 +174,25 @@ export default function DriverFormModal({ driver, writableLocations, onAddDriver
                     autoComplete="off" maxLength={10} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-500 mb-1">Vehicle No</label>
-                  <input value={basic.vehicleNo} onChange={e => setBasic({ ...basic, vehicleNo: e.target.value.toUpperCase() })} autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <label className="block font-semibold text-slate-500 mb-1">
+                    Vehicle No <span className="text-slate-400 font-normal">(add more than one if this driver covers several)</span>
+                  </label>
+                  <div className="flex gap-1.5">
+                    <input value={vehicleInput} onChange={e => setVehicleInput(e.target.value.toUpperCase())} autoComplete="off"
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addVehicleNo(); } }}
+                      placeholder="e.g. KA05AB1234" className="flex-1 border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                    <button type="button" onClick={addVehicleNo} className="px-3 border border-slate-300 rounded-lg bg-slate-50 hover:bg-slate-100 font-bold text-slate-600 cursor-pointer">Add</button>
+                  </div>
+                  {vehicleNos.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {vehicleNos.map(v => (
+                        <span key={v} className="inline-flex items-center gap-1 bg-pink-50 border border-pink-200 text-pink-800 font-mono font-bold text-[11px] px-2 py-1 rounded-full">
+                          {v}
+                          <button type="button" onClick={() => removeVehicleNo(v)} title={`Remove ${v}`} className="hover:text-rose-600 cursor-pointer"><X className="w-3 h-3" /></button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">

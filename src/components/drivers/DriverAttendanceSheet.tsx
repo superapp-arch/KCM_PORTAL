@@ -244,10 +244,14 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
                           title="Click to view monthly summary"
                         >
                           <div className="font-semibold text-teal-700 hover:underline">{driver.name}</div>
-                          {/* Vehicle No is read straight off the driver record (same field Driver
-                              Salary edits, see DriverFormModal) - not a separate copy, so a change
-                              made in Driver Salary shows here immediately with no extra sync step. */}
-                          {driver.vehicleNo && <div className="text-[9px] font-mono font-normal text-slate-400">{driver.vehicleNo}</div>}
+                          {/* Vehicle No(s) are read straight off the driver record (same field
+                              Driver Salary edits, see DriverFormModal) - not a separate copy, so a
+                              change made in Driver Salary shows here immediately with no extra sync
+                              step. A driver covering more than one vehicle shows all of them. */}
+                          {(() => {
+                            const vehicles = driver.vehicleNos && driver.vehicleNos.length > 0 ? driver.vehicleNos : (driver.vehicleNo ? [driver.vehicleNo] : []);
+                            return vehicles.length > 0 && <div className="text-[9px] font-mono font-normal text-slate-400">{vehicles.join(' / ')}</div>;
+                          })()}
                         </td>
                         {Array.from({ length: totalDays }, (_, i) => i + 1).map(day => {
                           const record = cellRecord(driver.id, day);

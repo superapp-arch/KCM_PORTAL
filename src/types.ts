@@ -819,7 +819,12 @@ export const DRIVER_LOCATION_CATEGORIES: DriverLocationCategory[] = [
 // Details that need to auto-match a vehicle to its driver (e.g. Petty Cash's
 // Market POD trip form) regardless of the caller's own Driver Details
 // location scope - see /api/drivers/vehicle-lookup. Deliberately excludes
-// every payroll/bank/document field DriverEmployee carries.
+// every payroll/bank/document field DriverEmployee carries. One row per
+// (driver, vehicle) pair, not per driver - a driver covering several
+// vehicles (DriverEmployee.vehicleNos) appears once per vehicle, and a
+// vehicle assigned to more than one driver naturally yields more than one
+// row with the same vehicleNo - callers matching by vehicle number should
+// expect (and handle) more than one match rather than assuming exactly one.
 export interface DriverVehicleLookup {
   id: string;
   name: string;
@@ -834,7 +839,8 @@ export interface DriverEmployee {
   id: string; // Driver ID*, e.g. KCMDRV19102
   name: string; // Driver Name*
   driverNo: string; // 10-digit mobile, optional
-  vehicleNo?: string;
+  vehicleNo?: string; // deprecated - kept in sync as vehicleNos[0] for old readers (e.g. Driver Attendance's caption) that only ever needed "a" vehicle to show; vehicleNos below is the source of truth
+  vehicleNos?: string[]; // a driver can legitimately cover more than one vehicle - see DriverFormModal's Vehicle No chips
   accountNumber?: string; // A/C No
   ifscCode?: string;
   reporting?: string;

@@ -2896,7 +2896,16 @@ async function startServer() {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       if (!sessionUser) return res.status(401).json({ error: 'Authentication required.' });
       const all = await getDriverEmployees();
-      res.json(all.map(d => ({ id: d.id, name: d.name, vehicleNo: d.vehicleNo || '' })));
+      // One row per (driver, vehicle) pair - a driver covering several
+      // vehicles (vehicleNos) now yields one row per vehicle instead of just
+      // the first, so every module matching by vehicle number can actually
+      // find them under each one. Falls back to the legacy single vehicleNo
+      // for any driver saved before vehicleNos existed.
+      const rows = all.flatMap(d => {
+        const vehicles = d.vehicleNos && d.vehicleNos.length > 0 ? d.vehicleNos : (d.vehicleNo ? [d.vehicleNo] : []);
+        return vehicles.filter(Boolean).map(vehicleNo => ({ id: d.id, name: d.name, vehicleNo }));
+      });
+      res.json(rows);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

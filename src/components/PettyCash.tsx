@@ -339,14 +339,27 @@ export default function PettyCash({
   // own Driver Details location scope, so this still finds the right driver
   // even for a vehicle/location they don't personally have Driver Details
   // access to. Read-only unless a super admin flips the override toggle.
-  const matchedDriver = mpVehicleNumber.trim()
-    ? driverVehicleLookup.find(d => (d.vehicleNo || '').trim().toUpperCase() === mpVehicleNumber.trim().toUpperCase())
-    : undefined;
+  // A vehicle can now match more than one driver (two drivers sharing a
+  // vehicle, e.g. shift-based) - only auto-fill when the match is
+  // unambiguous; otherwise leave it for the picker below to resolve rather
+  // than silently guessing which driver it was.
+  const matchingDrivers = mpVehicleNumber.trim()
+    ? driverVehicleLookup.filter(d => (d.vehicleNo || '').trim().toUpperCase() === mpVehicleNumber.trim().toUpperCase())
+    : [];
+  const matchedDriver = matchingDrivers.length === 1 ? matchingDrivers[0] : undefined;
 
   useEffect(() => {
     if (mpDriverOverride) return;
-    setMpDriverId(matchedDriver ? matchedDriver.id : '');
-  }, [matchedDriver, mpDriverOverride]);
+    if (matchingDrivers.length === 1) { setMpDriverId(matchingDrivers[0].id); return; }
+    if (matchingDrivers.length === 0) { setMpDriverId(''); return; }
+    // Ambiguous (2+) - the picker below resolves it. Keep whatever's
+    // currently set as long as it's still one of the valid candidates (e.g.
+    // already chosen from the picker) rather than clearing on every
+    // incidental re-render; only actually reset once it stops being a valid
+    // match (typically because the vehicle number itself changed).
+    setMpDriverId(prev => matchingDrivers.some(d => d.id === prev) ? prev : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mpVehicleNumber, mpDriverOverride, driverVehicleLookup]);
 
   // Entry No is auto-generated and never user-editable, e.g. "TRIP-000001" -
   // same live-max-plus-one convention as Fuel Entry's own auto-numbering.
@@ -437,11 +450,13 @@ export default function PettyCash({
     setMpStatus(entry.status);
     setMpRemarks(entry.remarks);
     setMpDriverId(entry.driverId || '');
-    // If the saved driverId doesn't match what auto-fetch would now produce,
+    // If the saved driverId isn't one of the vehicle's current valid matches
+    // (there can be more than one now - two drivers sharing a vehicle),
     // treat it as a standing override so re-opening this entry doesn't
-    // silently discard it.
-    const autoMatch = driverVehicleLookup.find(d => (d.vehicleNo || '').trim().toUpperCase() === entry.vehicleNumber.trim().toUpperCase());
-    setMpDriverOverride(!!entry.driverId && entry.driverId !== (autoMatch?.id || ''));
+    // silently discard it. Still not an override if it's simply which of
+    // several valid drivers was picked at save time.
+    const autoMatches = driverVehicleLookup.filter(d => (d.vehicleNo || '').trim().toUpperCase() === entry.vehicleNumber.trim().toUpperCase());
+    setMpDriverOverride(!!entry.driverId && !autoMatches.some(d => d.id === entry.driverId));
     setShowMarketPodSidebar(true);
   };
 
@@ -2789,19 +2804,35 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         </button>
                       )}
                     </label>
-                    <input
-                      type="text"
-                      readOnly={!mpDriverOverride}
-                      disabled={!mpDriverOverride}
-                      value={mpDriverId}
-                      onChange={(e) => setMpDriverId(e.target.value)}
-                      placeholder={matchedDriver ? undefined : 'No driver mapped'}
-                      className={`w-full border rounded-lg p-2 font-mono font-bold focus:outline-none focus:ring-1 focus:ring-teal-500 ${
-                        mpDriverOverride ? 'bg-white border-teal-300 text-slate-800' : 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed'
-                      }`}
-                    />
+                    {!mpDriverOverride && matchingDrivers.length > 1 ? (
+                      // This vehicle is assigned to more than one driver
+                      // (e.g. shift-based) - pick which one, rather than
+                      // silently guessing.
+                      <select
+                        value={mpDriverId}
+                        onChange={(e) => setMpDriverId(e.target.value)}
+                        className="w-full border border-amber-300 bg-amber-50 rounded-lg p-2 font-mono font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      >
+                        <option value="">Select driver...</option>
+                        {matchingDrivers.map(d => <option key={d.id} value={d.id}>{d.id} - {d.name}</option>)}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        readOnly={!mpDriverOverride}
+                        disabled={!mpDriverOverride}
+                        value={mpDriverId}
+                        onChange={(e) => setMpDriverId(e.target.value)}
+                        placeholder={matchedDriver ? undefined : 'No driver mapped'}
+                        className={`w-full border rounded-lg p-2 font-mono font-bold focus:outline-none focus:ring-1 focus:ring-teal-500 ${
+                          mpDriverOverride ? 'bg-white border-teal-300 text-slate-800' : 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed'
+                        }`}
+                      />
+                    )}
                     <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                      {matchedDriver ? `Matched: ${matchedDriver.name}` : 'No driver mapped to this vehicle in Driver Details.'}
+                      {matchingDrivers.length > 1
+                        ? `${matchingDrivers.length} drivers are assigned to this vehicle - pick which one.`
+                        : matchedDriver ? `Matched: ${matchedDriver.name}` : 'No driver mapped to this vehicle in Driver Details.'}
                     </p>
                   </div>
 

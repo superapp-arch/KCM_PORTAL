@@ -94,7 +94,8 @@ export async function resolveOrGenerateDriverSlip(params: {
     slipNumber,
     driverId: driver.id,
     driverName: driver.name,
-    vehicleNo: driver.vehicleNo,
+    // A driver covering more than one vehicle shows all of them on the slip.
+    vehicleNo: (driver.vehicleNos && driver.vehicleNos.length > 0 ? driver.vehicleNos : (driver.vehicleNo ? [driver.vehicleNo] : [])).join(' / ') || undefined,
     location: driver.location,
     dateFrom, dateTo,
     bankAccountNumberMasked: maskAccount(driver.accountNumber),
