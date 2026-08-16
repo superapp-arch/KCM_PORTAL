@@ -65,6 +65,11 @@ function dayLabel(month: string, day: number): string {
   const d = new Date(y, m - 1, day);
   return `${MONTH_ABBR[d.getMonth()]}${d.getDate()}`;
 }
+// Same yyyy-mm-dd convention every other "today" default in this codebase
+// already uses.
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheetProps) {
   const [month, setMonth] = useState(currentMonthKey());
@@ -99,6 +104,11 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
     return monthAttendance.find(a => a.empId === empId && a.date === date) || null;
   };
 
+  // Attendance can only ever be marked for today or earlier - a day cell
+  // past today is greyed out and unclickable, same rule the server also
+  // enforces (see /api/staff/attendance/mark) as a safety net.
+  const isFutureDay = (day: number): boolean => `${month}-${String(day).padStart(2, '0')}` > todayIso();
+
   const markCell = async (empId: string, day: number, status: AttendanceStatusCode, remarks?: string) => {
     const date = `${month}-${String(day).padStart(2, '0')}`;
     const res = await authFetch('/api/staff/attendance/mark', {
@@ -112,6 +122,7 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
   };
 
   const handleQuickClick = (empId: string, day: number) => {
+    if (isFutureDay(day)) return;
     const current = cellRecord(empId, day);
     const idx = current ? QUICK_CODES.findIndex(c => c.status === current.status) : -1;
     const next = QUICK_CODES[(idx + 1) % QUICK_CODES.length];
@@ -120,6 +131,7 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
 
   const openPopover = (e: React.MouseEvent, empId: string, day: number) => {
     e.stopPropagation();
+    if (isFutureDay(day)) return;
     const current = cellRecord(empId, day);
     setPopoverStatus(current?.status || 'Present');
     setPopoverRemarks(current?.remarks || '');
@@ -136,6 +148,7 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
   const autoFillSundaysAndHolidays = async () => {
     const entries: Array<{ empId: string; date: string; status: string }> = [];
     for (let day = 1; day <= totalDays; day++) {
+      if (isFutureDay(day)) continue; // never auto-fill ahead of today, same rule as manual marking
       const date = `${month}-${String(day).padStart(2, '0')}`;
       const dow = new Date(date).getDay();
       const holiday = holidays.find(h => h.date === date);
@@ -167,8 +180,8 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-4">
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <button onClick={() => setMonth(shiftMonth(month, -1))} className="p-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"><ChevronLeft className="w-3.5 h-3.5" /></button>
-          <input type="month" value={month} onChange={e => setMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
-          <button onClick={() => setMonth(shiftMonth(month, 1))} className="p-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"><ChevronRight className="w-3.5 h-3.5" /></button>
+          <input type="month" value={month} max={currentMonthKey()} onChange={e => setMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          <button onClick={() => setMonth(shiftMonth(month, 1))} disabled={month >= currentMonthKey()} className="p-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent cursor-pointer"><ChevronRight className="w-3.5 h-3.5" /></button>
           <button onClick={autoFillSundaysAndHolidays} className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-lg font-semibold cursor-pointer">
             Auto-fill Sundays (Week Off) &amp; Holidays
           </button>
@@ -202,19 +215,22 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
                     </td>
                     {Array.from({ length: totalDays }, (_, i) => i + 1).map(day => {
                       const record = cellRecord(emp.id, day);
+                      const future = isFutureDay(day);
                       return (
                         <td key={day} className="p-0.5 relative group">
-                          <button onClick={() => handleQuickClick(emp.id, day)}
-                            className={`w-9 h-6 rounded text-[9px] font-bold border cursor-pointer ${record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}>
+                          <button onClick={() => !future && handleQuickClick(emp.id, day)}
+                            disabled={future}
+                            title={future ? 'Future date - attendance cannot be marked ahead of today' : undefined}
+                            className={`w-9 h-6 rounded text-[9px] font-bold border ${future ? 'bg-slate-100 border-slate-100 text-slate-300 cursor-not-allowed' : `cursor-pointer ${record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}`}>
                             {record ? STATUS_ABBR[record.status] : '-'}
                           </button>
-                          <button
+                          {!future && <button
                             onClick={e => openPopover(e, emp.id, day)}
                             className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-slate-700 text-white text-[8px] opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer"
                             title="More statuses & remarks"
                           >
                             &#8230;
-                          </button>
+                          </button>}
                         </td>
                       );
                     })}

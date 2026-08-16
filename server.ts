@@ -52,6 +52,7 @@ import {
   MaintenanceServiceStation,
   BreakdownReport,
   VehicleServiceSchedule,
+  AlertSettings,
   TireBrand,
   TireRecord,
   BatteryRecord,
@@ -96,6 +97,8 @@ import {
   getVehicleServiceSchedules,
   saveVehicleServiceSchedule,
   deleteVehicleServiceSchedule,
+  getAlertSettings,
+  saveAlertSettings,
   getTireBrands,
   addTireBrand,
   getTireRecords,
@@ -724,6 +727,18 @@ function maskAttributionField<T extends Record<string, any>>(rows: T[], field: k
   return rows.map(r => { const copy = { ...r }; delete copy[field]; return copy; });
 }
 
+// Safety net for attendance/petty-cash/fuel/mileage entry dates - the UI
+// already disables future dates at the calendar-widget level (DateInput's
+// max prop, or the attendance grids' disabled day cells), but this catches
+// anyone bypassing that (e.g. a raw API call). Same yyyy-mm-dd "today"
+// convention every date default in this codebase already uses (server's own
+// local clock, consistent with how every "today" default is computed
+// client-side too - not a separate timezone standard).
+function isFutureDate(date: string | undefined | null): boolean {
+  if (!date) return false;
+  return date.slice(0, 10) > new Date().toISOString().slice(0, 10);
+}
+
 // A non-super-admin may only modify (update/delete) a row they themselves
 // created - mirrors the read-side filtering above for write operations.
 function canModifyEntryRow(row: { enteredBy?: string } | undefined, sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): boolean {
@@ -989,6 +1004,179 @@ async function startServer() {
     });
 
     return alerts.sort((a, b) => a.diffDays - b.diffDays);
+  }
+
+  // --- Service Due (Reefer/Hybrid) & Washing Due (Walkes) staged reminder
+  // emails - fixed calendar-day cycles (unlike calculateMaintenanceMilestoneAlerts
+  // above, which is km/projected-date driven), confirmed 40-day service /
+  // 15-day washing cycles with 15/7/3 and 7/5/3 day reminders respectively.
+  // Cycle lengths + reminder thresholds are configurable (see AlertSettings,
+  // Service Schedule's own Alert Settings panel) rather than hardcoded. Dry-
+  // category vehicles are untouched by this - they only ever get the
+  // existing km-based Service Schedule alerts above.
+  function addDaysToIsoDate(dateStr: string, days: number): Date {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    dt.setDate(dt.getDate() + days);
+    return dt;
+  }
+
+  interface ServiceWashingReminder {
+    regNo: string;
+    vehicleType: string; // Fleet & Vehicles' own Category value, e.g. 'Reefer', 'Hybrid', 'Walkes'
+    alertType: 'Service Due' | 'Washing Due';
+    dueDate: string; // YYYY-MM-DD
+    daysRemaining: number;
+    // The cycle's own anchor date (lastServiceDate/lastWashingDate) - baked
+    // into the dedup marker id below, so a newly-logged service/wash (a new
+    // cycle) is never blocked by an already-sent marker from the old one.
+    cycleStartDate: string;
+  }
+
+  async function calculateServiceWashingReminders(): Promise<ServiceWashingReminder[]> {
+    const [schedules, fleetVehicles, settings] = await Promise.all([
+      getVehicleServiceSchedules(),
+      getVehicles(),
+      getAlertSettings()
+    ]);
+
+    const categoryFor = (regNo: string): string => {
+      const v: any = fleetVehicles.find((veh: any) =>
+        (veh.regNo || veh['Reg. No.'] || '').trim().toUpperCase() === regNo.trim().toUpperCase()
+      );
+      return String(v?.Category || v?.category || '').trim();
+    };
+
+    const todayKey = istDateKey();
+    const today = new Date(`${todayKey}T00:00:00`);
+    const reminders: ServiceWashingReminder[] = [];
+
+    schedules.forEach(schedule => {
+      const category = categoryFor(schedule.regNo).toLowerCase();
+
+      if ((category === 'reefer' || category === 'hybrid') && schedule.lastServiceDate) {
+        const due = addDaysToIsoDate(schedule.lastServiceDate, settings.reeferHybridServiceCycleDays);
+        const daysRemaining = Math.round((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        if (settings.reeferHybridReminderDays.includes(daysRemaining)) {
+          reminders.push({
+            regNo: schedule.regNo,
+            vehicleType: category === 'reefer' ? 'Reefer' : 'Hybrid',
+            alertType: 'Service Due',
+            dueDate: due.toISOString().slice(0, 10),
+            daysRemaining,
+            cycleStartDate: schedule.lastServiceDate
+          });
+        }
+      }
+
+      if (category === 'walkes' && schedule.lastWashingDate) {
+        const due = addDaysToIsoDate(schedule.lastWashingDate, settings.walkesWashingCycleDays);
+        const daysRemaining = Math.round((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        if (settings.walkesReminderDays.includes(daysRemaining)) {
+          reminders.push({
+            regNo: schedule.regNo,
+            vehicleType: 'Walkes',
+            alertType: 'Washing Due',
+            dueDate: due.toISOString().slice(0, 10),
+            daysRemaining,
+            cycleStartDate: schedule.lastWashingDate
+          });
+        }
+      }
+    });
+
+    return reminders.sort((a, b) => a.daysRemaining - b.daysRemaining);
+  }
+
+  // Sends one email per due vehicle/milestone (not a combined digest, unlike
+  // buildAndSendComplianceDigest below) since each carries its own urgency-
+  // scaled subject line. Dedup is per marker (regNo + cycleStartDate +
+  // daysRemaining) via the same persisted-notification-marker idiom as
+  // sendTodaysBirthdayWishes, so a milestone is never emailed twice even if
+  // the hourly check reruns, and a new cycle is never blocked by the old
+  // one's markers (see cycleStartDate above). Recipients are the same
+  // Super Admin + Chandana list every other Fleet alert already uses.
+  async function sendServiceWashingReminders(): Promise<{ sent: number; details: string[] }> {
+    const reminders = await calculateServiceWashingReminders();
+    if (reminders.length === 0) return { sent: 0, details: [] };
+
+    const existingNotifs = await getNotifications();
+    const usersList = await getUsersWithFallback();
+    const recipients = usersList
+      .filter((u: any) => u.department === 'super_admin' || u.username === 'chandana')
+      .map((u: any) => u.email)
+      .filter(Boolean) as string[];
+    if (recipients.length === 0) return { sent: 0, details: [] };
+
+    const appUrl = process.env.APP_URL || process.env.SITE_URL || '';
+    let sentCount = 0;
+    const details: string[] = [];
+
+    for (const r of reminders) {
+      const markerPrefix = r.alertType === 'Service Due' ? 'service' : 'washing';
+      const markerId = `${markerPrefix}-reminder-${r.regNo}-${r.cycleStartDate}-${r.daysRemaining}`;
+      if (existingNotifs.some((n: any) => n.id === markerId)) continue;
+
+      const subjectEmoji = r.daysRemaining <= 3 ? '🚨' : r.daysRemaining <= 7 ? '⚠️' : '📅';
+      const linkHtml = appUrl
+        ? `<p><a href="${appUrl}" style="color:#2563eb;">Open ${r.regNo}'s record in Fleet Maintenance → Service Schedule</a></p>`
+        : `<p>Open Fleet Maintenance → Service Schedule and search for <strong>${r.regNo}</strong>.</p>`;
+
+      try {
+        await resend.emails.send({
+          from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
+          to: recipients,
+          subject: `${subjectEmoji} ${r.alertType} in ${r.daysRemaining} day${r.daysRemaining === 1 ? '' : 's'} - ${r.regNo}`,
+          html: `
+            <div style="font-family:Arial,sans-serif;line-height:1.6;font-size:14px;color:#1e293b;">
+              <p>Hello,</p>
+              <p><strong>${r.regNo}</strong> (${r.vehicleType}) has its <strong>${r.alertType}</strong> coming up.</p>
+              <table style="border-collapse:collapse;font-size:13px;margin:10px 0;">
+                <tr><td style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;">Vehicle</td><td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;">${r.regNo}</td></tr>
+                <tr><td style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;">Vehicle Type</td><td style="padding:6px 10px;border:1px solid #e2e8f0;">${r.vehicleType}</td></tr>
+                <tr><td style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;">Alert Type</td><td style="padding:6px 10px;border:1px solid #e2e8f0;">${r.alertType}</td></tr>
+                <tr><td style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;">Due Date</td><td style="padding:6px 10px;border:1px solid #e2e8f0;font-family:monospace;">${r.dueDate}</td></tr>
+                <tr><td style="padding:6px 10px;border:1px solid #e2e8f0;background:#f1f5f9;">Days Remaining</td><td style="padding:6px 10px;border:1px solid #e2e8f0;"><strong>${r.daysRemaining}</strong></td></tr>
+              </table>
+              ${linkHtml}
+            </div>
+          `
+        });
+
+        // read: false (unlike the compliance digest's own marker) so this
+        // also surfaces as an in-app notification badge on the Super Admin
+        // Terminal bell, not just a silent audit-log row.
+        await saveNotification({
+          id: markerId,
+          title: `${r.alertType}: ${r.regNo} in ${r.daysRemaining} day${r.daysRemaining === 1 ? '' : 's'}`,
+          message: `${r.vehicleType} vehicle ${r.regNo}'s ${r.alertType.toLowerCase()} on ${r.dueDate}.`,
+          type: r.alertType === 'Service Due' ? 'service-due' : 'washing-due',
+          timestamp: istTimestamp(),
+          read: false,
+          vehicleRegNo: r.regNo
+        });
+
+        sentCount++;
+        details.push(`${r.regNo} (${r.alertType}, ${r.daysRemaining}d)`);
+      } catch (error) {
+        console.error(`Failed to send ${r.alertType} reminder for ${r.regNo}:`, error);
+      }
+    }
+
+    return { sent: sentCount, details };
+  }
+
+  // Automatic trigger - runs on the same hourly interval as the other Fleet
+  // alerts. No time-of-day gate (unlike the birthday check) since this isn't
+  // tied to a specific send hour, just "at least once today" - the marker
+  // dedup above already prevents re-sending within the same day regardless
+  // of how many times the hourly tick lands.
+  async function runScheduledServiceWashingReminders() {
+    try {
+      await sendServiceWashingReminders();
+    } catch (error) {
+      console.error('Failed to run scheduled service/washing reminder check:', error);
+    }
   }
 
   // Builds and sends the combined Fleet digest email right now - every
@@ -1725,6 +1913,7 @@ async function startServer() {
       if (sessionUser?.department !== 'super_admin' && FUEL_RQ_ID_ONLY_EMAILS.includes(sessionUser?.email || '')) {
         return res.status(403).json({ error: 'You cannot add fuel entries.' });
       }
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Fuel entry date cannot be in the future.' });
       const result = await saveFuelLog({ ...req.body, enteredBy: sessionUser?.username });
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -1734,6 +1923,7 @@ async function startServer() {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getFuelLogs()).find(l => l.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Fuel entry date cannot be in the future.' });
       const result = await saveFuelLog({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -1797,6 +1987,7 @@ async function startServer() {
       if (findDuplicateEntryNo(allVouchers, entryNo)) {
         return res.status(409).json({ error: `Entry No. ${entryNo} already exists.` });
       }
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Petty cash entry date cannot be in the future.' });
       const result = await savePettyCashVoucher({ ...req.body, entryNo, enteredBy: sessionUser?.username });
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -1810,6 +2001,7 @@ async function startServer() {
       if (req.body.entryNo && findDuplicateEntryNo(allVouchers, req.body.entryNo, req.params.id)) {
         return res.status(409).json({ error: `Entry No. ${req.body.entryNo} already exists.` });
       }
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Petty cash entry date cannot be in the future.' });
       const result = await savePettyCashVoucher({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -1838,6 +2030,7 @@ async function startServer() {
       if (findDuplicateEntryNo(allEntries, entryNo)) {
         return res.status(409).json({ error: `Entry No. ${entryNo} already exists.` });
       }
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Market Trip date cannot be in the future.' });
       // id generated up front (mirrors saveMarketPodEntry's own fallback) so
       // syncMarketPodPettyCashLinks' deterministic mp-adv-<id>/mp-bal-<id>-*
       // ids are known immediately, without a second round trip to look it up.
@@ -1856,6 +2049,7 @@ async function startServer() {
       if (req.body.entryNo && findDuplicateEntryNo(allEntries, req.body.entryNo, req.params.id)) {
         return res.status(409).json({ error: `Entry No. ${req.body.entryNo} already exists.` });
       }
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Market Trip date cannot be in the future.' });
       // balanceReceipts/balanceSettledSnapshot aren't fields the Add/Edit
       // Market POD Trip form manages (only the dedicated balance-receipt
       // endpoint below does) - preserved from the existing record here so a
@@ -1900,6 +2094,7 @@ async function startServer() {
       const date = req.body.date;
       if (!amount || amount <= 0) return res.status(400).json({ error: 'Enter a valid amount received.' });
       if (!date) return res.status(400).json({ error: 'Enter the date received.' });
+      if (isFutureDate(date)) return res.status(400).json({ error: 'Balance receipt date cannot be in the future.' });
 
       const receivedSoFar = (existing.balanceReceipts || []).reduce((s, r) => s + r.amount, 0);
       const pending = (existing.balance || 0) - receivedSoFar;
@@ -1944,6 +2139,7 @@ async function startServer() {
       // ledger; only a super admin may specify a different `username` (e.g.
       // logging a top-up on someone else's behalf).
       const username = sessionUser?.department === 'super_admin' && req.body.username ? req.body.username : sessionUser?.username;
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Amount Received date cannot be in the future.' });
       const result = await savePettyCashAdvance({ ...req.body, username } as PettyCashAdvance);
       res.json({ success: true, data: filterAdvancesForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -2033,6 +2229,44 @@ async function startServer() {
   });
   app.delete('/api/vehicle-service-schedules/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteVehicleServiceSchedule(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Service Due / Washing Due reminder settings - readable by anyone with
+  // Fleet Maintenance access (so Service Schedule can show the configured
+  // cycle lengths), editable by Super Admin only.
+  app.get('/api/alert-settings', async (req, res) => {
+    try { res.json(await getAlertSettings()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/alert-settings', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser || sessionUser.department !== 'super_admin') {
+        return res.status(403).json({ error: 'Only Super Admin can change alert settings.' });
+      }
+      res.json({ success: true, data: await saveAlertSettings(req.body as Partial<AlertSettings>) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Manually trigger the Service Due/Washing Due reminder check immediately
+  // (Super Admin only) - for verifying the feature without waiting for the
+  // hourly tick. Still respects the per-milestone dedup marker.
+  app.post('/api/service-washing-reminders/send-now', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser || sessionUser.department !== 'super_admin') {
+        return res.status(403).json({ success: false, error: 'Only Super Admin can trigger this check.' });
+      }
+      const result = await sendServiceWashingReminders();
+      res.json({
+        success: true,
+        sent: result.sent > 0,
+        message: result.sent > 0
+          ? `Reminders sent for: ${result.details.join(', ')}.`
+          : 'No vehicles are at a reminder milestone right now (or already sent for this cycle).'
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
   });
 
   app.get('/api/service-invoices', async (req, res) => {
@@ -2258,6 +2492,7 @@ async function startServer() {
   app.post('/api/staff/attendance/mark', async (req, res) => {
     try {
       const { empId, date, status, remarks } = req.body;
+      if (isFutureDate(date)) return res.status(400).json({ success: false, error: 'Attendance cannot be marked for a future date.' });
       const record = await upsertAttendanceEntry({ empId, date, status, remarks });
       res.json({ success: true, data: record });
     } catch (err: any) {
@@ -2269,6 +2504,7 @@ async function startServer() {
     try {
       const entries = req.body as Array<{ empId: string; date: string; status: string; remarks?: string }>;
       if (!Array.isArray(entries)) return res.status(400).json({ success: false, error: 'Request body must be an array of attendance entries.' });
+      if (entries.some(e => isFutureDate(e.date))) return res.status(400).json({ success: false, error: 'Attendance cannot be marked for a future date.' });
 
       const results = [];
       for (const entry of entries) {
@@ -2493,6 +2729,7 @@ async function startServer() {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const entry: MileageReport = req.body;
+      if (isFutureDate(entry.date)) return res.status(400).json({ error: 'Mileage entry date cannot be in the future.' });
       if (entry.id) {
         const existing = (await getMileageReports()).find(r => r.id === entry.id);
         if (!canModifyEntryRow(existing, sessionUser)) {
@@ -2760,6 +2997,7 @@ async function startServer() {
       if (!(await assertDriverAccessible(driverId, sessionUser))) {
         return res.status(403).json({ success: false, error: 'You cannot mark attendance for this driver.' });
       }
+      if (isFutureDate(date)) return res.status(400).json({ success: false, error: 'Attendance cannot be marked for a future date.' });
       const id = `${driverId}-${date}`;
       // markedBy always reflects whoever most recently set *this* day's
       // status (unlike a flat ledger's enteredBy) - each driver+date cell is
@@ -2780,6 +3018,7 @@ async function startServer() {
       const results: DriverAttendance[] = [];
       for (const entry of entries) {
         if (!(await assertDriverAccessible(entry.driverId, sessionUser))) continue;
+        if (isFutureDate(entry.date)) continue; // silently skipped, same treatment as an out-of-scope driver just above
         const id = `${entry.driverId}-${entry.date}`;
         const record: DriverAttendance = { id, driverId: entry.driverId, date: entry.date, status: entry.status as DriverAttendance['status'], markedBy: sessionUser?.username };
         await saveDriverAttendanceRecord(record);
@@ -3007,6 +3246,13 @@ async function startServer() {
   // once/day regardless of how many times the hourly tick lands after that.
   runScheduledBirthdayCheck();
   setInterval(runScheduledBirthdayCheck, 60 * 60 * 1000);
+
+  // Same hourly-check pattern for the Service Due (Reefer/Hybrid) & Washing
+  // Due (Walkes) reminders - per-milestone marker notifications keep each
+  // vehicle/threshold to once per cycle regardless of how many times the
+  // hourly tick lands.
+  runScheduledServiceWashingReminders();
+  setInterval(runScheduledServiceWashingReminders, 60 * 60 * 1000);
 }
 
 startServer();

@@ -370,6 +370,26 @@ export interface VehicleServiceSchedule {
   warrantyExpiryDate?: string; // optional manual tracking, nullable
   warrantyExpiryKm?: number; // optional manual tracking, nullable
   remarks?: string;
+  // Washing cycle - Walkes-category vehicles only (Reefer/Hybrid instead use
+  // lastServiceDate above for their own fixed-day service cycle - one real
+  // "when was this vehicle last serviced" fact, shared with the km-based
+  // system this record already drives). See AlertSettings for the
+  // configurable cycle length/reminder thresholds both cycles use.
+  lastWashingDate?: string; // YYYY-MM-DD
+}
+
+// Configurable cycle lengths + reminder day-thresholds for the Service Due
+// (Reefer/Hybrid) and Washing Due (Walkes) staged alert emails - a single
+// row, editable from Service Schedule's Alert Settings panel (Super Admin
+// only) so these can change without a code deployment. Falls back to the
+// confirmed defaults (40/[15,7,3] and 15/[7,5,3]) if no row has been saved
+// yet.
+export interface AlertSettings {
+  id: string; // fixed singleton id, see DEFAULT_ALERT_SETTINGS
+  reeferHybridServiceCycleDays: number; // default 40
+  reeferHybridReminderDays: number[]; // default [15, 7, 3]
+  walkesWashingCycleDays: number; // default 15
+  walkesReminderDays: number[]; // default [7, 5, 3]
 }
 
 // A downloadable PDF invoice/slip generated from one Garage Work Order
@@ -699,7 +719,7 @@ export interface DashboardNotification {
   id: string;
   title: string;
   message: string;
-  type: 'security' | 'insurance' | 'permit' | 'fc' | 'tax' | 'general' | 'service-due' | 'alignment-due' | 'birthday';
+  type: 'security' | 'insurance' | 'permit' | 'fc' | 'tax' | 'general' | 'service-due' | 'alignment-due' | 'birthday' | 'washing-due';
   timestamp: string;
   read: boolean;
   vehicleRegNo?: string;

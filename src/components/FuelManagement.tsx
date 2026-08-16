@@ -1472,7 +1472,7 @@ export default function FuelManagement({
                     </div>
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1">Date *</label>
-                      <DateInput required value={date} onChange={(e) => setDate(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
+                      <DateInput required value={date} onChange={(e) => setDate(e.target.value)} max={new Date().toISOString().slice(0, 10)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
                     </div>
                   </div>
 

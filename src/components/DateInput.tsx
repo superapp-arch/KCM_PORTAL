@@ -9,6 +9,13 @@ interface DateInputProps {
   disabled?: boolean;
   id?: string;
   name?: string;
+  // yyyy-mm-dd. Passed straight to the native <input type="date">'s own max
+  // attribute, so the browser's calendar widget greys out/blocks anything
+  // past it directly - not just a post-submit check. Opt-in per field (e.g.
+  // max={todayIso()} on attendance/cash/fuel entry dates) rather than a
+  // built-in default, since most of this app's date fields (DOB, expiry,
+  // due dates...) legitimately need future dates.
+  max?: string;
 }
 
 // Native <input type="date"> only accepts an exact yyyy-mm-dd value - anything
@@ -40,7 +47,7 @@ const formatDisplayDate = (iso: string): string => {
   return `${d}/${m}/${y}`;
 };
 
-export default function DateInput({ value, onChange, className, required, disabled, id, name }: DateInputProps) {
+export default function DateInput({ value, onChange, className, required, disabled, id, name, max }: DateInputProps) {
   const isoValue = normalizeToISO(value);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -72,6 +79,7 @@ export default function DateInput({ value, onChange, className, required, disabl
         name={name}
         required={required}
         disabled={disabled}
+        max={max}
         value={isoValue}
         onChange={onChange}
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"

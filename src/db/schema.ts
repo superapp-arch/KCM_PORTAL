@@ -138,6 +138,14 @@ export const salarySlipAudits = pgTable('salary_slip_audits', {
   data: text('data').notNull(), // JSON string representing the full SalarySlipAuditRecord object
 });
 
+// Single-row settings table (id is always DEFAULT_ALERT_SETTINGS_ID) holding
+// the configurable Service Due (Reefer/Hybrid) and Washing Due (Walkes)
+// staged-reminder cycle lengths/thresholds. See AlertSettings.
+export const alertSettings = pgTable('alert_settings', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full AlertSettings object
+});
+
 // Generated driver payslips - one row per slip (id = slipNumber). See
 // DriverSalarySlipRecord.
 export const driverSalarySlips = pgTable('driver_salary_slips', {

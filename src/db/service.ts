@@ -16,6 +16,7 @@ import {
   staffBankDetails,
   staffAttendance,
   staffHolidays,
+  alertSettings,
   salarySlips,
   salarySlipAudits,
   driverSalarySlips,
@@ -63,6 +64,7 @@ import {
   StaffBankDetail,
   StaffAttendance,
   StaffHoliday,
+  AlertSettings,
   SalarySlipRecord,
   SalarySlipAuditRecord,
   DriverSalarySlipRecord,
@@ -1565,6 +1567,47 @@ export async function saveSalarySlipAuditRecord(entry: SalarySlipAuditRecord) {
   } catch (error) {
     console.error("Database action failed in saveSalarySlipAuditRecord:", error);
     throw new Error("Failed to write salary slip audit entry.", { cause: error });
+  }
+}
+
+// --- ALERT SETTINGS OPERATIONS (singleton row) ---
+export const DEFAULT_ALERT_SETTINGS_ID = 'default';
+export const DEFAULT_ALERT_SETTINGS: AlertSettings = {
+  id: DEFAULT_ALERT_SETTINGS_ID,
+  reeferHybridServiceCycleDays: 40,
+  reeferHybridReminderDays: [15, 7, 3],
+  walkesWashingCycleDays: 15,
+  walkesReminderDays: [7, 5, 3]
+};
+
+export async function getAlertSettings(): Promise<AlertSettings> {
+  try {
+    const rows = await db.select().from(alertSettings).where(eq(alertSettings.id, DEFAULT_ALERT_SETTINGS_ID));
+    if (rows.length === 0) return DEFAULT_ALERT_SETTINGS;
+    // Spread over the defaults so a settings row saved before a new field
+    // existed still comes back complete, rather than missing a key.
+    return { ...DEFAULT_ALERT_SETTINGS, ...JSON.parse(rows[0].data) };
+  } catch (error) {
+    console.error("Database query failed in getAlertSettings:", error);
+    throw new Error("Failed to retrieve alert settings.", { cause: error });
+  }
+}
+
+export async function saveAlertSettings(settings: Partial<AlertSettings>): Promise<AlertSettings> {
+  try {
+    const current = await getAlertSettings();
+    const complete: AlertSettings = { ...current, ...settings, id: DEFAULT_ALERT_SETTINGS_ID };
+    const dataString = JSON.stringify(complete);
+    const existing = await db.select().from(alertSettings).where(eq(alertSettings.id, DEFAULT_ALERT_SETTINGS_ID));
+    if (existing.length > 0) {
+      await db.update(alertSettings).set({ data: dataString }).where(eq(alertSettings.id, DEFAULT_ALERT_SETTINGS_ID));
+    } else {
+      await db.insert(alertSettings).values({ id: DEFAULT_ALERT_SETTINGS_ID, data: dataString });
+    }
+    return complete;
+  } catch (error) {
+    console.error("Database action failed in saveAlertSettings:", error);
+    throw new Error("Failed to save alert settings.", { cause: error });
   }
 }
 

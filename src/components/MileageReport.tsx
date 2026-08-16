@@ -66,6 +66,12 @@ export default function MileageReportModule({
 
   // Filter conditions
   const [selectedLocationFilter, setSelectedLocationFilter] = useState('All');
+  // Searchable Vehicle Number filter for Export Excel (and the on-screen
+  // ledger, since both read from the same filteredReports) - '' = All
+  // Vehicles. Sourced from vehicleList below, which is itself built off the
+  // live `vehicles` prop (Fleet & Vehicles), so it's never a separate list
+  // to keep in sync.
+  const [selectedVehicleFilter, setSelectedVehicleFilter] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   // Defaults to newest-first by Date, same "Sort by" convention as the Petty
   // Cash Ledger/Market POD tables - still fully overridable via the column
@@ -421,13 +427,14 @@ export default function MileageReportModule({
     const worksheet = XLSX.utils.json_to_sheet(data);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Mileage Reports");
-    XLSX.writeFile(workbook, `KCM_Mileage_Reports_${selectedLocationFilter}.xlsx`);
+    XLSX.writeFile(workbook, `KCM_Mileage_Reports_${selectedLocationFilter}${selectedVehicleFilter ? `_${selectedVehicleFilter}` : ''}.xlsx`);
     triggerNotif('Mileage reports Excel exported and downloaded!', 'success');
   };
 
-  // Filtering: by location and keyword search (vehicle-number filter removed)
+  // Filtering: by location, vehicle number, and keyword search.
   const filteredReports = reports.filter(r => {
     const matchesLocation = selectedLocationFilter === 'All' || (r.location || '').toUpperCase() === selectedLocationFilter.toUpperCase();
+    const matchesVehicle = !selectedVehicleFilter || (r.vehicleNo || '').trim().toUpperCase() === selectedVehicleFilter.trim().toUpperCase();
     const matchesKeyword =
       searchTerm === '' ||
       (r.driverName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -435,7 +442,7 @@ export default function MileageReportModule({
       (r.vehicleNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (r.location || '').toLowerCase().includes(searchTerm.toLowerCase());
 
-    return matchesLocation && matchesKeyword;
+    return matchesLocation && matchesVehicle && matchesKeyword;
   });
 
   const sortedReports = sort
@@ -531,7 +538,7 @@ export default function MileageReportModule({
             </span>
             <span>Matches: {filteredReports.length} entries</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {/* Sort By - Newest First (default) / Oldest First. Reuses the
                 same `sort` state the column headers drive. */}
             <div>
@@ -559,6 +566,26 @@ export default function MileageReportModule({
                   <option key={idx} value={l}>{l}</option>
                 ))}
               </select>
+            </div>
+
+            {/* Vehicle Number - searchable (type to filter), sourced live
+                from Fleet & Vehicles via vehicleList above. Scopes both the
+                on-screen ledger and Export Excel to just this vehicle;
+                leaving it blank keeps "All Vehicles" for both. */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Vehicle Number</label>
+              <input
+                type="text"
+                list="mileage-export-vehicle-datalist"
+                value={selectedVehicleFilter}
+                onChange={(e) => setSelectedVehicleFilter(e.target.value.toUpperCase())}
+                placeholder="All Vehicles"
+                autoComplete="off"
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-bold text-slate-700 text-[11px] uppercase"
+              />
+              <datalist id="mileage-export-vehicle-datalist">
+                {vehicleList.map((v, idx) => <option key={idx} value={v} />)}
+              </datalist>
             </div>
 
             {/* General Search */}
@@ -773,6 +800,7 @@ export default function MileageReportModule({
                       required
                       value={date}
                       onChange={(e) => setDate(e.target.value)}
+                      max={new Date().toISOString().slice(0, 10)}
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-pink-500 font-semibold"
                     />
                   </div>

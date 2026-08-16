@@ -66,6 +66,11 @@ function dayLabel(month: string, day: number): string {
   const d = new Date(y, m - 1, day);
   return `${MONTH_ABBR[d.getMonth()]}${d.getDate()}`;
 }
+// Same yyyy-mm-dd convention every other "today" default in this codebase
+// already uses (see e.g. FuelManagement/MileageReport's date state).
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 export default function DriverAttendanceSheet({ drivers, writableLocations }: DriverAttendanceSheetProps) {
   const [month, setMonth] = useState(currentMonthKey());
@@ -126,6 +131,11 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
     return monthAttendance.find(a => a.driverId === driverId && a.date === date) || null;
   };
 
+  // Attendance can only ever be marked for today or earlier - a day cell
+  // past today is greyed out and unclickable, same rule the server also
+  // enforces (see /api/drivers/attendance/mark) as a safety net.
+  const isFutureDay = (day: number): boolean => `${month}-${String(day).padStart(2, '0')}` > todayIso();
+
   // Each driver+day cell is its own record, so "who marked it" can only ever
   // be shown per-cell (not as a single flat column) - a hover tooltip, same
   // affordance as the existing remarks tooltip, scales to any number of
@@ -151,6 +161,7 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
   };
 
   const handleCellClick = (driverId: string, day: number) => {
+    if (isFutureDay(day)) return;
     const current = cellRecord(driverId, day);
     const idx = current ? QUICK_CODES.findIndex(c => c.status === current.status) : -1;
     const next = QUICK_CODES[(idx + 1) % QUICK_CODES.length];
@@ -159,6 +170,7 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
 
   const openPopover = (e: React.MouseEvent, driverId: string, day: number) => {
     e.stopPropagation();
+    if (isFutureDay(day)) return;
     const current = cellRecord(driverId, day);
     setPopoverStatus(current?.status || 'Present');
     setPopoverRemarks(current?.remarks || '');
@@ -187,8 +199,8 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-4">
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <button onClick={() => setMonth(shiftMonth(month, -1))} className="p-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"><ChevronLeft className="w-3.5 h-3.5" /></button>
-          <input type="month" value={month} onChange={e => setMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
-          <button onClick={() => setMonth(shiftMonth(month, 1))} className="p-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"><ChevronRight className="w-3.5 h-3.5" /></button>
+          <input type="month" value={month} max={currentMonthKey()} onChange={e => setMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
+          <button onClick={() => setMonth(shiftMonth(month, 1))} disabled={month >= currentMonthKey()} className="p-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent cursor-pointer"><ChevronRight className="w-3.5 h-3.5" /></button>
           <div className="ml-auto flex items-center gap-2 border border-slate-300 rounded-lg px-2.5 py-1.5 min-w-[220px]">
             <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search by Driver Name, ID, or Vehicle No..." autoComplete="off" className="flex-1 outline-none" />
           </div>
@@ -239,15 +251,17 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
                         </td>
                         {Array.from({ length: totalDays }, (_, i) => i + 1).map(day => {
                           const record = cellRecord(driver.id, day);
+                          const future = isFutureDay(day);
+                          const cellWritable = writable && !future;
                           return (
                             <td key={day} className="p-0.5 relative group">
-                              <button onClick={() => writable && handleCellClick(driver.id, day)}
-                                disabled={!writable}
-                                title={!writable ? 'View only - outside your assigned locations' : cellTitle(record)}
-                                className={`w-9 h-6 rounded text-[9px] font-bold border ${writable ? 'cursor-pointer' : 'cursor-not-allowed'} ${record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}>
+                              <button onClick={() => cellWritable && handleCellClick(driver.id, day)}
+                                disabled={!cellWritable}
+                                title={future ? 'Future date - attendance cannot be marked ahead of today' : (!writable ? 'View only - outside your assigned locations' : cellTitle(record))}
+                                className={`w-9 h-6 rounded text-[9px] font-bold border ${cellWritable ? 'cursor-pointer' : 'cursor-not-allowed'} ${future ? 'bg-slate-100 border-slate-100 text-slate-300' : record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}>
                                 {record ? STATUS_ABBR[record.status] : '-'}
                               </button>
-                              {writable && <button
+                              {cellWritable && <button
                                 onClick={e => openPopover(e, driver.id, day)}
                                 className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-slate-700 text-white text-[8px] opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer"
                                 title="More statuses & remarks"
