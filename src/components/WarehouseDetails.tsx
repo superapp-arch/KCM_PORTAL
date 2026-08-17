@@ -22,6 +22,31 @@ import {
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
 
+// Known Warehouse Name -> Warehouse City pairs, replacing the old free-form
+// suggestion list. Both Warehouse Name fields below stay plain text inputs
+// with a datalist (not a locked-down <select>), so a brand-new warehouse not
+// in this list can always be typed in manually - selecting/typing an exact
+// match here just auto-fetches its city; it doesn't restrict entry to only
+// these names.
+const WAREHOUSE_LOCATIONS: { name: string; city: string }[] = [
+  { name: 'BLR DHL', city: 'Bangalore' },
+  { name: 'BLR ECOM2', city: 'Bangalore' },
+  { name: 'BLR IM1', city: 'Bangalore' },
+  { name: 'BLR IM4', city: 'Bangalore' },
+  { name: 'CHN COLD IM1', city: 'Chennai' },
+  { name: 'GOA IM1', city: 'Central Goa' },
+  { name: 'Goravegere Cold WH', city: 'Bangalore' },
+  { name: 'HYD IM1', city: 'Hyderabad' },
+  { name: 'HYD IM2', city: 'Hyderabad' },
+  { name: 'HYD IM3 -Cold Star', city: 'Hyderabad' },
+  { name: 'HYD IM4', city: 'Hyderabad' },
+  { name: 'HYD IM5', city: 'Hyderabad' },
+  { name: 'VIZ IM1', city: 'Vizag' },
+];
+const WAREHOUSE_CITIES = Array.from(new Set(WAREHOUSE_LOCATIONS.map(w => w.city)));
+const cityForWarehouseName = (name: string): string | undefined =>
+  WAREHOUSE_LOCATIONS.find(w => w.name.trim().toLowerCase() === name.trim().toLowerCase())?.city;
+
 interface WarehouseDetailsProps {
   user: User;
   entries: WarehouseEntry[];
@@ -527,18 +552,19 @@ export default function WarehouseDetails({
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Amazon Sort WH"
+                  placeholder="e.g. BLR IM1"
                   value={warehouseName}
-                  onChange={(e) => setWarehouseName(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setWarehouseName(val);
+                    const matchedCity = cityForWarehouseName(val);
+                    if (matchedCity) setWarehouseCity(matchedCity); // Auto-fetch city for a known warehouse name; still freely editable/overridable below
+                  }}
                   className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
                   list="suggested-warehouses"
                 />
                 <datalist id="suggested-warehouses">
-                  <option value="Flipkart WH 1" />
-                  <option value="Amazon Sort Center" />
-                  <option value="Swiggy Instamart Warehouse" />
-                  <option value="RIL F&V Depot" />
-                  <option value="KCM General Hub" />
+                  {WAREHOUSE_LOCATIONS.map(w => <option key={w.name} value={w.name} />)}
                 </datalist>
               </div>
             </div>
@@ -551,13 +577,13 @@ export default function WarehouseDetails({
                   type="text"
                   placeholder="e.g. Bangalore"
                   value={warehouseCity}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setWarehouseCity(val);
-                    setPodCity(val); // Auto-apply to pod city
-                  }}
+                  onChange={(e) => setWarehouseCity(e.target.value)}
                   className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
+                  list="suggested-warehouse-cities"
                 />
+                <datalist id="suggested-warehouse-cities">
+                  {WAREHOUSE_CITIES.map(c => <option key={c} value={c} />)}
+                </datalist>
               </div>
               <div>
                 <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Vehicle Number *</label>
@@ -1168,22 +1194,31 @@ export default function WarehouseDetails({
                     type="text"
                     required
                     value={editWarehouseName}
-                    onChange={(e) => setEditWarehouseName(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setEditWarehouseName(val);
+                      const matchedCity = cityForWarehouseName(val);
+                      if (matchedCity) setEditWarehouseCity(matchedCity); // Auto-fetch city for a known warehouse name; still freely editable/overridable below
+                    }}
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:ring-1 focus:ring-pink-500 focus:outline-none"
+                    list="suggested-warehouses-edit"
                   />
+                  <datalist id="suggested-warehouses-edit">
+                    {WAREHOUSE_LOCATIONS.map(w => <option key={w.name} value={w.name} />)}
+                  </datalist>
                 </div>
                 <div>
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Warehouse City</label>
                   <input
                     type="text"
                     value={editWarehouseCity}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setEditWarehouseCity(val);
-                      setEditPodCity(val); // Auto-fill POD city
-                    }}
+                    onChange={(e) => setEditWarehouseCity(e.target.value)}
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:ring-1 focus:ring-pink-500 focus:outline-none"
+                    list="suggested-warehouse-cities-edit"
                   />
+                  <datalist id="suggested-warehouse-cities-edit">
+                    {WAREHOUSE_CITIES.map(c => <option key={c} value={c} />)}
+                  </datalist>
                 </div>
                 <div>
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Vehicle Number *</label>
