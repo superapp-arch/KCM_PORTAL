@@ -1,36 +1,24 @@
 // Shared "resolve or generate a Driver Salary Slip" logic - same shape as
-// HR & Payroll's salarySlipGenerate.ts, but scoped to an arbitrary Date
-// From/To period (so a driver who only worked part of a month still gets a
-// slip) instead of a fixed calendar month. Earned pay is pro-rated: Wages
-// Per Day (driver's monthly Gross Salary / days in that month) x days
-// actually Present/Paid-Leave within the period - confirmed with the user.
+// HR & Payroll's salarySlipGenerate.ts. Month-based, and nothing is entered
+// manually here: Gross Salary/Other Additions/deductions are read straight
+// off the driver's already-saved Salary Breakup (DriverFormModal's own
+// Salary tab), and the attendance figures (days present, LOP) come from the
+// same live monthly summary Salary Breakup itself already displays - so the
+// slip can never show something different from what's actually on record.
 import { authFetch } from '../authFetch';
 import { DriverEmployee, DriverSalarySlipRecord, DriverSalarySlipAuditRecord } from '../types';
 import { buildDriverSalarySlipFile } from './driverSalarySlipPdf';
 
-export interface DriverAttendanceRangeSummary {
-  driverId: string;
-  from: string;
-  to: string;
-  totalDaysInRange: number;
-  presentDays: number; // Present + Paid Leave within the range
+export interface DriverMonthlyAttendanceSummary {
+  totalDays: number;
+  salaryWorkingDays: number; // Present + Paid Leave - what Salary Breakup calls "Working Days"
   lopDays: number;
   exemptionLeaveDays: number;
-  daysInFromMonth: number;
-}
-
-export interface DriverSlipManualEntries {
-  otherAdditions: number;
-  pettyCashAdvance: number;
-  loanDeduction: number;
-  recoveryAmount: number;
-  driverWelfare: number;
-  bata: number;
 }
 
 export interface DriverSlipGenerationResult {
   slip: DriverSalarySlipRecord;
-  isNew: boolean; // false = an existing slip for this driverId+dateFrom+dateTo was found and reused, nothing was written
+  isNew: boolean; // false = an existing slip for this driverId+month was found and reused, nothing was written
 }
 
 // Same masking convention as HR's Salary Slip / the Bank Details tab - last
@@ -40,16 +28,15 @@ const maskAccount = (accountNumber?: string): string | undefined => {
   return accountNumber.length > 4 ? `${'•'.repeat(accountNumber.length - 4)}${accountNumber.slice(-4)}` : accountNumber;
 };
 
-export async function fetchDriverAttendanceRange(driverId: string, dateFrom: string, dateTo: string): Promise<DriverAttendanceRangeSummary> {
-  const res = await authFetch(`/api/drivers/attendance/range/${encodeURIComponent(driverId)}/${dateFrom}/${dateTo}`);
+export async function fetchDriverMonthlyAttendance(driverId: string, month: string): Promise<DriverMonthlyAttendanceSummary> {
+  const res = await authFetch(`/api/drivers/attendance/monthly/${encodeURIComponent(driverId)}/${month}`);
   const body = await res.json();
-  if (!res.ok || !body.success) throw new Error(body.error || 'Failed to load attendance for this period.');
+  if (!res.ok || !body.success) throw new Error(body.error || 'Failed to load attendance for this month.');
   return body.data;
 }
 
-function nextSlipNumber(dateTo: string, existingSlips: DriverSalarySlipRecord[]): string {
-  const monthKey = dateTo.slice(0, 7).replace('-', '');
-  const prefix = `DRVSLIP-${monthKey}-`;
+function nextSlipNumber(month: string, existingSlips: DriverSalarySlipRecord[]): string {
+  const prefix = `DRVSLIP-${month.replace('-', '')}-`;
   const maxN = existingSlips.reduce((max, s) => {
     if (!s.slipNumber.startsWith(prefix)) return max;
     const n = parseInt(s.slipNumber.slice(prefix.length), 10);
@@ -58,62 +45,60 @@ function nextSlipNumber(dateTo: string, existingSlips: DriverSalarySlipRecord[])
   return `${prefix}${String(maxN + 1).padStart(3, '0')}`;
 }
 
-// Resolves (reusing an existing slip if present for the same driver+period,
+// Resolves (reusing an existing slip if present for the same driver+month,
 // avoiding duplicate "Generated" audit entries) or generates a brand-new
-// one. Manual entries (Other Additions/deductions) are always whatever the
-// caller passes in for THIS specific period - they're never auto-copied
-// from the driver's monthly snapshot fields, since those apply to a whole
-// month, not necessarily the exact period being sliped.
+// one straight from the driver's current Salary Breakup + that month's
+// attendance - no separate manual-entry step.
 export async function resolveOrGenerateDriverSlip(params: {
   driver: DriverEmployee;
-  dateFrom: string;
-  dateTo: string;
-  manual: DriverSlipManualEntries;
   existingSlips: DriverSalarySlipRecord[];
   forceRegenerate: boolean;
   performedBy: string;
 }): Promise<DriverSlipGenerationResult> {
-  const { driver, dateFrom, dateTo, manual, existingSlips, forceRegenerate, performedBy } = params;
+  const { driver, existingSlips, forceRegenerate, performedBy } = params;
+  const month = driver.month;
+  if (!month) throw new Error('This driver has no Salary Breakup month set yet - fill in Salary Breakup first.');
 
   if (!forceRegenerate) {
-    const existing = existingSlips.find(s => s.driverId === driver.id && s.dateFrom === dateFrom && s.dateTo === dateTo);
+    const existing = existingSlips.find(s => s.driverId === driver.id && s.month === month);
     if (existing) return { slip: existing, isNew: false };
   }
 
-  const attendance = await fetchDriverAttendanceRange(driver.id, dateFrom, dateTo);
-  const wagesPerDay = attendance.daysInFromMonth > 0 ? (driver.grossSalary || 0) / attendance.daysInFromMonth : 0;
-  const earnedAmount = wagesPerDay * attendance.presentDays;
+  const attendance = await fetchDriverMonthlyAttendance(driver.id, month);
+  const grossSalary = driver.grossSalary || 0;
+  const wagesPerDay = attendance.totalDays > 0 ? grossSalary / attendance.totalDays : 0;
   const lopAmount = wagesPerDay * attendance.lopDays;
-  const totalEarnings = earnedAmount + manual.otherAdditions;
-  const totalDeductions = manual.pettyCashAdvance + manual.loanDeduction + manual.recoveryAmount + manual.driverWelfare + manual.bata;
-  const netSalary = totalEarnings - totalDeductions;
+  const otherAdditions = driver.otherAdditions || 0;
+  const totalDeductions = (driver.pettyCashAdvance || 0) + (driver.loanDeduction || 0) + (driver.recoveryAmount || 0) + (driver.driverWelfare || 0) + (driver.bata || 0);
+  const totalEarnings = grossSalary + otherAdditions;
+  // Matches DriverFormModal's Salary Breakup "Payable Amount" formula
+  // exactly: Gross Salary + Other Additions - deductions - LOP Amount.
+  const netSalary = totalEarnings - totalDeductions - lopAmount;
 
-  const slipNumber = nextSlipNumber(dateTo, existingSlips);
+  const slipNumber = nextSlipNumber(month, existingSlips);
   const slip: DriverSalarySlipRecord = {
     id: slipNumber,
     slipNumber,
     driverId: driver.id,
     driverName: driver.name,
-    // A driver covering more than one vehicle shows all of them on the slip.
     vehicleNo: (driver.vehicleNos && driver.vehicleNos.length > 0 ? driver.vehicleNos : (driver.vehicleNo ? [driver.vehicleNo] : [])).join(' / ') || undefined,
     location: driver.location,
-    dateFrom, dateTo,
+    month,
     bankAccountNumberMasked: maskAccount(driver.accountNumber),
     ifscCode: driver.ifscCode,
-    totalDaysInRange: attendance.totalDaysInRange,
-    presentDays: attendance.presentDays,
+    totalDays: attendance.totalDays,
+    presentDays: attendance.salaryWorkingDays,
     lopDays: attendance.lopDays,
     exemptionLeaveDays: attendance.exemptionLeaveDays,
-    grossSalaryMonthly: driver.grossSalary,
+    grossSalary: driver.grossSalary,
     wagesPerDay: parseFloat(wagesPerDay.toFixed(2)),
-    earnedAmount: parseFloat(earnedAmount.toFixed(2)),
     lopAmount: parseFloat(lopAmount.toFixed(2)),
-    otherAdditions: manual.otherAdditions || undefined,
-    pettyCashAdvance: manual.pettyCashAdvance || undefined,
-    loanDeduction: manual.loanDeduction || undefined,
-    recoveryAmount: manual.recoveryAmount || undefined,
-    driverWelfare: manual.driverWelfare || undefined,
-    bata: manual.bata || undefined,
+    otherAdditions: driver.otherAdditions,
+    pettyCashAdvance: driver.pettyCashAdvance,
+    loanDeduction: driver.loanDeduction,
+    recoveryAmount: driver.recoveryAmount,
+    driverWelfare: driver.driverWelfare,
+    bata: driver.bata,
     totalEarnings: parseFloat(totalEarnings.toFixed(2)),
     totalDeductions: parseFloat(totalDeductions.toFixed(2)),
     netSalary: parseFloat(netSalary.toFixed(2)),
@@ -146,7 +131,7 @@ export async function resolveOrGenerateDriverSlip(params: {
 
   const auditEntry: DriverSalarySlipAuditRecord = {
     id: `${slipNumber}-${forceRegenerate ? 'regen' : 'gen'}-${Date.now()}`,
-    slipNumber, driverId: driver.id, dateFrom, dateTo,
+    slipNumber, driverId: driver.id, month,
     action: forceRegenerate ? 'Regenerated' : 'Generated',
     timestamp: new Date().toISOString(),
     performedBy
@@ -168,7 +153,7 @@ export async function markDriverSlipDownloaded(slip: DriverSalarySlipRecord, per
   });
   const auditEntry: DriverSalarySlipAuditRecord = {
     id: `${slip.slipNumber}-download-${Date.now()}`,
-    slipNumber: slip.slipNumber, driverId: slip.driverId, dateFrom: slip.dateFrom, dateTo: slip.dateTo,
+    slipNumber: slip.slipNumber, driverId: slip.driverId, month: slip.month,
     action: 'Downloaded', timestamp: new Date().toISOString(), performedBy
   };
   await authFetch('/api/drivers/salary-slip-audit', {

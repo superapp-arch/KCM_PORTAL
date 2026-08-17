@@ -533,7 +533,7 @@ export default function TireAlignmentTab({
                                     className="w-full min-w-[100px] border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
                                 </td>
                                 <td className="px-2.5 py-1.5 align-top">
-                                  <DateInput value={row.installedDate} onChange={(e) => updateConfigRow(idx, { installedDate: e.target.value })} className="w-full min-w-[100px] border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
+                                  <DateInput value={row.installedDate} onChange={(e) => updateConfigRow(idx, { installedDate: e.target.value })} max={new Date().toISOString().slice(0, 10)} className="w-full min-w-[100px] border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
                                 </td>
                                 <td className="px-2.5 py-1.5 align-top">
                                   <input type="number" value={row.installedKm} onChange={(e) => updateConfigRow(idx, { installedKm: e.target.value })} autoComplete="off"
@@ -588,7 +588,7 @@ export default function TireAlignmentTab({
                           <div className="grid grid-cols-2 gap-2 mb-2">
                             <div>
                               <label className="block text-slate-400 mb-0.5">Installed Date{isRequiredPosition && ' *'}</label>
-                              <DateInput value={row.installedDate} onChange={(e) => updateConfigRow(idx, { installedDate: e.target.value })} className="w-full border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
+                              <DateInput value={row.installedDate} onChange={(e) => updateConfigRow(idx, { installedDate: e.target.value })} max={new Date().toISOString().slice(0, 10)} className="w-full border border-slate-300 rounded-lg px-2 py-1.5 font-mono" />
                             </div>
                             <div>
                               <label className="block text-slate-400 mb-0.5">Installed Odometer (km){isRequiredPosition && ' *'}</label>

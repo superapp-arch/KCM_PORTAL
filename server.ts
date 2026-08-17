@@ -2162,6 +2162,7 @@ async function startServer() {
   });
   app.post('/api/maintenance', async (req, res) => {
     try {
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Work order date cannot be in the future.' });
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const result = await saveMaintenanceRecord({ ...req.body, enteredBy: sessionUser?.username });
       res.json({ success: true, data: maskAttributionField(result, 'enteredBy', sessionUser) });
@@ -2169,6 +2170,7 @@ async function startServer() {
   });
   app.put('/api/maintenance/:id', async (req, res) => {
     try {
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Work order date cannot be in the future.' });
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       // enteredBy is never re-stamped on an edit - it always stays whoever
       // first created this work order, same convention as Fuel/Petty Cash/
@@ -2209,10 +2211,16 @@ async function startServer() {
     try { res.json(await getBreakdownReports()); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/breakdown-reports', async (req, res) => {
-    try { res.json({ success: true, data: await saveBreakdownReport(req.body as BreakdownReport) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Breakdown date cannot be in the future.' });
+      res.json({ success: true, data: await saveBreakdownReport(req.body as BreakdownReport) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/breakdown-reports/:id', async (req, res) => {
-    try { res.json({ success: true, data: await saveBreakdownReport({ ...req.body, id: req.params.id } as BreakdownReport) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Breakdown date cannot be in the future.' });
+      res.json({ success: true, data: await saveBreakdownReport({ ...req.body, id: req.params.id } as BreakdownReport) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/breakdown-reports/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteBreakdownReport(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -2221,11 +2229,24 @@ async function startServer() {
   app.get('/api/vehicle-service-schedules', async (req, res) => {
     try { res.json(await getVehicleServiceSchedules()); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
+  // Only Last Service/Washing Date are restricted to no-future here -
+  // Warranty Expiry Date is deliberately left alone since it's normally a
+  // real future date (that's the whole point of an expiry date).
   app.post('/api/vehicle-service-schedules', async (req, res) => {
-    try { res.json({ success: true, data: await saveVehicleServiceSchedule(req.body as VehicleServiceSchedule) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      if (isFutureDate(req.body?.lastServiceDate) || isFutureDate(req.body?.lastWashingDate)) {
+        return res.status(400).json({ error: 'Last Service/Washing Date cannot be in the future.' });
+      }
+      res.json({ success: true, data: await saveVehicleServiceSchedule(req.body as VehicleServiceSchedule) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/vehicle-service-schedules/:id', async (req, res) => {
-    try { res.json({ success: true, data: await saveVehicleServiceSchedule({ ...req.body, id: req.params.id } as VehicleServiceSchedule) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      if (isFutureDate(req.body?.lastServiceDate) || isFutureDate(req.body?.lastWashingDate)) {
+        return res.status(400).json({ error: 'Last Service/Washing Date cannot be in the future.' });
+      }
+      res.json({ success: true, data: await saveVehicleServiceSchedule({ ...req.body, id: req.params.id } as VehicleServiceSchedule) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/vehicle-service-schedules/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteVehicleServiceSchedule(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -2302,10 +2323,16 @@ async function startServer() {
     try { res.json(await getTireRecords()); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/tire-records', async (req, res) => {
-    try { res.json({ success: true, data: await saveTireRecord(req.body as TireRecord) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      if (isFutureDate(req.body?.installedDate)) return res.status(400).json({ error: 'Installed Date cannot be in the future.' });
+      res.json({ success: true, data: await saveTireRecord(req.body as TireRecord) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/tire-records/:id', async (req, res) => {
-    try { res.json({ success: true, data: await saveTireRecord({ ...req.body, id: req.params.id } as TireRecord) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      if (isFutureDate(req.body?.installedDate)) return res.status(400).json({ error: 'Installed Date cannot be in the future.' });
+      res.json({ success: true, data: await saveTireRecord({ ...req.body, id: req.params.id } as TireRecord) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/tire-records/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteTireRecord(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -2315,10 +2342,16 @@ async function startServer() {
     try { res.json(await getBatteryRecords()); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/battery-records', async (req, res) => {
-    try { res.json({ success: true, data: await saveBatteryRecord(req.body as BatteryRecord) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      if (isFutureDate(req.body?.installedDate)) return res.status(400).json({ error: 'Installed Date cannot be in the future.' });
+      res.json({ success: true, data: await saveBatteryRecord(req.body as BatteryRecord) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/battery-records/:id', async (req, res) => {
-    try { res.json({ success: true, data: await saveBatteryRecord({ ...req.body, id: req.params.id } as BatteryRecord) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      if (isFutureDate(req.body?.installedDate)) return res.status(400).json({ error: 'Installed Date cannot be in the future.' });
+      res.json({ success: true, data: await saveBatteryRecord({ ...req.body, id: req.params.id } as BatteryRecord) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/battery-records/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteBatteryRecord(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -2328,10 +2361,16 @@ async function startServer() {
     try { res.json(await getToolsChecklistRecords()); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/tools-checklist-records', async (req, res) => {
-    try { res.json({ success: true, data: await saveToolsChecklistRecord(req.body as ToolsChecklistRecord) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      if (isFutureDate(req.body?.checkDate)) return res.status(400).json({ error: 'Check Date cannot be in the future.' });
+      res.json({ success: true, data: await saveToolsChecklistRecord(req.body as ToolsChecklistRecord) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/tools-checklist-records/:id', async (req, res) => {
-    try { res.json({ success: true, data: await saveToolsChecklistRecord({ ...req.body, id: req.params.id } as ToolsChecklistRecord) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      if (isFutureDate(req.body?.checkDate)) return res.status(400).json({ error: 'Check Date cannot be in the future.' });
+      res.json({ success: true, data: await saveToolsChecklistRecord({ ...req.body, id: req.params.id } as ToolsChecklistRecord) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/tools-checklist-records/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteToolsChecklistRecord(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }

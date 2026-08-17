@@ -181,11 +181,10 @@ export default function FuelManagement({
 
   const [searchTerm, setSearchTerm] = useState('');
   const [bunkFilter, setBunkFilter] = useState('All');
-  // Defaults to Indent No ascending rather than raw/insertion order, so the
-  // ledger's order stays consistent and predictable on every page load/
-  // refresh instead of appearing to shuffle - still fully overridable via
-  // the column sort dropdowns (including switching to Vehicle No).
-  const [sort, setSort] = useState<SortState | null>({ key: 'indentNumber', direction: 'asc' });
+  // Defaults to newest-first by Date on open, same "Sort by" convention as
+  // Petty Cash/Market Trip/Mileage Report - still fully overridable via the
+  // Sort By dropdown or the column sort headers (Vehicle No/Indent No).
+  const [sort, setSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -706,9 +705,11 @@ export default function FuelManagement({
 
   const filteredLogs = sort
     ? [...filteredLogsUnsorted].sort((a, b) => {
-        const cmp = sort.key === 'indentNumber'
-          ? extractLeadingNumber(a.indentNumber) - extractLeadingNumber(b.indentNumber)
-          : extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber);
+        let cmp: number;
+        if (sort.key === 'indentNumber') cmp = extractLeadingNumber(a.indentNumber) - extractLeadingNumber(b.indentNumber);
+        else if (sort.key === 'vehicleNumber') cmp = extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber);
+        // Ties (same date) break on Vehicle No so the order stays stable.
+        else cmp = a.date === b.date ? extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber) : (a.date < b.date ? -1 : 1);
         return sort.direction === 'asc' ? cmp : -cmp;
       })
     : filteredLogsUnsorted;
@@ -974,6 +975,16 @@ export default function FuelManagement({
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-7 pr-3 py-1.5 text-[11px] focus:outline-none text-slate-800 font-semibold"
                 />
               </div>
+              {/* Sort By - Newest First (default) / Oldest First. Reuses the
+                  same `sort` state the column sort headers drive. */}
+              <select
+                value={sort?.key === 'date' && sort.direction === 'asc' ? 'oldest' : 'newest'}
+                onChange={(e) => setSort({ key: 'date', direction: e.target.value === 'oldest' ? 'asc' : 'desc' })}
+                className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-700"
+              >
+                <option value="newest">Newest First</option>
+                <option value="oldest">Oldest First</option>
+              </select>
               {!isRqIdOnlyUser && (
                 <button
                   onClick={() => { resetForm(); setShowSidebar(true); }}
@@ -991,7 +1002,7 @@ export default function FuelManagement({
                 <tr>
                   <th className="px-3 py-2.5">Entry #</th>
                   <th className="px-3 py-2.5">Period</th>
-                  <th className="px-3 py-2.5">Date</th>
+                  <th className="px-3 py-2.5"><SortHeader label="Date" sortKey="date" sort={sort} onSort={handleSort} type="numeric" /></th>
                   <th className="px-3 py-2.5">Location</th>
                   <th className="px-3 py-2.5">Bunk Name</th>
                   <th className="px-3 py-2.5">Bunk/Card</th>
@@ -1399,46 +1410,20 @@ export default function FuelManagement({
                       <DollarSign className="w-4 h-4 text-pink-300" />
                     </div>
 
-                    {/* Authorized Driver */}
-                    <div>
-                      <label className="block font-semibold text-slate-600 mb-1 flex items-center gap-1">
-                        <UserIcon className="w-3.5 h-3.5 text-pink-600" />
-                        Authorized Driver
-                      </label>
-                      <input
-                        type="text"
-                        list="fuel-driver-names-datalist"
-                        placeholder="e.g. Suresh / Adhithya"
-                        value={mDriverName}
-                        onChange={(e) => setMDriverName(e.target.value)}
-                        autoComplete="off"
-                        className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-800 font-semibold"
-                      />
-                      <datalist id="fuel-driver-names-datalist">
-                        {driverNameList.map((n, i) => <option key={i} value={n} />)}
-                      </datalist>
-                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                        Multiple drivers can be entered in one field, separated by "/". Fill in Opening/Closing KM + Authorized Driver together to also log a Mileage entry - otherwise this fuel entry commits on its own.
-                      </p>
-                    </div>
-
-                    {/* Driver ID - auto-fetched from Driver Details when
-                        Authorized Driver matches exactly one registered
-                        driver; freely editable for a driver not yet
-                        registered there (both fields become manual entry). */}
-                    <div>
-                      <label className="block font-semibold text-slate-600 mb-1">Driver ID</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. KCMDRV19102"
-                        value={mDriverId}
-                        onChange={(e) => setMDriverId(e.target.value)}
-                        autoComplete="off"
-                        className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
-                      />
-                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                        {matchedMileageDriver ? `✓ Auto-fetched from Driver Details (${matchedMileageDriver.name})` : 'Not found in Driver Details - enter manually for a new driver'}
-                      </p>
+                    {/* Authorized Driver / Driver ID are now entered on the
+                        Fuel Entry Details tab (that's when the vehicle is
+                        actually at the pump, which is when the driver is
+                        physically there) - reflected here read-only so it's
+                        still visible while filling in mileage figures,
+                        without a second place to edit it. */}
+                    <div className="p-2.5 bg-white rounded-lg border border-pink-100 flex items-center justify-between font-mono">
+                      <div className="min-w-0">
+                        <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Authorized Driver (from Fuel Entry Details)</span>
+                        <span className="text-xs font-black text-pink-700 truncate block">
+                          {mDriverName || '-'} {mDriverId && <span className="text-slate-400 font-normal">({mDriverId})</span>}
+                        </span>
+                      </div>
+                      <UserIcon className="w-4 h-4 text-pink-300 shrink-0" />
                     </div>
 
                     {/* Mileage Remarks */}
@@ -1561,6 +1546,51 @@ export default function FuelManagement({
                           </select>
                         </div>
                       )}
+                    </div>
+                  </div>
+
+                  {/* Authorized Driver / Driver ID - captured here (Fuel
+                      Entry Details) since that's the moment the vehicle is
+                      actually at the pump and the driver is physically
+                      there, rather than buried in the optional Mileage tab.
+                      Still auto-fetches Driver ID the same way, and still
+                      reflected (read-only) on the Mileage tab so it stays
+                      visible while filling in mileage figures. */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1 flex items-center gap-1">
+                        <UserIcon className="w-3.5 h-3.5 text-emerald-600" />
+                        Authorized Driver
+                      </label>
+                      <input
+                        type="text"
+                        list="fuel-driver-names-datalist"
+                        placeholder="e.g. Suresh / Adhithya"
+                        value={mDriverName}
+                        onChange={(e) => setMDriverName(e.target.value)}
+                        autoComplete="off"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-semibold"
+                      />
+                      <datalist id="fuel-driver-names-datalist">
+                        {driverNameList.map((n, i) => <option key={i} value={n} />)}
+                      </datalist>
+                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                        Multiple drivers can be entered in one field, separated by "/".
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1">Driver ID</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. KCMDRV19102"
+                        value={mDriverId}
+                        onChange={(e) => setMDriverId(e.target.value)}
+                        autoComplete="off"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
+                      />
+                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                        {matchedMileageDriver ? `✓ Auto-fetched from Driver Details (${matchedMileageDriver.name})` : 'Not found in Driver Details - enter manually for a new driver'}
+                      </p>
                     </div>
                   </div>
 

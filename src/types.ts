@@ -882,34 +882,40 @@ export interface DriverAttendance {
 // month) x days actually Present/Paid-Leave within the range - LOP days
 // within the range are simply excluded from that count (0 pay), not
 // subtracted a second time, so lopAmount below is informational only.
+// Month-based, same spirit as HR & Payroll's SalarySlipRecord - a frozen
+// snapshot of whatever's already been entered in Salary Breakup (Driver
+// Salary's own "Salary" tab: Gross Salary, Other Additions, deductions) for
+// this driver/month, combined with that month's live attendance summary
+// (Present + Paid Leave, LOP days) the exact same way Salary Breakup's own
+// Wages Per Day / LOP Amount / Payable Amount are computed - so the slip and
+// the Salary Breakup tab can never disagree. Nothing is entered manually
+// inside the slip itself; it only ever reflects what's already saved.
 export interface DriverSalarySlipRecord {
   id: string; // = slipNumber
-  slipNumber: string; // DRVSLIP-YYYYMM-NNN (month = dateTo's month), auto-generated, sequential within that month
+  slipNumber: string; // DRVSLIP-YYYYMM-NNN, auto-generated, sequential within that month
   driverId: string;
   driverName: string;
   vehicleNo?: string;
   location: DriverLocationCategory;
-  dateFrom: string; // YYYY-MM-DD
-  dateTo: string; // YYYY-MM-DD
+  month: string; // YYYY-MM
   bankAccountNumberMasked?: string; // last 4 digits only, same masking convention as HR's Salary Slip
   ifscCode?: string;
-  totalDaysInRange: number; // calendar days from dateFrom to dateTo, inclusive
-  presentDays: number; // Present + Paid Leave within the range - what earnedAmount is paid for
-  lopDays: number; // AbsentLOP within the range - informational, already excluded from presentDays
+  totalDays: number; // days in this calendar month
+  presentDays: number; // Present + Paid Leave (salaryWorkingDays) for the month
+  lopDays: number;
   exemptionLeaveDays: number;
-  grossSalaryMonthly?: number; // snapshot of the driver's monthly Gross Salary used to derive wagesPerDay
-  wagesPerDay: number; // grossSalaryMonthly / days in dateFrom's calendar month
-  earnedAmount: number; // wagesPerDay x presentDays - the pro-rated pay for this period
-  lopAmount: number; // wagesPerDay x lopDays - shown on the slip as unpaid, not subtracted again from netSalary
+  grossSalary?: number; // snapshot from Salary Breakup
+  wagesPerDay: number; // grossSalary / totalDays
+  lopAmount: number; // lopDays x wagesPerDay
   otherAdditions?: number;
   pettyCashAdvance?: number;
   loanDeduction?: number;
   recoveryAmount?: number;
   driverWelfare?: number;
   bata?: number;
-  totalEarnings: number; // earnedAmount + otherAdditions
+  totalEarnings: number; // grossSalary + otherAdditions
   totalDeductions: number; // pettyCashAdvance + loanDeduction + recoveryAmount + driverWelfare + bata
-  netSalary: number; // totalEarnings - totalDeductions
+  netSalary: number; // totalEarnings - totalDeductions - lopAmount, matching Salary Breakup's Payable Amount formula exactly
   generatedDate: string; // YYYY-MM-DD
   pdfUrl?: string; // /uploads/driver-salary-slips/... - same generic upload endpoint every other module's documents already use
   isDownloaded?: boolean;
@@ -920,8 +926,7 @@ export interface DriverSalarySlipAuditRecord {
   id: string;
   slipNumber: string;
   driverId: string;
-  dateFrom: string;
-  dateTo: string;
+  month: string;
   action: 'Generated' | 'Regenerated' | 'Downloaded';
   timestamp: string;
   performedBy?: string; // username

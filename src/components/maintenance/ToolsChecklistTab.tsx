@@ -179,7 +179,7 @@ export default function ToolsChecklistTab({ vehicles, toolsChecklistRecords, onS
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-600 mb-1">Check Date *</label>
-                  <DateInput required value={form.checkDate} onChange={(e) => setForm(f => ({ ...f, checkDate: e.target.value }))} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
+                  <DateInput required value={form.checkDate} onChange={(e) => setForm(f => ({ ...f, checkDate: e.target.value }))} max={new Date().toISOString().slice(0, 10)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
                 </div>
               </div>
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-2 gap-1.5">

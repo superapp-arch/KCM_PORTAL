@@ -1,11 +1,18 @@
 // Renders a DriverSalarySlipRecord (an already-frozen snapshot - see
 // types.ts) into a PDF, using the same jsPDF + jspdf-autotable toolchain as
-// HR & Payroll's Salary Slip (src/utils/salarySlipPdf.ts) - same look, just
-// for a Date From/To period instead of a fixed month.
+// HR & Payroll's Salary Slip (src/utils/salarySlipPdf.ts) - same look, same
+// month-based layout, just for a driver's Salary Breakup instead of a
+// StaffProvidentFund record.
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { DriverSalarySlipRecord } from '../types';
 import { numberToIndianWords } from './numberToWords';
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+function monthLabel(month: string): string {
+  const [y, m] = month.split('-').map(Number);
+  return m >= 1 && m <= 12 ? `${MONTH_NAMES[m - 1]} ${y}` : month;
+}
 
 const rupee = (n: number | undefined) => `Rs. ${Math.round(n || 0).toLocaleString('en-IN')}`;
 
@@ -18,7 +25,7 @@ export function buildDriverSalarySlipDoc(slip: DriverSalarySlipRecord): jsPDF {
   doc.text('KCM LOGISTICS', 105, 16, { align: 'center' });
   doc.setFontSize(11);
   doc.setTextColor(100, 116, 139);
-  doc.text('Driver Salary Slip', 105, 23, { align: 'center' });
+  doc.text(`Driver Salary Slip - ${monthLabel(slip.month)}`, 105, 23, { align: 'center' });
   doc.setDrawColor(203, 213, 225);
   doc.line(14, 28, 196, 28);
 
@@ -28,7 +35,6 @@ export function buildDriverSalarySlipDoc(slip: DriverSalarySlipRecord): jsPDF {
     body: [
       ['Driver Name', slip.driverName, 'Driver ID', slip.driverId],
       ['Vehicle No', slip.vehicleNo || '-', 'Location', slip.location],
-      ['Period From', slip.dateFrom, 'Period To', slip.dateTo],
       ['Bank Account', slip.bankAccountNumberMasked || '-', 'IFSC Code', slip.ifscCode || '-']
     ],
     theme: 'plain',
@@ -41,22 +47,20 @@ export function buildDriverSalarySlipDoc(slip: DriverSalarySlipRecord): jsPDF {
 
   let cursorY = (doc as any).lastAutoTable.finalY + 6;
 
-  // Attendance summary for the period
+  // Attendance summary for the month
   autoTable(doc, {
     startY: cursorY,
-    head: [['Days in Period', 'Present/Paid Leave', 'LOP Days', 'Exemption Leave']],
-    body: [[String(slip.totalDaysInRange), String(slip.presentDays), String(slip.lopDays), String(slip.exemptionLeaveDays)]],
+    head: [['No. of Days', 'Working Days', 'LOP Days', 'Exemption Leave']],
+    body: [[String(slip.totalDays), String(slip.presentDays), String(slip.lopDays), String(slip.exemptionLeaveDays)]],
     theme: 'grid',
     styles: { fontSize: 9, cellPadding: 2, halign: 'center' },
     headStyles: { fillColor: [30, 64, 175] }
   });
   cursorY = (doc as any).lastAutoTable.finalY + 6;
 
-  // Earnings table - earned pay is already pro-rated (Wages Per Day x
-  // Present/Paid Leave days in the period), so LOP is shown informationally
-  // only, not subtracted a second time.
+  // Gross Salary / Earnings
   const earningsRows: [string, string][] = [
-    [`Earned Pay (${rupee(slip.wagesPerDay)}/day x ${slip.presentDays} days)`, rupee(slip.earnedAmount)],
+    ['Gross Salary', rupee(slip.grossSalary)],
     ['Other Additions', rupee(slip.otherAdditions)]
   ];
   autoTable(doc, {
@@ -80,11 +84,13 @@ export function buildDriverSalarySlipDoc(slip: DriverSalarySlipRecord): jsPDF {
     ['Driver Welfare', rupee(slip.driverWelfare)],
     ['BATA', rupee(slip.bata)]
   ];
+  if (slip.lopDays > 0) deductionsRows.push([`LOP (${slip.lopDays} day${slip.lopDays === 1 ? '' : 's'})`, rupee(slip.lopAmount)]);
+  const totalDeductionsWithLop = slip.totalDeductions + slip.lopAmount;
   autoTable(doc, {
     startY: cursorY,
     head: [['Deductions', 'Amount']],
     body: deductionsRows,
-    foot: [['Total Deductions', rupee(slip.totalDeductions)]],
+    foot: [['Total Deductions', rupee(totalDeductionsWithLop)]],
     theme: 'grid',
     styles: { fontSize: 9, cellPadding: 2 },
     headStyles: { fillColor: [225, 29, 72] },
@@ -93,19 +99,12 @@ export function buildDriverSalarySlipDoc(slip: DriverSalarySlipRecord): jsPDF {
   });
   cursorY = (doc as any).lastAutoTable.finalY + 8;
 
-  if (slip.lopDays > 0) {
-    doc.setFontSize(8);
-    doc.setTextColor(180, 83, 9);
-    doc.text(`${slip.lopDays} LOP day(s) in this period (${rupee(slip.lopAmount)} unpaid) - already excluded from Earned Pay above.`, 14, cursorY);
-    cursorY += 8;
-  }
-
   // Net Salary - highlighted
   doc.setFillColor(88, 28, 135);
   doc.roundedRect(14, cursorY, 182, 18, 2, 2, 'F');
   doc.setFontSize(12);
   doc.setTextColor(255, 255, 255);
-  doc.text('NET PAYABLE', 20, cursorY + 11);
+  doc.text('NET SALARY', 20, cursorY + 11);
   doc.setFontSize(14);
   doc.text(rupee(slip.netSalary), 190, cursorY + 11, { align: 'right' });
   cursorY += 24;

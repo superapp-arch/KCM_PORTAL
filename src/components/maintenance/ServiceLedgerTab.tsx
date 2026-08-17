@@ -585,7 +585,7 @@ export default function ServiceLedgerTab({
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block font-semibold text-slate-600 mb-1">Date of Work Order</label>
-                    <DateInput required value={date} onChange={(e) => setDate(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-mono" />
+                    <DateInput required value={date} onChange={(e) => setDate(e.target.value)} max={new Date().toISOString().slice(0, 10)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-mono" />
                   </div>
                   <div>
                     <label className="block font-semibold text-slate-600 mb-1">Time of Work Order</label>

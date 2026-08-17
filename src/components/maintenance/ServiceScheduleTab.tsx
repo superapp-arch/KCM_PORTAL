@@ -292,7 +292,7 @@ export default function ServiceScheduleTab({
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block font-semibold text-slate-600 mb-1">Date</label>
-                    <DateInput value={form.lastServiceDate || ''} onChange={(e) => setForm(f => f && ({ ...f, lastServiceDate: e.target.value }))} className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
+                    <DateInput value={form.lastServiceDate || ''} onChange={(e) => setForm(f => f && ({ ...f, lastServiceDate: e.target.value }))} max={new Date().toISOString().slice(0, 10)} className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
                   </div>
                   <div>
                     <label className="block font-semibold text-slate-600 mb-1">Odometer (km)</label>
@@ -329,7 +329,7 @@ export default function ServiceScheduleTab({
                       <span className="text-[10px] font-bold text-cyan-700 uppercase flex items-center gap-1"><Droplets className="w-3.5 h-3.5" /> Washing Due Reminders</span>
                       <div>
                         <label className="block font-semibold text-slate-600 mb-1">Last Washing Date</label>
-                        <DateInput value={form.lastWashingDate || ''} onChange={(e) => setForm(f => f && ({ ...f, lastWashingDate: e.target.value }))} className="w-full bg-white border border-cyan-200 rounded-lg p-2 font-mono text-slate-800" />
+                        <DateInput value={form.lastWashingDate || ''} onChange={(e) => setForm(f => f && ({ ...f, lastWashingDate: e.target.value }))} max={new Date().toISOString().slice(0, 10)} className="w-full bg-white border border-cyan-200 rounded-lg p-2 font-mono text-slate-800" />
                       </div>
                       <p className="text-[10px] text-cyan-800">Staged reminder emails go out every {alertSettings.walkesWashingCycleDays} days from this date ({alertSettings.walkesReminderDays.join('/')}-day countdown).</p>
                     </div>
