@@ -1049,6 +1049,7 @@ export default function Administration({
               user={user}
               entries={warehouseEntries}
               vehicles={vehicles}
+              vendors={vendors}
               onAddEntry={onAddWarehouseEntry}
               onUpdateEntry={onUpdateWarehouseEntry}
               onDeleteEntry={onDeleteWarehouseEntry}

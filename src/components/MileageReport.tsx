@@ -27,6 +27,17 @@ import DateInput from './DateInput';
 import SortHeader from './SortHeader';
 import { SortState, SortDirection, compareText, compareNumber, extractLeadingNumber } from '../utils/sort';
 
+// Resolves the [start, end] date-string window (inclusive) for a "Day /
+// Monthly Till Date / Year Till Date" period relative to a reference date -
+// drives the ledger's view-scope tabs below. Mirrors FuelManagement.tsx's
+// own getPeriodDateRange (same math, kept local since neither module shares
+// a common home for it).
+const getPeriodDateRange = (period: 'day' | 'month' | 'year', refDate: string): { start: string; end: string } => {
+  if (period === 'day') return { start: refDate, end: refDate };
+  if (period === 'month') return { start: `${refDate.slice(0, 7)}-01`, end: refDate };
+  return { start: `${refDate.slice(0, 4)}-01-01`, end: refDate };
+};
+
 interface MileageReportModuleProps {
   user: User;
   reports: MileageReport[];
@@ -66,6 +77,10 @@ export default function MileageReportModule({
 
   // Filter conditions
   const [selectedLocationFilter, setSelectedLocationFilter] = useState('All');
+  // Ledger view scope - All (default, today's existing behavior) / Day /
+  // Month Till Date / Year Till Date. See getPeriodDateRange above.
+  const [viewPeriod, setViewPeriod] = useState<'all' | 'day' | 'month' | 'year'>('all');
+  const [viewDate, setViewDate] = useState(new Date().toISOString().slice(0, 10));
   // Searchable Vehicle Number filter for Export Excel (and the on-screen
   // ledger, since both read from the same filteredReports) - '' = All
   // Vehicles. Sourced from vehicleList below, which is itself built off the
@@ -431,8 +446,13 @@ export default function MileageReportModule({
     triggerNotif('Mileage reports Excel exported and downloaded!', 'success');
   };
 
-  // Filtering: by location, vehicle number, and keyword search.
+  // View-scope range for the ledger below (Day / Month Till Date / Year
+  // Till Date tabs) - 'all' skips the date check entirely.
+  const { start: viewStart, end: viewEnd } = viewPeriod === 'all' ? { start: '', end: '' } : getPeriodDateRange(viewPeriod, viewDate);
+
+  // Filtering: by view scope, location, vehicle number, and keyword search.
   const filteredReports = reports.filter(r => {
+    const matchesView = viewPeriod === 'all' || (r.date >= viewStart && r.date <= viewEnd);
     const matchesLocation = selectedLocationFilter === 'All' || (r.location || '').toUpperCase() === selectedLocationFilter.toUpperCase();
     const matchesVehicle = !selectedVehicleFilter || (r.vehicleNo || '').trim().toUpperCase() === selectedVehicleFilter.trim().toUpperCase();
     const matchesKeyword =
@@ -442,7 +462,7 @@ export default function MileageReportModule({
       (r.vehicleNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (r.location || '').toLowerCase().includes(searchTerm.toLowerCase());
 
-    return matchesLocation && matchesVehicle && matchesKeyword;
+    return matchesView && matchesLocation && matchesVehicle && matchesKeyword;
   });
 
   const sortedReports = sort
@@ -451,6 +471,20 @@ export default function MileageReportModule({
         switch (sort.key) {
           case 'driverName': cmp = compareText(a.driverName, b.driverName); break;
           case 'difference': cmp = compareNumber(a.difference, b.difference); break;
+          case 'openingKm': cmp = compareNumber(a.openingKm, b.openingKm); break;
+          case 'closingKm': cmp = compareNumber(a.closingKm, b.closingKm); break;
+          case 'totalKm': cmp = compareNumber(a.totalKm, b.totalKm); break;
+          case 'ratePerLitre': cmp = compareNumber(a.ratePerLitre, b.ratePerLitre); break;
+          case 'litres': cmp = compareNumber(a.litres, b.litres); break;
+          case 'dieselAmount': cmp = compareNumber(a.dieselAmount, b.dieselAmount); break;
+          case 'mileage': cmp = compareNumber(a.mileage, b.mileage); break;
+          case 'costPerKm': cmp = compareNumber(a.costPerKm, b.costPerKm); break;
+          case 'actualMileage': cmp = compareNumber(a.actualMileage, b.actualMileage); break;
+          case 'extraFuel': cmp = compareNumber(a.extraFuel, b.extraFuel); break;
+          case 'ratePerLitreNew': cmp = compareNumber(a.ratePerLitreNew, b.ratePerLitreNew); break;
+          case 'totalAmount': cmp = compareNumber(a.totalAmount, b.totalAmount); break;
+          case 'location': cmp = compareText(a.location, b.location); break;
+          case 'vehicleNo': cmp = extractLeadingNumber(a.vehicleNo) - extractLeadingNumber(b.vehicleNo); break;
           // Ties (same date) break on Vehicle No so the order stays stable.
           case 'date': cmp = a.date === b.date ? extractLeadingNumber(a.vehicleNo) - extractLeadingNumber(b.vehicleNo) : (a.date < b.date ? -1 : 1); break;
           default: cmp = extractLeadingNumber(a.vehicleNo) - extractLeadingNumber(b.vehicleNo);
@@ -528,6 +562,32 @@ export default function MileageReportModule({
               Export Excel
             </button>
           </div>
+        </div>
+
+        {/* Ledger view scope - All (default) / Day / Month Till Date / Year
+            Till Date. Picking a date only matters for Day/Month/Year. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-[10px] font-bold">
+            {([['all', 'All'], ['day', 'Day'], ['month', 'Month Till Date'], ['year', 'Year Till Date']] as const).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setViewPeriod(key)}
+                className={`px-2.5 py-1 rounded-md cursor-pointer transition-colors ${viewPeriod === key ? 'bg-white shadow-xs text-pink-700' : 'text-slate-500'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {viewPeriod !== 'all' && (
+            <div className="w-40">
+              <DateInput
+                value={viewDate}
+                onChange={(e) => setViewDate(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-mono text-slate-800"
+              />
+            </div>
+          )}
         </div>
 
         {/* Filter Console */}
@@ -613,23 +673,23 @@ export default function MileageReportModule({
             <thead className="bg-slate-900 text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
               <tr>
                 <th className="px-3 py-2.5">Sl. No</th>
-                <th className="px-3 py-2.5">Date</th>
+                <th className="px-3 py-2.5"><SortHeader label="Date" sortKey="date" sort={sort} onSort={handleSort} type="numeric" /></th>
                 <th className="px-3 py-2.5"><SortHeader label="Vehicle No" sortKey="vehicleNo" sort={sort} onSort={handleSort} type="numeric" /></th>
-                <th className="px-3 py-2.5 text-right">Opening KM</th>
-                <th className="px-3 py-2.5 text-right">Closing KM</th>
-                <th className="px-3 py-2.5 text-right bg-slate-800">Total KM</th>
-                <th className="px-3 py-2.5 text-right">Rate / Litre</th>
-                <th className="px-3 py-2.5 text-right">Litres</th>
-                <th className="px-3 py-2.5 text-right text-teal-400">Diesel Amount</th>
-                <th className="px-3 py-2.5 text-right text-pink-400">Mileage</th>
-                <th className="px-3 py-2.5 text-right text-amber-400">Cost/KM</th>
-                <th className="px-3 py-2.5 text-right text-purple-400">Fixed Mileage</th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="Opening KM" sortKey="openingKm" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="Closing KM" sortKey="closingKm" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right bg-slate-800"><SortHeader label="Total KM" sortKey="totalKm" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="Rate / Litre" sortKey="ratePerLitre" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="Litres" sortKey="litres" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right text-teal-400"><SortHeader label="Diesel Amount" sortKey="dieselAmount" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right text-pink-400"><SortHeader label="Mileage" sortKey="mileage" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right text-amber-400"><SortHeader label="Cost/KM" sortKey="costPerKm" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right text-purple-400"><SortHeader label="Fixed Mileage" sortKey="actualMileage" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right"><SortHeader label="Difference (L)" sortKey="difference" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right">Extra Fuel</th>
-                <th className="px-3 py-2.5 text-right">Rate/Ltr (new)</th>
-                <th className="px-3 py-2.5 text-right text-teal-400">Total Amount</th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="Extra Fuel" sortKey="extraFuel" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="Rate/Ltr (new)" sortKey="ratePerLitreNew" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right text-teal-400"><SortHeader label="Total Amount" sortKey="totalAmount" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5"><SortHeader label="Authorized Driver" sortKey="driverName" sort={sort} onSort={handleSort} /></th>
-                <th className="px-3 py-2.5">Location</th>
+                <th className="px-3 py-2.5"><SortHeader label="Location" sortKey="location" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5 max-w-xs">Remarks</th>
                 {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
                 {!readOnly && <th className="px-3 py-2.5 text-center">Actions</th>}

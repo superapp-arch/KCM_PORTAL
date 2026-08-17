@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { FuelLog, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage, Vendor, StaffEmployee, DriverEmployee } from '../types';
 import SortHeader from './SortHeader';
-import { SortState, SortDirection, extractLeadingNumber } from '../utils/sort';
+import { SortState, SortDirection, extractLeadingNumber, compareText, compareNumber } from '../utils/sort';
 import {
   Fuel,
   Plus,
@@ -40,6 +40,16 @@ const BUNK_NAMES = [
 ];
 
 const CLIENTS = ['KCM', 'Swiggy', 'Reliance', 'Market Vehicle', 'Shadowfax'];
+
+// Resolves the [start, end] date-string window (inclusive) for a "Day /
+// Monthly Till Date / Year Till Date" period relative to a reference date -
+// shared by the on-screen ledger's view-scope tabs and the "Download Fuel
+// Report" panel below (independent controls, same underlying math).
+const getPeriodDateRange = (period: 'day' | 'month' | 'year', refDate: string): { start: string; end: string } => {
+  if (period === 'day') return { start: refDate, end: refDate };
+  if (period === 'month') return { start: `${refDate.slice(0, 7)}-01`, end: refDate };
+  return { start: `${refDate.slice(0, 4)}-01-01`, end: refDate };
+};
 
 // Which bunks are available at each location, so selecting one filters/
 // auto-fills the other. Bunks shared across multiple locations (HPCL) are
@@ -197,6 +207,17 @@ export default function FuelManagement({
   const [downloadDate, setDownloadDate] = useState(new Date().toISOString().slice(0, 10));
   const [downloadPeriod, setDownloadPeriod] = useState<'day' | 'month' | 'year'>('day');
 
+  // On-screen ledger view scope - independent of the download controls above
+  // (viewing a period doesn't require also downloading it, and vice versa).
+  // Defaults to 'all' (every entry, today's existing behavior) so opening
+  // this module never looks like data went missing - Day/Month Till
+  // Date/Year Till Date are an opt-in narrower view. 'day' = just viewDate;
+  // 'month' = the 1st of viewDate's month through viewDate itself ("Monthly
+  // Till Date" - pick any date inside the target month); 'year' likewise
+  // from Jan 1 of viewDate's year.
+  const [viewPeriod, setViewPeriod] = useState<'all' | 'day' | 'month' | 'year'>('all');
+  const [viewDate, setViewDate] = useState(new Date().toISOString().slice(0, 10));
+
   // Sidebar / editing state
   const [showSidebar, setShowSidebar] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -210,6 +231,13 @@ export default function FuelManagement({
   const [period, setPeriod] = useState(new Date().toISOString().slice(0, 7));
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [location, setLocation] = useState('');
+  // Whether the Location dropdown is in "Other (New Location)" mode - shows
+  // a separate manual-entry field instead of the fixed LOCATIONS list, for a
+  // location that hasn't been used before. Derived fresh whenever the form
+  // opens/resets (see resetForm/startEdit) rather than solely from whether
+  // `location` matches LOCATIONS, so picking "Other" and clearing the field
+  // to start typing doesn't immediately snap back to the dropdown view.
+  const [locationIsOther, setLocationIsOther] = useState(false);
   const [bunkName, setBunkName] = useState('');
   const [bunkOrCard, setBunkOrCard] = useState<'Bunk' | 'Card'>('Bunk');
   const [vehicleNumber, setVehicleNumber] = useState('');
@@ -261,6 +289,24 @@ export default function FuelManagement({
       ...logs.map(l => l.vehicleNumber).filter(Boolean)
     ])
   ).sort();
+
+  // Vehicle Number Enter-to-complete: typing just the last few digits (e.g.
+  // "9514") and pressing Enter resolves and fills in the full registration
+  // number instead of leaving the partial digits sitting in the field - also
+  // prevents that Enter from prematurely submitting the whole form. Prefers
+  // a number ending in what was typed (the common "last 4 digits" case),
+  // falling back to any number containing it; only resolves when that's
+  // unambiguous (exactly one match) - otherwise the field is left as typed
+  // so the user can keep narrowing it down.
+  const handleVehicleNumberKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const typed = vehicleNumber.trim().toUpperCase();
+    if (!typed || vehicleList.some(v => v.toUpperCase() === typed)) return;
+    const endsMatch = vehicleList.filter(v => v.toUpperCase().endsWith(typed));
+    const candidates = endsMatch.length > 0 ? endsMatch : vehicleList.filter(v => v.toUpperCase().includes(typed));
+    if (candidates.length === 1) setVehicleNumber(candidates[0]);
+  };
 
   // Authorized Driver autofetch list, from Driver Details
   const driverNameList = Array.from(new Set(drivers.map(d => d.name).filter(Boolean))).sort();
@@ -355,6 +401,26 @@ export default function FuelManagement({
     }
   }, [bunkName, date, logs, editingId]);
 
+  // Indent No auto-continue: a new entry auto-fills the next sequential
+  // number after the highest Indent No already logged in the selected
+  // Date's calendar month (across every bunk/location - one shared running
+  // sequence) - which also rules out duplicates by construction, since it's
+  // always strictly higher than everything already logged that month. The
+  // first entry of a new month (nothing logged yet) is left blank for
+  // manual entry; every entry after that auto-continues for the rest of the
+  // month.
+  useEffect(() => {
+    if (editingId || !date) return;
+    const monthKey = date.slice(0, 7);
+    const monthNumbers = logs
+      .filter(l => (l.date || '').slice(0, 7) === monthKey)
+      .map(l => extractLeadingNumber(l.indentNumber))
+      .filter(n => n > 0);
+    if (monthNumbers.length > 0) {
+      setIndentNumber(String(Math.max(...monthNumbers) + 1));
+    }
+  }, [date, logs, editingId]);
+
   // --- Mileage section calculations - identical rules to the old standalone
   // Trip Details form (see MileageReport.tsx), just keyed off this form's own
   // Vehicle Number/Date/Rate/Ltrs/Amount instead of re-entering them. ---
@@ -392,6 +458,34 @@ export default function FuelManagement({
     }
     // mOpeningKm deliberately excluded - it's only read here to decide
     // whether to skip, not something this effect should re-run for.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vehicleNumber, mileageReports, editingId, logs]);
+
+  // Authorized Driver: auto-fills from this vehicle's most recent prior
+  // entry (its latest saved mileage report) - same "last entry wins"
+  // pattern as Opening KM above. A brand-new vehicle number is left blank
+  // for manual (first-time) entry. The driver can still be changed by hand
+  // for any one entry (a substitute driver that day, say) - that becomes the
+  // new "latest", so the vehicle's very next entry then picks up from it.
+  // Driver ID keeps auto-fetching off whatever driver name ends up here via
+  // the separate matchedMileageDriver effect further below.
+  useEffect(() => {
+    if (!vehicleNumber) return;
+    const editingSameVehicleWithDriver =
+      editingId && logs.find(l => l.id === editingId)?.vehicleNumber === vehicleNumber && mDriverName;
+    if (editingSameVehicleWithDriver) return;
+    const vehicleReports = mileageReports
+      .filter(r => (r.vehicleNo || '').trim().toUpperCase() === vehicleNumber.trim().toUpperCase() && r.driverName)
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    if (vehicleReports.length > 0) {
+      const lastReport = vehicleReports[vehicleReports.length - 1];
+      setMDriverName(lastReport.driverName || '');
+      setMDriverId(lastReport.driverId || '');
+    } else if (!editingId) {
+      setMDriverName('');
+      setMDriverId('');
+    }
+    // mDriverName deliberately excluded - same reasoning as mOpeningKm above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vehicleNumber, mileageReports, editingId, logs]);
 
@@ -485,6 +579,7 @@ export default function FuelManagement({
     setPeriod(new Date().toISOString().slice(0, 7));
     setDate(new Date().toISOString().slice(0, 10));
     setLocation('');
+    setLocationIsOther(false);
     setBunkName('');
     setBunkOrCard('Bunk');
     setVehicleNumber('');
@@ -520,6 +615,7 @@ export default function FuelManagement({
     setPeriod(log.period);
     setDate(log.date);
     setLocation(log.location);
+    setLocationIsOther(!!log.location && !LOCATIONS.includes(log.location));
     setBunkName(log.bunkName);
     setBunkOrCard(log.bunkOrCard);
     setVehicleNumber(log.vehicleNumber);
@@ -698,7 +794,13 @@ export default function FuelManagement({
   };
 
 
+  // View-scope range for the ledger below (Day / Month Till Date / Year
+  // Till Date tabs) - independent of the Download panel's own date/period.
+  // 'all' skips the date check entirely (start/end unused in that case).
+  const { start: viewStart, end: viewEnd } = viewPeriod === 'all' ? { start: '', end: '' } : getPeriodDateRange(viewPeriod, viewDate);
+
   const filteredLogsUnsorted = logs.filter(log =>
+    (viewPeriod === 'all' || (log.date >= viewStart && log.date <= viewEnd)) &&
     (
       (log?.vehicleNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (log?.vendorName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -710,10 +812,26 @@ export default function FuelManagement({
   const filteredLogs = sort
     ? [...filteredLogsUnsorted].sort((a, b) => {
         let cmp: number;
-        if (sort.key === 'indentNumber') cmp = extractLeadingNumber(a.indentNumber) - extractLeadingNumber(b.indentNumber);
-        else if (sort.key === 'vehicleNumber') cmp = extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber);
-        // Ties (same date) break on Vehicle No so the order stays stable.
-        else cmp = a.date === b.date ? extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber) : (a.date < b.date ? -1 : 1);
+        switch (sort.key) {
+          case 'indentNumber': cmp = extractLeadingNumber(a.indentNumber) - extractLeadingNumber(b.indentNumber); break;
+          case 'vehicleNumber': cmp = extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber); break;
+          case 'period': cmp = compareText(a.period, b.period); break;
+          case 'location': cmp = compareText(a.location, b.location); break;
+          case 'bunkName': cmp = compareText(a.bunkName, b.bunkName); break;
+          case 'bunkOrCard': cmp = compareText(a.bunkOrCard, b.bunkOrCard); break;
+          case 'ltrs': cmp = compareNumber(a.ltrs, b.ltrs); break;
+          case 'rate': cmp = compareNumber(a.rate, b.rate); break;
+          case 'amount': cmp = compareNumber(a.amount, b.amount); break;
+          case 'client': cmp = compareText(a.client, b.client); break;
+          case 'type': cmp = compareText(a.type, b.type); break;
+          case 'vendorName': cmp = compareText(a.vendorName, b.vendorName); break;
+          case 'vendorCode': cmp = compareText(a.vendorCode, b.vendorCode); break;
+          case 'requestedBy': cmp = compareText(a.requestedBy, b.requestedBy); break;
+          case 'rqId': cmp = compareText(a.rqId, b.rqId); break;
+          default:
+            // Ties (same date) break on Vehicle No so the order stays stable.
+            cmp = a.date === b.date ? extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber) : (a.date < b.date ? -1 : 1);
+        }
         return sort.direction === 'asc' ? cmp : -cmp;
       })
     : filteredLogsUnsorted;
@@ -762,13 +880,6 @@ export default function FuelManagement({
     return name;
   };
 
-  // Resolves the [start, end] date-string window (inclusive) for the
-  // dashboard's "For the Day / Monthly Till Date / Year Till Date" download.
-  const getDownloadDateRange = (period: 'day' | 'month' | 'year', refDate: string): { start: string; end: string } => {
-    if (period === 'day') return { start: refDate, end: refDate };
-    if (period === 'month') return { start: `${refDate.slice(0, 7)}-01`, end: refDate };
-    return { start: `${refDate.slice(0, 4)}-01-01`, end: refDate };
-  };
 
   // Fuel Entry download: Date, Period (Day/MTD/YTD), and Bunk all connect
   // together. When "All Bunks" is selected (or the selected bunk spans
@@ -781,7 +892,7 @@ export default function FuelManagement({
       triggerNotif('Please pick a reference date first.');
       return;
     }
-    const { start, end } = getDownloadDateRange(downloadPeriod, downloadDate);
+    const { start, end } = getPeriodDateRange(downloadPeriod, downloadDate);
     const periodLogs = logs.filter(l => l.date >= start && l.date <= end && (bunkFilter === 'All' || l.bunkName === bunkFilter));
 
     if (periodLogs.length === 0) {
@@ -1003,27 +1114,56 @@ export default function FuelManagement({
             </div>
           </div>
 
+          {/* Ledger view scope - All (default) / Day / Month Till Date /
+              Year Till Date, independent of the Download Fuel Report panel
+              above. Picking a date only matters for Day/Month/Year - it's
+              hidden in All. */}
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-[10px] font-bold">
+              {([['all', 'All'], ['day', 'Day'], ['month', 'Month Till Date'], ['year', 'Year Till Date']] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setViewPeriod(key)}
+                  className={`px-2.5 py-1 rounded-md cursor-pointer transition-colors ${viewPeriod === key ? 'bg-white shadow-xs text-emerald-700' : 'text-slate-500'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {viewPeriod !== 'all' && (
+              <div className="w-40">
+                <DateInput
+                  value={viewDate}
+                  onChange={(e) => setViewDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-mono text-slate-800"
+                />
+              </div>
+            )}
+            <span className="text-[10px] text-slate-400 font-mono">{filteredLogsUnsorted.length} of {logs.length} entries</span>
+          </div>
+
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
                 <tr>
                   <th className="px-3 py-2.5">Entry #</th>
-                  <th className="px-3 py-2.5">Period</th>
+                  <th className="px-3 py-2.5"><SortHeader label="Period" sortKey="period" sort={sort} onSort={handleSort} /></th>
                   <th className="px-3 py-2.5"><SortHeader label="Date" sortKey="date" sort={sort} onSort={handleSort} type="numeric" /></th>
-                  <th className="px-3 py-2.5">Location</th>
-                  <th className="px-3 py-2.5">Bunk Name</th>
-                  <th className="px-3 py-2.5">Bunk/Card</th>
+                  <th className="px-3 py-2.5"><SortHeader label="Location" sortKey="location" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><SortHeader label="Bunk Name" sortKey="bunkName" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><SortHeader label="Bunk/Card" sortKey="bunkOrCard" sort={sort} onSort={handleSort} /></th>
                   <th className="px-3 py-2.5"><SortHeader label="Vehicle No" sortKey="vehicleNumber" sort={sort} onSort={handleSort} type="numeric" /></th>
                   <th className="px-3 py-2.5"><SortHeader label="Indent No" sortKey="indentNumber" sort={sort} onSort={handleSort} type="numeric" /></th>
-                  <th className="px-3 py-2.5 text-right">Ltrs</th>
-                  <th className="px-3 py-2.5 text-right">Rate</th>
-                  <th className="px-3 py-2.5 text-right">Amount</th>
-                  <th className="px-3 py-2.5">Client</th>
-                  <th className="px-3 py-2.5">Type</th>
-                  <th className="px-3 py-2.5">Vendor Name</th>
-                  <th className="px-3 py-2.5">Vendor Code</th>
-                  <th className="px-3 py-2.5">Requested By</th>
-                  <th className="px-3 py-2.5">RQ ID</th>
+                  <th className="px-3 py-2.5 text-right"><SortHeader label="Ltrs" sortKey="ltrs" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                  <th className="px-3 py-2.5 text-right"><SortHeader label="Rate" sortKey="rate" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                  <th className="px-3 py-2.5 text-right"><SortHeader label="Amount" sortKey="amount" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                  <th className="px-3 py-2.5"><SortHeader label="Client" sortKey="client" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><SortHeader label="Type" sortKey="type" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><SortHeader label="Vendor Name" sortKey="vendorName" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><SortHeader label="Vendor Code" sortKey="vendorCode" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><SortHeader label="Requested By" sortKey="requestedBy" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><SortHeader label="RQ ID" sortKey="rqId" sort={sort} onSort={handleSort} /></th>
                   <th className="px-3 py-2.5 max-w-xs">Remarks</th>
                   <th className="px-3 py-2.5 text-center">Docs</th>
                   {(isSuperAdmin || isRqIdOnlyUser) && <th className="px-3 py-2.5">Entered By</th>}
@@ -1471,19 +1611,34 @@ export default function FuelManagement({
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1">Location *</label>
-                      <input
-                        type="text"
-                        required
-                        list="fuel-locations-datalist"
-                        value={location}
-                        onChange={(e) => setLocation(e.target.value)}
-                        placeholder="Search location"
-                        autoComplete="off"
+                      <select
+                        required={!locationIsOther}
+                        value={locationIsOther ? 'Other' : location}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === 'Other') { setLocationIsOther(true); setLocation(''); }
+                          else { setLocationIsOther(false); setLocation(val); }
+                        }}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
-                      />
-                      <datalist id="fuel-locations-datalist">
-                        {LOCATIONS.map((l, i) => <option key={i} value={l} />)}
-                      </datalist>
+                      >
+                        <option value="">Select location</option>
+                        {LOCATIONS.map((l, i) => <option key={i} value={l}>{l}</option>)}
+                        <option value="Other">Other (New Location)</option>
+                      </select>
+                      {locationIsOther && (
+                        <div className="mt-1.5">
+                          <label className="block text-[9.5px] font-bold text-slate-500 uppercase mb-0.5">Other - Specify Location</label>
+                          <input
+                            type="text"
+                            required
+                            value={location}
+                            onChange={(e) => setLocation(e.target.value)}
+                            placeholder="Type the new location"
+                            autoComplete="off"
+                            className="w-full bg-indigo-50 border border-indigo-200 rounded-lg p-2 text-slate-800"
+                          />
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1">Bunk Name *</label>
@@ -1493,7 +1648,7 @@ export default function FuelManagement({
                         list="fuel-bunks-datalist"
                         value={bunkName}
                         onChange={(e) => setBunkName(e.target.value)}
-                        placeholder="Search bunk"
+                        placeholder={locationIsOther ? 'New bunk - enter manually' : 'Search bunk'}
                         autoComplete="off"
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
                       />
@@ -1503,6 +1658,11 @@ export default function FuelManagement({
                       {location && LOCATION_BUNK_MAP[location] && (
                         <p className="text-[9px] text-slate-400 font-mono mt-0.5">
                           Suggested for {location}: {LOCATION_BUNK_MAP[location].join(', ')}
+                        </p>
+                      )}
+                      {locationIsOther && (
+                        <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                          New location - type the bunk name for it manually.
                         </p>
                       )}
                     </div>
@@ -1529,7 +1689,8 @@ export default function FuelManagement({
                         list="fuel-vehicles-datalist"
                         value={vehicleNumber}
                         onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
-                        placeholder="e.g. KA53AA0069"
+                        onKeyDown={handleVehicleNumberKeyDown}
+                        placeholder="e.g. KA53AA0069 or just the last 4 digits"
                         autoComplete="off"
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold uppercase text-slate-800"
                       />

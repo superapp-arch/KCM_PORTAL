@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
-import { WarehouseEntry, VehicleDocument, Vehicle, User } from '../types';
+import { WarehouseEntry, VehicleDocument, Vehicle, User, Vendor } from '../types';
+import { VEHICLE_CATEGORIES } from '../utils/vehicleCycleDefaults';
 import { 
   Warehouse, 
   Plus, 
@@ -47,22 +48,32 @@ const WAREHOUSE_CITIES = Array.from(new Set(WAREHOUSE_LOCATIONS.map(w => w.city)
 const cityForWarehouseName = (name: string): string | undefined =>
   WAREHOUSE_LOCATIONS.find(w => w.name.trim().toLowerCase() === name.trim().toLowerCase())?.city;
 
+// Suggestions only (not a locked list) for a vendor vehicle's Type field,
+// mirroring FleetSheet.tsx's own VEHICLE_TYPES - Vehicle Category instead
+// reuses the real shared VEHICLE_CATEGORIES (Dry/Hybrid/Walkes/Reefer) above.
+const VEHICLE_TYPE_SUGGESTIONS = ['Tata Ace', '207', '407', '14 FT', '17 FT', '20 FT', '32 FT'];
+
 interface WarehouseDetailsProps {
   user: User;
   entries: WarehouseEntry[];
   vehicles: Vehicle[];
+  // Vendor Management registry - Vehicle Number below also offers vendor
+  // (non-Fleet) vehicles, since plenty of warehouse deployments run on
+  // vendor-owned trucks that never get a Fleet & Vehicles record.
+  vendors: Vendor[];
   onAddEntry: (entry: Omit<WarehouseEntry, 'id'>) => Promise<void>;
   onUpdateEntry: (id: string, entry: Partial<WarehouseEntry>) => Promise<void>;
   onDeleteEntry: (id: string) => Promise<void>;
 }
 
-export default function WarehouseDetails({ 
+export default function WarehouseDetails({
   user,
-  entries, 
-  vehicles, 
-  onAddEntry, 
-  onUpdateEntry, 
-  onDeleteEntry 
+  entries,
+  vehicles,
+  vendors,
+  onAddEntry,
+  onUpdateEntry,
+  onDeleteEntry
 }: WarehouseDetailsProps) {
   
   // Search & Filters State
@@ -82,8 +93,11 @@ export default function WarehouseDetails({
   const [warehouseName, setWarehouseName] = useState('');
   const [warehouseCity, setWarehouseCity] = useState('');
   const [vehicleNumber, setVehicleNumber] = useState('');
-  const [vehicleType, setVehicleType] = useState('17ft');
-  const [vehicleCategory, setVehicleCategory] = useState('dry');
+  // No default value - a Fleet-registered vehicle auto-fills these, a
+  // vendor/ad-hoc one either reuses its last entry's values or starts blank
+  // for manual entry (see handleVehicleChange) - never silently assumed.
+  const [vehicleType, setVehicleType] = useState('');
+  const [vehicleCategory, setVehicleCategory] = useState('');
   const [deploymentType, setDeploymentType] = useState('regular');
   const [pod, setPod] = useState('');
   const [podCity, setPodCity] = useState('');
@@ -185,20 +199,40 @@ export default function WarehouseDetails({
     }
   }, [vehicleNumber, entries, vehicles]);
 
-  // Handle vehicle number selection to also autofill its registered type/category
+  // Vehicle Number datalist: registered Fleet vehicles + every vendor
+  // vehicle from Vendor Management (vendorVehicleNumbers below) - plenty of
+  // warehouse deployments run on vendor-owned trucks that never get a Fleet
+  // & Vehicles record.
+  const vendorVehicleNumbers = Array.from(new Set(vendors.flatMap(v => v.vehicleNumbers || []))).sort();
+  const isFleetVehicleNumber = (num: string) =>
+    vehicles.some(v => (v['Reg. No.'] || v.regNo || '').trim().toLowerCase() === num.trim().toLowerCase());
+
+  // Handle vehicle number selection to also autofill Type/Category:
+  // - Registered in Fleet & Vehicles -> that record is authoritative, always
+  //   wins (existing behavior).
+  // - Not in Fleet (a vendor-only or ad-hoc vehicle) -> reuse whatever
+  //   Type/Category was saved on this vehicle's most recent Warehouse entry,
+  //   so it only ever needs to be typed in once; a genuinely first-time
+  //   vehicle number is left blank for manual entry instead.
   const handleVehicleChange = (num: string) => {
     setVehicleNumber(num);
-    const matchedVehicle = vehicles.find(v => (v['Reg. No.'] || v.regNo || '').trim().toLowerCase() === num.trim().toLowerCase());
+    const trimmed = num.trim();
+    if (!trimmed) { setVehicleType(''); setVehicleCategory(''); return; }
+
+    const matchedVehicle = vehicles.find(v => (v['Reg. No.'] || v.regNo || '').trim().toLowerCase() === trimmed.toLowerCase());
     if (matchedVehicle) {
       const vType = matchedVehicle.Type || matchedVehicle.type || '';
       const vCategory = matchedVehicle.Category || matchedVehicle.category || '';
-      if (vType) {
-        setVehicleType(vType);
-      }
-      if (vCategory) {
-        setVehicleCategory(vCategory);
-      }
+      if (vType) setVehicleType(vType);
+      if (vCategory) setVehicleCategory(vCategory);
+      return;
     }
+
+    const priorEntry = [...entries]
+      .filter(e => (e.vehicleNumber || '').trim().toLowerCase() === trimmed.toLowerCase())
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.slNo - a.slNo)[0];
+    setVehicleType(priorEntry?.vehicleType || '');
+    setVehicleCategory(priorEntry?.vehicleCategory || '');
   };
 
   // Form Submit (New Warehouse Entry)
@@ -257,6 +291,8 @@ export default function WarehouseDetails({
       setWarehouseName('');
       setWarehouseCity('');
       setVehicleNumber('');
+      setVehicleType('');
+      setVehicleCategory('');
       setPod('');
       setPodCity('');
       setKmSlab('');
@@ -281,6 +317,31 @@ export default function WarehouseDetails({
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // Vehicle Number changed mid-edit - same Fleet-first, then last-entry,
+  // then blank-for-manual resolution as handleVehicleChange above (the
+  // initial values loaded by handleOpenEdit below are just that entry's own
+  // saved Type/Category, untouched unless the vehicle number itself changes).
+  const handleEditVehicleChange = (num: string) => {
+    setEditVehicleNumber(num);
+    const trimmed = num.trim();
+    if (!trimmed) { setEditVehicleType(''); setEditVehicleCategory(''); return; }
+
+    const matchedVehicle = vehicles.find(v => (v['Reg. No.'] || v.regNo || '').trim().toLowerCase() === trimmed.toLowerCase());
+    if (matchedVehicle) {
+      const vType = matchedVehicle.Type || matchedVehicle.type || '';
+      const vCategory = matchedVehicle.Category || matchedVehicle.category || '';
+      if (vType) setEditVehicleType(vType);
+      if (vCategory) setEditVehicleCategory(vCategory);
+      return;
+    }
+
+    const priorEntry = [...entries]
+      .filter(e => e.id !== selectedEntry?.id && (e.vehicleNumber || '').trim().toLowerCase() === trimmed.toLowerCase())
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.slNo - a.slNo)[0];
+    setEditVehicleType(priorEntry?.vehicleType || '');
+    setEditVehicleCategory(priorEntry?.vehicleCategory || '');
   };
 
   // Open Edit Modal
@@ -600,33 +661,56 @@ export default function WarehouseDetails({
                   {vehicles.map((v, idx) => (
                     <option key={v.id || v.regNo || `veh-${idx}`} value={v['Reg. No.'] || v.regNo || ''} />
                   ))}
+                  {vendorVehicleNumbers.map((v, idx) => <option key={`vendor-${idx}`} value={v} />)}
                 </datalist>
               </div>
             </div>
 
-            {/* 3. Vehicle Type & Vehicle Category */}
+            {/* 3. Vehicle Type & Vehicle Category - auto-filled+locked for a
+                Fleet-registered vehicle; for a vendor/ad-hoc one (see
+                handleVehicleChange) these are freely editable, pre-filled
+                from that vehicle's last Warehouse entry when it has one. */}
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Vehicle Type (Auto)</label>
+                <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">
+                  Vehicle Type {isFleetVehicleNumber(vehicleNumber) ? '(Auto)' : ''}
+                </label>
                 <input
                   type="text"
-                  readOnly
+                  readOnly={isFleetVehicleNumber(vehicleNumber)}
                   value={vehicleType}
-                  placeholder="Linked to Fleet Master"
-                  className="w-full bg-slate-100 border border-purple-100 rounded-lg p-2 text-xs font-bold text-slate-700 focus:outline-none"
+                  onChange={(e) => setVehicleType(e.target.value)}
+                  placeholder={isFleetVehicleNumber(vehicleNumber) ? 'Linked to Fleet Master' : 'e.g. 17 FT'}
+                  list={isFleetVehicleNumber(vehicleNumber) ? undefined : 'warehouse-vehicle-type-suggestions'}
+                  className={`w-full border border-purple-100 rounded-lg p-2 text-xs font-bold focus:outline-none ${isFleetVehicleNumber(vehicleNumber) ? 'bg-slate-100 text-slate-700' : 'bg-slate-50 text-slate-800 focus:ring-2 focus:ring-pink-500'}`}
                 />
+                <datalist id="warehouse-vehicle-type-suggestions">
+                  {VEHICLE_TYPE_SUGGESTIONS.map(t => <option key={t} value={t} />)}
+                </datalist>
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Vehicle Category (Auto)</label>
+                <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">
+                  Vehicle Category {isFleetVehicleNumber(vehicleNumber) ? '(Auto)' : ''}
+                </label>
                 <input
                   type="text"
-                  readOnly
+                  readOnly={isFleetVehicleNumber(vehicleNumber)}
                   value={vehicleCategory}
-                  placeholder="Linked to Fleet Master"
-                  className="w-full bg-slate-100 border border-purple-100 rounded-lg p-2 text-xs font-bold text-slate-700 focus:outline-none"
+                  onChange={(e) => setVehicleCategory(e.target.value)}
+                  placeholder={isFleetVehicleNumber(vehicleNumber) ? 'Linked to Fleet Master' : 'e.g. Dry'}
+                  list={isFleetVehicleNumber(vehicleNumber) ? undefined : 'warehouse-vehicle-category-suggestions'}
+                  className={`w-full border border-purple-100 rounded-lg p-2 text-xs font-bold focus:outline-none ${isFleetVehicleNumber(vehicleNumber) ? 'bg-slate-100 text-slate-700' : 'bg-slate-50 text-slate-800 focus:ring-2 focus:ring-pink-500'}`}
                 />
+                <datalist id="warehouse-vehicle-category-suggestions">
+                  {VEHICLE_CATEGORIES.map(c => <option key={c} value={c} />)}
+                </datalist>
               </div>
             </div>
+            {!isFleetVehicleNumber(vehicleNumber) && vehicleNumber.trim() && (
+              <p className="text-[9px] text-purple-400 -mt-1.5">
+                Not in Fleet &amp; Vehicles - {vehicleType || vehicleCategory ? 'reused from this vehicle\'s last entry, still' : 'this looks like a first-time vendor vehicle,'} editable above.
+              </p>
+            )}
 
             {/* 4. Deployment Type & POD Details */}
             <div className="grid grid-cols-3 gap-1.5">
@@ -1226,44 +1310,51 @@ export default function WarehouseDetails({
                     type="text"
                     required
                     value={editVehicleNumber}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setEditVehicleNumber(val);
-                      const matched = vehicles.find(v => (v['Reg. No.'] || v.regNo || '').trim().toLowerCase() === val.trim().toLowerCase());
-                      if (matched) {
-                        const vType = matched.Type || matched.type || '';
-                        const vCategory = matched.Category || matched.category || '';
-                        if (vType) setEditVehicleType(vType);
-                        if (vCategory) setEditVehicleCategory(vCategory);
-                      }
-                    }}
+                    onChange={(e) => handleEditVehicleChange(e.target.value)}
+                    list="registered-fleet-nums-edit"
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 uppercase focus:ring-1 focus:ring-pink-500 focus:outline-none"
                   />
+                  <datalist id="registered-fleet-nums-edit">
+                    {vehicles.map((v, idx) => (
+                      <option key={v.id || v.regNo || `veh-edit-${idx}`} value={v['Reg. No.'] || v.regNo || ''} />
+                    ))}
+                    {vendorVehicleNumbers.map((v, idx) => <option key={`vendor-edit-${idx}`} value={v} />)}
+                  </datalist>
                 </div>
 
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                
-                {/* Type & Categories */}
+
+                {/* Type & Categories - see handleEditVehicleChange: locked
+                    Auto for a Fleet-registered vehicle, freely editable
+                    (pre-filled from its last entry if any) otherwise. */}
                 <div>
-                  <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Vehicle Type (Auto)</label>
+                  <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">
+                    Vehicle Type {isFleetVehicleNumber(editVehicleNumber) ? '(Auto)' : ''}
+                  </label>
                   <input
                     type="text"
-                    readOnly
+                    readOnly={isFleetVehicleNumber(editVehicleNumber)}
                     value={editVehicleType}
-                    placeholder="Auto-filled from Fleet"
-                    className="w-full bg-slate-100 border border-purple-100 rounded-lg p-2 font-bold text-slate-700 focus:outline-none"
+                    onChange={(e) => setEditVehicleType(e.target.value)}
+                    placeholder={isFleetVehicleNumber(editVehicleNumber) ? 'Auto-filled from Fleet' : 'e.g. 17 FT'}
+                    list={isFleetVehicleNumber(editVehicleNumber) ? undefined : 'warehouse-vehicle-type-suggestions'}
+                    className={`w-full border border-purple-100 rounded-lg p-2 font-bold focus:outline-none ${isFleetVehicleNumber(editVehicleNumber) ? 'bg-slate-100 text-slate-700' : 'bg-slate-50 text-slate-800 focus:ring-1 focus:ring-pink-500'}`}
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Vehicle Category (Auto)</label>
+                  <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">
+                    Vehicle Category {isFleetVehicleNumber(editVehicleNumber) ? '(Auto)' : ''}
+                  </label>
                   <input
                     type="text"
-                    readOnly
+                    readOnly={isFleetVehicleNumber(editVehicleNumber)}
                     value={editVehicleCategory}
-                    placeholder="Auto-filled from Fleet"
-                    className="w-full bg-slate-100 border border-purple-100 rounded-lg p-2 font-bold text-slate-700 focus:outline-none"
+                    onChange={(e) => setEditVehicleCategory(e.target.value)}
+                    placeholder={isFleetVehicleNumber(editVehicleNumber) ? 'Auto-filled from Fleet' : 'e.g. Dry'}
+                    list={isFleetVehicleNumber(editVehicleNumber) ? undefined : 'warehouse-vehicle-category-suggestions'}
+                    className={`w-full border border-purple-100 rounded-lg p-2 font-bold focus:outline-none ${isFleetVehicleNumber(editVehicleNumber) ? 'bg-slate-100 text-slate-700' : 'bg-slate-50 text-slate-800 focus:ring-1 focus:ring-pink-500'}`}
                   />
                 </div>
                 <div>
