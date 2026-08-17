@@ -939,7 +939,6 @@ export default function Administration({
           {activeTab === 'maintenance' && hasAccess('maintenance') && (
             <Maintenance
               performedBy={user.username}
-              isSuperAdmin={user.department === 'super_admin'}
               records={records}
               onAddRecord={onAddMaintenanceRecord}
               onUpdateRecord={onUpdateMaintenanceRecord}

@@ -15,6 +15,7 @@ import { issueOtp, verifyOtp } from './src/auth/otp.ts';
 import { istTimestamp, istDateKey, istHour, istMonthDayKey } from './src/auth/time.ts';
 import { computeDueDateRaw } from './src/utils/loanDates.ts';
 import { extractTrailingNumber } from './src/utils/sort.ts';
+import { cycleDefaultFor } from './src/utils/vehicleCycleDefaults.ts';
 import { latestOdometerFor, computeKmStatus, computeAlignmentStatus, nextAlignmentDueKm, projectDueDate, daysUntil } from './src/utils/maintenanceDates.ts';
 import {
   User,
@@ -1010,8 +1011,10 @@ async function startServer() {
   // emails - fixed calendar-day cycles (unlike calculateMaintenanceMilestoneAlerts
   // above, which is km/projected-date driven), confirmed 40-day service /
   // 15-day washing cycles with 15/7/3 and 7/5/3 day reminders respectively.
-  // Cycle lengths + reminder thresholds are configurable (see AlertSettings,
-  // Service Schedule's own Alert Settings panel) rather than hardcoded. Dry-
+  // Cycle lengths + reminder thresholds come from VEHICLE_CYCLE_DEFAULTS
+  // (src/utils/vehicleCycleDefaults.ts), overridable per-vehicle via
+  // VehicleServiceSchedule.cycleDays/reminderDays (Service Schedule's own
+  // per-vehicle Edit form) - there is no global settings panel anymore. Dry-
   // category vehicles are untouched by this - they only ever get the
   // existing km-based Service Schedule alerts above.
   function addDaysToIsoDate(dateStr: string, days: number): Date {
@@ -1034,10 +1037,9 @@ async function startServer() {
   }
 
   async function calculateServiceWashingReminders(): Promise<ServiceWashingReminder[]> {
-    const [schedules, fleetVehicles, settings] = await Promise.all([
+    const [schedules, fleetVehicles] = await Promise.all([
       getVehicleServiceSchedules(),
-      getVehicles(),
-      getAlertSettings()
+      getVehicles()
     ]);
 
     const categoryFor = (regNo: string): string => {
@@ -1053,36 +1055,26 @@ async function startServer() {
 
     schedules.forEach(schedule => {
       const category = categoryFor(schedule.regNo).toLowerCase();
+      const def = cycleDefaultFor(category);
+      if (!def) return; // Dry (or unrecognized) - no calendar cycle
 
-      if ((category === 'reefer' || category === 'hybrid') && schedule.lastServiceDate) {
-        const due = addDaysToIsoDate(schedule.lastServiceDate, settings.reeferHybridServiceCycleDays);
-        const daysRemaining = Math.round((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-        if (settings.reeferHybridReminderDays.includes(daysRemaining)) {
-          reminders.push({
-            regNo: schedule.regNo,
-            vehicleType: category === 'reefer' ? 'Reefer' : 'Hybrid',
-            alertType: 'Service Due',
-            dueDate: due.toISOString().slice(0, 10),
-            daysRemaining,
-            cycleStartDate: schedule.lastServiceDate
-          });
-        }
-      }
+      const cycleDays = schedule.cycleDays ?? def.cycleDays;
+      const reminderDays = schedule.reminderDays ?? def.reminderDays;
+      const anchorDate = def.dateField === 'lastServiceDate' ? schedule.lastServiceDate : schedule.lastWashingDate;
+      if (!anchorDate) return;
 
-      if (category === 'walkes' && schedule.lastWashingDate) {
-        const due = addDaysToIsoDate(schedule.lastWashingDate, settings.walkesWashingCycleDays);
-        const daysRemaining = Math.round((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-        if (settings.walkesReminderDays.includes(daysRemaining)) {
-          reminders.push({
-            regNo: schedule.regNo,
-            vehicleType: 'Walkes',
-            alertType: 'Washing Due',
-            dueDate: due.toISOString().slice(0, 10),
-            daysRemaining,
-            cycleStartDate: schedule.lastWashingDate
-          });
-        }
-      }
+      const due = addDaysToIsoDate(anchorDate, cycleDays);
+      const daysRemaining = Math.round((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      if (!reminderDays.includes(daysRemaining)) return;
+
+      reminders.push({
+        regNo: schedule.regNo,
+        vehicleType: category === 'reefer' ? 'Reefer' : category === 'hybrid' ? 'Hybrid' : 'Walkes',
+        alertType: def.alertType,
+        dueDate: due.toISOString().slice(0, 10),
+        daysRemaining,
+        cycleStartDate: anchorDate
+      });
     });
 
     return reminders.sort((a, b) => a.daysRemaining - b.daysRemaining);
@@ -2252,9 +2244,12 @@ async function startServer() {
     try { res.json({ success: true, data: await deleteVehicleServiceSchedule(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  // Service Due / Washing Due reminder settings - readable by anyone with
-  // Fleet Maintenance access (so Service Schedule can show the configured
-  // cycle lengths), editable by Super Admin only.
+  // Retired - Service Schedule's Service Due/Washing Due cycle config is now
+  // fixed per-category defaults with per-vehicle overrides (see
+  // VehicleServiceSchedule.cycleDays/reminderDays and
+  // calculateServiceWashingReminders above), not this global settings row.
+  // Routes kept only so any previously-saved row remains readable; no UI
+  // calls these anymore.
   app.get('/api/alert-settings', async (req, res) => {
     try { res.json(await getAlertSettings()); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });

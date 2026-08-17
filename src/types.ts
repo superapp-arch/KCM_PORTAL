@@ -373,17 +373,32 @@ export interface VehicleServiceSchedule {
   // Washing cycle - Walkes-category vehicles only (Reefer/Hybrid instead use
   // lastServiceDate above for their own fixed-day service cycle - one real
   // "when was this vehicle last serviced" fact, shared with the km-based
-  // system this record already drives). See AlertSettings for the
-  // configurable cycle length/reminder thresholds both cycles use.
+  // system this record already drives). See cycleDays/reminderDays below for
+  // the per-vehicle cycle length/reminder thresholds both cycles use.
   lastWashingDate?: string; // YYYY-MM-DD
+  // Per-vehicle overrides for the Service Due (Reefer/Hybrid) / Washing Due
+  // (Walkes) calendar cycle - unset means "use this vehicle's category
+  // default" (see VEHICLE_CYCLE_DEFAULTS in utils/vehicleCycleDefaults.ts),
+  // set means the office has deliberately overridden it for this vehicle.
+  // There is no global admin settings panel anymore - the category defaults
+  // are fixed in code and this is the only place they can be customized.
+  cycleDays?: number;
+  reminderDays?: number[]; // days-before-due countdown, e.g. [15, 7, 3]
+  // Snapshot of the previous value every time lastServiceDate/lastServiceKm
+  // or lastWashingDate is changed and saved - newest first. Purely a display
+  // history; the cycle math above only ever reads the current
+  // lastServiceDate/lastWashingDate fields.
+  serviceHistory?: { date: string; km?: number }[];
+  washingHistory?: { date: string }[];
 }
 
-// Configurable cycle lengths + reminder day-thresholds for the Service Due
-// (Reefer/Hybrid) and Washing Due (Walkes) staged alert emails - a single
-// row, editable from Service Schedule's Alert Settings panel (Super Admin
-// only) so these can change without a code deployment. Falls back to the
-// confirmed defaults (40/[15,7,3] and 15/[7,5,3]) if no row has been saved
-// yet.
+// Retired - Service Schedule's Service Due/Washing Due cycle lengths and
+// reminder-day thresholds used to be a single global row edited from an
+// Alert Settings panel; they are now fixed per-category defaults
+// (VEHICLE_CYCLE_DEFAULTS in utils/vehicleCycleDefaults.ts) with per-vehicle
+// overrides on VehicleServiceSchedule.cycleDays/reminderDays instead. This
+// type, its DB table, and the /api/alert-settings routes are kept only so
+// any previously-saved row can still be read; nothing writes to it anymore.
 export interface AlertSettings {
   id: string; // fixed singleton id, see DEFAULT_ALERT_SETTINGS
   reeferHybridServiceCycleDays: number; // default 40

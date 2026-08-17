@@ -23,7 +23,6 @@ import BreakdownsTab from './maintenance/BreakdownsTab';
 
 interface MaintenanceProps {
   performedBy: string; // current user's username - used for the Service Invoice audit trail (Generated/Regenerated/Downloaded)
-  isSuperAdmin: boolean; // gates Service Schedule's Alert Settings panel (Service Due/Washing Due cycle config)
   records: MaintenanceRecord[];
   onAddRecord: (record: Omit<MaintenanceRecord, 'id'>) => Promise<void>;
   onUpdateRecord: (id: string, record: Partial<MaintenanceRecord>) => Promise<void>;
@@ -257,7 +256,6 @@ export default function Maintenance(props: MaintenanceProps) {
           mileageReports={props.mileageReports}
           vehicleServiceSchedules={props.vehicleServiceSchedules}
           onSaveVehicleServiceSchedule={props.onSaveVehicleServiceSchedule}
-          isSuperAdmin={props.isSuperAdmin}
         />
       )}
       {moduleTab === 'tires' && (

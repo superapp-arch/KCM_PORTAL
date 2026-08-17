@@ -5,6 +5,7 @@ import { motion } from 'motion/react';
 import { Vehicle, VehicleDocument, VehicleMileage, VehicleLoan } from '../types';
 import SortHeader from './SortHeader';
 import { SortState, SortDirection, extractLeadingNumber } from '../utils/sort';
+import { VEHICLE_CATEGORIES, normalizeVehicleCategory, matchVehicleCategoryOption } from '../utils/vehicleCycleDefaults';
 import {
   Search,
   Filter,
@@ -64,10 +65,6 @@ interface FleetSheetProps {
 
 const VEHICLE_TYPES = [
   'Tata Ace', '207', '407', '14 FT', '17 FT','20 FT', '32 FT'
-];
-
-const VEHICLE_CATEGORIES = [
-  'Dry', 'Hybrid', 'Walkes', 'Reefer'
 ];
 
 const VEHICLE_OWNERSHIPS = [
@@ -308,22 +305,12 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
   // Helper to match input criteria perfectly
   const normalize = (val: string | undefined) => String(val || '').toLowerCase().trim();
 
-  const normalizeCategory = (cat: string | undefined) => {
-    const c = String(cat || '').toLowerCase().trim();
-    if (c === 'normal' || c === 'dry') return 'dry';
-    if (c === 'walkee') return 'walkes';
-    return c;
-  };
-
-  // The Category select's options are stored in their display case (e.g.
-  // 'Hybrid', 'Reefer'), but normalizeCategory lowercases everything for
-  // filtering. Using the lowercased value directly as the select's `value`
-  // never matched any <option>, so the browser silently fell back to the
-  // first option ('Dry') instead of showing the vehicle's actual category.
-  const matchCategoryOption = (cat: string | undefined) => {
-    const norm = normalizeCategory(cat);
-    return VEHICLE_CATEGORIES.find(c => normalizeCategory(c) === norm) || VEHICLE_CATEGORIES[0];
-  };
+  // Category normalization/matching now lives in ../utils/vehicleCycleDefaults
+  // (shared with Fleet Maintenance's Service Schedule and server.ts's
+  // reminder cron) - kept as local aliases so the rest of this file doesn't
+  // need to change.
+  const normalizeCategory = normalizeVehicleCategory;
+  const matchCategoryOption = matchVehicleCategoryOption;
 
   const normalizeOwnership = (own: string | undefined) => {
     const o = String(own || '').toUpperCase().trim();
