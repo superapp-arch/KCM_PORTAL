@@ -181,10 +181,14 @@ export default function FuelManagement({
 
   const [searchTerm, setSearchTerm] = useState('');
   const [bunkFilter, setBunkFilter] = useState('All');
-  // Defaults to newest-first by Date on open, same "Sort by" convention as
-  // Petty Cash/Market Trip/Mileage Report - still fully overridable via the
-  // Sort By dropdown or the column sort headers (Vehicle No/Indent No).
-  const [sort, setSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
+  // Defaults to Indent No descending (highest/most-recent indent number
+  // first), NOT Date - Indent Nos are entered by hand and don't necessarily
+  // land in date order, so sorting by Date scrambled them and made it hard
+  // to see the last-used number when starting the next entry. Sorting by
+  // Indent No descending keeps that number visible right at the top instead.
+  // Still fully overridable via the Sort By dropdown or the column sort
+  // headers (Date/Vehicle No).
+  const [sort, setSort] = useState<SortState | null>({ key: 'indentNumber', direction: 'desc' });
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -975,15 +979,18 @@ export default function FuelManagement({
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-7 pr-3 py-1.5 text-[11px] focus:outline-none text-slate-800 font-semibold"
                 />
               </div>
-              {/* Sort By - Newest First (default) / Oldest First. Reuses the
-                  same `sort` state the column sort headers drive. */}
+              {/* Sort By - Indent No descending (default, most-recent number
+                  on top so the next entry's number is easy to spot) /
+                  ascending. Reuses the same `sort` state the column sort
+                  headers drive. */}
               <select
-                value={sort?.key === 'date' && sort.direction === 'asc' ? 'oldest' : 'newest'}
-                onChange={(e) => setSort({ key: 'date', direction: e.target.value === 'oldest' ? 'asc' : 'desc' })}
+                value={sort?.key === 'indentNumber' && sort.direction === 'asc' ? 'oldest' : 'newest'}
+                onChange={(e) => setSort({ key: 'indentNumber', direction: e.target.value === 'oldest' ? 'asc' : 'desc' })}
                 className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-700"
+                title="Sort by Indent No"
               >
-                <option value="newest">Newest First</option>
-                <option value="oldest">Oldest First</option>
+                <option value="newest">Indent No: Newest First</option>
+                <option value="oldest">Indent No: Oldest First</option>
               </select>
               {!isRqIdOnlyUser && (
                 <button
