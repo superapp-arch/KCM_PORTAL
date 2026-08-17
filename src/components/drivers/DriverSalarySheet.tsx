@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { motion } from 'motion/react';
 import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Download, Lock, ChevronDown, ChevronUp, User as UserIcon, Paperclip, Receipt } from 'lucide-react';
-import { DriverEmployee, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES, VehicleDocument, DriverSalarySlipRecord } from '../../types';
+import { DriverEmployee, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES, VehicleDocument, DriverSalarySlipRecord, Vehicle } from '../../types';
 import DriverFormModal from './DriverFormModal';
 import DriverSalarySlipModal from './DriverSalarySlipModal';
 import DocumentAttachment from '../DocumentAttachment';
@@ -50,13 +50,14 @@ const toDriverRow = (driver: DriverEmployee, i: number) => ({
 interface DriverSalarySheetProps {
   performedBy: string; // current user's username - for the Salary Slip audit trail
   drivers: DriverEmployee[];
+  vehicles: Vehicle[]; // Fleet & Vehicles' own live list - source for the Vehicle No dropdown in DriverFormModal
   writableLocations: DriverLocationCategory[] | 'ALL'; // locations this user may add/edit/delete drivers in - view is broader, handled server-side
   onAddDriver: (driver: Omit<DriverEmployee, 'id'> & { id: string }) => Promise<void>;
   onUpdateDriver: (id: string, driver: Partial<DriverEmployee>) => Promise<void>;
   onDeleteDriver: (id: string) => Promise<void>;
 }
 
-export default function DriverSalarySheet({ performedBy, drivers, writableLocations, onAddDriver, onUpdateDriver, onDeleteDriver }: DriverSalarySheetProps) {
+export default function DriverSalarySheet({ performedBy, drivers, vehicles, writableLocations, onAddDriver, onUpdateDriver, onDeleteDriver }: DriverSalarySheetProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [modalDriver, setModalDriver] = useState<DriverEmployee | null | undefined>(undefined); // undefined = closed
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -341,6 +342,7 @@ export default function DriverSalarySheet({ performedBy, drivers, writableLocati
       {modalDriver !== undefined && (
         <DriverFormModal
           driver={modalDriver}
+          vehicles={vehicles}
           writableLocations={writableLocations}
           onAddDriver={onAddDriver}
           onUpdateDriver={onUpdateDriver}

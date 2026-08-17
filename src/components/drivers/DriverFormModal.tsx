@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { X, User, Upload, Wallet } from 'lucide-react';
-import { DriverEmployee, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES, VehicleDocument } from '../../types';
+import { DriverEmployee, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES, VehicleDocument, Vehicle } from '../../types';
 import DocumentAttachment from '../DocumentAttachment';
 import { authFetch } from '../../authFetch';
 
 interface DriverFormModalProps {
   driver: DriverEmployee | null; // null = creating a new driver
+  vehicles: Vehicle[]; // Fleet & Vehicles' own live list - source for the Vehicle No dropdown/search below
   writableLocations: DriverLocationCategory[] | 'ALL'; // locations this user may save a driver into
   onAddDriver: (driver: Omit<DriverEmployee, 'id'> & { id: string }) => Promise<void>;
   onUpdateDriver: (id: string, driver: Partial<DriverEmployee>) => Promise<void>;
@@ -20,7 +21,7 @@ function currentMonthKey(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-export default function DriverFormModal({ driver, writableLocations, onAddDriver, onUpdateDriver, onClose, onSaved }: DriverFormModalProps) {
+export default function DriverFormModal({ driver, vehicles, writableLocations, onAddDriver, onUpdateDriver, onClose, onSaved }: DriverFormModalProps) {
   const isEditing = !!driver;
   const [tab, setTab] = useState<FormTab>('basic');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -55,6 +56,12 @@ export default function DriverFormModal({ driver, writableLocations, onAddDriver
     setVehicleInput('');
   };
   const removeVehicleNo = (v: string) => setVehicleNos(prev => prev.filter(x => x !== v));
+  // Live from Fleet & Vehicles (not a separate/hardcoded list) - the input
+  // below is a searchable dropdown via this datalist, but a vehicle not yet
+  // in Fleet & Vehicles can still be typed in manually and added, same
+  // "search first, manual entry still allowed" convention every other
+  // vehicle picker in this app already uses.
+  const vehicleList = Array.from(new Set(vehicles.map(v => v.regNo || v['Reg. No.'] || '').filter(Boolean))).sort();
   const [aadharDocuments, setAadharDocuments] = useState<VehicleDocument[]>(driver?.aadharDocuments || []);
   const [drivingLicenseDocuments, setDrivingLicenseDocuments] = useState<VehicleDocument[]>(driver?.drivingLicenseDocuments || []);
   const [otherDocuments, setOtherDocuments] = useState<VehicleDocument[]>(driver?.otherDocuments || []);
@@ -175,14 +182,18 @@ export default function DriverFormModal({ driver, writableLocations, onAddDriver
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">
-                    Vehicle No <span className="text-slate-400 font-normal">(add more than one if this driver covers several)</span>
+                    Vehicle No <span className="text-slate-400 font-normal">(search Fleet &amp; Vehicles, or type a new one - add more than one if this driver covers several)</span>
                   </label>
                   <div className="flex gap-1.5">
                     <input value={vehicleInput} onChange={e => setVehicleInput(e.target.value.toUpperCase())} autoComplete="off"
+                      list="driver-form-vehicle-datalist"
                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addVehicleNo(); } }}
-                      placeholder="e.g. KA05AB1234" className="flex-1 border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                      placeholder="Search or type e.g. KA05AB1234" className="flex-1 border border-slate-300 rounded-lg px-2.5 py-1.5" />
                     <button type="button" onClick={addVehicleNo} className="px-3 border border-slate-300 rounded-lg bg-slate-50 hover:bg-slate-100 font-bold text-slate-600 cursor-pointer">Add</button>
                   </div>
+                  <datalist id="driver-form-vehicle-datalist">
+                    {vehicleList.map(v => <option key={v} value={v} />)}
+                  </datalist>
                   {vehicleNos.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-1.5">
                       {vehicleNos.map(v => (

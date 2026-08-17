@@ -1015,6 +1015,7 @@ export default function Administration({
             <DriverDetails
               user={user}
               drivers={drivers}
+              vehicles={vehicles}
               onAddDriver={onAddDriver}
               onUpdateDriver={onUpdateDriver}
               onDeleteDriver={onDeleteDriver}

@@ -190,10 +190,17 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
           </div>
         </div>
 
-        <div className="overflow-x-auto border border-slate-100 rounded-lg">
+        {/* Bounded height (not just overflow-x-auto) is what makes this div
+            itself the scrolling ancestor, so the sticky thead below actually
+            has something to stick to - same convention as Petty Cash's own
+            scrollable ledger tables. Without it, the date header row scrolls
+            away with everything else once the employee list runs long enough
+            to need page-level scrolling, leaving no way to tell which date
+            column you're clicking on. */}
+        <div className="overflow-auto border border-slate-100 rounded-lg max-h-[65vh]">
           <table className="text-[10px] border-collapse w-full">
-            <thead>
-              <tr className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 sticky top-0">
+            <thead className="sticky top-0 z-20">
+              <tr className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900">
                 <th className="px-2 py-2 text-left font-bold text-purple-100 uppercase tracking-wider sticky left-0 bg-indigo-950 min-w-[140px]">Employee</th>
                 {Array.from({ length: totalDays }, (_, i) => i + 1).map(day => (
                   <th key={day} className="px-1 py-2 text-center font-bold text-purple-200 w-9">{dayLabel(month, day)}</th>
@@ -207,7 +214,7 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
                 return (
                   <tr key={emp.id} className="hover:bg-purple-50/40">
                     <td
-                      className="px-2 py-1 font-semibold text-teal-700 hover:underline cursor-pointer sticky left-0 bg-white whitespace-nowrap"
+                      className="px-2 py-1 font-semibold text-teal-700 hover:underline cursor-pointer sticky left-0 z-10 bg-white whitespace-nowrap"
                       onClick={() => setSummaryEmp(emp)}
                       title="Click to view monthly summary"
                     >
