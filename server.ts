@@ -15,7 +15,11 @@ import { issueOtp, verifyOtp } from './src/auth/otp.ts';
 import { istTimestamp, istDateKey, istHour, istMonthDayKey } from './src/auth/time.ts';
 import { computeDueDateRaw } from './src/utils/loanDates.ts';
 import { extractTrailingNumber, extractLeadingNumber } from './src/utils/sort.ts';
-import { cycleDefaultFor } from './src/utils/vehicleCycleDefaults.ts';
+import {
+  WASHING_CYCLE_DAYS, isWashingEligible,
+  AC_SERVICE_CYCLE_DAYS, isAcServiceEligible,
+  REMINDER_DAYS_BEFORE_DUE
+} from './src/utils/vehicleCycleDefaults.ts';
 import { latestOdometerFor, computeKmStatus, computeAlignmentStatus, nextAlignmentDueKm, projectDueDate, daysUntil } from './src/utils/maintenanceDates.ts';
 import {
   User,
@@ -1147,16 +1151,20 @@ async function startServer() {
     return alerts.sort((a, b) => a.diffDays - b.diffDays);
   }
 
-  // --- Service Due (Reefer/Hybrid) & Washing Due (Walkes) staged reminder
-  // emails - fixed calendar-day cycles (unlike calculateMaintenanceMilestoneAlerts
-  // above, which is km/projected-date driven), confirmed 40-day service /
-  // 15-day washing cycles with 15/7/3 and 7/5/3 day reminders respectively.
-  // Cycle lengths + reminder thresholds come from VEHICLE_CYCLE_DEFAULTS
-  // (src/utils/vehicleCycleDefaults.ts), overridable per-vehicle via
-  // VehicleServiceSchedule.cycleDays/reminderDays (Service Schedule's own
-  // per-vehicle Edit form) - there is no global settings panel anymore. Dry-
-  // category vehicles are untouched by this - they only ever get the
-  // existing km-based Service Schedule alerts above.
+  // --- Washing (Walkes/Reefer/Hybrid) & AC Service (Hybrid/Reefer) staged
+  // reminder emails - fixed calendar-day cycles (unlike
+  // calculateMaintenanceMilestoneAlerts above, which is km/projected-date
+  // driven): a fixed 10-day Washing cycle and a fixed 40-day AC Service
+  // cycle, both with a fixed 2-day-before-due reminder (REMINDER_DAYS_BEFORE_DUE
+  // in src/utils/vehicleCycleDefaults.ts) - no per-vehicle override, no
+  // global settings panel. A Hybrid/Reefer vehicle is eligible for BOTH
+  // cycles independently (they're unrelated activities); Walkes gets only
+  // Washing; Dry gets neither - it only ever gets the existing km-based
+  // Service Schedule alerts above. Reminders only fire for a vehicle that
+  // actually has a real last-washing/last-AC-service date recorded - the
+  // Service Schedule UI's own "default to today" preview is a display
+  // convenience only and never used to trigger a real email for a vehicle
+  // that's never actually been washed/serviced.
   function addDaysToIsoDate(dateStr: string, days: number): Date {
     const [y, m, d] = dateStr.split('-').map(Number);
     const dt = new Date(y, m - 1, d);
@@ -1167,12 +1175,12 @@ async function startServer() {
   interface ServiceWashingReminder {
     regNo: string;
     vehicleType: string; // Fleet & Vehicles' own Category value, e.g. 'Reefer', 'Hybrid', 'Walkes'
-    alertType: 'Service Due' | 'Washing Due';
+    alertType: 'Washing Due' | 'AC Service Due';
     dueDate: string; // YYYY-MM-DD
     daysRemaining: number;
-    // The cycle's own anchor date (lastServiceDate/lastWashingDate) - baked
-    // into the dedup marker id below, so a newly-logged service/wash (a new
-    // cycle) is never blocked by an already-sent marker from the old one.
+    // The cycle's own anchor date (lastWashingDate/lastAcServiceDate) - baked
+    // into the dedup marker id below, so a newly-logged washing/AC service (a
+    // new cycle) is never blocked by an already-sent marker from the old one.
     cycleStartDate: string;
   }
 
@@ -1193,28 +1201,26 @@ async function startServer() {
     const today = new Date(`${todayKey}T00:00:00`);
     const reminders: ServiceWashingReminder[] = [];
 
-    schedules.forEach(schedule => {
-      const category = categoryFor(schedule.regNo).toLowerCase();
-      const def = cycleDefaultFor(category);
-      if (!def) return; // Dry (or unrecognized) - no calendar cycle
-
-      const cycleDays = schedule.cycleDays ?? def.cycleDays;
-      const reminderDays = schedule.reminderDays ?? def.reminderDays;
-      const anchorDate = def.dateField === 'lastServiceDate' ? schedule.lastServiceDate : schedule.lastWashingDate;
+    const pushIfDue = (
+      schedule: (typeof schedules)[number], category: string, vehicleType: string,
+      alertType: 'Washing Due' | 'AC Service Due', anchorDate: string | undefined, cycleDays: number
+    ) => {
       if (!anchorDate) return;
-
       const due = addDaysToIsoDate(anchorDate, cycleDays);
       const daysRemaining = Math.round((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-      if (!reminderDays.includes(daysRemaining)) return;
+      if (daysRemaining !== REMINDER_DAYS_BEFORE_DUE) return;
+      reminders.push({ regNo: schedule.regNo, vehicleType, alertType, dueDate: due.toISOString().slice(0, 10), daysRemaining, cycleStartDate: anchorDate });
+    };
 
-      reminders.push({
-        regNo: schedule.regNo,
-        vehicleType: category === 'reefer' ? 'Reefer' : category === 'hybrid' ? 'Hybrid' : 'Walkes',
-        alertType: def.alertType,
-        dueDate: due.toISOString().slice(0, 10),
-        daysRemaining,
-        cycleStartDate: anchorDate
-      });
+    schedules.forEach(schedule => {
+      const category = categoryFor(schedule.regNo).toLowerCase();
+      const vehicleType = category.charAt(0).toUpperCase() + category.slice(1);
+      if (isWashingEligible(category)) {
+        pushIfDue(schedule, category, vehicleType, 'Washing Due', schedule.lastWashingDate, WASHING_CYCLE_DAYS);
+      }
+      if (isAcServiceEligible(category)) {
+        pushIfDue(schedule, category, vehicleType, 'AC Service Due', schedule.lastAcServiceDate, AC_SERVICE_CYCLE_DAYS);
+      }
     });
 
     return reminders.sort((a, b) => a.daysRemaining - b.daysRemaining);
@@ -1245,7 +1251,7 @@ async function startServer() {
     const details: string[] = [];
 
     for (const r of reminders) {
-      const markerPrefix = r.alertType === 'Service Due' ? 'service' : 'washing';
+      const markerPrefix = r.alertType === 'AC Service Due' ? 'ac-service' : 'washing';
       const markerId = `${markerPrefix}-reminder-${r.regNo}-${r.cycleStartDate}-${r.daysRemaining}`;
       if (existingNotifs.some((n: any) => n.id === markerId)) continue;
 
@@ -1282,7 +1288,7 @@ async function startServer() {
           id: markerId,
           title: `${r.alertType}: ${r.regNo} in ${r.daysRemaining} day${r.daysRemaining === 1 ? '' : 's'}`,
           message: `${r.vehicleType} vehicle ${r.regNo}'s ${r.alertType.toLowerCase()} on ${r.dueDate}.`,
-          type: r.alertType === 'Service Due' ? 'service-due' : 'washing-due',
+          type: r.alertType === 'AC Service Due' ? 'ac-service-due' : 'washing-due',
           timestamp: istTimestamp(),
           read: false,
           vehicleRegNo: r.regNo

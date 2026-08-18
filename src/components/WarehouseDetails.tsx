@@ -22,6 +22,10 @@ import {
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
+import {
+  FUEL_COST_PERCENT, KM_SLAB_SUGGESTIONS, formatINR, round2, daysInMonth, countSundaysInMonth,
+  computeAutoWorkingDays, resolveWorkingDays, computeWarehouseRates
+} from '../utils/warehouseRates';
 
 // Known Warehouse Name -> Warehouse City pairs, replacing the old free-form
 // suggestion list. Both Warehouse Name fields below stay plain text inputs
@@ -108,12 +112,23 @@ export default function WarehouseDetails({
   const [inTime, setInTime] = useState('08:00');
   const [closureTime, setClosureTime] = useState('20:00');
   const [hoursDaysAsPerContract, setHoursDaysAsPerContract] = useState<number>(1);
-  const [overtimeVehicle, setOvertimeVehicle] = useState('No');
-  const [extraKm, setExtraKm] = useState<number>(0);
-  const [baseRate, setBaseRate] = useState<number>(0);
-  const [fuelCost, setFuelCost] = useState<number>(0);
-  const [additionalKmCost, setAdditionalKmCost] = useState<number>(0);
-  const [additionalHourCost, setAdditionalHourCost] = useState<number>(0);
+  // Retired - overtime is now captured via addHour below instead of a
+  // separate Yes/No field (see WarehouseEntry.overtimeVehicle).
+  const [overtimeVehicle] = useState('');
+  const [extraKm, setExtraKm] = useState<number>(0); // "Add KM" - km beyond kmSlab
+  const [addHour, setAddHour] = useState<number>(0); // "Add Hour" - hours beyond fixedHours
+  // Rate Configuration - Base Rate/Fuel Cost/Extra KM & Hour Amounts are all
+  // auto-computed from these (see computeWarehouseRates), no longer typed
+  // directly.
+  const [scheduledRate, setScheduledRate] = useState<number>(0);
+  const [ratePerExtraKm, setRatePerExtraKm] = useState<number>(0);
+  const [ratePerExtraHour, setRatePerExtraHour] = useState<number>(0);
+  const [variableCostPerKm, setVariableCostPerKm] = useState<number>(0); // 24 Hrs only
+  const [workingMonth, setWorkingMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [deductSundays, setDeductSundays] = useState(false);
+  const [holidaysCount, setHolidaysCount] = useState<number>(0);
+  const [workingDaysOverride, setWorkingDaysOverride] = useState<number | null>(null);
+  const [kmPerDayOverride, setKmPerDayOverride] = useState<number | null>(null); // 24 Hrs only
   const [tollCharges, setTollCharges] = useState<number>(0);
   const [parkingCost, setParkingCost] = useState<number>(0);
   const [hybridReeferCost, setHybridReeferCost] = useState<number>(0);
@@ -140,12 +155,19 @@ export default function WarehouseDetails({
   const [editInTime, setEditInTime] = useState('');
   const [editClosureTime, setEditClosureTime] = useState('');
   const [editHoursDaysAsPerContract, setEditHoursDaysAsPerContract] = useState<number>(1);
-  const [editOvertimeVehicle, setEditOvertimeVehicle] = useState('');
-  const [editExtraKm, setEditExtraKm] = useState<number>(0);
-  const [editBaseRate, setEditBaseRate] = useState<number>(0);
-  const [editFuelCost, setEditFuelCost] = useState<number>(0);
-  const [editAdditionalKmCost, setEditAdditionalKmCost] = useState<number>(0);
-  const [editAdditionalHourCost, setEditAdditionalHourCost] = useState<number>(0);
+  // Retired - see overtimeVehicle above.
+  const [editOvertimeVehicle] = useState('');
+  const [editExtraKm, setEditExtraKm] = useState<number>(0); // "Add KM"
+  const [editAddHour, setEditAddHour] = useState<number>(0); // "Add Hour"
+  const [editScheduledRate, setEditScheduledRate] = useState<number>(0);
+  const [editRatePerExtraKm, setEditRatePerExtraKm] = useState<number>(0);
+  const [editRatePerExtraHour, setEditRatePerExtraHour] = useState<number>(0);
+  const [editVariableCostPerKm, setEditVariableCostPerKm] = useState<number>(0);
+  const [editWorkingMonth, setEditWorkingMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [editDeductSundays, setEditDeductSundays] = useState(false);
+  const [editHolidaysCount, setEditHolidaysCount] = useState<number>(0);
+  const [editWorkingDaysOverride, setEditWorkingDaysOverride] = useState<number | null>(null);
+  const [editKmPerDayOverride, setEditKmPerDayOverride] = useState<number | null>(null);
   const [editTollCharges, setEditTollCharges] = useState<number>(0);
   const [editParkingCost, setEditParkingCost] = useState<number>(0);
   const [editHybridReeferCost, setEditHybridReeferCost] = useState<number>(0);
@@ -153,27 +175,34 @@ export default function WarehouseDetails({
 
   // Auto-calculated fields for new entry form
   const kmUtilised = Math.max(0, closingKm - openingKm);
-  const finalBaseRate = Math.max(0, Number(baseRate) + Number(fuelCost));
-  const grandTotal = Math.max(0, 
-    finalBaseRate + 
-    Number(additionalKmCost) + 
-    Number(additionalHourCost) + 
-    Number(tollCharges) + 
-    Number(parkingCost) + 
-    Number(hybridReeferCost)
-  );
+  const workingDaysAuto = computeAutoWorkingDays(workingMonth, deductSundays, holidaysCount);
+  const workingDays = resolveWorkingDays(workingDaysAuto, workingDaysOverride);
+  const kmSlabNumber = parseFloat(kmSlab) || 0;
+  const kmPerDayAuto = workingDays > 0 ? round2(kmSlabNumber / workingDays) : 0;
+  const kmPerDay = kmPerDayOverride ?? kmPerDayAuto;
+  const rates = computeWarehouseRates({
+    fixedHours, scheduledRate, workingDays, kmSlab: kmSlabNumber, variableCostPerKm, kmPerDay,
+    addKm: extraKm, ratePerExtraKm, addHour, ratePerExtraHour,
+    tollCharges, parkingCost, hybridReeferCost
+  });
+  const { baseRate, fuelCost, extraKmAmount: additionalKmCost, extraHourAmount: additionalHourCost, grandTotal } = rates;
+  const finalBaseRate = Math.max(0, baseRate + fuelCost);
 
   // Auto-calculated fields for edit modal
   const editKmUtilised = Math.max(0, editClosingKm - editOpeningKm);
-  const editFinalBaseRate = Math.max(0, Number(editBaseRate) + Number(editFuelCost));
-  const editGrandTotal = Math.max(0, 
-    editFinalBaseRate + 
-    Number(editAdditionalKmCost) + 
-    Number(editAdditionalHourCost) + 
-    Number(editTollCharges) + 
-    Number(editParkingCost) + 
-    Number(editHybridReeferCost)
-  );
+  const editWorkingDaysAuto = computeAutoWorkingDays(editWorkingMonth, editDeductSundays, editHolidaysCount);
+  const editWorkingDays = resolveWorkingDays(editWorkingDaysAuto, editWorkingDaysOverride);
+  const editKmSlabNumber = parseFloat(editKmSlab) || 0;
+  const editKmPerDayAuto = editWorkingDays > 0 ? round2(editKmSlabNumber / editWorkingDays) : 0;
+  const editKmPerDay = editKmPerDayOverride ?? editKmPerDayAuto;
+  const editRates = computeWarehouseRates({
+    fixedHours: editFixedHours, scheduledRate: editScheduledRate, workingDays: editWorkingDays, kmSlab: editKmSlabNumber,
+    variableCostPerKm: editVariableCostPerKm, kmPerDay: editKmPerDay,
+    addKm: editExtraKm, ratePerExtraKm: editRatePerExtraKm, addHour: editAddHour, ratePerExtraHour: editRatePerExtraHour,
+    tollCharges: editTollCharges, parkingCost: editParkingCost, hybridReeferCost: editHybridReeferCost
+  });
+  const { baseRate: editBaseRate, fuelCost: editFuelCost, extraKmAmount: editAdditionalKmCost, extraHourAmount: editAdditionalHourCost, grandTotal: editGrandTotal } = editRates;
+  const editFinalBaseRate = Math.max(0, editBaseRate + editFuelCost);
 
   // Trigger temporary toast notification
   const triggerNotif = (msg: string) => {
@@ -274,17 +303,33 @@ export default function WarehouseDetails({
         hoursDaysAsPerContract,
         overtimeVehicle: overtimeVehicle.trim(),
         extraKm: Number(extraKm),
-        baseRate: Number(baseRate),
-        fuelCost: Number(fuelCost),
+        baseRate,
+        fuelCost,
         finalBaseRate,
-        additionalKmCost: Number(additionalKmCost),
-        additionalHourCost: Number(additionalHourCost),
+        additionalKmCost,
+        additionalHourCost,
         tollCharges: Number(tollCharges),
         parkingCost: Number(parkingCost),
         hybridReeferCost: Number(hybridReeferCost),
         grandTotal,
         vendorRemarks: vendorRemarks.trim(),
-        documents: newEntryDocs
+        documents: newEntryDocs,
+        // Rate-calculation inputs - saved alongside the results above so
+        // this record still reconciles even after config changes later.
+        scheduledRate,
+        workingMonth,
+        workingDaysAuto,
+        deductSundays,
+        holidaysCount,
+        workingDaysOverride: workingDaysOverride ?? undefined,
+        workingDays,
+        ratePerExtraKm,
+        addHour: Number(addHour),
+        ratePerExtraHour,
+        variableCostPerKm,
+        kmPerDayAuto,
+        kmPerDayOverride: kmPerDayOverride ?? undefined,
+        kmPerDay
       });
 
       // Reset
@@ -298,12 +343,17 @@ export default function WarehouseDetails({
       setKmSlab('');
       setClosingKm(0);
       setHoursDaysAsPerContract(1);
-      setOvertimeVehicle('No');
       setExtraKm(0);
-      setBaseRate(0);
-      setFuelCost(0);
-      setAdditionalKmCost(0);
-      setAdditionalHourCost(0);
+      setAddHour(0);
+      setScheduledRate(0);
+      setRatePerExtraKm(0);
+      setRatePerExtraHour(0);
+      setVariableCostPerKm(0);
+      setWorkingMonth(new Date().toISOString().slice(0, 7));
+      setDeductSundays(false);
+      setHolidaysCount(0);
+      setWorkingDaysOverride(null);
+      setKmPerDayOverride(null);
       setTollCharges(0);
       setParkingCost(0);
       setHybridReeferCost(0);
@@ -363,12 +413,17 @@ export default function WarehouseDetails({
     setEditInTime(entry.inTime);
     setEditClosureTime(entry.closureTime);
     setEditHoursDaysAsPerContract(entry.hoursDaysAsPerContract);
-    setEditOvertimeVehicle(entry.overtimeVehicle || '');
     setEditExtraKm(entry.extraKm || 0);
-    setEditBaseRate(entry.baseRate || 0);
-    setEditFuelCost(entry.fuelCost || 0);
-    setEditAdditionalKmCost(entry.additionalKmCost || 0);
-    setEditAdditionalHourCost(entry.additionalHourCost || 0);
+    setEditAddHour(entry.addHour || 0);
+    setEditScheduledRate(entry.scheduledRate || 0);
+    setEditRatePerExtraKm(entry.ratePerExtraKm || 0);
+    setEditRatePerExtraHour(entry.ratePerExtraHour || 0);
+    setEditVariableCostPerKm(entry.variableCostPerKm || 0);
+    setEditWorkingMonth(entry.workingMonth || new Date().toISOString().slice(0, 7));
+    setEditDeductSundays(entry.deductSundays ?? false);
+    setEditHolidaysCount(entry.holidaysCount || 0);
+    setEditWorkingDaysOverride(entry.workingDaysOverride ?? null);
+    setEditKmPerDayOverride(entry.kmPerDayOverride ?? null);
     setEditTollCharges(entry.tollCharges || 0);
     setEditParkingCost(entry.parkingCost || 0);
     setEditHybridReeferCost(entry.hybridReeferCost || 0);
@@ -407,16 +462,30 @@ export default function WarehouseDetails({
         hoursDaysAsPerContract: Number(editHoursDaysAsPerContract),
         overtimeVehicle: editOvertimeVehicle.trim(),
         extraKm: Number(editExtraKm),
-        baseRate: Number(editBaseRate),
-        fuelCost: Number(editFuelCost),
+        baseRate: editBaseRate,
+        fuelCost: editFuelCost,
         finalBaseRate: editFinalBaseRate,
-        additionalKmCost: Number(editAdditionalKmCost),
-        additionalHourCost: Number(editAdditionalHourCost),
+        additionalKmCost: editAdditionalKmCost,
+        additionalHourCost: editAdditionalHourCost,
         tollCharges: Number(editTollCharges),
         parkingCost: Number(editParkingCost),
         hybridReeferCost: Number(editHybridReeferCost),
         grandTotal: editGrandTotal,
-        vendorRemarks: editVendorRemarks.trim()
+        vendorRemarks: editVendorRemarks.trim(),
+        scheduledRate: editScheduledRate,
+        workingMonth: editWorkingMonth,
+        workingDaysAuto: editWorkingDaysAuto,
+        deductSundays: editDeductSundays,
+        holidaysCount: editHolidaysCount,
+        workingDaysOverride: editWorkingDaysOverride ?? undefined,
+        workingDays: editWorkingDays,
+        ratePerExtraKm: editRatePerExtraKm,
+        addHour: Number(editAddHour),
+        ratePerExtraHour: editRatePerExtraHour,
+        variableCostPerKm: editVariableCostPerKm,
+        kmPerDayAuto: editKmPerDayAuto,
+        kmPerDayOverride: editKmPerDayOverride ?? undefined,
+        kmPerDay: editKmPerDay
       };
 
       await onUpdateEntry(selectedEntry.id, updatedData);
@@ -764,12 +833,16 @@ export default function WarehouseDetails({
               <div>
                 <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">KM Slab</label>
                 <input
-                  type="text"
-                  placeholder="e.g. 100km"
+                  type="number"
+                  list="km-slab-suggestions"
+                  placeholder="e.g. 2000"
                   value={kmSlab}
                   onChange={(e) => setKmSlab(e.target.value)}
                   className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
                 />
+                <datalist id="km-slab-suggestions">
+                  {KM_SLAB_SUGGESTIONS.map(s => <option key={s} value={s} />)}
+                </datalist>
               </div>
             </div>
 
@@ -804,7 +877,10 @@ export default function WarehouseDetails({
               </div>
             </div>
 
-            {/* 7. In Time & Closure Time & Overtime & Extra KM */}
+            {/* 7. In Time & Closure Time & Add KM & Add Hour - Overtime is now
+                captured via Add Hour below, so the old OT Vehicle Yes/No
+                field is gone here (still shown as-is in reports/exports for
+                any entry that already has one). */}
             <div className="grid grid-cols-4 gap-1.5">
               <div className="col-span-1">
                 <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">In Time</label>
@@ -827,17 +903,7 @@ export default function WarehouseDetails({
                 />
               </div>
               <div className="col-span-1">
-                <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">OT Vehicle</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Yes / 2h"
-                  value={overtimeVehicle}
-                  onChange={(e) => setOvertimeVehicle(e.target.value)}
-                  className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1 text-xs focus:outline-none"
-                />
-              </div>
-              <div className="col-span-1">
-                <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Extra KM</label>
+                <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide" title="km run beyond the KM Slab, e.g. slab 2000 + 100 run over = 100">Add KM</label>
                 <input
                   type="number"
                   placeholder="0"
@@ -846,61 +912,131 @@ export default function WarehouseDetails({
                   className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1 text-xs focus:outline-none"
                 />
               </div>
-            </div>
-
-            {/* 8. Costs: Base Rate & Fuel Cost */}
-            <div className="grid grid-cols-2 gap-2 bg-purple-50/40 p-2.5 rounded-xl border border-purple-100/50">
-              <div>
-                <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Base Rate (₹)</label>
+              <div className="col-span-1">
+                <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide" title="hours run beyond Fixed Hrs, e.g. 12 booked + 1 run over = 1">Add Hour</label>
                 <input
                   type="number"
-                  placeholder="Base Rate"
-                  value={baseRate || ''}
-                  onChange={(e) => setBaseRate(Number(e.target.value))}
-                  className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 text-xs font-bold text-slate-800"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Fuel Cost (₹)</label>
-                <input
-                  type="number"
-                  placeholder="Fuel Cost"
-                  value={fuelCost || ''}
-                  onChange={(e) => setFuelCost(Number(e.target.value))}
-                  className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 text-xs font-bold text-slate-800"
+                  placeholder="0"
+                  value={addHour || ''}
+                  onChange={(e) => setAddHour(Number(e.target.value))}
+                  className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1 text-xs focus:outline-none"
                 />
               </div>
             </div>
 
-            {/* 9. Computed Rates Block */}
+            {/* 8. Rate Configuration - Base Rate/Fuel Cost/Extra KM & Hour
+                Amounts below all auto-calculate from these, nothing here is
+                typed directly into the totals anymore. */}
+            <div className="p-2.5 bg-purple-50/40 rounded-xl border border-purple-100/50 space-y-2">
+              <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wide">Rate Configuration</span>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Scheduled Rate (₹/month)</label>
+                  <input type="number" placeholder="e.g. 75000" value={scheduledRate || ''} onChange={(e) => setScheduledRate(Number(e.target.value))}
+                    className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
+                </div>
+                <div>
+                  <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra KM (₹)</label>
+                  <input type="number" placeholder="0" value={ratePerExtraKm || ''} onChange={(e) => setRatePerExtraKm(Number(e.target.value))}
+                    className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
+                </div>
+              </div>
+              <div className={`grid gap-2 ${fixedHours === 24 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                <div>
+                  <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra Hour (₹)</label>
+                  <input type="number" placeholder="0" value={ratePerExtraHour || ''} onChange={(e) => setRatePerExtraHour(Number(e.target.value))}
+                    className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
+                </div>
+                {fixedHours === 24 && (
+                  <div>
+                    <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Variable Cost (₹/km)</label>
+                    <input type="number" placeholder="e.g. 18" value={variableCostPerKm || ''} onChange={(e) => setVariableCostPerKm(Number(e.target.value))}
+                      className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
+                  </div>
+                )}
+              </div>
+
+              {/* Working Days - auto-fills from the Month + Year calendar,
+                  never hard-coded to 30; stays editable with a Reset to
+                  auto link. */}
+              <div className="p-2 bg-white rounded-lg border border-purple-100 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] font-bold text-purple-700 uppercase tracking-wide">Working Days</span>
+                  {workingDaysOverride != null && (
+                    <button type="button" onClick={() => setWorkingDaysOverride(null)} className="text-[9px] text-pink-600 hover:text-pink-800 underline cursor-pointer">Reset to auto</button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="month" value={workingMonth} onChange={(e) => setWorkingMonth(e.target.value)}
+                    className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 text-xs font-mono text-slate-800" />
+                  <input type="number" min={1} value={workingDaysOverride ?? workingDaysAuto}
+                    onChange={(e) => setWorkingDaysOverride(e.target.value ? Number(e.target.value) : null)}
+                    className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-1 text-[9px] font-semibold text-slate-600 cursor-pointer">
+                    <input type="checkbox" checked={deductSundays} onChange={(e) => setDeductSundays(e.target.checked)} /> Deduct Sundays
+                  </label>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[9px] font-semibold text-slate-600">Holidays</span>
+                    <input type="number" min={0} value={holidaysCount || ''} onChange={(e) => setHolidaysCount(Number(e.target.value) || 0)}
+                      className="w-14 bg-slate-50 border border-purple-100 rounded p-1 text-[10px] font-bold text-slate-800" />
+                  </div>
+                </div>
+                <p className="text-[9px] text-slate-400 font-mono">
+                  Auto: {workingDaysAuto} days ({daysInMonth(workingMonth)} in month{deductSundays ? ` - ${countSundaysInMonth(workingMonth)} Sundays` : ''}{holidaysCount ? ` - ${holidaysCount} holidays` : ''})
+                </p>
+              </div>
+
+              {fixedHours === 24 && (
+                <div>
+                  <div className="flex items-center justify-between">
+                    <label className="block text-[9px] font-bold text-purple-700 uppercase tracking-wide">KM per Day</label>
+                    {kmPerDayOverride != null && (
+                      <button type="button" onClick={() => setKmPerDayOverride(null)} className="text-[9px] text-pink-600 hover:text-pink-800 underline cursor-pointer">Reset to auto</button>
+                    )}
+                  </div>
+                  <input type="number" value={kmPerDayOverride ?? kmPerDayAuto} onChange={(e) => setKmPerDayOverride(e.target.value ? Number(e.target.value) : null)}
+                    className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
+                  <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto = KM Slab / Working Days</p>
+                </div>
+              )}
+            </div>
+
+            {/* 9. Computed Rates Block - Base Rate, Fuel Cost, Extra KM/Hour
+                Amounts are all read-only now (see computeWarehouseRates) -
+                Grand Total updates live, no Calculate button. */}
             <div className="p-3 bg-purple-950 text-slate-100 rounded-2xl border border-pink-500/20 shadow-sm space-y-1.5 font-mono">
-              <div className="flex justify-between items-center text-[11px]">
+              <div className="grid grid-cols-2 gap-2 text-[10px]">
+                <div>
+                  <span className="text-purple-300 block">Base Rate ({fixedHours} Hrs)</span>
+                  <span className="font-extrabold text-white text-xs">{formatINR(baseRate)}</span>
+                </div>
+                <div>
+                  <span className="text-purple-300 block">Fuel Cost ({FUEL_COST_PERCENT}%)</span>
+                  <span className="font-extrabold text-white text-xs">{formatINR(fuelCost)}</span>
+                </div>
+              </div>
+              <div className="flex justify-between items-center text-[11px] pt-1">
                 <span className="text-pink-300 font-bold uppercase tracking-wider">Final Base Rate:</span>
-                <span className="font-extrabold text-white text-xs">₹{finalBaseRate.toLocaleString('en-IN')}</span>
+                <span className="font-extrabold text-white text-xs">{formatINR(finalBaseRate)}</span>
               </div>
               <span className="text-[9px] text-pink-300/60 block leading-tight mb-2">Calculated automatically as (Base Rate + Fuel Cost)</span>
-              
+
               <div className="h-px bg-pink-500/20" />
-              
+
+              <div className="grid grid-cols-2 gap-2 pt-1.5 text-[10px]">
+                <div>
+                  <span className="text-purple-300 block">Extra KM Amount</span>
+                  <span className="font-bold text-white">{formatINR(additionalKmCost)}</span>
+                </div>
+                <div>
+                  <span className="text-purple-300 block">Extra Hour Amount</span>
+                  <span className="font-bold text-white">{formatINR(additionalHourCost)}</span>
+                </div>
+              </div>
+
               <div className="grid grid-cols-3 gap-1 pt-1.5 text-[9.5px]">
-                <div>
-                  <span className="text-purple-300">Add KM (₹)</span>
-                  <input
-                    type="number"
-                    value={additionalKmCost || ''}
-                    onChange={(e) => setAdditionalKmCost(Number(e.target.value))}
-                    className="w-full bg-white/10 text-white rounded p-1 text-center font-bold font-mono text-[10px] focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <span className="text-purple-300">Add Hour (₹)</span>
-                  <input
-                    type="number"
-                    value={additionalHourCost || ''}
-                    onChange={(e) => setAdditionalHourCost(Number(e.target.value))}
-                    className="w-full bg-white/10 text-white rounded p-1 text-center font-bold font-mono text-[10px] focus:outline-none"
-                  />
-                </div>
                 <div>
                   <span className="text-purple-300">Tolls (₹)</span>
                   <input
@@ -910,9 +1046,6 @@ export default function WarehouseDetails({
                     className="w-full bg-white/10 text-white rounded p-1 text-center font-bold font-mono text-[10px] focus:outline-none"
                   />
                 </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 pt-1.5 text-[9.5px]">
                 <div>
                   <span className="text-purple-300">Parking (₹)</span>
                   <input
@@ -939,7 +1072,7 @@ export default function WarehouseDetails({
                 <span className="text-pink-300 font-extrabold uppercase tracking-widest text-xs flex items-center gap-1">
                   <Calculator className="w-3.5 h-3.5" /> Grand Total:
                 </span>
-                <span className="font-black text-emerald-400 text-sm">₹{grandTotal.toLocaleString('en-IN')}</span>
+                <span className="font-black text-emerald-400 text-sm">{formatINR(grandTotal)}</span>
               </div>
             </div>
 
@@ -1407,11 +1540,15 @@ export default function WarehouseDetails({
                 <div>
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">KM Slab</label>
                   <input
-                    type="text"
+                    type="number"
+                    list="km-slab-suggestions-edit"
                     value={editKmSlab}
                     onChange={(e) => setEditKmSlab(e.target.value)}
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:ring-1 focus:ring-pink-500 focus:outline-none"
                   />
+                  <datalist id="km-slab-suggestions-edit">
+                    {KM_SLAB_SUGGESTIONS.map(s => <option key={s} value={s} />)}
+                  </datalist>
                 </div>
                 <div>
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Contract Quantity</label>
@@ -1472,23 +1609,24 @@ export default function WarehouseDetails({
                 </div>
               </div>
 
-              {/* OT and Extra KM */}
+              {/* Add KM / Add Hour - Overtime is now captured via Add Hour
+                  instead of the old separate OT Vehicle Yes/No field. */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
                 <div>
-                  <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Overtime Vehicle</label>
-                  <input
-                    type="text"
-                    value={editOvertimeVehicle}
-                    onChange={(e) => setEditOvertimeVehicle(e.target.value)}
-                    className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Extra KM Run</label>
+                  <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1" title="km run beyond the KM Slab">Add KM</label>
                   <input
                     type="number"
                     value={editExtraKm}
                     onChange={(e) => setEditExtraKm(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1" title="hours run beyond Fixed Hours">Add Hour</label>
+                  <input
+                    type="number"
+                    value={editAddHour}
+                    onChange={(e) => setEditAddHour(Number(e.target.value))}
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2"
                   />
                 </div>
@@ -1503,45 +1641,98 @@ export default function WarehouseDetails({
                 </div>
               </div>
 
+              {/* Rate Configuration - same auto-calc system as Add Entry.
+                  Note for legacy records saved before this system existed:
+                  their original Base Rate/Grand Total stay exactly as
+                  already stored in reports/exports until Scheduled Rate
+                  etc. are entered here and this edit is saved. */}
+              <div className="p-3 bg-purple-50/40 rounded-xl border border-purple-100/50 space-y-2 text-xs">
+                <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wide">Rate Configuration</span>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  <div>
+                    <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Scheduled Rate (₹/mo)</label>
+                    <input type="number" value={editScheduledRate || ''} onChange={(e) => setEditScheduledRate(Number(e.target.value))}
+                      className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra KM</label>
+                    <input type="number" value={editRatePerExtraKm || ''} onChange={(e) => setEditRatePerExtraKm(Number(e.target.value))}
+                      className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra Hour</label>
+                    <input type="number" value={editRatePerExtraHour || ''} onChange={(e) => setEditRatePerExtraHour(Number(e.target.value))}
+                      className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                  </div>
+                  {editFixedHours === 24 && (
+                    <div>
+                      <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Variable Cost (₹/km)</label>
+                      <input type="number" value={editVariableCostPerKm || ''} onChange={(e) => setEditVariableCostPerKm(Number(e.target.value))}
+                        className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-2 bg-white rounded-lg border border-purple-100 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-bold text-purple-700 uppercase tracking-wide">Working Days</span>
+                    {editWorkingDaysOverride != null && (
+                      <button type="button" onClick={() => setEditWorkingDaysOverride(null)} className="text-[9px] text-pink-600 hover:text-pink-800 underline cursor-pointer">Reset to auto</button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input type="month" value={editWorkingMonth} onChange={(e) => setEditWorkingMonth(e.target.value)}
+                      className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 font-mono text-slate-800" />
+                    <input type="number" min={1} value={editWorkingDaysOverride ?? editWorkingDaysAuto}
+                      onChange={(e) => setEditWorkingDaysOverride(e.target.value ? Number(e.target.value) : null)}
+                      className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-1 text-[9px] font-semibold text-slate-600 cursor-pointer">
+                      <input type="checkbox" checked={editDeductSundays} onChange={(e) => setEditDeductSundays(e.target.checked)} /> Deduct Sundays
+                    </label>
+                    <div className="flex items-center gap-1">
+                      <span className="text-[9px] font-semibold text-slate-600">Holidays</span>
+                      <input type="number" min={0} value={editHolidaysCount || ''} onChange={(e) => setEditHolidaysCount(Number(e.target.value) || 0)}
+                        className="w-14 bg-slate-50 border border-purple-100 rounded p-1 text-[10px] font-bold text-slate-800" />
+                    </div>
+                  </div>
+                  <p className="text-[9px] text-slate-400 font-mono">Auto: {editWorkingDaysAuto} days</p>
+                </div>
+
+                {editFixedHours === 24 && (
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-[9px] font-bold text-purple-700 uppercase tracking-wide">KM per Day</label>
+                      {editKmPerDayOverride != null && (
+                        <button type="button" onClick={() => setEditKmPerDayOverride(null)} className="text-[9px] text-pink-600 hover:text-pink-800 underline cursor-pointer">Reset to auto</button>
+                      )}
+                    </div>
+                    <input type="number" value={editKmPerDayOverride ?? editKmPerDayAuto} onChange={(e) => setEditKmPerDayOverride(e.target.value ? Number(e.target.value) : null)}
+                      className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                  </div>
+                )}
+              </div>
+
               {/* Costing parameters & Calculations */}
               <div className="p-4 bg-purple-950 text-slate-100 rounded-2xl border border-pink-500/20 grid grid-cols-1 md:grid-cols-12 gap-4 font-mono">
-                
+
                 <div className="md:col-span-8 grid grid-cols-2 sm:grid-cols-4 gap-3.5 text-[9.5px]">
                   <div>
-                    <span className="text-purple-300 block mb-1">Base Rate (₹)</span>
-                    <input
-                      type="number"
-                      value={editBaseRate || ''}
-                      onChange={(e) => setEditBaseRate(Number(e.target.value))}
-                      className="w-full bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px] focus:outline-none"
-                    />
+                    <span className="text-purple-300 block mb-1">Base Rate ({editFixedHours} Hrs)</span>
+                    <div className="bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px]">{formatINR(editBaseRate)}</div>
                   </div>
                   <div>
-                    <span className="text-purple-300 block mb-1">Fuel Cost (₹)</span>
-                    <input
-                      type="number"
-                      value={editFuelCost || ''}
-                      onChange={(e) => setEditFuelCost(Number(e.target.value))}
-                      className="w-full bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px] focus:outline-none"
-                    />
+                    <span className="text-purple-300 block mb-1">Fuel Cost ({FUEL_COST_PERCENT}%)</span>
+                    <div className="bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px]">{formatINR(editFuelCost)}</div>
                   </div>
                   <div>
-                    <span className="text-purple-300 block mb-1">Add KM (₹)</span>
-                    <input
-                      type="number"
-                      value={editAdditionalKmCost || ''}
-                      onChange={(e) => setEditAdditionalKmCost(Number(e.target.value))}
-                      className="w-full bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px] focus:outline-none"
-                    />
+                    <span className="text-purple-300 block mb-1">Extra KM Amount</span>
+                    <div className="bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px]">{formatINR(editAdditionalKmCost)}</div>
                   </div>
                   <div>
-                    <span className="text-purple-300 block mb-1">Add Hour (₹)</span>
-                    <input
-                      type="number"
-                      value={editAdditionalHourCost || ''}
-                      onChange={(e) => setEditAdditionalHourCost(Number(e.target.value))}
-                      className="w-full bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px] focus:outline-none"
-                    />
+                    <span className="text-purple-300 block mb-1">Extra Hour Amount</span>
+                    <div className="bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px]">{formatINR(editAdditionalHourCost)}</div>
                   </div>
 
                   <div>
@@ -1574,15 +1765,15 @@ export default function WarehouseDetails({
                   <div>
                     <span className="text-purple-300 block mb-1">Final Base (₹)</span>
                     <div className="bg-white/5 text-pink-300 rounded p-1.5 text-center font-bold font-mono text-[11px] border border-white/5">
-                      ₹{editFinalBaseRate}
+                      {formatINR(editFinalBaseRate)}
                     </div>
                   </div>
                 </div>
 
                 <div className="md:col-span-4 bg-white/5 border border-white/5 p-3 rounded-xl flex flex-col justify-center items-center text-center">
                   <span className="text-pink-300 font-extrabold uppercase tracking-widest text-[10px] mb-1">Re-calculated Grand Total</span>
-                  <span className="font-black text-emerald-400 text-lg">₹{editGrandTotal.toLocaleString('en-IN')}</span>
-                  <span className="text-[9px] text-slate-300 mt-1 leading-normal">Sums final base rate, extra KM, extra hours, toll & parking logs.</span>
+                  <span className="font-black text-emerald-400 text-lg">{formatINR(editGrandTotal)}</span>
+                  <span className="text-[9px] text-slate-300 mt-1 leading-normal">Base Rate + Fuel Cost + Extra KM + Extra Hour + toll/parking/hybrid-reefer logs.</span>
                 </div>
 
               </div>

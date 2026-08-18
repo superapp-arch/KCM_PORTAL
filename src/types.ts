@@ -357,9 +357,17 @@ export interface VehicleMaintenanceProfile {
 export interface VehicleServiceSchedule {
   id: string; // Reg. No.
   regNo: string;
+  // General record shown on the Vehicle Service Schedule tab itself - no
+  // longer drives a km-based cycle/Cycle Alert (that UI was removed; the
+  // Washing and AC Service tabs below are the two real fixed-cycle
+  // registers now). serviceIntervalKm/lastServiceKm are kept only so
+  // pre-existing data isn't lost - nothing computes from them anymore.
   lastServiceDate?: string; // YYYY-MM-DD
   lastServiceKm?: number;
   serviceIntervalKm: number; // default 10,000 km
+  // Manual Completed/Pending flag for the Vehicle Service Schedule tab's own
+  // Service Status column - no longer derived from km remaining.
+  serviceStatus?: 'Completed' | 'Pending';
   // The status the office has recorded (e.g. voided early, or genuinely
   // still under the manufacturer's warranty). This is a FLOOR only in the
   // "OutOfWarranty" direction - computeWarrantyStatus() in maintenanceDates.ts
@@ -370,35 +378,45 @@ export interface VehicleServiceSchedule {
   warrantyExpiryDate?: string; // optional manual tracking, nullable
   warrantyExpiryKm?: number; // optional manual tracking, nullable
   remarks?: string;
-  // Washing cycle - Walkes-category vehicles only (Reefer/Hybrid instead use
-  // lastServiceDate above for their own fixed-day service cycle - one real
-  // "when was this vehicle last serviced" fact, shared with the km-based
-  // system this record already drives). See cycleDays/reminderDays below for
-  // the per-vehicle cycle length/reminder thresholds both cycles use.
+
+  // --- Washing tab (Walkes/Reefer/Hybrid, fixed 10-day cycle, 2-day-before
+  // reminder - see WASHING_CYCLE_DAYS/WASHING_CATEGORIES in
+  // utils/vehicleCycleDefaults.ts). Next Due = lastWashingDate + 10 days,
+  // defaulting to today when lastWashingDate is unset (a never-yet-washed
+  // vehicle still shows a live preview instead of a blank dash).
   lastWashingDate?: string; // YYYY-MM-DD
-  // Per-vehicle overrides for the Service Due (Reefer/Hybrid) / Washing Due
-  // (Walkes) calendar cycle - unset means "use this vehicle's category
-  // default" (see VEHICLE_CYCLE_DEFAULTS in utils/vehicleCycleDefaults.ts),
-  // set means the office has deliberately overridden it for this vehicle.
-  // There is no global admin settings panel anymore - the category defaults
-  // are fixed in code and this is the only place they can be customized.
+  washingStatus?: 'Completed' | 'Pending';
+  // --- AC Service tab (Hybrid/Reefer only, fixed 40-day cycle, 2-day-before
+  // reminder - see AC_SERVICE_CYCLE_DAYS/AC_SERVICE_CATEGORIES). A separate
+  // date from lastServiceDate above - AC servicing is its own maintenance
+  // activity, not the same event as a general/odometer-based service.
+  lastAcServiceDate?: string; // YYYY-MM-DD
+  acServiceStatus?: 'Completed' | 'Pending';
+
+  // Retired - cycleDays/reminderDays used to let each vehicle override the
+  // (also now-retired) combined Service Due/Washing Due cycle. The Washing
+  // and AC Service tabs above use fixed, non-configurable cycle lengths
+  // instead. Kept only so any previously-saved value can still be read;
+  // nothing writes to them anymore.
   cycleDays?: number;
-  reminderDays?: number[]; // days-before-due countdown, e.g. [15, 7, 3]
-  // Snapshot of the previous value every time lastServiceDate/lastServiceKm
-  // or lastWashingDate is changed and saved - newest first. Purely a display
-  // history; the cycle math above only ever reads the current
-  // lastServiceDate/lastWashingDate fields.
+  reminderDays?: number[];
+  // Snapshot of the previous value every time lastServiceDate/lastServiceKm,
+  // lastWashingDate, or lastAcServiceDate is changed and saved - newest
+  // first. Purely a display history; the cycle math only ever reads the
+  // current date fields above.
   serviceHistory?: { date: string; km?: number }[];
   washingHistory?: { date: string }[];
+  acServiceHistory?: { date: string }[];
 }
 
 // Retired - Service Schedule's Service Due/Washing Due cycle lengths and
 // reminder-day thresholds used to be a single global row edited from an
-// Alert Settings panel; they are now fixed per-category defaults
-// (VEHICLE_CYCLE_DEFAULTS in utils/vehicleCycleDefaults.ts) with per-vehicle
-// overrides on VehicleServiceSchedule.cycleDays/reminderDays instead. This
-// type, its DB table, and the /api/alert-settings routes are kept only so
-// any previously-saved row can still be read; nothing writes to it anymore.
+// Alert Settings panel, then briefly a fixed-per-category default with a
+// per-vehicle override (VehicleServiceSchedule.cycleDays/reminderDays).
+// Both are superseded by the Washing/AC Service tabs' own fixed cycles (see
+// WASHING_CYCLE_DAYS/AC_SERVICE_CYCLE_DAYS in utils/vehicleCycleDefaults.ts).
+// This type, its DB table, and the /api/alert-settings routes are kept only
+// so any previously-saved row can still be read; nothing writes to it anymore.
 export interface AlertSettings {
   id: string; // fixed singleton id, see DEFAULT_ALERT_SETTINGS
   reeferHybridServiceCycleDays: number; // default 40
@@ -734,7 +752,7 @@ export interface DashboardNotification {
   id: string;
   title: string;
   message: string;
-  type: 'security' | 'insurance' | 'permit' | 'fc' | 'tax' | 'general' | 'service-due' | 'alignment-due' | 'birthday' | 'washing-due';
+  type: 'security' | 'insurance' | 'permit' | 'fc' | 'tax' | 'general' | 'service-due' | 'alignment-due' | 'birthday' | 'washing-due' | 'ac-service-due';
   timestamp: string;
   read: boolean;
   vehicleRegNo?: string;
@@ -760,19 +778,45 @@ export interface WarehouseEntry {
   closureTime: string;
   kmUtilised: number;
   hoursDaysAsPerContract: number;
+  // Retired - overtime is now captured via addHour/additionalHourCost below
+  // instead of a separate Yes/No field. Kept only so already-saved entries
+  // still show their original value in reports/exports; the Add/Edit forms
+  // no longer have an input for it.
   overtimeVehicle: string;
-  extraKm: number;
-  baseRate: number;
-  fuelCost: number;
+  extraKm: number; // "Add KM" - km run beyond kmSlab, manually entered
+  baseRate: number; // auto-computed (see scheduledRate/workingDays below) - kept manually editable for pre-existing records saved before this existed
+  fuelCost: number; // auto = baseRate * FUEL_COST_PERCENT (see utils/warehouseRates.ts) - same backward-compat note as baseRate
   finalBaseRate: number;
-  additionalKmCost: number;
-  additionalHourCost: number;
+  additionalKmCost: number; // auto = extraKm * ratePerExtraKm
+  additionalHourCost: number; // auto = addHour * ratePerExtraHour
   tollCharges: number;
   parkingCost: number;
   hybridReeferCost: number;
   grandTotal: number;
   vendorRemarks: string;
   documents?: VehicleDocument[];
+
+  // --- Rate-calculation inputs, saved alongside the computed results above
+  // so a past record's Base Rate/Fuel Cost/Grand Total still reconciles even
+  // after the Scheduled Rate, per-km/per-hour rates, or fuel % config
+  // changes later - the record carries the exact inputs used at the time,
+  // not just the output. All optional so pre-existing entries (saved before
+  // this system existed) are unaffected and keep showing their own already-
+  // stored baseRate/fuelCost/etc above untouched.
+  scheduledRate?: number; // fixed monthly rate Base Rate (12 Hrs) divides by Working Days
+  workingMonth?: string; // YYYY-MM the Working Days calendar was computed for
+  workingDaysAuto?: number; // calendar days in workingMonth, minus Sundays/holidays per the flags below
+  deductSundays?: boolean;
+  holidaysCount?: number;
+  workingDaysOverride?: number; // set only when the user overrides the auto-computed Working Days ("Reset to auto" clears this)
+  workingDays?: number; // the value actually used in the formula = workingDaysOverride ?? workingDaysAuto (>= 1, never 0)
+  ratePerExtraKm?: number; // Rs per km beyond kmSlab - multiplies extraKm into additionalKmCost
+  addHour?: number; // "Add Hour" - hours run beyond fixedHours, manually entered
+  ratePerExtraHour?: number; // Rs per hour beyond fixedHours - multiplies addHour into additionalHourCost
+  variableCostPerKm?: number; // 24 Hrs only - Rs/km term in the 24 Hrs Base Rate formula
+  kmPerDayAuto?: number; // 24 Hrs only - auto = kmSlab / workingDays
+  kmPerDayOverride?: number; // 24 Hrs only - set only when the user overrides kmPerDayAuto
+  kmPerDay?: number; // 24 Hrs only - the value actually used = kmPerDayOverride ?? kmPerDayAuto
 }
 
 export interface MileageReport {

@@ -24,27 +24,23 @@ export function matchVehicleCategoryOption(cat: string | undefined | null): Vehi
   return VEHICLE_CATEGORIES.find(c => normalizeVehicleCategory(c) === norm) || VEHICLE_CATEGORIES[0];
 }
 
-export interface CycleDefault {
-  alertType: 'Service Due' | 'Washing Due';
-  cycleDays: number;
-  reminderDays: number[]; // days-before-due countdown, e.g. [15, 7, 3]
-  dateField: 'lastServiceDate' | 'lastWashingDate';
-}
+// Fleet Maintenance -> Service Schedule's two dedicated cycle tabs (Washing,
+// AC Service) - fixed, non-configurable cycle lengths and a fixed 2-day-
+// before reminder for both (no per-vehicle override, unlike the retired
+// cycleDefaultFor system this replaced). Category scope differs per tab:
+// Washing covers Walkes/Reefer/Hybrid; AC Service covers Hybrid/Reefer only
+// - Dry never appears in either. Shared here (rather than duplicated in
+// ServiceScheduleTab.tsx and server.ts) so the UI's Next Due/Remaining Days
+// Left preview and the server's actual reminder-email cron can never
+// disagree.
+export const REMINDER_DAYS_BEFORE_DUE = 2;
 
-// Confirmed defaults: Reefer/Hybrid get a 40-day Service Due cycle with a
-// 15/7/3-day countdown; Walkes gets a 15-day Washing Due cycle with a
-// 7/5/3-day countdown. Dry has no calendar cycle at all - it only ever gets
-// the separate km-based Service Status column in Service Schedule. These are
-// fixed in code (not an admin-editable settings panel); a vehicle's own
-// VehicleServiceSchedule.cycleDays/reminderDays overrides them per-vehicle
-// (see ServiceScheduleTab.tsx).
-export const VEHICLE_CYCLE_DEFAULTS: Record<string, CycleDefault | null> = {
-  dry: null,
-  reefer: { alertType: 'Service Due', cycleDays: 40, reminderDays: [15, 7, 3], dateField: 'lastServiceDate' },
-  hybrid: { alertType: 'Service Due', cycleDays: 40, reminderDays: [15, 7, 3], dateField: 'lastServiceDate' },
-  walkes: { alertType: 'Washing Due', cycleDays: 15, reminderDays: [7, 5, 3], dateField: 'lastWashingDate' },
-};
+export const WASHING_CYCLE_DAYS = 10;
+export const WASHING_CATEGORIES: readonly string[] = ['walkes', 'reefer', 'hybrid'];
+export const isWashingEligible = (category: string | undefined | null): boolean =>
+  WASHING_CATEGORIES.includes(normalizeVehicleCategory(category));
 
-export function cycleDefaultFor(category: string | undefined | null): CycleDefault | null {
-  return VEHICLE_CYCLE_DEFAULTS[normalizeVehicleCategory(category)] ?? null;
-}
+export const AC_SERVICE_CYCLE_DAYS = 40;
+export const AC_SERVICE_CATEGORIES: readonly string[] = ['hybrid', 'reefer'];
+export const isAcServiceEligible = (category: string | undefined | null): boolean =>
+  AC_SERVICE_CATEGORIES.includes(normalizeVehicleCategory(category));

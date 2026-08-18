@@ -173,6 +173,70 @@ function RqIdEditableCell({ log, onSave }: { log: FuelLog; onSave: (id: string, 
   );
 }
 
+// Save-confirmation toast - anchored directly below the Commit/Update Entry
+// button (not a screen-corner snackbar) so it lands exactly where the
+// user's attention already is right after they click, useful for someone
+// logging many entries back-to-back. Auto-dismisses itself after ~3s; no
+// manual close needed. The parent remounts this with a fresh React `key` on
+// every save (see saveConfirmation state below), which re-runs the
+// useMemo'd confetti burst from scratch each time - including two saves in
+// a row for the same or different Indent No.
+function SaveConfirmationToast({ indentNumber, onDone }: { indentNumber: string; onDone: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDone, 3000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A mixed-color, mixed-shape confetti burst radiating outward from the
+  // checkmark - angles/distances/colors/shapes randomized once per mount.
+  const pieces = React.useMemo(() => {
+    const colors = ['#f43f5e', '#f59e0b', '#10b981', '#3b82f6', '#a855f7', '#ec4899', '#facc15', '#14b8a6'];
+    return Array.from({ length: 14 }, (_, i) => {
+      const angle = (Math.PI * 2 * i) / 14 + (Math.random() - 0.5) * 0.7;
+      const distance = 24 + Math.random() * 20;
+      return {
+        id: i,
+        color: colors[i % colors.length],
+        shape: i % 3, // 0 circle, 1 square, 2 diamond
+        x: Math.cos(angle) * distance,
+        y: Math.sin(angle) * distance,
+        rotate: Math.random() * 360,
+        size: 5 + Math.random() * 4
+      };
+    });
+  }, []);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -6, scale: 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -6, scale: 0.95 }}
+      transition={{ type: 'spring', damping: 22, stiffness: 320 }}
+      className="mt-2 bg-white border border-emerald-200 rounded-xl shadow-md px-3 py-2.5 flex items-center gap-2.5"
+    >
+      <div className="relative shrink-0 w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center">
+        <Check className="w-3.5 h-3.5 text-white" strokeWidth={3} />
+        {pieces.map(p => (
+          <motion.span
+            key={p.id}
+            initial={{ opacity: 1, x: 0, y: 0, scale: 1, rotate: 0 }}
+            animate={{ opacity: 0, x: p.x, y: p.y, scale: 0.4, rotate: p.rotate }}
+            transition={{ duration: 0.7, ease: 'easeOut' }}
+            className="absolute left-1/2 top-1/2 pointer-events-none"
+            style={{
+              width: p.size, height: p.size, backgroundColor: p.color,
+              borderRadius: p.shape === 0 ? '9999px' : p.shape === 1 ? '2px' : '1px',
+              transform: p.shape === 2 ? 'rotate(45deg)' : undefined
+            }}
+          />
+        ))}
+      </div>
+      <span className="text-xs font-bold text-slate-800">Indent no. <span className="font-mono text-emerald-700">{indentNumber}</span> saved</span>
+    </motion.div>
+  );
+}
+
 export default function FuelManagement({
   user,
   logs,
@@ -218,6 +282,11 @@ export default function FuelManagement({
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  // Save-confirmation toast (confetti + "Indent no. X saved") anchored below
+  // the Commit/Update Entry button - see SaveConfirmationToast. `key`
+  // increments on every save so React remounts it fresh each time, even for
+  // back-to-back saves of the same Indent No.
+  const [saveConfirmation, setSaveConfirmation] = useState<{ indentNumber: string; key: number } | null>(null);
 
   // Period-based report download - reference date + day/month/year-till-date dropdown.
   const [downloadDate, setDownloadDate] = useState(new Date().toISOString().slice(0, 10));
@@ -666,7 +735,14 @@ export default function FuelManagement({
     }
   };
 
-  const resetForm = () => {
+  // keepOpen=true (used only right after a successful save, see
+  // handleSubmit) resets every field for a fresh entry but leaves the
+  // sidebar open, so the office can keep logging entries back-to-back
+  // without reopening it each time, and so the save-confirmation toast
+  // below the Commit button actually has something to render under. Every
+  // other caller (Cancel, the header X, the backdrop click) still closes it
+  // as before.
+  const resetForm = (keepOpen = false) => {
     setEditingId(null);
     setPeriod(new Date().toISOString().slice(0, 7));
     setDate(new Date().toISOString().slice(0, 10));
@@ -699,7 +775,14 @@ export default function FuelManagement({
     setMileageFormVehicleNo('');
     setMileageFormValue('');
     setEntrySection('details');
-    setShowSidebar(false);
+    if (!keepOpen) {
+      setShowSidebar(false);
+      // Otherwise a stale toast from a previous save could flash back up the
+      // next time the sidebar reopens, well after its own 3s auto-dismiss
+      // should have cleared it (its timer only runs while mounted, i.e.
+      // while the sidebar showing it stays open).
+      setSaveConfirmation(null);
+    }
   };
 
   const startEdit = (log: FuelLog) => {
@@ -872,7 +955,13 @@ export default function FuelManagement({
         await onAddLog(payload);
         triggerNotif('Fuel entry logged successfully!');
       }
-      resetForm();
+      // Save-confirmation toast (below the Commit/Update button) - captures
+      // the just-saved Indent No. before resetForm() clears the field, and
+      // bumps `key` so a fresh confetti burst plays even for back-to-back
+      // saves. The form is already reset/ready for the next entry by the
+      // time this shows.
+      setSaveConfirmation({ indentNumber: payload.indentNumber || '-', key: Date.now() });
+      resetForm(true);
     } catch (err) {
       console.error(err);
       // Surfaces the server's actual message (e.g. a duplicate Indent No.
@@ -1441,7 +1530,7 @@ export default function FuelManagement({
       <AnimatePresence>
         {showSidebar && (
           <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex justify-end z-50">
-            <div className="absolute inset-0" onClick={resetForm} />
+            <div className="absolute inset-0" onClick={() => resetForm()} />
             <motion.div
               initial={{ x: '100%' }}
               animate={{ x: 0 }}
@@ -1459,7 +1548,7 @@ export default function FuelManagement({
                     KCM Logistics Fuel Desk
                   </span>
                 </div>
-                <button onClick={resetForm} className="p-1.5 rounded-lg hover:bg-white/10 text-slate-200 hover:text-white cursor-pointer">
+                <button onClick={() => resetForm()} className="p-1.5 rounded-lg hover:bg-white/10 text-slate-200 hover:text-white cursor-pointer">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -2067,7 +2156,7 @@ export default function FuelManagement({
               </div>
 
               <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-2">
-                <button type="button" onClick={resetForm} className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 transition-colors uppercase text-[10px] cursor-pointer">
+                <button type="button" onClick={() => resetForm()} className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 transition-colors uppercase text-[10px] cursor-pointer">
                   Cancel
                 </button>
                 <button
@@ -2083,6 +2172,21 @@ export default function FuelManagement({
                     </>
                   ) : editingId ? 'Update Entry' : 'Commit Entry'}
                 </button>
+              </div>
+              {/* Save-confirmation toast - directly below the button, not a
+                  screen-corner snackbar (see SaveConfirmationToast above).
+                  Keyed by saveConfirmation.key so it fully remounts (fresh
+                  confetti) on every save, including consecutive ones. */}
+              <div className="px-4 pb-4 bg-slate-50">
+                <AnimatePresence>
+                  {saveConfirmation && (
+                    <SaveConfirmationToast
+                      key={saveConfirmation.key}
+                      indentNumber={saveConfirmation.indentNumber}
+                      onDone={() => setSaveConfirmation(null)}
+                    />
+                  )}
+                </AnimatePresence>
               </div>
             </motion.div>
           </div>
