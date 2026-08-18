@@ -434,14 +434,15 @@ async function requirePettyCashAccess(req: express.Request, res: express.Respons
   next();
 }
 
-// Warehouse Details is super-admin-only for now (the user may open it up to
-// specific other roles later - this is the one place to widen that).
+// Warehouse Details is super-admin-only, plus Bhagya explicitly (mirrors
+// Administration.tsx's own hasAccess('warehouse') check - this is the one
+// place to widen it further to other roles later).
 async function requireWarehouseAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
-  if (sessionUser.department !== 'super_admin') {
+  if (sessionUser.department !== 'super_admin' && sessionUser.email !== 'bhagya@kcmlogistics.in') {
     return res.status(403).json({ error: 'You do not have access to Warehouse Details.' });
   }
   next();
@@ -2889,7 +2890,7 @@ async function startServer() {
     }
   });
 
-  // Warehouse Details endpoints - super-admin-only for now
+  // Warehouse Details endpoints - super-admin + Bhagya (see requireWarehouseAccess)
   app.use('/api/warehouse', requireWarehouseAccess);
 
   app.get('/api/warehouse', async (req, res) => {

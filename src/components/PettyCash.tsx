@@ -122,7 +122,6 @@ const EXPENSE_CATEGORIES = [
 ];
 
 const CLIENT_NAMES = ["Swiggy", "Reliance F&V", "Market Load", "KCM", "Other"];
-const VENDORS = ["kcm insta", "kcm supply"];
 
 // Locations selectable (dropdown/type-to-search) for Ramesh's Petty Cash
 // login only - every other login keeps the free-text Location field.
@@ -193,7 +192,14 @@ export default function PettyCash({
   // Search & Filters state
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('All');
-  const [selectedVendorFilter, setSelectedVendorFilter] = useState('All');
+  // Client / Vehicle No / Receiver filters - all populated dynamically from
+  // whatever's actually been entered in the ledger (see usedClientNames/
+  // usedVehicleNumbers/usedReceivers below), not a fixed suggestion list, so
+  // a newly-typed client/receiver or a newly-used vehicle immediately shows
+  // up as a filter option too.
+  const [selectedClientFilter, setSelectedClientFilter] = useState('All');
+  const [selectedVehicleFilter, setSelectedVehicleFilter] = useState('All');
+  const [selectedReceiverFilter, setSelectedReceiverFilter] = useState('All');
   // Defaults to newest-first by Date (the "Sort by" dropdown's default) so
   // the most recent entry is always on top when the module opens fresh -
   // still fully overridable via the column sort headers or the dropdown.
@@ -832,7 +838,15 @@ export default function PettyCash({
     }
   };
 
-  // Filter vouchers based on search, vendor, category, year and month
+  // Client / Vehicle No / Receiver filter option lists - dynamic, sourced
+  // straight from the actual ledger (not a fixed suggestion list), so any
+  // newly-entered value immediately becomes a filterable option. Vehicle No
+  // merges both vehicleNumber and vendorVehicleNumber, per direct instruction.
+  const usedClientNames = Array.from(new Set(vouchers.map(v => v.clientName).filter(Boolean))).sort();
+  const usedVehicleNumbers = Array.from(new Set(vouchers.flatMap(v => [v.vehicleNumber, v.vendorVehicleNumber]).filter((n): n is string => !!n))).sort();
+  const usedReceivers = Array.from(new Set(vouchers.map(v => v.receiver).filter(Boolean))).sort();
+
+  // Filter vouchers based on search, client, vehicle, receiver, category, year and month
   const filteredVouchersUnsorted = vouchers.filter(v => {
     // Search Term matching (EntryNo, Category, Location, Receiver, VehicleNumber, ClientName)
     const matchesSearch =
@@ -843,7 +857,9 @@ export default function PettyCash({
       (v.vehicleNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (v.clientName || '').toLowerCase().includes(searchTerm.toLowerCase());
 
-    const matchesVendor = selectedVendorFilter === 'All' || v.vendor === selectedVendorFilter;
+    const matchesClient = selectedClientFilter === 'All' || v.clientName === selectedClientFilter;
+    const matchesVehicle = selectedVehicleFilter === 'All' || v.vehicleNumber === selectedVehicleFilter || v.vendorVehicleNumber === selectedVehicleFilter;
+    const matchesReceiver = selectedReceiverFilter === 'All' || v.receiver === selectedReceiverFilter;
     const matchesCategory = selectedCategoryFilter === 'All' || v.category === selectedCategoryFilter;
 
     // Date filtering (Date structure is YYYY-MM-DD or DD-MM-YYYY)
@@ -853,7 +869,7 @@ export default function PettyCash({
     const matchesYear = filterYear === 'All' || year === filterYear;
     const matchesMonth = filterMonth === 'All' || month === filterMonth;
 
-    return matchesSearch && matchesVendor && matchesCategory && matchesYear && matchesMonth;
+    return matchesSearch && matchesClient && matchesVehicle && matchesReceiver && matchesCategory && matchesYear && matchesMonth;
   });
 
   const filteredVouchers = sort
@@ -1399,7 +1415,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 <span className="flex items-center gap-1"><Filter className="w-3 h-3 text-teal-600" /> Filters & Historical Lookup</span>
                 <span>Matches: {filteredVouchers.length} entries</span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-6 gap-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5">
                 {/* Sort By - Newest First (default) / Oldest First. Reuses
                     the same `sort` state the column headers drive, so it's
                     always exactly what's currently applied - re-sorts the
@@ -1446,21 +1462,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   </select>
                 </div>
 
-                {/* Vendor Filter */}
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Vendor filter</label>
-                  <select
-                    value={selectedVendorFilter}
-                    onChange={(e) => setSelectedVendorFilter(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-bold uppercase text-[9px] text-slate-700"
-                  >
-                    <option value="All">All Vendors</option>
-                    {VENDORS.map((v, idx) => (
-                      <option key={idx} value={v}>{v}</option>
-                    ))}
-                  </select>
-                </div>
-
                 {/* Category Filter */}
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Category Filter</label>
@@ -1472,6 +1473,56 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <option value="All">All Categories</option>
                     {EXPENSE_CATEGORIES.map((cat, idx) => (
                       <option key={idx} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Client Filter - dynamic from whatever clientName values
+                    are actually in the ledger (see usedClientNames above),
+                    not the fixed CLIENT_NAMES suggestion list, so a custom
+                    "Other" client someone typed in shows up here too. */}
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Client</label>
+                  <select
+                    value={selectedClientFilter}
+                    onChange={(e) => setSelectedClientFilter(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-semibold text-slate-700"
+                  >
+                    <option value="All">All Clients</option>
+                    {usedClientNames.map((c, idx) => (
+                      <option key={idx} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Vehicle No Filter - merges Vehicle # and Vendor Vehicle #
+                    from the ledger into one searchable list. */}
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Vehicle No</label>
+                  <input
+                    type="text"
+                    list="petty-cash-vehicle-filter-options"
+                    placeholder="All Vehicles"
+                    value={selectedVehicleFilter === 'All' ? '' : selectedVehicleFilter}
+                    onChange={(e) => setSelectedVehicleFilter(e.target.value.trim() ? e.target.value.toUpperCase() : 'All')}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-semibold text-slate-700 uppercase"
+                  />
+                  <datalist id="petty-cash-vehicle-filter-options">
+                    {usedVehicleNumbers.map((n, idx) => <option key={idx} value={n} />)}
+                  </datalist>
+                </div>
+
+                {/* Receiver Filter - dynamic from the ledger, same rule as Client. */}
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Receiver</label>
+                  <select
+                    value={selectedReceiverFilter}
+                    onChange={(e) => setSelectedReceiverFilter(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-semibold text-slate-700"
+                  >
+                    <option value="All">All Receivers</option>
+                    {usedReceivers.map((r, idx) => (
+                      <option key={idx} value={r}>{r}</option>
                     ))}
                   </select>
                 </div>

@@ -410,7 +410,7 @@ export default function Administration({
   // Safe tab filter based on department constraint
   const hasAccess = (tabName: string): boolean => {
     if (user.department === 'super_admin') return true;
-    // Warehouse Details is super-admin-only for now; may open up to other roles later.
+    if (tabName === 'warehouse' && user.email === 'bhagya@kcmlogistics.in') return true;
     if ((tabName === 'fuel' || tabName === 'mileage') && FUEL_ACCESS_EMAILS.includes(user.email || '')) return true;
     if (tabName === 'fuel' && FUEL_RQ_ID_ONLY_EMAILS.includes(user.email || '')) return true;
     if (tabName === 'fleet' && (user.department === 'vehicle_manager' || user.email === 'bhagya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in')) return true;
