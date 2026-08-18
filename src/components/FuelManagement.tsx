@@ -41,6 +41,15 @@ const BUNK_NAMES = [
 
 const CLIENTS = ['KCM', 'Swiggy', 'Reliance', 'Market Vehicle', 'Shadowfax'];
 
+// Extra Fuel accepts a sum-of-numbers expression typed directly into the
+// field (e.g. "30+40" for two separate top-ups during one trip - say
+// Bangalore->Mysore, one top-up mid-route and another near the destination)
+// instead of requiring the office to add them up by hand first or needing
+// two separate fields; a single plain number still works exactly as before.
+// Non-numeric/empty segments are ignored rather than breaking the whole sum.
+const sumExtraFuelExpression = (raw: string): number =>
+  raw.split('+').map(s => parseFloat(s.trim())).filter(n => !isNaN(n)).reduce((sum, n) => sum + n, 0);
+
 // Resolves the [start, end] date-string window (inclusive) for a "Day /
 // Monthly Till Date / Year Till Date" period relative to a reference date -
 // shared by the on-screen ledger's view-scope tabs and the "Download Fuel
@@ -190,7 +199,13 @@ export default function FuelManagement({
   const isRqIdOnlyUser = user.email === 'divya@kcmlogistics.in';
 
   const [searchTerm, setSearchTerm] = useState('');
+  // Bunk Name filter - shared between the on-screen ledger, the Download
+  // Fuel Report panel, and Bunk Summary's own download (picking a bunk to
+  // view also scopes what gets downloaded, which is the expected pairing).
   const [bunkFilter, setBunkFilter] = useState('All');
+  // Bunk/Card filter - whichever payment method (Bunk vs Card) an entry was
+  // logged under, independent of the Bunk Name filter above.
+  const [bunkOrCardFilter, setBunkOrCardFilter] = useState<'All' | 'Bunk' | 'Card'>('All');
   // Defaults to Indent No descending (highest/most-recent indent number
   // first), NOT Date - Indent Nos are entered by hand and don't necessarily
   // land in date order, so sorting by Date scrambled them and made it hard
@@ -261,6 +276,7 @@ export default function FuelManagement({
   const [mOpeningKm, setMOpeningKm] = useState('');
   const [mClosingKm, setMClosingKm] = useState('');
   const [mTotalKm, setMTotalKm] = useState('');
+  const [mTotalLtrs, setMTotalLtrs] = useState(''); // Litres + Extra Fuel - see sumExtraFuelExpression
   const [mMileage, setMMileage] = useState('');
   const [mCostPerKm, setMCostPerKm] = useState('');
   const [mActualMileage, setMActualMileage] = useState('');
@@ -330,8 +346,11 @@ export default function FuelManagement({
     if (matchedMileageDriver) setMDriverId(matchedMileageDriver.id);
   }, [matchedMileageDriver]);
 
-  // Bunks actually used in the ledger so far, for the bunk-wise download filter
-  const usedBunks = Array.from(new Set(logs.map(l => l.bunkName).filter(Boolean))).sort();
+  // Every bunk name available to filter by - the fixed BUNK_NAMES list plus
+  // any other bunk name that's actually shown up in the ledger (a new bunk
+  // typed in that isn't in the fixed list yet) - used by both the ledger's
+  // own Bunk Name filter and the Download/Bunk Summary panels below.
+  const usedBunks = Array.from(new Set([...BUNK_NAMES, ...logs.map(l => l.bunkName).filter(Boolean)])).sort();
 
   // Amount auto-calc = Ltrs * Rate (editable override afterward)
   useEffect(() => {
@@ -502,13 +521,24 @@ export default function FuelManagement({
     setMTotalKm(c >= o ? String(c - o) : '0');
   }, [mOpeningKm, mClosingKm]);
 
-  // Mileage (this trip, real achieved efficiency) = Total KM / Ltrs (from
-  // the Fuel Entry section above, not re-entered here).
+  // Total Ltrs = Litres (from the Fuel Entry section above) + Extra Fuel -
+  // the actual total fuel consumed this trip, including any mid-trip
+  // top-up(s). Extra Fuel accepts a sum expression like "30+40" - see
+  // sumExtraFuelExpression.
+  useEffect(() => {
+    const l = parseFloat(ltrs) || 0;
+    const extra = sumExtraFuelExpression(mExtraFuel);
+    setMTotalLtrs(String(parseFloat((l + extra).toFixed(2))));
+  }, [ltrs, mExtraFuel]);
+
+  // Mileage (this trip, real achieved efficiency) = Total KM / Total Ltrs -
+  // NOT the bare Litres field, since fuel topped up mid-trip is fuel that
+  // trip actually used.
   useEffect(() => {
     const tKm = parseFloat(mTotalKm) || 0;
-    const l = parseFloat(ltrs) || 0;
-    setMMileage(l > 0 ? String(parseFloat((tKm / l).toFixed(2))) : '0');
-  }, [mTotalKm, ltrs]);
+    const tL = parseFloat(mTotalLtrs) || 0;
+    setMMileage(tL > 0 ? String(parseFloat((tKm / tL).toFixed(2))) : '0');
+  }, [mTotalKm, mTotalLtrs]);
 
   // Cost per KM = Rate per Litre (from Fuel Entry) / Mileage (this trip)
   useEffect(() => {
@@ -520,7 +550,7 @@ export default function FuelManagement({
   // Total Amount = Diesel Amount (from Fuel Entry) + (Extra Fuel * new Rate)
   useEffect(() => {
     const diesel = parseFloat(amount) || 0;
-    const extra = parseFloat(mExtraFuel) || 0;
+    const extra = sumExtraFuelExpression(mExtraFuel);
     const rateNew = parseFloat(mRatePerLitreNew) || 0;
     setMTotalAmount(String(parseFloat((diesel + extra * rateNew).toFixed(2))));
   }, [amount, mExtraFuel, mRatePerLitreNew]);
@@ -692,13 +722,22 @@ export default function FuelManagement({
         // handleSubmit exactly, using this form's rate/litres/amount/date/
         // vehicle/location instead of separately-entered values.
         const calculatedTotalKm = cKm - oKm;
-        const calculatedMileage = l > 0 ? parseFloat((calculatedTotalKm / l).toFixed(2)) : 0;
+        // Total Ltrs (Litres + Extra Fuel, e.g. "30+40" for two top-ups
+        // during one trip) is what actually got consumed, not just the main
+        // fill-up - Mileage/Cost-per-KM/the fuel-theft audit all key off it.
+        const extra = sumExtraFuelExpression(mExtraFuel);
+        const totalLitres = parseFloat((l + extra).toFixed(2));
+        const calculatedMileage = totalLitres > 0 ? parseFloat((calculatedTotalKm / totalLitres).toFixed(2)) : 0;
         const calculatedCostPerKm = calculatedMileage > 0 ? parseFloat((r / calculatedMileage).toFixed(2)) : 0;
         const calculatedActualMileage = fixedMileageForVehicle || 0;
-        const { difference, note } = computeFuelAudit(calculatedTotalKm, l, r, calculatedActualMileage, mDriverName);
-        const baseMileageRemarks = stripPreviousAuditNote(mRemarks);
+        const { difference, note } = computeFuelAudit(calculatedTotalKm, totalLitres, r, calculatedActualMileage, mDriverName);
+        // Mileage Remarks now also carries forward whatever's typed into
+        // Fuel Entry Details' own Remarks field above, so a note logged
+        // there is visible from Mileage Report too - not just this form's
+        // separate Mileage Remarks box - combined ahead of the auto Fuel
+        // Audit note.
+        const baseMileageRemarks = [remarks.trim(), stripPreviousAuditNote(mRemarks)].filter(Boolean).join(' | ');
         const finalMileageRemarks = note ? `${baseMileageRemarks}${baseMileageRemarks ? ' ' : ''}(Fuel Audit: ${note})` : baseMileageRemarks;
-        const extra = parseFloat(mExtraFuel) || 0;
         const rateNew = parseFloat(mRatePerLitreNew) || 0;
         const calculatedTotalAmount = parseFloat((a + extra * rateNew).toFixed(2));
         const nextSlNo = mileageReports.length > 0 ? Math.max(...mileageReports.map(rep => rep.slNo || 0)) + 1 : 1;
@@ -712,6 +751,7 @@ export default function FuelManagement({
           totalKm: calculatedTotalKm,
           ratePerLitre: r,
           litres: l,
+          totalLitres,
           dieselAmount: a,
           mileage: calculatedMileage,
           costPerKm: calculatedCostPerKm,
@@ -801,6 +841,8 @@ export default function FuelManagement({
 
   const filteredLogsUnsorted = logs.filter(log =>
     (viewPeriod === 'all' || (log.date >= viewStart && log.date <= viewEnd)) &&
+    (bunkFilter === 'All' || log.bunkName === bunkFilter) &&
+    (bunkOrCardFilter === 'All' || log.bunkOrCard === bunkOrCardFilter) &&
     (
       (log?.vehicleNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (log?.vendorName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -1102,6 +1144,30 @@ export default function FuelManagement({
               >
                 <option value="newest">Indent No: Newest First</option>
                 <option value="oldest">Indent No: Oldest First</option>
+              </select>
+              {/* Bunk Name filter - All Bunks + BUNK_NAMES + any other bunk
+                  name already used in the ledger (see usedBunks above). Also
+                  scopes the Download Fuel Report/Bunk Summary panels below. */}
+              <select
+                value={bunkFilter}
+                onChange={(e) => setBunkFilter(e.target.value)}
+                title="Filter by Bunk Name"
+                className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-700"
+              >
+                <option value="All">All Bunks</option>
+                {usedBunks.map((b, i) => <option key={i} value={b}>{b}</option>)}
+              </select>
+              {/* Bunk/Card filter - show only Bunk entries or only Card
+                  entries, independent of the Bunk Name filter above. */}
+              <select
+                value={bunkOrCardFilter}
+                onChange={(e) => setBunkOrCardFilter(e.target.value as 'All' | 'Bunk' | 'Card')}
+                title="Filter by Bunk/Card"
+                className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-700"
+              >
+                <option value="All">Bunk/Card: All</option>
+                <option value="Bunk">Bunk Only</option>
+                <option value="Card">Card Only</option>
               </select>
               {!isRqIdOnlyUser && (
                 <button
@@ -1467,12 +1533,17 @@ export default function FuelManagement({
                       )}
                     </div>
 
-                    {/* Diesel Amount / Mileage / Cost per KM / Fixed Mileage - all
-                        auto, Diesel Amount mirrors the Amount entered below */}
+                    {/* Diesel Amount / Total Ltrs / Mileage / Cost per KM /
+                        Fixed Mileage - all auto, Diesel Amount mirrors the
+                        Amount entered below */}
                     <div className="grid grid-cols-2 gap-2 bg-white p-2.5 rounded-lg border border-pink-100 font-mono">
                       <div>
                         <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Diesel Amount</span>
                         <span className="text-xs font-black text-teal-700">₹{amount || 0}</span>
+                      </div>
+                      <div>
+                        <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Total Ltrs (Litres + Extra Fuel)</span>
+                        <span className="text-xs font-black text-teal-700">{mTotalLtrs || 0} L</span>
                       </div>
                       <div>
                         <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Cost/KM</span>
@@ -1490,9 +1561,9 @@ export default function FuelManagement({
                       </div>
                       {(() => {
                         const totalKmVal = parseFloat(mTotalKm) || 0;
-                        const litresVal = parseFloat(ltrs) || 0;
+                        const totalLtrsVal = parseFloat(mTotalLtrs) || 0;
                         const actualMileageVal = parseFloat(mActualMileage) || 0;
-                        const { difference } = computeFuelAudit(totalKmVal, litresVal, 0, actualMileageVal, mDriverName);
+                        const { difference } = computeFuelAudit(totalKmVal, totalLtrsVal, 0, actualMileageVal, mDriverName);
                         return (
                           <div className="col-span-2 pt-2 border-t border-slate-100">
                             <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Difference (Litres wasted/saved)</span>
@@ -1506,10 +1577,10 @@ export default function FuelManagement({
 
                     {(() => {
                       const totalKmVal = parseFloat(mTotalKm) || 0;
-                      const litresVal = parseFloat(ltrs) || 0;
+                      const totalLtrsVal = parseFloat(mTotalLtrs) || 0;
                       const rateVal = parseFloat(rate) || 0;
                       const actualMileageVal = parseFloat(mActualMileage) || 0;
-                      const { note } = computeFuelAudit(totalKmVal, litresVal, rateVal, actualMileageVal, mDriverName);
+                      const { note } = computeFuelAudit(totalKmVal, totalLtrsVal, rateVal, actualMileageVal, mDriverName);
                       if (!note) return null;
                       return (
                         <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg">
@@ -1524,13 +1595,16 @@ export default function FuelManagement({
                       <div>
                         <label className="block font-semibold text-slate-600 mb-1">Extra Fuel</label>
                         <input
-                          type="number"
-                          step="0.01"
-                          placeholder="e.g. 5"
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="e.g. 5, or 30+40 for two top-ups"
                           value={mExtraFuel}
                           onChange={(e) => setMExtraFuel(e.target.value)}
                           className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
                         />
+                        <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                          Multiple top-ups this trip? Type them as e.g. "30+40" - added up automatically into Total Ltrs.
+                        </p>
                       </div>
                       <div>
                         <label className="block font-semibold text-slate-600 mb-1">Rate per Ltr (new)</label>
@@ -1550,7 +1624,7 @@ export default function FuelManagement({
                     <div className="p-2.5 bg-white rounded-lg border border-pink-100 flex items-center justify-between font-mono">
                       <div>
                         <span className="text-[9px] text-slate-400 uppercase font-bold block">
-                          Total Amount {parseFloat(mExtraFuel) > 0 ? '(Diesel + Extra Fuel)' : '(auto)'}
+                          Total Amount {sumExtraFuelExpression(mExtraFuel) > 0 ? '(Diesel + Extra Fuel)' : '(auto)'}
                         </span>
                         <span className="text-xs font-black text-pink-700">₹{mTotalAmount || 0}</span>
                       </div>

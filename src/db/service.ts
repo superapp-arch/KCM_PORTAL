@@ -1896,6 +1896,40 @@ export async function deleteMileageReport(id: string) {
   }
 }
 
+// One-time migration: MileageReport gained a `totalLitres` field (Litres +
+// Extra Fuel - a mid-trip top-up is real fuel that trip used) that
+// Mileage/Cost-per-KM now compute from instead of the bare `litres` field.
+// Backfills every existing row that doesn't have totalLitres set yet,
+// recomputing totalLitres/mileage/costPerKm purely from that row's own
+// already-stored fields (deterministic, no data loss) - safe to call on
+// every boot, a no-op once every row has totalLitres.
+//
+// Deliberately does NOT touch difference/fuelAuditNote/remarks - those drive
+// the fuel-theft audit's payroll deduction/credit wording, which may already
+// have been acted on for past periods; silently recalculating those Rs
+// figures after the fact could contradict a deduction/credit that already
+// happened. They keep whatever was originally reported at entry time.
+export async function migrateMileageReportTotalLitres() {
+  try {
+    const reports = await getMileageReports();
+    const pending = reports.filter(r => r.totalLitres == null);
+    if (pending.length === 0) return;
+
+    for (const r of pending) {
+      const litres = r.litres || 0;
+      const extra = r.extraFuel || 0;
+      const totalLitres = parseFloat((litres + extra).toFixed(2));
+      const mileage = totalLitres > 0 ? parseFloat(((r.totalKm || 0) / totalLitres).toFixed(2)) : 0;
+      const costPerKm = mileage > 0 ? parseFloat(((r.ratePerLitre || 0) / mileage).toFixed(2)) : 0;
+      await saveMileageReport({ ...r, totalLitres, mileage, costPerKm });
+    }
+
+    console.log(`[MIGRATION] Backfilled totalLitres/mileage/costPerKm on ${pending.length} Mileage Report row(s).`);
+  } catch (error) {
+    console.error("Migration failed in migrateMileageReportTotalLitres:", error);
+  }
+}
+
 // --- FUEL VENDOR (VENDOR MASTER) OPERATIONS ---
 export async function getFuelVendors(): Promise<FuelVendor[]> {
   try {

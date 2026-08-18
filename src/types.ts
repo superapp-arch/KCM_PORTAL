@@ -784,17 +784,28 @@ export interface MileageReport {
   closingKm: number; // required - real odometer reading, feeds totalKm
   totalKm: number; // Distance Covered, = closingKm - openingKm
   ratePerLitre: number;
-  litres: number;
+  litres: number; // the main fill-up only - see totalLitres below for what mileage/cost/audit actually use
   dieselAmount: number;
-  mileage: number; // computed per trip = totalKm / litres (the REAL achieved efficiency this trip)
+  // Total fuel actually consumed this trip = litres + extraFuel (e.g. a
+  // Bangalore->Mysore run that top-ups mid-route AND again near the
+  // destination) - mileage/costPerKm/the fuel-theft audit below are all
+  // computed off THIS, not the bare `litres` field, since a mid-trip top-up
+  // is real fuel used. Optional only for pre-existing rows saved before this
+  // field existed; falls back to `litres` (extraFuel treated as 0) when
+  // absent - see the one-time backfill migration in db/service.ts.
+  totalLitres?: number;
+  mileage: number; // computed per trip = totalKm / totalLitres (the REAL achieved efficiency this trip)
   costPerKm?: number; // auto = ratePerLitre / mileage
   driverName: string; // UI label "Authorized Driver" - supports multiple names, e.g. "Suresh / Adhithya"
   driverId?: string; // auto-fetched from Driver Details (DriverEmployee.id) when Authorized Driver matches exactly one registered driver; manual entry allowed for drivers not yet registered
   location: string;
   remarks: string;
   actualMileage: number; // FIXED per-vehicle reference, looked up from the Vehicle Mileage Master (src/db/schema.ts: vehicleMileage) by vehicleNo - not manually typed
-  difference?: number; // auto, in LITRES = (totalKm / actualMileage) - litres; positive (green, +) = fuel saved, negative (red, -) = fuel wasted
+  difference?: number; // auto, in LITRES = (totalKm / actualMileage) - totalLitres; positive (green, +) = fuel saved, negative (red, -) = fuel wasted
   fuelAuditNote?: string; // auto-generated advisory text appended to remarks when difference is non-zero - informational only, no payroll record created
+  // Accepts a sum-of-numbers expression when typed in the UI (e.g. "30+40"
+  // for two separate top-ups) - always stored here as the already-evaluated
+  // total (70), never the raw expression text.
   extraFuel?: number;
   ratePerLitreNew?: number; // rate applied to extraFuel in the Total Amount calc
   totalAmount?: number; // auto = dieselAmount + (extraFuel * ratePerLitreNew)

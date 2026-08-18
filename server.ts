@@ -112,6 +112,7 @@ import {
   saveToolsChecklistRecord,
   deleteToolsChecklistRecord,
   migrateLegacyMaintenanceProfiles,
+  migrateMileageReportTotalLitres,
   getAccountsEntries,
   saveAccountsEntry,
   deleteAccountsEntry,
@@ -858,6 +859,10 @@ async function startServer() {
   // combined Vehicle Maintenance Profiles into the new Service Schedule /
   // Tire / Battery / Tools Checklist tables (no-op once already migrated).
   await migrateLegacyMaintenanceProfiles();
+  // Mileage Report gained a Total Ltrs (Litres + Extra Fuel) field that
+  // Mileage/Cost-per-KM now compute from - backfill it onto every
+  // pre-existing row (no-op once every row has it).
+  await migrateMileageReportTotalLitres();
   // Petty Cash / Market POD change request part 2: backfill pre-existing
   // Petty-Cash-mode trips that predate the float-sync logic (see
   // backfillMarketPodPettyCashFloats above) - no-op once every trip's

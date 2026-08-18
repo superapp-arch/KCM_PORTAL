@@ -27,6 +27,15 @@ import DateInput from './DateInput';
 import SortHeader from './SortHeader';
 import { SortState, SortDirection, compareText, compareNumber, extractLeadingNumber } from '../utils/sort';
 
+// Extra Fuel accepts a sum-of-numbers expression typed directly into the
+// field (e.g. "30+40" for two separate top-ups during one trip - say
+// Bangalore->Mysore, one top-up mid-route and another near the destination)
+// instead of requiring the office to add them up by hand first; a single
+// plain number still works exactly as before. Mirrors FuelManagement.tsx's
+// own sumExtraFuelExpression.
+const sumExtraFuelExpression = (raw: string): number =>
+  raw.split('+').map(s => parseFloat(s.trim())).filter(n => !isNaN(n)).reduce((sum, n) => sum + n, 0);
+
 // Resolves the [start, end] date-string window (inclusive) for a "Day /
 // Monthly Till Date / Year Till Date" period relative to a reference date -
 // drives the ledger's view-scope tabs below. Mirrors FuelManagement.tsx's
@@ -103,6 +112,7 @@ export default function MileageReportModule({
   const [totalKm, setTotalKm] = useState('');
   const [ratePerLitre, setRatePerLitre] = useState('');
   const [litres, setLitres] = useState('');
+  const [totalLitres, setTotalLitres] = useState(''); // Litres + Extra Fuel - see sumExtraFuelExpression
   const [dieselAmount, setDieselAmount] = useState('');
   const [mileage, setMileage] = useState('');
   const [driverName, setDriverName] = useState('');
@@ -196,14 +206,25 @@ export default function MileageReportModule({
     setDieselAmount(String(parseFloat((rate * l).toFixed(2))));
   }, [ratePerLitre, litres]);
 
-  // 5. Mileage = the REAL, achieved-this-trip efficiency = Total KM / Litres
-  // - compared against the fixed Actual Mileage above to catch fuel theft,
-  // misuse, or meter tampering (see Difference below).
+  // 5. Total Litres = Litres + Extra Fuel - the actual total fuel consumed
+  // this trip, including any mid-trip top-up(s). Extra Fuel accepts a sum
+  // expression like "30+40" - see sumExtraFuelExpression.
+  useEffect(() => {
+    const l = parseFloat(litres) || 0;
+    const extra = sumExtraFuelExpression(extraFuel);
+    setTotalLitres(String(parseFloat((l + extra).toFixed(2))));
+  }, [litres, extraFuel]);
+
+  // 6. Mileage = the REAL, achieved-this-trip efficiency = Total KM / Total
+  // Litres - NOT the bare Litres field, since fuel topped up mid-trip is
+  // fuel that trip actually used - compared against the fixed Actual
+  // Mileage above to catch fuel theft, misuse, or meter tampering (see
+  // Difference below).
   useEffect(() => {
     const tKm = parseFloat(totalKm) || 0;
-    const l = parseFloat(litres) || 0;
-    setMileage(l > 0 ? String(parseFloat((tKm / l).toFixed(2))) : '0');
-  }, [totalKm, litres]);
+    const tL = parseFloat(totalLitres) || 0;
+    setMileage(tL > 0 ? String(parseFloat((tKm / tL).toFixed(2))) : '0');
+  }, [totalKm, totalLitres]);
 
   // 6. Cost per KM = Rate per Litre / Mileage (this trip's real efficiency)
   useEffect(() => {
@@ -226,7 +247,7 @@ export default function MileageReportModule({
   // 8. Total Amount = Diesel Amount + (Extra Fuel * Rate per Ltr (new))
   useEffect(() => {
     const diesel = parseFloat(dieselAmount) || 0;
-    const extra = parseFloat(extraFuel) || 0;
+    const extra = sumExtraFuelExpression(extraFuel);
     const rateNew = parseFloat(ratePerLitreNew) || 0;
     setTotalAmount(String(parseFloat((diesel + extra * rateNew).toFixed(2))));
   }, [dieselAmount, extraFuel, ratePerLitreNew]);
@@ -291,16 +312,20 @@ export default function MileageReportModule({
       const l = parseFloat(litres);
       const calculatedDieselAmount = parseFloat((rate * l).toFixed(2));
       const calculatedTotalKm = c - o;
-      const calculatedMileage = l > 0 ? parseFloat((calculatedTotalKm / l).toFixed(2)) : 0;
+      // Total Litres (Litres + Extra Fuel, e.g. "30+40" for two top-ups
+      // during one trip) is what actually got consumed, not just the main
+      // fill-up - Mileage/Cost-per-KM/the fuel-theft audit all key off it.
+      const extra = sumExtraFuelExpression(extraFuel);
+      const calculatedTotalLitres = parseFloat((l + extra).toFixed(2));
+      const calculatedMileage = calculatedTotalLitres > 0 ? parseFloat((calculatedTotalKm / calculatedTotalLitres).toFixed(2)) : 0;
       const calculatedCostPerKm = calculatedMileage > 0 ? parseFloat((rate / calculatedMileage).toFixed(2)) : 0;
       // Snapshot the vehicle's current fixed Actual Mileage reference at entry
       // time, so later edits to the Vehicle Mileage Master don't retroactively
       // change historical entries.
       const calculatedActualMileage = fixedMileageForVehicle || 0;
-      const { difference, note } = computeFuelAudit(calculatedTotalKm, l, rate, calculatedActualMileage, driverName);
+      const { difference, note } = computeFuelAudit(calculatedTotalKm, calculatedTotalLitres, rate, calculatedActualMileage, driverName);
       const baseRemarks = stripPreviousAuditNote(remarks);
       const finalRemarks = note ? `${baseRemarks}${baseRemarks ? ' ' : ''}(Fuel Audit: ${note})` : baseRemarks;
-      const extra = parseFloat(extraFuel) || 0;
       const rateNew = parseFloat(ratePerLitreNew) || 0;
       const calculatedTotalAmount = parseFloat((calculatedDieselAmount + extra * rateNew).toFixed(2));
 
@@ -316,6 +341,7 @@ export default function MileageReportModule({
         totalKm: calculatedTotalKm,
         ratePerLitre: rate,
         litres: l,
+        totalLitres: calculatedTotalLitres,
         dieselAmount: calculatedDieselAmount,
         mileage: calculatedMileage,
         costPerKm: calculatedCostPerKm,
@@ -425,6 +451,7 @@ export default function MileageReportModule({
       'Total KM': r.totalKm,
       'Rate Per Litre': r.ratePerLitre,
       'Litres': r.litres,
+      'Total Ltrs (Litres + Extra Fuel)': r.totalLitres ?? r.litres,
       'Diesel Amount': r.dieselAmount,
       'Mileage': r.mileage,
       'Cost per KM': r.costPerKm || 0,
@@ -476,6 +503,7 @@ export default function MileageReportModule({
           case 'totalKm': cmp = compareNumber(a.totalKm, b.totalKm); break;
           case 'ratePerLitre': cmp = compareNumber(a.ratePerLitre, b.ratePerLitre); break;
           case 'litres': cmp = compareNumber(a.litres, b.litres); break;
+          case 'totalLitres': cmp = compareNumber(a.totalLitres ?? a.litres, b.totalLitres ?? b.litres); break;
           case 'dieselAmount': cmp = compareNumber(a.dieselAmount, b.dieselAmount); break;
           case 'mileage': cmp = compareNumber(a.mileage, b.mileage); break;
           case 'costPerKm': cmp = compareNumber(a.costPerKm, b.costPerKm); break;
@@ -680,6 +708,7 @@ export default function MileageReportModule({
                 <th className="px-3 py-2.5 text-right bg-slate-800"><SortHeader label="Total KM" sortKey="totalKm" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right"><SortHeader label="Rate / Litre" sortKey="ratePerLitre" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right"><SortHeader label="Litres" sortKey="litres" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="Total Ltrs (Litres + Extra Fuel)" sortKey="totalLitres" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right text-teal-400"><SortHeader label="Diesel Amount" sortKey="dieselAmount" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right text-pink-400"><SortHeader label="Mileage" sortKey="mileage" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right text-amber-400"><SortHeader label="Cost/KM" sortKey="costPerKm" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
@@ -698,7 +727,7 @@ export default function MileageReportModule({
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
               {filteredReports.length === 0 ? (
                 <tr>
-                  <td colSpan={20 + (isSuperAdmin ? 1 : 0) + (readOnly ? 0 : 1)} className="text-center py-20 text-slate-400 font-mono text-xs">
+                  <td colSpan={21 + (isSuperAdmin ? 1 : 0) + (readOnly ? 0 : 1)} className="text-center py-20 text-slate-400 font-mono text-xs">
                     🚫 NO REGISTERED MILEAGE ENTRIES DISCOVERED FOR THIS SEGMENT.
                     <div className="text-[10px] text-slate-400 font-sans mt-1">
                       {readOnly ? 'Entries are logged from the Mileage section of the Fuel Entry form in Fuel Management.' : 'Use the "Add Details" sidebar button to authorize new mileage and fuel log books.'}
@@ -716,6 +745,7 @@ export default function MileageReportModule({
                     <td className="px-3 py-2 text-right font-mono font-bold bg-slate-50 text-slate-900">{(r.totalKm || 0).toLocaleString('en-IN')} KM</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">₹{(r.ratePerLitre || 0).toFixed(2)}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{(r.litres || 0).toFixed(2)} L</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-600">{(r.totalLitres ?? r.litres ?? 0).toFixed(2)} L</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-teal-700 bg-teal-50/20">₹{(r.dieselAmount || 0).toLocaleString('en-IN')}</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-pink-700 bg-pink-50/20">{(r.mileage || 0).toFixed(2)} KM/L</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-amber-700 bg-amber-50/20">{r.costPerKm ? `₹${r.costPerKm.toFixed(2)}` : '-'}</td>
@@ -1052,6 +1082,10 @@ export default function MileageReportModule({
                       <span className="text-xs font-black text-teal-700">₹{dieselAmount}</span>
                     </div>
                     <div>
+                      <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Total Ltrs (Litres + Extra Fuel)</span>
+                      <span className="text-xs font-black text-teal-700">{totalLitres || 0} L</span>
+                    </div>
+                    <div>
                       <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Cost/KM</span>
                       <span className="text-xs font-black text-amber-700">₹{costPerKm}</span>
                     </div>
@@ -1067,9 +1101,9 @@ export default function MileageReportModule({
                     </div>
                     {(() => {
                       const totalKmVal = parseFloat(totalKm) || 0;
-                      const litresVal = parseFloat(litres) || 0;
+                      const totalLitresVal = parseFloat(totalLitres) || 0;
                       const actualMileageVal = parseFloat(actualMileage) || 0;
-                      const { difference } = computeFuelAudit(totalKmVal, litresVal, 0, actualMileageVal, driverName);
+                      const { difference } = computeFuelAudit(totalKmVal, totalLitresVal, 0, actualMileageVal, driverName);
                       return (
                         <div className="col-span-2 pt-2 border-t border-slate-200">
                           <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Difference (Litres wasted/saved)</span>
@@ -1083,10 +1117,10 @@ export default function MileageReportModule({
 
                   {(() => {
                     const totalKmVal = parseFloat(totalKm) || 0;
-                    const litresVal = parseFloat(litres) || 0;
+                    const totalLitresVal = parseFloat(totalLitres) || 0;
                     const rateVal = parseFloat(ratePerLitre) || 0;
                     const actualMileageVal = parseFloat(actualMileage) || 0;
-                    const { note } = computeFuelAudit(totalKmVal, litresVal, rateVal, actualMileageVal, driverName);
+                    const { note } = computeFuelAudit(totalKmVal, totalLitresVal, rateVal, actualMileageVal, driverName);
                     if (!note) return null;
                     return (
                       <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
@@ -1103,13 +1137,16 @@ export default function MileageReportModule({
                         Extra Fuel
                       </label>
                       <input
-                        type="number"
-                        step="0.01"
-                        placeholder="e.g. 5"
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="e.g. 5, or 30+40 for two top-ups"
                         value={extraFuel}
                         onChange={(e) => setExtraFuel(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-pink-500"
                       />
+                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                        Multiple top-ups this trip? Type them as e.g. "30+40" - added up automatically into Total Ltrs.
+                      </p>
                     </div>
                     <div>
                       <label className="block font-bold text-slate-700 mb-1">
