@@ -97,11 +97,12 @@ export default function MileageReportModule({
   // to keep in sync.
   const [selectedVehicleFilter, setSelectedVehicleFilter] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  // Defaults to newest-first by Date, same "Sort by" convention as the Petty
-  // Cash Ledger/Market POD tables - still fully overridable via the column
-  // sort headers or the dropdown, and resets to this default every time the
-  // module is opened fresh (plain component state, not persisted).
-  const [sort, setSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
+  // Defaults to oldest-first by Date (Mileage Report-specific - unlike the
+  // Petty Cash Ledger/Market POD tables, which default newest-first) - still
+  // fully overridable via the column sort headers or the dropdown, and
+  // resets to this default every time the module is opened fresh (plain
+  // component state, not persisted).
+  const [sort, setSort] = useState<SortState | null>({ key: 'date', direction: 'asc' });
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
 
   // Form inputs
@@ -627,7 +628,7 @@ export default function MileageReportModule({
             <span>Matches: {filteredReports.length} entries</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            {/* Sort By - Newest First (default) / Oldest First. Reuses the
+            {/* Sort By - Oldest First (default) / Newest First. Reuses the
                 same `sort` state the column headers drive. */}
             <div>
               <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Sort By</label>

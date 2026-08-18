@@ -14,7 +14,7 @@ import { createSession, getSessionUser, destroySession, extractBearerToken, star
 import { issueOtp, verifyOtp } from './src/auth/otp.ts';
 import { istTimestamp, istDateKey, istHour, istMonthDayKey } from './src/auth/time.ts';
 import { computeDueDateRaw } from './src/utils/loanDates.ts';
-import { extractTrailingNumber } from './src/utils/sort.ts';
+import { extractTrailingNumber, extractLeadingNumber } from './src/utils/sort.ts';
 import { cycleDefaultFor } from './src/utils/vehicleCycleDefaults.ts';
 import { latestOdometerFor, computeKmStatus, computeAlignmentStatus, nextAlignmentDueKm, projectDueDate, daysUntil } from './src/utils/maintenanceDates.ts';
 import {
@@ -560,6 +560,72 @@ function nextPettyCashEntryNo(vouchers: PettyCashVoucher[]): string {
   return candidate;
 }
 
+// Which Entry No numbering "bucket" a voucher belongs to for renumbering
+// purposes (see renumberPettyCashSequence below) - currently only recognizes
+// the flat-2026 format (ENT-2026-<4-digit-seq>), and only from the
+// 2026-08-13 floor (2672) onward - anything below that is the deliberately-
+// untouched messy legacy zone (duplicate/out-of-order numbers, see
+// nextPettyCashEntryNo's own comment) and must never be swept into a
+// renumbering pass.
+//
+// Deliberately does NOT also recognize nextPettyCashEntryNo's other format
+// (2026-09 onward, and every year after 2026: ENT-<year>-<2-digit month>
+// <2-digit seq>) - a monthly MM+NN value for 2026 and an old sub-2672 flat
+// legacy value both look like a plain 4-digit number with no way to tell
+// them apart from the string alone (e.g. is "1150" month 11 seq 50, or just
+// old flat entry #1150?), so guessing would risk corrupting the untouched
+// legacy zone. Since real monthly-format entries don't exist yet (today is
+// still within the flat-2026 period), this only means: once September 2026
+// genuinely arrives, newly-generated monthly entries simply won't be
+// gap-compacted by this function - a known gap, safer than a wrong guess.
+interface PettyCashEntryBucket { key: string; prefix: string; width: number; floor: number; seq: number }
+function pettyCashEntryBucket(entryNo: string): PettyCashEntryBucket | null {
+  const upper = (entryNo || '').toUpperCase();
+  const m = upper.match(/^ENT-(\d{4})-(\d{4})$/);
+  if (!m) return null;
+  const year = parseInt(m[1], 10);
+  const value = parseInt(m[2], 10);
+  if (isNaN(value) || year !== 2026 || value < 2672) return null;
+  return { key: `${year}-flat`, prefix: `ENT-${year}-`, width: 4, floor: 2672, seq: value };
+}
+
+// Closes any gap left in the Entry No sequence - e.g. deleting ENT-2026-2713
+// out of .../2712, 2713, 2714 shifts 2714 down to become the new 2713, and
+// so on, so the office never sees "2712, 2714" with 2713 missing. Renumbers
+// within each bucket independently (see pettyCashEntryBucket), sorted by
+// each voucher's CURRENT Entry No - preserving relative order (the same
+// "Entry No order = real entry order" assumption the Ledger's running
+// Balance Net already depends on), only the numbers shift, nothing is
+// reordered or touched outside a recognized/eligible bucket. Idempotent - a
+// no-op once a bucket is already gap-free - so it's safe to run after every
+// delete AND as a one-time sweep to fix gaps that already existed before
+// this existed.
+async function renumberPettyCashSequence(): Promise<void> {
+  try {
+    const vouchers = await getPettyCashVouchers();
+    const buckets = new Map<string, { prefix: string; width: number; floor: number; entries: { voucher: PettyCashVoucher; seq: number }[] }>();
+
+    vouchers.forEach(v => {
+      const info = pettyCashEntryBucket(v.entryNo);
+      if (!info) return;
+      if (!buckets.has(info.key)) buckets.set(info.key, { prefix: info.prefix, width: info.width, floor: info.floor, entries: [] });
+      buckets.get(info.key)!.entries.push({ voucher: v, seq: info.seq });
+    });
+
+    for (const { prefix, width, floor, entries } of buckets.values()) {
+      entries.sort((a, b) => a.seq - b.seq);
+      for (let i = 0; i < entries.length; i++) {
+        const targetEntryNo = `${prefix}${String(floor + i).padStart(width, '0')}`;
+        if (entries[i].voucher.entryNo.toUpperCase() !== targetEntryNo) {
+          await savePettyCashVoucher({ ...entries[i].voucher, entryNo: targetEntryNo });
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Failed to renumber Petty Cash Entry No sequence:', error);
+  }
+}
+
 // Entry No. must be unique - enforced here, not just client-side, since a
 // direct API call or a race between two near-simultaneous saves could
 // otherwise slip a duplicate past the auto-generator's own collision check
@@ -572,6 +638,71 @@ function findDuplicateEntryNo<T extends { id?: string; entryNo?: string }>(rows:
   const target = (entryNo || '').trim().toUpperCase();
   if (!target) return false;
   return rows.some(r => r.id !== excludeId && (r.entryNo || '').trim().toUpperCase() === target);
+}
+
+// --- Fuel Entry Indent No - Bunk and Card are two completely independent
+// sequences (see nextBunkFuelIndentNumber/nextCardFuelIndentNumber below),
+// both database-backed (computed fresh from getFuelLogs() every call, never
+// an in-memory counter) so they stay correct across server/PM2 restarts,
+// deployments, and concurrent users. A pre-existing FuelLog saved before the
+// bunkOrCard field existed is treated as 'Bunk' - the same default the Add
+// Entry form itself has always used - so it's never silently miscounted
+// into the Card sequence or dropped from Bunk's.
+
+// Bunk: plain numeric string (e.g. "6412"), continuing within the entry's
+// own Date's calendar month - matches the existing/original behavior. The
+// first entry of a new month has nothing to continue from (returns null),
+// so the office types a fresh starting number by hand; every entry after
+// that, that same month, auto-continues from the highest one already saved.
+function nextBunkFuelIndentNumber(logs: FuelLog[], refDate: string): string | null {
+  const monthKey = (refDate || '').slice(0, 7);
+  if (!monthKey) return null;
+  const monthNumbers = logs
+    .filter(l => (l.bunkOrCard || 'Bunk') === 'Bunk' && (l.date || '').slice(0, 7) === monthKey)
+    .map(l => extractLeadingNumber(l.indentNumber))
+    .filter(n => n > 0);
+  if (monthNumbers.length === 0) return null;
+  return String(Math.max(...monthNumbers) + 1);
+}
+
+// Card: zero-padded 5-digit string (e.g. "00001"), one single continuously-
+// incrementing sequence that never resets monthly - entirely independent of
+// Bunk's, per direct instruction. Starts fresh at 00001: only entries whose
+// Indent No is already in this exact 5-digit shape count toward "the
+// sequence" - a Card-flagged entry saved before this scheme existed (an
+// arbitrary/Bunk-style number) is invisible to this function, so the fresh
+// start can never be skewed by old data, the same "floor" idea
+// renumberPettyCashSequence's own legacy-zone exclusion uses.
+function nextCardFuelIndentNumber(logs: FuelLog[]): string {
+  const cardNumbers = logs
+    .filter(l => l.bunkOrCard === 'Card' && /^\d{5}$/.test((l.indentNumber || '').trim()))
+    .map(l => parseInt(l.indentNumber.trim(), 10))
+    .filter(n => !isNaN(n) && n > 0);
+  const next = cardNumbers.length > 0 ? Math.max(...cardNumbers) + 1 : 1;
+  return String(next).padStart(5, '0');
+}
+
+// Duplicate guard for both sequences - scoped to match how each is
+// generated: Bunk within the same (Bunk, calendar month) bucket (the same
+// number can legitimately recur across different months, since Bunk
+// restarts by hand each month), Card across its whole single sequence
+// (never resets, so no two Card entries should ever share a number). Only
+// ever rejects a genuinely new-to-this-id value - resubmitting a record's
+// own unchanged Indent No (a normal edit that didn't touch it) always
+// passes.
+function findDuplicateFuelIndentNumber(logs: FuelLog[], indentNumber: string | undefined, candidate: { bunkOrCard?: string; date?: string }, excludeId?: string): boolean {
+  const target = (indentNumber || '').trim().toUpperCase();
+  if (!target) return false;
+  const isCard = candidate.bunkOrCard === 'Card';
+  const monthKey = (candidate.date || '').slice(0, 7);
+  return logs.some(l => {
+    if (l.id === excludeId) return false;
+    if ((l.indentNumber || '').trim().toUpperCase() !== target) return false;
+    const lIsCard = l.bunkOrCard === 'Card';
+    if (isCard !== lIsCard) return false;
+    if (isCard) return true; // Card: one global sequence, no month scoping
+    return (l.date || '').slice(0, 7) === monthKey;
+  });
 }
 
 // Newest-first by default (Petty Cash Ledger / Market POD Trip Ledger) -
@@ -863,6 +994,10 @@ async function startServer() {
   // Mileage/Cost-per-KM now compute from - backfill it onto every
   // pre-existing row (no-op once every row has it).
   await migrateMileageReportTotalLitres();
+  // One-time sweep to close any Petty Cash Entry No gaps that already
+  // existed before renumberPettyCashSequence started running on every
+  // delete - no-op once the sequence is already gap-free.
+  await renumberPettyCashSequence();
   // Petty Cash / Market POD change request part 2: backfill pre-existing
   // Petty-Cash-mode trips that predate the float-sync logic (see
   // backfillMarketPodPettyCashFloats above) - no-op once every trip's
@@ -1902,6 +2037,24 @@ async function startServer() {
       res.json(filterEntryRowsForViewer(await getFuelLogs(), sessionUser, FUEL_RQ_ID_ONLY_EMAILS));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
+  // Database-backed Indent No preview for the Add Entry form - computed
+  // fresh from every saved fuel log each call (see
+  // nextBunkFuelIndentNumber/nextCardFuelIndentNumber), not a client-side
+  // guess off a possibly-stale local cache, so two users adding entries at
+  // the same time both see the real next number. `indentNumber: null` means
+  // there's nothing to continue from yet (first Bunk entry of a new month) -
+  // the office types a starting number by hand in that case. Still just a
+  // preview/prefill - the actual save is still validated by the duplicate
+  // check in POST/PUT below, and the field stays fully editable either way.
+  app.get('/api/fuel/next-indent-number', async (req, res) => {
+    try {
+      const bunkOrCard = req.query.bunkOrCard === 'Card' ? 'Card' : 'Bunk';
+      const date = typeof req.query.date === 'string' ? req.query.date : '';
+      const logs = await getFuelLogs();
+      const indentNumber = bunkOrCard === 'Card' ? nextCardFuelIndentNumber(logs) : nextBunkFuelIndentNumber(logs, date);
+      res.json({ indentNumber });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
   app.post('/api/fuel', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
@@ -1911,6 +2064,10 @@ async function startServer() {
         return res.status(403).json({ error: 'You cannot add fuel entries.' });
       }
       if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Fuel entry date cannot be in the future.' });
+      const allLogs = await getFuelLogs();
+      if (findDuplicateFuelIndentNumber(allLogs, req.body?.indentNumber, req.body || {})) {
+        return res.status(409).json({ error: `Indent No. ${req.body.indentNumber} already exists in the ${req.body?.bunkOrCard === 'Card' ? 'Card' : 'Bunk'} sequence.` });
+      }
       const result = await saveFuelLog({ ...req.body, enteredBy: sessionUser?.username });
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -1921,6 +2078,10 @@ async function startServer() {
       const existing = (await getFuelLogs()).find(l => l.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
       if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Fuel entry date cannot be in the future.' });
+      const allLogs = await getFuelLogs();
+      if (findDuplicateFuelIndentNumber(allLogs, req.body?.indentNumber, req.body || {}, req.params.id)) {
+        return res.status(409).json({ error: `Indent No. ${req.body.indentNumber} already exists in the ${req.body?.bunkOrCard === 'Card' ? 'Card' : 'Bunk'} sequence.` });
+      }
       const result = await saveFuelLog({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -2008,7 +2169,12 @@ async function startServer() {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getPettyCashVouchers()).find(v => v.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
-      const result = await deletePettyCashVoucher(req.params.id);
+      await deletePettyCashVoucher(req.params.id);
+      // Deleting a voucher leaves a gap in its Entry No sequence - close it
+      // immediately rather than leaving a permanent hole (see
+      // renumberPettyCashSequence).
+      await renumberPettyCashSequence();
+      const result = await getPettyCashVouchers();
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });

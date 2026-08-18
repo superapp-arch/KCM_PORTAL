@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
+import { authFetch } from '../authFetch';
 
 const LOCATIONS = [
   'AP', 'Nelmangala', 'Belagaum', 'BLR', 'Chennai', 'Goa', 'Hyderabad', 'Hassan',
@@ -39,7 +40,7 @@ const BUNK_NAMES = [
   'Tejashri', 'Vayuputra', 'Visalakshi'
 ];
 
-const CLIENTS = ['KCM', 'Swiggy', 'Reliance', 'Market Vehicle', 'Shadowfax'];
+const CLIENTS = ['KCM', 'Swiggy', 'Reliance', 'Market Vehicle', 'Shadowfax', 'One Time Vendor'];
 
 // Extra Fuel accepts a sum-of-numbers expression typed directly into the
 // field (e.g. "30+40" for two separate top-ups during one trip - say
@@ -302,6 +303,7 @@ export default function FuelManagement({
   const vehicleList = Array.from(
     new Set([
       ...vehicles.map(v => v.regNo || v['Reg. No.'] || '').filter(Boolean),
+      ...vendorProfiles.flatMap(v => v.vehicleNumbers || []),
       ...logs.map(l => l.vehicleNumber).filter(Boolean)
     ])
   ).sort();
@@ -369,6 +371,15 @@ export default function FuelManagement({
   }, [client]);
   const rqIdLocked = !isRqIdOnlyUser && user.department !== 'super_admin';
 
+  // Client = "One Time Vendor" auto-sets Type to "Vendor" - the user
+  // shouldn't have to also manually flip Type after picking this Client.
+  // One-directional only: Type stays a normal, freely-editable field the
+  // rest of the time (nothing forces it back when Client changes away from
+  // One Time Vendor, same as Client=KCM never locks Type either).
+  useEffect(() => {
+    if (client === 'One Time Vendor') setEntryType('Vendor');
+  }, [client]);
+
   // Vendor Name/Code/Vehicle all come from the Vendor Management registry
   // (vendorProfiles) - there is no separate "Manage Vendors" list anymore.
   // Requires a non-empty vendorName so an empty/malformed vendor record
@@ -390,6 +401,26 @@ export default function FuelManagement({
       setVehicleNumber(matchedVendorProfile.vehicleNumbers[0]);
     }
   }, [matchedVendorProfile]);
+
+  // Reverse lookup: Vehicle Number -> Vendor Name/Code, the other direction
+  // from matchedVendorProfile above (which goes Vendor Name -> Vehicle
+  // Number). Selecting/typing a vehicle number that's registered against a
+  // Vendor Management vendor auto-fills that vendor's Name and Code here too
+  // - still sourced only from vendorProfiles (Vendor Management), never a
+  // second maintained list. Re-evaluates on every Vehicle Number change, so
+  // switching to a different vendor's vehicle updates both fields to match;
+  // a vehicle with no matching vendor record simply leaves whatever's
+  // already in Vendor Name/Code alone for manual entry, same as any other
+  // no-match case in this form.
+  const matchedVendorByVehicle = vehicleNumber.trim() ? vendorProfiles.find(
+    v => (v.vehicleNumbers || []).some(n => n.trim().toUpperCase() === vehicleNumber.trim().toUpperCase())
+  ) : undefined;
+  useEffect(() => {
+    if (matchedVendorByVehicle) {
+      setVendorName(matchedVendorByVehicle.name);
+      setVendorCode(matchedVendorByVehicle.code);
+    }
+  }, [matchedVendorByVehicle]);
 
   // Bunk options for the currently selected location, per LOCATION_BUNK_MAP -
   // falls back to the full list if the location isn't mapped (or none picked).
@@ -420,25 +451,32 @@ export default function FuelManagement({
     }
   }, [bunkName, date, logs, editingId]);
 
-  // Indent No auto-continue: a new entry auto-fills the next sequential
-  // number after the highest Indent No already logged in the selected
-  // Date's calendar month (across every bunk/location - one shared running
-  // sequence) - which also rules out duplicates by construction, since it's
-  // always strictly higher than everything already logged that month. The
-  // first entry of a new month (nothing logged yet) is left blank for
-  // manual entry; every entry after that auto-continues for the rest of the
-  // month.
+  // Indent No auto-continue - Bunk and Card are two completely independent
+  // sequences (see server.ts's nextBunkFuelIndentNumber/
+  // nextCardFuelIndentNumber), both computed fresh from the actual saved
+  // database rows via GET /api/fuel/next-indent-number rather than this
+  // form's own possibly-stale `logs` prop, so two people adding entries at
+  // the same time both see the real next number and never collide. Bunk
+  // continues within the selected Date's calendar month (blank on the first
+  // entry of a new month - typed by hand, then auto-continues from there for
+  // the rest of that month); Card is one continuous 5-digit sequence that
+  // never resets and ignores Date entirely. Still just a prefill - fully
+  // editable afterward, and the actual save is re-validated server-side
+  // (duplicate check) regardless of what ends up in this field.
   useEffect(() => {
-    if (editingId || !date) return;
-    const monthKey = date.slice(0, 7);
-    const monthNumbers = logs
-      .filter(l => (l.date || '').slice(0, 7) === monthKey)
-      .map(l => extractLeadingNumber(l.indentNumber))
-      .filter(n => n > 0);
-    if (monthNumbers.length > 0) {
-      setIndentNumber(String(Math.max(...monthNumbers) + 1));
-    }
-  }, [date, logs, editingId]);
+    if (editingId) return;
+    if (bunkOrCard === 'Bunk' && !date) return;
+    let cancelled = false;
+    const params = new URLSearchParams({ bunkOrCard });
+    if (bunkOrCard === 'Bunk') params.set('date', date);
+    authFetch(`/api/fuel/next-indent-number?${params.toString()}`)
+      .then(r => r.json())
+      .then((body: { indentNumber: string | null }) => {
+        if (!cancelled) setIndentNumber(body.indentNumber || '');
+      })
+      .catch(() => { /* leave whatever's already typed - manual entry still works */ });
+    return () => { cancelled = true; };
+  }, [bunkOrCard, date, editingId]);
 
   // --- Mileage section calculations - identical rules to the old standalone
   // Trip Details form (see MileageReport.tsx), just keyed off this form's own
@@ -647,7 +685,7 @@ export default function FuelManagement({
     setLocation(log.location);
     setLocationIsOther(!!log.location && !LOCATIONS.includes(log.location));
     setBunkName(log.bunkName);
-    setBunkOrCard(log.bunkOrCard);
+    setBunkOrCard(log.bunkOrCard || 'Bunk'); // pre-existing record saved before this field existed - see item 8 backward-compat note above
     setVehicleNumber(log.vehicleNumber);
     setIndentNumber(log.indentNumber);
     setLtrs(String(log.ltrs));
@@ -813,7 +851,11 @@ export default function FuelManagement({
       resetForm();
     } catch (err) {
       console.error(err);
-      triggerNotif('Failed to save fuel entry.');
+      // Surfaces the server's actual message (e.g. a duplicate Indent No.
+      // rejection - see findDuplicateFuelIndentNumber in server.ts) instead
+      // of a generic failure notice, so the office can see exactly why and
+      // correct the Indent No.
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save fuel entry.');
     } finally {
       setIsSubmitting(false);
     }
@@ -842,7 +884,7 @@ export default function FuelManagement({
   const filteredLogsUnsorted = logs.filter(log =>
     (viewPeriod === 'all' || (log.date >= viewStart && log.date <= viewEnd)) &&
     (bunkFilter === 'All' || log.bunkName === bunkFilter) &&
-    (bunkOrCardFilter === 'All' || log.bunkOrCard === bunkOrCardFilter) &&
+    (bunkOrCardFilter === 'All' || (log.bunkOrCard || 'Bunk') === bunkOrCardFilter) &&
     (
       (log?.vehicleNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (log?.vendorName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -1157,18 +1199,6 @@ export default function FuelManagement({
                 <option value="All">All Bunks</option>
                 {usedBunks.map((b, i) => <option key={i} value={b}>{b}</option>)}
               </select>
-              {/* Bunk/Card filter - show only Bunk entries or only Card
-                  entries, independent of the Bunk Name filter above. */}
-              <select
-                value={bunkOrCardFilter}
-                onChange={(e) => setBunkOrCardFilter(e.target.value as 'All' | 'Bunk' | 'Card')}
-                title="Filter by Bunk/Card"
-                className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-700"
-              >
-                <option value="All">Bunk/Card: All</option>
-                <option value="Bunk">Bunk Only</option>
-                <option value="Card">Card Only</option>
-              </select>
               {!isRqIdOnlyUser && (
                 <button
                   onClick={() => { resetForm(); setShowSidebar(true); }}
@@ -1177,6 +1207,28 @@ export default function FuelManagement({
                   <Plus className="w-4 h-4" /> Add Entry
                 </button>
               )}
+            </div>
+          </div>
+
+          {/* Bunk | Card - the two ledgers are clearly separated views over
+              the same underlying entries (bunkOrCard on each FuelLog), not
+              separate Add Entry forms - saving an entry as Bunk shows it
+              only here in Bunk, Card only in Card. "All" keeps the
+              previously-only view (everything together) available too, so
+              this is additive, not a removal of existing behavior. */}
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Ledger:</span>
+            <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-bold">
+              {([['All', 'All'], ['Bunk', 'Bunk'], ['Card', 'Card']] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setBunkOrCardFilter(key)}
+                  className={`px-3.5 py-1.5 rounded-md cursor-pointer transition-colors ${bunkOrCardFilter === key ? 'bg-white shadow-xs text-emerald-700' : 'text-slate-500'}`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -1251,7 +1303,7 @@ export default function FuelManagement({
                       <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{log.date}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.location}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.bunkName}</td>
-                      <td className="px-3 py-2.5 whitespace-nowrap">{log.bunkOrCard}</td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">{log.bunkOrCard || 'Bunk'}</td>
                       <td className="px-3 py-2.5 font-bold font-mono text-slate-900 uppercase tracking-wider whitespace-nowrap">{log.vehicleNumber}</td>
                       <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{log.indentNumber}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-slate-800">{(log.ltrs || 0)} L</td>
@@ -1845,6 +1897,12 @@ export default function FuelManagement({
                       autoComplete="off"
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
                     />
+                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                      {bunkOrCard === 'Card'
+                        ? 'Card has its own sequence (00001, 00002...), completely separate from Bunk.'
+                        : 'Auto-continues within this month for Bunk - blank means this is the first entry of a new month; type the starting number.'}
+                      {' '}Still fully editable - correcting an existing entry never renumbers others.
+                    </p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -1923,7 +1981,7 @@ export default function FuelManagement({
                         {vendorProfiles.map((v) => <option key={v.id} value={v.name} />)}
                       </datalist>
                       <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                        Type a name registered in Vendor Management, or enter one manually if not found.
+                        Type a name registered in Vendor Management, or enter one manually if not found. Also auto-fills from Vehicle Number above when that vehicle belongs to a registered vendor.
                       </p>
                     </div>
                     <div>
