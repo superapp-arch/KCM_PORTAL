@@ -407,20 +407,35 @@ export default function FuelManagement({
   // Number). Selecting/typing a vehicle number that's registered against a
   // Vendor Management vendor auto-fills that vendor's Name and Code here too
   // - still sourced only from vendorProfiles (Vendor Management), never a
-  // second maintained list. Re-evaluates on every Vehicle Number change, so
-  // switching to a different vendor's vehicle updates both fields to match;
-  // a vehicle with no matching vendor record simply leaves whatever's
-  // already in Vendor Name/Code alone for manual entry, same as any other
-  // no-match case in this form.
+  // second maintained list.
+  //
+  // A Fleet & Vehicles vehicle never has a vendor - no vehicle owned by KCM
+  // itself should ever show vendor info, even if it happens to also be
+  // (mis)listed under a vendor's vehicleNumbers, so a Fleet match always
+  // wins and clears Vendor Name/Code rather than leaving stale/random data
+  // from whatever vehicle was selected before it. Only when the vehicle
+  // number is a genuine Vendor Management vehicle does it get filled; a
+  // vehicle number that's neither Fleet nor a registered vendor vehicle
+  // leaves the gap alone for manual entry.
+  const isFleetVehicleNumber = (num: string) =>
+    vehicles.some(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === num.trim().toUpperCase());
   const matchedVendorByVehicle = vehicleNumber.trim() ? vendorProfiles.find(
     v => (v.vehicleNumbers || []).some(n => n.trim().toUpperCase() === vehicleNumber.trim().toUpperCase())
   ) : undefined;
   useEffect(() => {
+    const trimmed = vehicleNumber.trim();
+    if (!trimmed) return;
+    if (isFleetVehicleNumber(trimmed)) {
+      setVendorName('');
+      setVendorCode('');
+      return;
+    }
     if (matchedVendorByVehicle) {
       setVendorName(matchedVendorByVehicle.name);
       setVendorCode(matchedVendorByVehicle.code);
     }
-  }, [matchedVendorByVehicle]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vehicleNumber, vehicles, matchedVendorByVehicle]);
 
   // Bunk options for the currently selected location, per LOCATION_BUNK_MAP -
   // falls back to the full list if the location isn't mapped (or none picked).
