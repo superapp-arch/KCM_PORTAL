@@ -478,8 +478,17 @@ export default function FuelManagement({
   // never resets and ignores Date entirely. Still just a prefill - fully
   // editable afterward, and the actual save is re-validated server-side
   // (duplicate check) regardless of what ends up in this field.
+  // Also keyed off `showSidebar`, not just [bunkOrCard, date, editingId] -
+  // resetForm() (see "Add Entry" button below) unconditionally clears
+  // indentNumber to '' every time the form is opened fresh, but if
+  // bunkOrCard/date/editingId all happen to already equal their previous
+  // values (the common case - same day, still Bunk), those 3 alone never
+  // change and this effect would never re-run to refill it, leaving the
+  // field permanently blank after that clear. Including showSidebar
+  // guarantees a fresh fetch every single time Add Entry opens for a new
+  // entry, regardless of whether the other 3 values changed.
   useEffect(() => {
-    if (editingId) return;
+    if (!showSidebar || editingId) return;
     if (bunkOrCard === 'Bunk' && !date) return;
     let cancelled = false;
     const params = new URLSearchParams({ bunkOrCard });
@@ -491,7 +500,7 @@ export default function FuelManagement({
       })
       .catch(() => { /* leave whatever's already typed - manual entry still works */ });
     return () => { cancelled = true; };
-  }, [bunkOrCard, date, editingId]);
+  }, [bunkOrCard, date, editingId, showSidebar]);
 
   // --- Mileage section calculations - identical rules to the old standalone
   // Trip Details form (see MileageReport.tsx), just keyed off this form's own
