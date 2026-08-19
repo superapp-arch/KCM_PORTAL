@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { WarehouseEntry, VehicleDocument, Vehicle, User, Vendor } from '../types';
 import { VEHICLE_CATEGORIES } from '../utils/vehicleCycleDefaults';
@@ -91,6 +92,10 @@ export default function WarehouseDetails({
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<string | null>(null);
+  // "Log New Warehouse Deployment" is a slide-out sidebar now (matching Fuel
+  // Management/Mileage Report's own +Add Entry pattern), closed by default,
+  // instead of sitting permanently open as a left-hand panel.
+  const [showAddSidebar, setShowAddSidebar] = useState(false);
 
   // Form State for Adding New Entry
   const [date, setDate] = useState(new Date().toISOString().substring(0, 10));
@@ -359,6 +364,7 @@ export default function WarehouseDetails({
       setHybridReeferCost(0);
       setVendorRemarks('');
       setNewEntryDocs([]);
+      setShowAddSidebar(false);
 
       triggerNotif('🏬 New warehouse details log saved & calculated successfully!');
     } catch (err) {
@@ -642,27 +648,55 @@ export default function WarehouseDetails({
           </p>
         </div>
 
-        <button
-          onClick={handleExportCSV}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-md transition-all shrink-0 self-start sm:self-auto"
-        >
-          <FileSpreadsheet className="w-4 h-4" />
-          Export Sheet (Excel)
-        </button>
+        <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
+          <button
+            onClick={handleExportCSV}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            Export Sheet (Excel)
+          </button>
+          <button
+            onClick={() => setShowAddSidebar(true)}
+            className="bg-gradient-to-r from-pink-600 to-purple-800 hover:from-pink-700 hover:to-purple-900 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
+          >
+            <Plus className="w-4 h-4" />
+            Log New Deployment
+          </button>
+        </div>
       </div>
 
-      {/* Main Grid: Form Left, Table Right */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* Left Side: Create Entry Form Panel */}
-        <div className="lg:col-span-4 bg-white rounded-2xl border border-pink-100 p-5 shadow-xs space-y-4">
-          <h2 className="text-xs font-black text-purple-900 uppercase tracking-wider flex items-center gap-1.5">
-            <Plus className="w-4 h-4 text-pink-600" />
-            Log New Warehouse Deployment
-          </h2>
+      {/* Ledger - full width; Log New Warehouse Deployment lives in its own
+          slide-out sidebar below (triggered by the button above), matching
+          Fuel Management/Mileage Report's own +Add Entry pattern, instead of
+          sitting open as a permanent left-hand panel. */}
+      <div className="space-y-4">
 
-          <form onSubmit={handleSubmit} className="space-y-3.5 text-xs text-slate-700">
-            
+      {/* Slide-out Sidebar: Log New Warehouse Deployment */}
+      <AnimatePresence>
+        {showAddSidebar && (
+          <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex justify-end z-50">
+            <div className="absolute inset-0" onClick={() => setShowAddSidebar(false)} />
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="relative w-full max-w-lg bg-white h-full shadow-2xl flex flex-col z-10 border-l border-pink-100"
+            >
+              <div className="p-4 bg-gradient-to-r from-purple-950 to-pink-950 text-white flex items-center justify-between">
+                <h2 className="text-xs font-black uppercase tracking-wider flex items-center gap-1.5">
+                  <Plus className="w-4 h-4 text-pink-400" />
+                  Log New Warehouse Deployment
+                </h2>
+                <button onClick={() => setShowAddSidebar(false)} className="p-1.5 rounded-lg hover:bg-white/10 text-slate-200 hover:text-white cursor-pointer">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-5">
+              <form id="warehouse-entry-form" onSubmit={handleSubmit} className="space-y-3.5 text-xs text-slate-700">
+
             {/* 1. Date & Warehouse Name */}
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -1100,20 +1134,30 @@ export default function WarehouseDetails({
               />
             </div>
 
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full bg-gradient-to-r from-pink-600 to-purple-800 hover:from-pink-700 hover:to-purple-900 text-slate-100 font-black py-2.5 px-4 rounded-xl shadow-lg shadow-pink-500/10 cursor-pointer text-xs uppercase tracking-wider transition-all disabled:opacity-50 mt-2"
-            >
-              {isSubmitting ? 'Processing Record...' : 'Post Warehouse Details Log'}
-            </button>
+              </form>
+              </div>
 
-          </form>
-        </div>
+              <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-2">
+                <button type="button" onClick={() => setShowAddSidebar(false)} className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 transition-colors uppercase text-[10px] cursor-pointer">
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  form="warehouse-entry-form"
+                  disabled={isSubmitting}
+                  className="flex-1 bg-gradient-to-r from-pink-600 to-purple-800 hover:from-pink-700 hover:to-purple-900 text-slate-100 font-black py-2.5 px-4 rounded-xl shadow-lg shadow-pink-500/10 cursor-pointer text-xs uppercase tracking-wider transition-all disabled:opacity-50"
+                >
+                  {isSubmitting ? 'Processing Record...' : 'Post Warehouse Details Log'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
-        {/* Right Side: Tabular LEDGER View of Logs */}
-        <div className="lg:col-span-8 space-y-4">
-          
+        {/* Tabular LEDGER View of Logs */}
+        <div className="space-y-4">
+
           {/* Filters Bar Widget */}
           <div className="bg-white p-4 rounded-2xl border border-pink-100 shadow-xs space-y-3">
             <div className="flex items-center justify-between border-b border-purple-50/50 pb-2">

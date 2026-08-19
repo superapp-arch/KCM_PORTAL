@@ -838,6 +838,17 @@ export default function FuelManagement({
       triggerNotif('Please complete all required fields (*)');
       return;
     }
+    // Rate per Ltr (new) is only mandatory once Extra Fuel actually has a
+    // value typed in - otherwise it stays optional, same as today. Checked
+    // here (not just via the input's own `required`) since the Mileage
+    // sub-tab can be unmounted at submit time if the user is currently on
+    // Fuel Entry Details - switching them there so the field they need to
+    // fix is actually visible.
+    if (mExtraFuel.trim() && !mRatePerLitreNew.trim()) {
+      triggerNotif('Rate per Ltr (new) is required when Extra Fuel has a value.');
+      setEntrySection('mileage');
+      return;
+    }
     // Mileage is optional - plenty of vehicles only ever get a fuel entry,
     // with no trip/mileage data at all. Only treat the Mileage tab as filled
     // in (and validate/save it) when Opening KM, Closing KM, and Authorized
@@ -1379,7 +1390,9 @@ export default function FuelManagement({
               <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
                 <tr>
                   <th className="px-3 py-2.5">Entry #</th>
-                  <th className="px-3 py-2.5"><SortHeader label="Period" sortKey="period" sort={sort} onSort={handleSort} /></th>
+                  {/* Period column hidden from the listing (per direct
+                      instruction) - log.period is still saved/exported, just
+                      not shown as its own column here anymore. */}
                   <th className="px-3 py-2.5"><SortHeader label="Date" sortKey="date" sort={sort} onSort={handleSort} type="numeric" /></th>
                   <th className="px-3 py-2.5"><SortHeader label="Location" sortKey="location" sort={sort} onSort={handleSort} /></th>
                   <th className="px-3 py-2.5"><SortHeader label="Bunk Name" sortKey="bunkName" sort={sort} onSort={handleSort} /></th>
@@ -1404,7 +1417,7 @@ export default function FuelManagement({
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {filteredLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={20 + (isSuperAdmin || isRqIdOnlyUser ? 1 : 0)} className="text-center py-10 text-slate-400 font-mono">
+                    <td colSpan={19 + (isSuperAdmin || isRqIdOnlyUser ? 1 : 0)} className="text-center py-10 text-slate-400 font-mono">
                       NO FUEL ENTRIES FOUND IN CURRENT LEDGER.
                     </td>
                   </tr>
@@ -1412,7 +1425,6 @@ export default function FuelManagement({
                   filteredLogs.map((log, i) => (
                     <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{i + 1}</td>
-                      <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{log.period}</td>
                       <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{log.date}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.location}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.bunkName}</td>
@@ -1772,15 +1784,21 @@ export default function FuelManagement({
                         </p>
                       </div>
                       <div>
-                        <label className="block font-semibold text-slate-600 mb-1">Rate per Ltr (new)</label>
+                        <label className="block font-semibold text-slate-600 mb-1">
+                          Rate per Ltr (new){mExtraFuel.trim() && <span className="text-rose-500"> *</span>}
+                        </label>
                         <input
                           type="number"
                           step="0.01"
+                          required={!!mExtraFuel.trim()}
                           placeholder="e.g. 96.50"
                           value={mRatePerLitreNew}
                           onChange={(e) => setMRatePerLitreNew(e.target.value)}
                           className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
                         />
+                        {mExtraFuel.trim() && !mRatePerLitreNew.trim() && (
+                          <p className="text-[9px] text-rose-500 font-mono mt-0.5">Required since Extra Fuel has a value.</p>
+                        )}
                       </div>
                     </div>
 

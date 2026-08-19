@@ -452,7 +452,7 @@ export default function MileageReportModule({
       'Total KM': r.totalKm,
       'Rate Per Litre': r.ratePerLitre,
       'Litres': r.litres,
-      'Total Ltrs (Litres + Extra Fuel)': r.totalLitres ?? r.litres,
+      'Total Litres': r.totalLitres ?? r.litres,
       'Diesel Amount': r.dieselAmount,
       'Mileage': r.mileage,
       'Cost per KM': r.costPerKm || 0,
@@ -709,7 +709,6 @@ export default function MileageReportModule({
                 <th className="px-3 py-2.5 text-right bg-slate-800"><SortHeader label="Total KM" sortKey="totalKm" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right"><SortHeader label="Rate / Litre" sortKey="ratePerLitre" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right"><SortHeader label="Litres" sortKey="litres" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="Total Ltrs (Litres + Extra Fuel)" sortKey="totalLitres" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right text-teal-400"><SortHeader label="Diesel Amount" sortKey="dieselAmount" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right text-pink-400"><SortHeader label="Mileage" sortKey="mileage" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right text-amber-400"><SortHeader label="Cost/KM" sortKey="costPerKm" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
@@ -717,6 +716,7 @@ export default function MileageReportModule({
                 <th className="px-3 py-2.5 text-right"><SortHeader label="Difference (L)" sortKey="difference" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right"><SortHeader label="Extra Fuel" sortKey="extraFuel" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right"><SortHeader label="Rate/Ltr (new)" sortKey="ratePerLitreNew" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><SortHeader label="Total Litres" sortKey="totalLitres" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-right text-teal-400"><SortHeader label="Total Amount" sortKey="totalAmount" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
                 <th className="px-3 py-2.5"><SortHeader label="Authorized Driver" sortKey="driverName" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5"><SortHeader label="Location" sortKey="location" sort={sort} onSort={handleSort} /></th>
@@ -746,7 +746,6 @@ export default function MileageReportModule({
                     <td className="px-3 py-2 text-right font-mono font-bold bg-slate-50 text-slate-900">{(r.totalKm || 0).toLocaleString('en-IN')} KM</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">₹{(r.ratePerLitre || 0).toFixed(2)}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{(r.litres || 0).toFixed(2)} L</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-600">{(r.totalLitres ?? r.litres ?? 0).toFixed(2)} L</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-teal-700 bg-teal-50/20">₹{(r.dieselAmount || 0).toLocaleString('en-IN')}</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-pink-700 bg-pink-50/20">{(r.mileage || 0).toFixed(2)} KM/L</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-amber-700 bg-amber-50/20">{r.costPerKm ? `₹${r.costPerKm.toFixed(2)}` : '-'}</td>
@@ -756,6 +755,7 @@ export default function MileageReportModule({
                     </td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.extraFuel ? r.extraFuel.toFixed(2) : '-'}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.ratePerLitreNew ? `₹${r.ratePerLitreNew.toFixed(2)}` : '-'}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-600">{(r.totalLitres ?? r.litres ?? 0).toFixed(2)} L</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-teal-700 bg-teal-50/20">{r.totalAmount ? `₹${r.totalAmount.toLocaleString('en-IN')}` : '-'}</td>
                     <td className="px-3 py-2 text-slate-800 whitespace-nowrap font-semibold">{r.driverName}</td>
                     <td className="px-3 py-2 whitespace-nowrap">
@@ -1083,7 +1083,7 @@ export default function MileageReportModule({
                       <span className="text-xs font-black text-teal-700">₹{dieselAmount}</span>
                     </div>
                     <div>
-                      <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Total Ltrs (Litres + Extra Fuel)</span>
+                      <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Total Litres</span>
                       <span className="text-xs font-black text-teal-700">{totalLitres || 0} L</span>
                     </div>
                     <div>
