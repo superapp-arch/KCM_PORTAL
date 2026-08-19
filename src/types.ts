@@ -817,6 +817,13 @@ export interface WarehouseEntry {
   kmPerDayAuto?: number; // 24 Hrs only - auto = kmSlab / workingDays
   kmPerDayOverride?: number; // 24 Hrs only - set only when the user overrides kmPerDayAuto
   kmPerDay?: number; // 24 Hrs only - the value actually used = kmPerDayOverride ?? kmPerDayAuto
+  // 12Hr Dedicated fixed Scheduled Rate lookup (see utils/warehouseRateMatrix.ts)
+  // - one of WAREHOUSE_GROUP_OPTIONS' values, e.g. "BLR IM2" or "Vizag".
+  // Only meaningful/used when fixedHours is 12 and this group has a rate
+  // configured for the chosen Vehicle Type + KM Slab; otherwise
+  // scheduledRate above is manually typed exactly as before. Purely a fixed
+  // in-code lookup table for now, not a database-backed/admin-editable one.
+  warehouseGroup?: string;
 }
 
 export interface MileageReport {

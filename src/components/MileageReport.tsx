@@ -805,42 +805,59 @@ export default function MileageReportModule({
           </table>
         </div>
 
-        {/* Calculated Totals Mini Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 pt-2 text-xs">
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-            <span className="text-[10px] text-slate-400 font-bold uppercase">Total KM Accumulated</span>
-            <div className="text-sm font-black text-slate-800 font-mono mt-0.5">
+        {/* Calculated Totals Mini Grid - deliberately compact (small
+            padding/text) since these get screenshotted on their own a lot -
+            the old size ran off a typical phone screenshot. */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 pt-2 text-xs">
+          <div className="bg-slate-50 p-1.5 rounded-lg border border-slate-200">
+            <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Total KM Accumulated</span>
+            <div className="text-[11px] font-black text-slate-800 font-mono mt-0.5">
               {filteredReports.reduce((s, r) => s + (r.totalKm || 0), 0).toLocaleString('en-IN')} KM
             </div>
           </div>
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-            <span className="text-[10px] text-slate-400 font-bold uppercase">Total Diesel Consumed</span>
-            <div className="text-sm font-black text-slate-800 font-mono mt-0.5">
-              {filteredReports.reduce((s, r) => s + (r.litres || 0), 0).toLocaleString('en-IN')} Litres
+          {/* Total Litres - sums the Total Litres column (Litres + Extra
+              Fuel), same value the table's own column shows, not the bare
+              Litres field. */}
+          <div className="bg-slate-50 p-1.5 rounded-lg border border-slate-200">
+            <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Total Litres</span>
+            <div className="text-[11px] font-black text-slate-800 font-mono mt-0.5">
+              {filteredReports.reduce((s, r) => s + (r.totalLitres ?? r.litres ?? 0), 0).toLocaleString('en-IN')} L
             </div>
           </div>
-          <div className="bg-teal-50/40 p-3 rounded-xl border border-teal-100">
-            <span className="text-[10px] text-teal-600 font-bold uppercase">Total Fuel Expenditure</span>
-            <div className="text-sm font-black text-teal-800 font-mono mt-0.5">
-              ₹{filteredReports.reduce((s, r) => s + (r.dieselAmount || 0), 0).toLocaleString('en-IN')}
+          {/* Total Amount - sums the Total Amount column (Diesel Amount +
+              Extra Fuel*new rate), falling back to Diesel Amount only for
+              any row that never had Extra Fuel/a new rate. */}
+          <div className="bg-teal-50/40 p-1.5 rounded-lg border border-teal-100">
+            <span className="text-[8.5px] text-teal-600 font-bold uppercase block">Total Amount</span>
+            <div className="text-[11px] font-black text-teal-800 font-mono mt-0.5">
+              ₹{filteredReports.reduce((s, r) => s + (r.totalAmount ?? r.dieselAmount ?? 0), 0).toLocaleString('en-IN')}
             </div>
           </div>
-          <div className="bg-pink-50/40 p-3 rounded-xl border border-pink-100">
-            <span className="text-[10px] text-pink-600 font-bold uppercase">Avg Segmented Mileage</span>
-            <div className="text-sm font-black text-pink-700 font-mono mt-0.5">
+          <div className="bg-pink-50/40 p-1.5 rounded-lg border border-pink-100">
+            <span className="text-[8.5px] text-pink-600 font-bold uppercase block">Avg Segmented Mileage</span>
+            <div className="text-[11px] font-black text-pink-700 font-mono mt-0.5">
               {filteredReports.length > 0
                 ? (filteredReports.reduce((s, r) => s + (r.mileage || 0), 0) / filteredReports.length).toFixed(2)
                 : '0.00'} KM/L
             </div>
           </div>
-          <div className="bg-amber-50/40 p-3 rounded-xl border border-amber-100">
-            <span className="text-[10px] text-amber-600 font-bold uppercase">Avg Cost/KM</span>
-            <div className="text-sm font-black text-amber-700 font-mono mt-0.5">
-              ₹{filteredReports.length > 0
-                ? (filteredReports.reduce((s, r) => s + (r.costPerKm || 0), 0) / filteredReports.length).toFixed(2)
-                : '0.00'}
-            </div>
-          </div>
+          {/* Difference Mileage Amount - cumulative rupee value of the
+              Difference (L) column: each row's difference (litres, +saved/
+              -wasted) x its own Rate/Litre, summed across every filtered
+              row. Green when the total is fuel saved (>= 0), red when it's
+              net wasted (< 0) - same sign convention the Difference (L)
+              column itself already uses. */}
+          {(() => {
+            const differenceAmount = filteredReports.reduce((s, r) => s + (r.difference ?? 0) * (r.ratePerLitre || 0), 0);
+            return (
+              <div className={`p-1.5 rounded-lg border ${differenceAmount >= 0 ? 'bg-emerald-50/40 border-emerald-100' : 'bg-rose-50/40 border-rose-100'}`}>
+                <span className={`text-[8.5px] font-bold uppercase block ${differenceAmount >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>Difference Mileage Amount</span>
+                <div className={`text-[11px] font-black font-mono mt-0.5 ${differenceAmount >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                  {differenceAmount >= 0 ? '+' : '-'}₹{Math.abs(differenceAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
 

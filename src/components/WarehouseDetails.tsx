@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { WarehouseEntry, VehicleDocument, Vehicle, User, Vendor } from '../types';
@@ -27,6 +27,7 @@ import {
   FUEL_COST_PERCENT, KM_SLAB_SUGGESTIONS, formatINR, round2, daysInMonth, countSundaysInMonth,
   computeAutoWorkingDays, resolveWorkingDays, computeWarehouseRates
 } from '../utils/warehouseRates';
+import { WAREHOUSE_GROUP_OPTIONS, lookupScheduledRate } from '../utils/warehouseRateMatrix';
 
 // Known Warehouse Name -> Warehouse City pairs, replacing the old free-form
 // suggestion list. Both Warehouse Name fields below stay plain text inputs
@@ -38,6 +39,8 @@ const WAREHOUSE_LOCATIONS: { name: string; city: string }[] = [
   { name: 'BLR DHL', city: 'Bangalore' },
   { name: 'BLR ECOM2', city: 'Bangalore' },
   { name: 'BLR IM1', city: 'Bangalore' },
+  { name: 'BLR IM2', city: 'Bangalore' },
+  { name: 'BLR IM3', city: 'Bangalore' },
   { name: 'BLR IM4', city: 'Bangalore' },
   { name: 'CHN COLD IM1', city: 'Chennai' },
   { name: 'GOA IM1', city: 'Central Goa' },
@@ -126,6 +129,7 @@ export default function WarehouseDetails({
   // auto-computed from these (see computeWarehouseRates), no longer typed
   // directly.
   const [scheduledRate, setScheduledRate] = useState<number>(0);
+  const [warehouseGroup, setWarehouseGroup] = useState(''); // 12Hr Dedicated fixed rate lookup - see utils/warehouseRateMatrix.ts
   const [ratePerExtraKm, setRatePerExtraKm] = useState<number>(0);
   const [ratePerExtraHour, setRatePerExtraHour] = useState<number>(0);
   const [variableCostPerKm, setVariableCostPerKm] = useState<number>(0); // 24 Hrs only
@@ -165,6 +169,7 @@ export default function WarehouseDetails({
   const [editExtraKm, setEditExtraKm] = useState<number>(0); // "Add KM"
   const [editAddHour, setEditAddHour] = useState<number>(0); // "Add Hour"
   const [editScheduledRate, setEditScheduledRate] = useState<number>(0);
+  const [editWarehouseGroup, setEditWarehouseGroup] = useState('');
   const [editRatePerExtraKm, setEditRatePerExtraKm] = useState<number>(0);
   const [editRatePerExtraHour, setEditRatePerExtraHour] = useState<number>(0);
   const [editVariableCostPerKm, setEditVariableCostPerKm] = useState<number>(0);
@@ -193,6 +198,16 @@ export default function WarehouseDetails({
   const { baseRate, fuelCost, extraKmAmount: additionalKmCost, extraHourAmount: additionalHourCost, grandTotal } = rates;
   const finalBaseRate = Math.max(0, baseRate + fuelCost);
 
+  // 12Hr Dedicated fixed Scheduled Rate lookup (see utils/warehouseRateMatrix.ts)
+  // - null (no auto-fill, Scheduled Rate stays manual) unless fixedHours is
+  // 12 and Warehouse Group + Vehicle Type + KM Slab resolve to a configured
+  // rate. Re-syncs scheduledRate whenever the match changes, so switching
+  // Warehouse Group/Vehicle Type/KM Slab always reflects the right rate.
+  const matchedScheduledRate = fixedHours === 12 ? lookupScheduledRate(warehouseGroup, vehicleType, kmSlabNumber) : null;
+  useEffect(() => {
+    if (matchedScheduledRate != null) setScheduledRate(matchedScheduledRate);
+  }, [matchedScheduledRate]);
+
   // Auto-calculated fields for edit modal
   const editKmUtilised = Math.max(0, editClosingKm - editOpeningKm);
   const editWorkingDaysAuto = computeAutoWorkingDays(editWorkingMonth, editDeductSundays, editHolidaysCount);
@@ -207,6 +222,10 @@ export default function WarehouseDetails({
     tollCharges: editTollCharges, parkingCost: editParkingCost, hybridReeferCost: editHybridReeferCost
   });
   const { baseRate: editBaseRate, fuelCost: editFuelCost, extraKmAmount: editAdditionalKmCost, extraHourAmount: editAdditionalHourCost, grandTotal: editGrandTotal } = editRates;
+  const editMatchedScheduledRate = editFixedHours === 12 ? lookupScheduledRate(editWarehouseGroup, editVehicleType, editKmSlabNumber) : null;
+  useEffect(() => {
+    if (editMatchedScheduledRate != null) setEditScheduledRate(editMatchedScheduledRate);
+  }, [editMatchedScheduledRate]);
   const editFinalBaseRate = Math.max(0, editBaseRate + editFuelCost);
 
   // Trigger temporary toast notification
@@ -322,6 +341,7 @@ export default function WarehouseDetails({
         // Rate-calculation inputs - saved alongside the results above so
         // this record still reconciles even after config changes later.
         scheduledRate,
+        warehouseGroup: warehouseGroup || undefined,
         workingMonth,
         workingDaysAuto,
         deductSundays,
@@ -351,6 +371,7 @@ export default function WarehouseDetails({
       setExtraKm(0);
       setAddHour(0);
       setScheduledRate(0);
+      setWarehouseGroup('');
       setRatePerExtraKm(0);
       setRatePerExtraHour(0);
       setVariableCostPerKm(0);
@@ -422,6 +443,7 @@ export default function WarehouseDetails({
     setEditExtraKm(entry.extraKm || 0);
     setEditAddHour(entry.addHour || 0);
     setEditScheduledRate(entry.scheduledRate || 0);
+    setEditWarehouseGroup(entry.warehouseGroup || '');
     setEditRatePerExtraKm(entry.ratePerExtraKm || 0);
     setEditRatePerExtraHour(entry.ratePerExtraHour || 0);
     setEditVariableCostPerKm(entry.variableCostPerKm || 0);
@@ -479,6 +501,7 @@ export default function WarehouseDetails({
         grandTotal: editGrandTotal,
         vendorRemarks: editVendorRemarks.trim(),
         scheduledRate: editScheduledRate,
+        warehouseGroup: editWarehouseGroup || undefined,
         workingMonth: editWorkingMonth,
         workingDaysAuto: editWorkingDaysAuto,
         deductSundays: editDeductSundays,
@@ -623,6 +646,156 @@ export default function WarehouseDetails({
     XLSX.writeFile(workbook, `KCM_Warehouse_Details_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
+  // --- Import (Excel/CSV) - lets the office bulk-load a past month's data
+  // instead of re-typing it entry-by-entry. Column headers are matched
+  // case/spacing-insensitively against this alias table, which covers this
+  // module's own Export Sheet headers exactly (so an exported sheet always
+  // re-imports cleanly) plus a handful of common real-world spreadsheet
+  // variations. A row is only skipped if it's missing Date, Warehouse Name,
+  // Vehicle Number, or Closing KM - the same minimum this module's own Add
+  // Entry form requires; everything else defaults sensibly (blank/0) rather
+  // than rejecting the whole row over one missing optional column.
+  const normalizeHeader = (h: string) => h.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const WAREHOUSE_IMPORT_ALIASES: Record<string, keyof WarehouseEntry> = {
+    date: 'date', deploymentdate: 'date',
+    warehousename: 'warehouseName', warehouse: 'warehouseName',
+    warehousecity: 'warehouseCity',
+    vehiclenumber: 'vehicleNumber', vehicleno: 'vehicleNumber', vehicle: 'vehicleNumber', regno: 'vehicleNumber',
+    vehicletype: 'vehicleType', type: 'vehicleType',
+    vehiclecategory: 'vehicleCategory', category: 'vehicleCategory',
+    deploymenttype: 'deploymentType', deployment: 'deploymentType',
+    podname: 'pod', pod: 'pod',
+    podcity: 'podCity',
+    fixedhours: 'fixedHours', fixedhrs: 'fixedHours',
+    kmslab: 'kmSlab',
+    openingkm: 'openingKm', opening: 'openingKm',
+    closingkm: 'closingKm', closing: 'closingKm',
+    intime: 'inTime',
+    closuretime: 'closureTime', closure: 'closureTime',
+    contractperioddayshrs: 'hoursDaysAsPerContract', contractperiod: 'hoursDaysAsPerContract',
+    overtimevehicle: 'overtimeVehicle', ot: 'overtimeVehicle', otvehicle: 'overtimeVehicle',
+    extrakm: 'extraKm', addkm: 'extraKm',
+    baserate: 'baseRate',
+    fuelcost: 'fuelCost',
+    finalbaserate: 'finalBaseRate',
+    additionalkmcost: 'additionalKmCost',
+    additionalhourcost: 'additionalHourCost',
+    tollcharges: 'tollCharges', tolls: 'tollCharges',
+    parkingcost: 'parkingCost', parking: 'parkingCost',
+    hybridreefercost: 'hybridReeferCost', hybridreefer: 'hybridReeferCost',
+    grandtotal: 'grandTotal',
+    vendorremarks: 'vendorRemarks', remarks: 'vendorRemarks',
+    scheduledrate: 'scheduledRate',
+    warehousegroup: 'warehouseGroup',
+  };
+
+  // Tolerant of an already-ISO date, dd.mm.yyyy/dd-mm-yyyy/dd/mm/yyyy (same
+  // formats DateInput.tsx's own normalizer accepts), or an Excel date
+  // serial number (sheet_to_json's raw:false + dateNF below normally
+  // formats these as text already, this is just a safety net).
+  const normalizeImportDate = (raw: string | number): string => {
+    if (typeof raw === 'number') {
+      const d = new Date(Math.round((raw - 25569) * 86400 * 1000));
+      return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+    }
+    const s = String(raw || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+    const dmy = /^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/.exec(s);
+    if (dmy) { const [, d, m, y] = dmy; return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`; }
+    return '';
+  };
+
+  const [isImporting, setIsImporting] = useState(false);
+  const importFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportFile = async (file: File) => {
+    setIsImporting(true);
+    try {
+      const buf = await file.arrayBuffer();
+      const workbook = XLSX.read(buf, { type: 'array', cellDates: false });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows: Record<string, string | number>[] = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false, dateNF: 'yyyy-mm-dd' });
+
+      let imported = 0;
+      let skipped = 0;
+      const startingSlNo = entries.length > 0 ? Math.max(...entries.map(e => e.slNo || 0)) : 0;
+
+      for (const row of rows) {
+        const mapped: Partial<Record<keyof WarehouseEntry, string | number>> = {};
+        Object.entries(row).forEach(([header, value]) => {
+          const key = WAREHOUSE_IMPORT_ALIASES[normalizeHeader(header)];
+          if (key && value !== '') mapped[key] = value;
+        });
+
+        const dateVal = normalizeImportDate(mapped.date ?? '');
+        const whName = String(mapped.warehouseName || '').trim();
+        const vehNo = String(mapped.vehicleNumber || '').trim().toUpperCase();
+        const closingKmVal = Number(mapped.closingKm) || 0;
+        if (!dateVal || !whName || !vehNo || !closingKmVal) { skipped++; continue; }
+
+        const openingKmVal = Number(mapped.openingKm) || 0;
+        const baseRateVal = Number(mapped.baseRate) || 0;
+        const fuelCostVal = Number(mapped.fuelCost) || 0;
+        const additionalKmCostVal = Number(mapped.additionalKmCost) || 0;
+        const additionalHourCostVal = Number(mapped.additionalHourCost) || 0;
+        const tollChargesVal = Number(mapped.tollCharges) || 0;
+        const parkingCostVal = Number(mapped.parkingCost) || 0;
+        const hybridReeferCostVal = Number(mapped.hybridReeferCost) || 0;
+
+        try {
+          await onAddEntry({
+            slNo: startingSlNo + imported + 1,
+            date: dateVal,
+            warehouseName: whName,
+            warehouseCity: String(mapped.warehouseCity || '').trim(),
+            vehicleNumber: vehNo,
+            vehicleType: String(mapped.vehicleType || '').trim(),
+            vehicleCategory: String(mapped.vehicleCategory || '').trim(),
+            deploymentType: String(mapped.deploymentType || 'regular').trim(),
+            pod: String(mapped.pod || '').trim(),
+            podCity: String(mapped.podCity || '').trim(),
+            fixedHours: Number(mapped.fixedHours) || 12,
+            kmSlab: String(mapped.kmSlab || '').trim(),
+            openingKm: openingKmVal,
+            closingKm: closingKmVal,
+            inTime: String(mapped.inTime || '').trim(),
+            closureTime: String(mapped.closureTime || '').trim(),
+            kmUtilised: Math.max(0, closingKmVal - openingKmVal),
+            hoursDaysAsPerContract: Number(mapped.hoursDaysAsPerContract) || 1,
+            overtimeVehicle: String(mapped.overtimeVehicle || '').trim(),
+            extraKm: Number(mapped.extraKm) || 0,
+            baseRate: baseRateVal,
+            fuelCost: fuelCostVal,
+            finalBaseRate: Number(mapped.finalBaseRate) || round2(baseRateVal + fuelCostVal),
+            additionalKmCost: additionalKmCostVal,
+            additionalHourCost: additionalHourCostVal,
+            tollCharges: tollChargesVal,
+            parkingCost: parkingCostVal,
+            hybridReeferCost: hybridReeferCostVal,
+            grandTotal: Number(mapped.grandTotal) || round2(
+              baseRateVal + fuelCostVal + additionalKmCostVal + additionalHourCostVal + tollChargesVal + parkingCostVal + hybridReeferCostVal
+            ),
+            vendorRemarks: String(mapped.vendorRemarks || '').trim(),
+            scheduledRate: mapped.scheduledRate ? Number(mapped.scheduledRate) : undefined,
+            warehouseGroup: mapped.warehouseGroup ? String(mapped.warehouseGroup).trim() : undefined,
+            documents: []
+          });
+          imported++;
+        } catch {
+          skipped++;
+        }
+      }
+
+      triggerNotif(`📥 Imported ${imported} row${imported === 1 ? '' : 's'}${skipped > 0 ? ` - skipped ${skipped} (missing Date/Warehouse Name/Vehicle Number/Closing KM, or failed to save)` : ''}.`);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to read the import file. Make sure it\'s a valid Excel (.xlsx/.xls) or CSV file with a header row.');
+    } finally {
+      setIsImporting(false);
+      if (importFileInputRef.current) importFileInputRef.current.value = '';
+    }
+  };
+
   return (
     <div className="space-y-6" id="warehouse-details-root">
       
@@ -655,6 +828,25 @@ export default function WarehouseDetails({
           >
             <FileSpreadsheet className="w-4 h-4" />
             Export Sheet (Excel)
+          </button>
+          {/* Import - bulk-loads a past month's data from Excel/CSV instead
+              of re-typing it (see handleImportFile above for the column
+              matching/skip rules). */}
+          <input
+            ref={importFileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportFile(f); }}
+          />
+          <button
+            onClick={() => importFileInputRef.current?.click()}
+            disabled={isImporting}
+            title="Import a past month's data from Excel/CSV"
+            className="bg-white border border-purple-200 hover:bg-purple-50 text-purple-800 font-bold text-xs py-2.5 px-4 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-md transition-all disabled:opacity-50"
+          >
+            <Upload className="w-4 h-4" />
+            {isImporting ? 'Importing...' : 'Import'}
           </button>
           <button
             onClick={() => setShowAddSidebar(true)}
@@ -963,11 +1155,34 @@ export default function WarehouseDetails({
                 typed directly into the totals anymore. */}
             <div className="p-2.5 bg-purple-50/40 rounded-xl border border-purple-100/50 space-y-2">
               <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wide">Rate Configuration</span>
+
+              {/* 12Hr Dedicated fixed rate lookup - Warehouse Group x Vehicle
+                  Type x KM Slab (see utils/warehouseRateMatrix.ts). Only
+                  shown for 12 Hr; 24 Hr/other deployments keep a plain
+                  manually-typed Scheduled Rate below, untouched. */}
+              {fixedHours === 12 && (
+                <div>
+                  <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Warehouse Group (12Hr Dedicated rate)</label>
+                  <select value={warehouseGroup} onChange={(e) => setWarehouseGroup(e.target.value)}
+                    className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800">
+                    <option value="">Not applicable - manual rate</option>
+                    {WAREHOUSE_GROUP_OPTIONS.map(g => <option key={g.value} value={g.value}>{g.value}</option>)}
+                  </select>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Scheduled Rate (₹/month)</label>
-                  <input type="number" placeholder="e.g. 75000" value={scheduledRate || ''} onChange={(e) => setScheduledRate(Number(e.target.value))}
-                    className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
+                  <input type="number" placeholder="e.g. 75000" value={scheduledRate || ''}
+                    readOnly={matchedScheduledRate != null}
+                    onChange={(e) => setScheduledRate(Number(e.target.value))}
+                    className={`w-full border border-purple-100 rounded-lg p-1.5 text-xs font-bold ${matchedScheduledRate != null ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white text-slate-800'}`} />
+                  {matchedScheduledRate != null ? (
+                    <p className="text-[9px] text-emerald-600 font-mono mt-0.5">Auto-filled from {warehouseGroup}'s 12Hr Dedicated rate table.</p>
+                  ) : fixedHours === 12 && warehouseGroup ? (
+                    <p className="text-[9px] text-rose-500 font-mono mt-0.5">Rate not configured for this combination. Contact admin.</p>
+                  ) : null}
                 </div>
                 <div>
                   <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra KM (₹)</label>
@@ -1692,11 +1907,30 @@ export default function WarehouseDetails({
                   etc. are entered here and this edit is saved. */}
               <div className="p-3 bg-purple-50/40 rounded-xl border border-purple-100/50 space-y-2 text-xs">
                 <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wide">Rate Configuration</span>
+
+                {editFixedHours === 12 && (
+                  <div>
+                    <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Warehouse Group (12Hr Dedicated rate)</label>
+                    <select value={editWarehouseGroup} onChange={(e) => setEditWarehouseGroup(e.target.value)}
+                      className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800">
+                      <option value="">Not applicable - manual rate</option>
+                      {WAREHOUSE_GROUP_OPTIONS.map(g => <option key={g.value} value={g.value}>{g.value}</option>)}
+                    </select>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   <div>
                     <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Scheduled Rate (₹/mo)</label>
-                    <input type="number" value={editScheduledRate || ''} onChange={(e) => setEditScheduledRate(Number(e.target.value))}
-                      className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                    <input type="number" value={editScheduledRate || ''}
+                      readOnly={editMatchedScheduledRate != null}
+                      onChange={(e) => setEditScheduledRate(Number(e.target.value))}
+                      className={`w-full border border-purple-100 rounded-lg p-1.5 font-bold ${editMatchedScheduledRate != null ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white text-slate-800'}`} />
+                    {editMatchedScheduledRate != null ? (
+                      <p className="text-[9px] text-emerald-600 font-mono mt-0.5">Auto-filled from {editWarehouseGroup}'s rate table.</p>
+                    ) : editFixedHours === 12 && editWarehouseGroup ? (
+                      <p className="text-[9px] text-rose-500 font-mono mt-0.5">Rate not configured for this combination. Contact admin.</p>
+                    ) : null}
                   </div>
                   <div>
                     <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra KM</label>

@@ -1,0 +1,124 @@
+// Fixed Scheduled Rate lookup for 12Hr Dedicated Warehouse deployments -
+// Vehicle Type x KM Slab, per Warehouse Group. A plain in-code table for now
+// (not database-backed/admin-editable) - Base Rate/Fuel Cost/Grand Total
+// downstream (see warehouseRates.ts) are unaffected; this only decides what
+// pre-fills the Scheduled Rate input.
+//
+// Four independent tables:
+// - "blr": shared by all 6 BLR entities (ECOM, IM1, IM2, IM3, IM4, DHL) -
+//   whichever of the six is picked, the lookup is identical.
+// - "ecomHyd": ECOM HYD (IM1, IM2, IM3) - one merged group, its own table.
+// - "vizag" / "hydIm4": each fully independent, even though they happen to
+//   coincide on Tata Ace/207/407 - 14/17/20 FT genuinely diverge between
+//   them, so they're kept as separate lookup keys, never merged.
+
+export type RateTableKey = 'blr' | 'ecomHyd' | 'vizag' | 'hydIm4';
+
+export interface WarehouseGroupOption {
+  value: string; // shown in the Warehouse Group dropdown
+  rateTableKey: RateTableKey;
+}
+
+// The 6 BLR entities all map to the one shared "blr" table - selecting any
+// of them identifies the client for the record, but never changes the rate.
+export const WAREHOUSE_GROUP_OPTIONS: WarehouseGroupOption[] = [
+  { value: 'BLR ECOM', rateTableKey: 'blr' },
+  { value: 'BLR IM1', rateTableKey: 'blr' },
+  { value: 'BLR IM2', rateTableKey: 'blr' },
+  { value: 'BLR IM3', rateTableKey: 'blr' },
+  { value: 'BLR IM4', rateTableKey: 'blr' },
+  { value: 'BLR DHL', rateTableKey: 'blr' },
+  { value: 'ECOM HYD (IM1, IM2, IM3)', rateTableKey: 'ecomHyd' },
+  { value: 'Vizag', rateTableKey: 'vizag' },
+  { value: 'HYD IM4', rateTableKey: 'hydIm4' },
+];
+
+export const RATE_MATRIX_KM_SLABS = [2000, 2500, 3000] as const;
+export type RateMatrixKmSlab = typeof RATE_MATRIX_KM_SLABS[number];
+
+// Canonical Vehicle Type row keys - matches Fleet & Vehicles/FleetSheet.tsx's
+// own VEHICLE_TYPES spelling exactly (so a Fleet-registered vehicle's
+// auto-filled Type resolves directly, no fuzzy matching needed for the
+// common case). "Bolero"/"T407"/"14ft/LPT"/"19-20ft" etc. from the source
+// rate sheets are folded into these via normalizeRateMatrixVehicleType below
+// - a display-label rename scoped to this table only, not a rename of
+// Fleet & Vehicles' own Type field.
+export const RATE_MATRIX_VEHICLE_TYPES = ['Tata Ace', '207', '407', '14 FT', '17 FT', '20 FT'] as const;
+export type RateMatrixVehicleType = typeof RATE_MATRIX_VEHICLE_TYPES[number];
+
+type RateRow = Record<RateMatrixKmSlab, number>;
+type RateTable = Partial<Record<RateMatrixVehicleType, RateRow>>;
+
+const BLR_TABLE: RateTable = {
+  'Tata Ace': { 2000: 38378, 2500: 41186, 3000: 43994 },
+  '207': { 2000: 43994, 2500: 48675, 3000: 51483 },
+  '407': { 2000: 56163, 2500: 63651, 3000: 67396 },
+  '14 FT': { 2000: 65524, 2500: 73012, 3000: 77692 },
+  '17 FT': { 2000: 70204, 2500: 81436, 3000: 85181 },
+  '20 FT': { 2000: 83955, 2500: 86117, 3000: 93605 },
+};
+
+const ECOM_HYD_TABLE: RateTable = {
+  'Tata Ace': { 2000: 41495, 2500: 43908, 3000: 47285 },
+  '207': { 2000: 53075, 2500: 55005, 3000: 56935 },
+  '407': { 2000: 59348, 2500: 66585, 3000: 72858 },
+  '14 FT': { 2000: 67550, 2500: 75270, 3000: 81060 },
+  '17 FT': { 2000: 73340, 2500: 82025, 3000: 88780 },
+  '20 FT': { 2000: 87815, 2500: 91675, 3000: 98430 },
+};
+
+const VIZAG_TABLE: RateTable = {
+  'Tata Ace': { 2000: 44400, 2500: 46981, 3000: 50595 },
+  '207': { 2000: 56790, 2500: 58855, 3000: 60920 },
+  '407': { 2000: 63502, 2500: 71246, 3000: 77958 },
+  '14 FT': { 2000: 72279, 2500: 80539, 3000: 86734 },
+  '17 FT': { 2000: 78474, 2500: 87767, 3000: 94995 },
+  '20 FT': { 2000: 93962, 2500: 98092, 3000: 105320 },
+};
+
+const HYD_IM4_TABLE: RateTable = {
+  'Tata Ace': { 2000: 44400, 2500: 46981, 3000: 50595 },
+  '207': { 2000: 56790, 2500: 58855, 3000: 60920 },
+  '407': { 2000: 63502, 2500: 71246, 3000: 77958 },
+  '14 FT': { 2000: 78279, 2500: 86539, 3000: 92734 },
+  '17 FT': { 2000: 85474, 2500: 94767, 3000: 101995 },
+  '20 FT': { 2000: 101962, 2500: 106092, 3000: 113320 },
+};
+
+const RATE_TABLES: Record<RateTableKey, RateTable> = {
+  blr: BLR_TABLE,
+  ecomHyd: ECOM_HYD_TABLE,
+  vizag: VIZAG_TABLE,
+  hydIm4: HYD_IM4_TABLE,
+};
+
+// Tolerant of the source sheets' own varied spellings ("Bolero/207",
+// "14ft/LPT", "19/20ft", "T407") as well as Fleet & Vehicles' canonical
+// "207"/"14 FT" etc. - returns null (not a guess) for anything that isn't
+// clearly one of the 6 recognized types, e.g. "32 FT" (out of scope here).
+export function normalizeRateMatrixVehicleType(raw: string | undefined | null): RateMatrixVehicleType | null {
+  const v = (raw || '').trim().toLowerCase();
+  if (!v) return null;
+  if (v.includes('tata ace') || v === 'ace') return 'Tata Ace';
+  if (v.includes('bolero') || v === '207') return '207';
+  if (v === '407' || v === 't407' || v.includes('407')) return '407';
+  if (v.includes('14')) return '14 FT';
+  if (v.includes('17')) return '17 FT';
+  if (v.includes('19') || v.includes('20')) return '20 FT';
+  return null;
+}
+
+// Resolves the fixed Scheduled Rate for a (Warehouse Group, Vehicle Type, KM
+// Slab) combination - null when any part doesn't match a configured
+// combination (unrecognized group, unrecognized/unsupported vehicle type, or
+// a KM Slab this group's table doesn't have a rate for).
+export function lookupScheduledRate(warehouseGroupValue: string | undefined | null, vehicleType: string | undefined | null, kmSlab: number | undefined | null): number | null {
+  if (!warehouseGroupValue || !kmSlab) return null;
+  const group = WAREHOUSE_GROUP_OPTIONS.find(g => g.value === warehouseGroupValue);
+  if (!group) return null;
+  const normType = normalizeRateMatrixVehicleType(vehicleType);
+  if (!normType) return null;
+  const row = RATE_TABLES[group.rateTableKey][normType];
+  if (!row) return null;
+  return row[kmSlab as RateMatrixKmSlab] ?? null;
+}

@@ -613,10 +613,15 @@ export default function FuelManagement({
 
   // Authorized Driver: auto-fills from this vehicle's most recent prior
   // entry (its latest saved mileage report) - same "last entry wins"
-  // pattern as Opening KM above. A brand-new vehicle number is left blank
-  // for manual (first-time) entry. The driver can still be changed by hand
-  // for any one entry (a substitute driver that day, say) - that becomes the
-  // new "latest", so the vehicle's very next entry then picks up from it.
+  // pattern as Opening KM above. If this vehicle has never had an entry
+  // before, falls back to Driver Details' own vehicle assignment (a driver
+  // whose Vehicle No(s) includes this one) - so a first-time vehicle still
+  // auto-fills when the office already knows who normally drives it. If
+  // neither source has anything, it's left blank for manual (first-time)
+  // entry, same as before. The driver can still be changed by hand for any
+  // one entry (a substitute driver that day, say) - that becomes the new
+  // "latest" (from the mileage-report history, not the Driver Details
+  // assignment), so the vehicle's very next entry then picks up from it.
   // Driver ID keeps auto-fetching off whatever driver name ends up here via
   // the separate matchedMileageDriver effect further below.
   useEffect(() => {
@@ -631,13 +636,23 @@ export default function FuelManagement({
       const lastReport = vehicleReports[vehicleReports.length - 1];
       setMDriverName(lastReport.driverName || '');
       setMDriverId(lastReport.driverId || '');
+      return;
+    }
+    const assignedDriver = drivers.find(d => {
+      const target = vehicleNumber.trim().toUpperCase();
+      return (d.vehicleNos || []).some(v => (v || '').trim().toUpperCase() === target) ||
+        (d.vehicleNo || '').trim().toUpperCase() === target;
+    });
+    if (assignedDriver) {
+      setMDriverName(assignedDriver.name || '');
+      setMDriverId(assignedDriver.id || '');
     } else if (!editingId) {
       setMDriverName('');
       setMDriverId('');
     }
     // mDriverName deliberately excluded - same reasoning as mOpeningKm above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vehicleNumber, mileageReports, editingId, logs]);
+  }, [vehicleNumber, mileageReports, editingId, logs, drivers]);
 
   // Actual Mileage = the vehicle's fixed reference rating (per-vehicle
   // constant), not computed per trip.
