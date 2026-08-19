@@ -187,8 +187,12 @@ export default function WarehouseDetails({
   const workingDaysAuto = computeAutoWorkingDays(workingMonth, deductSundays, holidaysCount);
   const workingDays = resolveWorkingDays(workingDaysAuto, workingDaysOverride);
   const kmSlabNumber = parseFloat(kmSlab) || 0;
+  // KM per Day (24 Hrs only) is no longer auto-calculated from KM Slab /
+  // Working Days - it's optional and starts blank; kmPerDayAuto is still
+  // computed and saved alongside the record purely for reference/reports,
+  // it no longer feeds the input or the live rate calculation.
   const kmPerDayAuto = workingDays > 0 ? round2(kmSlabNumber / workingDays) : 0;
-  const kmPerDay = kmPerDayOverride ?? kmPerDayAuto;
+  const kmPerDay = kmPerDayOverride ?? 0;
   const rates = computeWarehouseRates({
     fixedHours, scheduledRate, workingDays, kmSlab: kmSlabNumber, variableCostPerKm, kmPerDay,
     addKm: extraKm, ratePerExtraKm, addHour, ratePerExtraHour,
@@ -216,8 +220,9 @@ export default function WarehouseDetails({
   const editWorkingDaysAuto = computeAutoWorkingDays(editWorkingMonth, editDeductSundays, editHolidaysCount);
   const editWorkingDays = resolveWorkingDays(editWorkingDaysAuto, editWorkingDaysOverride);
   const editKmSlabNumber = parseFloat(editKmSlab) || 0;
+  // Same as kmPerDay above - no longer auto-calculated, optional/blank by default.
   const editKmPerDayAuto = editWorkingDays > 0 ? round2(editKmSlabNumber / editWorkingDays) : 0;
-  const editKmPerDay = editKmPerDayOverride ?? editKmPerDayAuto;
+  const editKmPerDay = editKmPerDayOverride ?? 0;
   const editRates = computeWarehouseRates({
     fixedHours: editFixedHours, scheduledRate: editScheduledRate, workingDays: editWorkingDays, kmSlab: editKmSlabNumber,
     variableCostPerKm: editVariableCostPerKm, kmPerDay: editKmPerDay,
@@ -1237,15 +1242,10 @@ export default function WarehouseDetails({
 
               {fixedHours === 24 && (
                 <div>
-                  <div className="flex items-center justify-between">
-                    <label className="block text-[9px] font-bold text-purple-700 uppercase tracking-wide">KM per Day</label>
-                    {kmPerDayOverride != null && (
-                      <button type="button" onClick={() => setKmPerDayOverride(null)} className="text-[9px] text-pink-600 hover:text-pink-800 underline cursor-pointer">Reset to auto</button>
-                    )}
-                  </div>
-                  <input type="number" value={kmPerDayOverride ?? kmPerDayAuto} onChange={(e) => setKmPerDayOverride(e.target.value ? Number(e.target.value) : null)}
+                  <label className="block text-[9px] font-bold text-purple-700 uppercase tracking-wide">KM per Day (optional)</label>
+                  <input type="number" placeholder="Leave blank if not applicable" value={kmPerDayOverride ?? ''} onChange={(e) => setKmPerDayOverride(e.target.value ? Number(e.target.value) : null)}
                     className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
-                  <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto = KM Slab / Working Days</p>
+                  <p className="text-[9px] text-slate-400 font-mono mt-0.5">Not auto-calculated - enter only if this deployment has a variable per-km cost.</p>
                 </div>
               )}
             </div>
@@ -1970,14 +1970,10 @@ export default function WarehouseDetails({
 
                 {editFixedHours === 24 && (
                   <div>
-                    <div className="flex items-center justify-between">
-                      <label className="block text-[9px] font-bold text-purple-700 uppercase tracking-wide">KM per Day</label>
-                      {editKmPerDayOverride != null && (
-                        <button type="button" onClick={() => setEditKmPerDayOverride(null)} className="text-[9px] text-pink-600 hover:text-pink-800 underline cursor-pointer">Reset to auto</button>
-                      )}
-                    </div>
-                    <input type="number" value={editKmPerDayOverride ?? editKmPerDayAuto} onChange={(e) => setEditKmPerDayOverride(e.target.value ? Number(e.target.value) : null)}
+                    <label className="block text-[9px] font-bold text-purple-700 uppercase tracking-wide">KM per Day (optional)</label>
+                    <input type="number" placeholder="Leave blank if not applicable" value={editKmPerDayOverride ?? ''} onChange={(e) => setEditKmPerDayOverride(e.target.value ? Number(e.target.value) : null)}
                       className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">Not auto-calculated - enter only if this deployment has a variable per-km cost.</p>
                   </div>
                 )}
               </div>
