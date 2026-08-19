@@ -26,6 +26,7 @@ import {
 import DateInput from './DateInput';
 import SortHeader from './SortHeader';
 import { SortState, SortDirection, compareText, compareNumber, extractLeadingNumber } from '../utils/sort';
+import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 
 // Extra Fuel accepts a sum-of-numbers expression typed directly into the
 // field (e.g. "30+40" for two separate top-ups during one trip - say
@@ -668,6 +669,7 @@ export default function MileageReportModule({
                 list="mileage-export-vehicle-datalist"
                 value={selectedVehicleFilter}
                 onChange={(e) => setSelectedVehicleFilter(e.target.value.toUpperCase())}
+                onKeyDown={(e) => handleVehicleNumberEnterKey(e, selectedVehicleFilter, vehicleList, setSelectedVehicleFilter)}
                 placeholder="All Vehicles"
                 autoComplete="off"
                 className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-bold text-slate-700 text-[11px] uppercase"
@@ -926,6 +928,7 @@ export default function MileageReportModule({
                       placeholder="e.g. KA53AA0069"
                       value={vehicleNo}
                       onChange={(e) => setVehicleNo(e.target.value.toUpperCase())}
+                      onKeyDown={(e) => handleVehicleNumberEnterKey(e, vehicleNo, vehicleList, setVehicleNo)}
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-pink-500 tracking-wider"
                     />
                     <datalist id="fleet-vehicles-datalist">

@@ -33,6 +33,7 @@ import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
 import SortHeader from './SortHeader';
 import { SortState, SortDirection, extractLeadingNumber, extractTrailingNumber, compareText } from '../utils/sort';
+import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 import { exportReportToExcel, exportReportToPdf, ReportTableSection } from '../utils/reportExport';
 
 interface PettyCashProps {
@@ -1505,6 +1506,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     placeholder="All Vehicles"
                     value={selectedVehicleFilter === 'All' ? '' : selectedVehicleFilter}
                     onChange={(e) => setSelectedVehicleFilter(e.target.value.trim() ? e.target.value.toUpperCase() : 'All')}
+                    onKeyDown={(e) => handleVehicleNumberEnterKey(e, selectedVehicleFilter === 'All' ? '' : selectedVehicleFilter, usedVehicleNumbers, (v) => setSelectedVehicleFilter(v || 'All'))}
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-semibold text-slate-700 uppercase"
                   />
                   <datalist id="petty-cash-vehicle-filter-options">
@@ -1512,19 +1514,21 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   </datalist>
                 </div>
 
-                {/* Receiver Filter - dynamic from the ledger, same rule as Client. */}
+                {/* Receiver Filter - dynamic from the ledger, same rule as
+                    Client, now searchable (type to filter) like Vehicle No. */}
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Receiver</label>
-                  <select
-                    value={selectedReceiverFilter}
-                    onChange={(e) => setSelectedReceiverFilter(e.target.value)}
+                  <input
+                    type="text"
+                    list="petty-cash-receiver-filter-options"
+                    placeholder="All Receivers"
+                    value={selectedReceiverFilter === 'All' ? '' : selectedReceiverFilter}
+                    onChange={(e) => setSelectedReceiverFilter(e.target.value.trim() ? e.target.value : 'All')}
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-semibold text-slate-700"
-                  >
-                    <option value="All">All Receivers</option>
-                    {usedReceivers.map((r, idx) => (
-                      <option key={idx} value={r}>{r}</option>
-                    ))}
-                  </select>
+                  />
+                  <datalist id="petty-cash-receiver-filter-options">
+                    {usedReceivers.map((r, idx) => <option key={idx} value={r} />)}
+                  </datalist>
                 </div>
 
                 {/* Live search input */}
@@ -2567,6 +2571,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         placeholder="Search or select a vehicle"
                         value={vehicleNumber}
                         onChange={(e) => handleVehicleNumberChange(e.target.value)}
+                        onKeyDown={(e) => handleVehicleNumberEnterKey(e, vehicleNumber, mpVehicleList, handleVehicleNumberChange)}
                         autoComplete="off"
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 uppercase font-bold"
                       />
@@ -2678,6 +2683,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       placeholder="Search or select a vendor-owned vehicle"
                       value={vendorVehicleNumber}
                       onChange={(e) => setVendorVehicleNumber(e.target.value.toUpperCase())}
+                      onKeyDown={(e) => handleVehicleNumberEnterKey(e, vendorVehicleNumber, vendorVehicleList, setVendorVehicleNumber)}
                       autoComplete="off"
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 uppercase font-bold"
                     />
@@ -2829,6 +2835,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       placeholder="e.g. KA53AA0069"
                       value={mpVehicleNumber}
                       onChange={(e) => setMpVehicleNumber(e.target.value.toUpperCase())}
+                      onKeyDown={(e) => handleVehicleNumberEnterKey(e, mpVehicleNumber, mpVehicleList, setMpVehicleNumber)}
                       autoComplete="off"
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-teal-500"
                     />

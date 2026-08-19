@@ -28,6 +28,7 @@ import {
   computeAutoWorkingDays, resolveWorkingDays, computeWarehouseRates
 } from '../utils/warehouseRates';
 import { WAREHOUSE_GROUP_OPTIONS, lookupScheduledRate } from '../utils/warehouseRateMatrix';
+import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 
 // Known Warehouse Name -> Warehouse City pairs, replacing the old free-form
 // suggestion list. Both Warehouse Name fields below stay plain text inputs
@@ -257,6 +258,10 @@ export default function WarehouseDetails({
   // warehouse deployments run on vendor-owned trucks that never get a Fleet
   // & Vehicles record.
   const vendorVehicleNumbers = Array.from(new Set(vendors.flatMap(v => v.vehicleNumbers || []))).sort();
+  const knownVehicleNumbers = Array.from(new Set([
+    ...vehicles.map(v => (v['Reg. No.'] || v.regNo || '').trim()).filter(Boolean),
+    ...vendorVehicleNumbers,
+  ]));
   const isFleetVehicleNumber = (num: string) =>
     vehicles.some(v => (v['Reg. No.'] || v.regNo || '').trim().toLowerCase() === num.trim().toLowerCase());
 
@@ -949,6 +954,7 @@ export default function WarehouseDetails({
                   placeholder="e.g. KA53D9514"
                   value={vehicleNumber}
                   onChange={(e) => handleVehicleChange(e.target.value)}
+                  onKeyDown={(e) => handleVehicleNumberEnterKey(e, vehicleNumber, knownVehicleNumbers, handleVehicleChange)}
                   className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none uppercase"
                   list="registered-fleet-nums"
                 />
@@ -1703,6 +1709,7 @@ export default function WarehouseDetails({
                     required
                     value={editVehicleNumber}
                     onChange={(e) => handleEditVehicleChange(e.target.value)}
+                    onKeyDown={(e) => handleVehicleNumberEnterKey(e, editVehicleNumber, knownVehicleNumbers, handleEditVehicleChange)}
                     list="registered-fleet-nums-edit"
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 uppercase focus:ring-1 focus:ring-pink-500 focus:outline-none"
                   />

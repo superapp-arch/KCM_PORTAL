@@ -710,6 +710,65 @@ function findDuplicateFuelIndentNumber(logs: FuelLog[], indentNumber: string | u
   });
 }
 
+// Closes any gap left in the Indent No sequence after a delete - same idea
+// as renumberPettyCashSequence above, applied to both Fuel sequences
+// independently:
+// - Bunk: bucketed per calendar month (matches nextBunkFuelIndentNumber's
+//   own monthly-reset scoping) - within each month, the surviving entries
+//   are renumbered to run consecutively starting from that month's own
+//   lowest existing number (whatever the office originally typed by hand
+//   for that month's first entry), preserving relative order.
+// - Card: one single sequence, renumbered to run consecutively from 00001 -
+//   matches nextCardFuelIndentNumber's own always-starts-at-1 rule.
+// Only ever touches entries whose current Indent No is already in the
+// numeric shape each sequence recognizes (extractLeadingNumber()>0 for Bunk,
+// the exact 5-digit shape for Card) - anything else (blank, non-numeric,
+// legacy/free-text) is left completely alone, same "don't touch what it
+// doesn't recognize" rule as the Petty Cash version. Idempotent - a no-op
+// once a bucket is already gap-free.
+async function renumberFuelIndentSequence(): Promise<void> {
+  try {
+    const logs = await getFuelLogs();
+
+    // Bunk - one bucket per calendar month.
+    const bunkBuckets = new Map<string, { log: FuelLog; seq: number }[]>();
+    logs.forEach(l => {
+      if ((l.bunkOrCard || 'Bunk') !== 'Bunk') return;
+      const seq = extractLeadingNumber(l.indentNumber);
+      if (seq <= 0) return;
+      const monthKey = (l.date || '').slice(0, 7);
+      if (!monthKey) return;
+      if (!bunkBuckets.has(monthKey)) bunkBuckets.set(monthKey, []);
+      bunkBuckets.get(monthKey)!.push({ log: l, seq });
+    });
+    for (const entries of bunkBuckets.values()) {
+      entries.sort((a, b) => a.seq - b.seq);
+      const floor = entries[0].seq;
+      for (let i = 0; i < entries.length; i++) {
+        const targetIndentNumber = String(floor + i);
+        if ((entries[i].log.indentNumber || '').trim() !== targetIndentNumber) {
+          await saveFuelLog({ ...entries[i].log, id: entries[i].log.id, indentNumber: targetIndentNumber });
+        }
+      }
+    }
+
+    // Card - one single continuous sequence, always starting at 00001.
+    const cardEntries = logs
+      .filter(l => l.bunkOrCard === 'Card' && /^\d{5}$/.test((l.indentNumber || '').trim()))
+      .map(l => ({ log: l, seq: parseInt(l.indentNumber.trim(), 10) }))
+      .filter(e => !isNaN(e.seq) && e.seq > 0)
+      .sort((a, b) => a.seq - b.seq);
+    for (let i = 0; i < cardEntries.length; i++) {
+      const targetIndentNumber = String(i + 1).padStart(5, '0');
+      if ((cardEntries[i].log.indentNumber || '').trim() !== targetIndentNumber) {
+        await saveFuelLog({ ...cardEntries[i].log, id: cardEntries[i].log.id, indentNumber: targetIndentNumber });
+      }
+    }
+  } catch (error) {
+    console.error('Failed to renumber Fuel Indent No sequence:', error);
+  }
+}
+
 // Newest-first by default (Petty Cash Ledger / Market POD Trip Ledger) -
 // sorted here, server-side, not left to the client, so the order is correct
 // no matter what the UI later filters/searches on top. Ties (same date)
@@ -1003,6 +1062,9 @@ async function startServer() {
   // existed before renumberPettyCashSequence started running on every
   // delete - no-op once the sequence is already gap-free.
   await renumberPettyCashSequence();
+  // Same one-time sweep for Fuel Indent No (Bunk and Card sequences) - see
+  // renumberFuelIndentSequence.
+  await renumberFuelIndentSequence();
   // Petty Cash / Market POD change request part 2: backfill pre-existing
   // Petty-Cash-mode trips that predate the float-sync logic (see
   // backfillMarketPodPettyCashFloats above) - no-op once every trip's
@@ -2112,7 +2174,12 @@ async function startServer() {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getFuelLogs()).find(l => l.id === req.params.id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
-      const result = await deleteFuelLog(req.params.id);
+      await deleteFuelLog(req.params.id);
+      // Deleting an entry leaves a gap in its Indent No sequence - close it
+      // immediately, same as Petty Cash's Entry No (see
+      // renumberFuelIndentSequence).
+      await renumberFuelIndentSequence();
+      const result = await getFuelLogs();
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });

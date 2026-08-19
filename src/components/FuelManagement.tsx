@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { FuelLog, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage, Vendor, StaffEmployee, DriverEmployee } from '../types';
 import SortHeader from './SortHeader';
 import { SortState, SortDirection, extractLeadingNumber, compareText, compareNumber } from '../utils/sort';
+import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 import {
   Fuel,
   Plus,
@@ -377,23 +378,14 @@ export default function FuelManagement({
     ])
   ).sort();
 
-  // Vehicle Number Enter-to-complete: typing just the last few digits (e.g.
-  // "9514") and pressing Enter resolves and fills in the full registration
-  // number instead of leaving the partial digits sitting in the field - also
-  // prevents that Enter from prematurely submitting the whole form. Prefers
-  // a number ending in what was typed (the common "last 4 digits" case),
-  // falling back to any number containing it; only resolves when that's
-  // unambiguous (exactly one match) - otherwise the field is left as typed
-  // so the user can keep narrowing it down.
-  const handleVehicleNumberKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key !== 'Enter') return;
-    e.preventDefault();
-    const typed = vehicleNumber.trim().toUpperCase();
-    if (!typed || vehicleList.some(v => v.toUpperCase() === typed)) return;
-    const endsMatch = vehicleList.filter(v => v.toUpperCase().endsWith(typed));
-    const candidates = endsMatch.length > 0 ? endsMatch : vehicleList.filter(v => v.toUpperCase().includes(typed));
-    if (candidates.length === 1) setVehicleNumber(candidates[0]);
-  };
+  // Vehicle Number Enter-to-complete (shared with every other Vehicle Number
+  // field across the app - see utils/vehicleNumberSearch.ts): typing just
+  // the last few digits (e.g. "9514") and pressing Enter resolves and fills
+  // in the full registration number instead of leaving the partial digits
+  // sitting in the field, and prevents that Enter from prematurely
+  // submitting the whole form.
+  const handleVehicleNumberKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) =>
+    handleVehicleNumberEnterKey(e, vehicleNumber, vehicleList, setVehicleNumber);
 
   // Authorized Driver autofetch list, from Driver Details
   const driverNameList = Array.from(new Set(drivers.map(d => d.name).filter(Boolean))).sort();
