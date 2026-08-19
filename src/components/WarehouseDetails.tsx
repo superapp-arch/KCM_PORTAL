@@ -27,7 +27,7 @@ import {
   FUEL_COST_PERCENT, KM_SLAB_SUGGESTIONS, formatINR, round2, daysInMonth, countSundaysInMonth,
   computeAutoWorkingDays, resolveWorkingDays, computeWarehouseRates
 } from '../utils/warehouseRates';
-import { WAREHOUSE_GROUP_OPTIONS, lookupScheduledRate } from '../utils/warehouseRateMatrix';
+import { lookupScheduledRate, rateGroupForWarehouseName } from '../utils/warehouseRateMatrix';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 
 // Known Warehouse Name -> Warehouse City pairs, replacing the old free-form
@@ -130,7 +130,6 @@ export default function WarehouseDetails({
   // auto-computed from these (see computeWarehouseRates), no longer typed
   // directly.
   const [scheduledRate, setScheduledRate] = useState<number>(0);
-  const [warehouseGroup, setWarehouseGroup] = useState(''); // 12Hr Dedicated fixed rate lookup - see utils/warehouseRateMatrix.ts
   const [ratePerExtraKm, setRatePerExtraKm] = useState<number>(0);
   const [ratePerExtraHour, setRatePerExtraHour] = useState<number>(0);
   const [variableCostPerKm, setVariableCostPerKm] = useState<number>(0); // 24 Hrs only
@@ -170,7 +169,6 @@ export default function WarehouseDetails({
   const [editExtraKm, setEditExtraKm] = useState<number>(0); // "Add KM"
   const [editAddHour, setEditAddHour] = useState<number>(0); // "Add Hour"
   const [editScheduledRate, setEditScheduledRate] = useState<number>(0);
-  const [editWarehouseGroup, setEditWarehouseGroup] = useState('');
   const [editRatePerExtraKm, setEditRatePerExtraKm] = useState<number>(0);
   const [editRatePerExtraHour, setEditRatePerExtraHour] = useState<number>(0);
   const [editVariableCostPerKm, setEditVariableCostPerKm] = useState<number>(0);
@@ -200,10 +198,14 @@ export default function WarehouseDetails({
   const finalBaseRate = Math.max(0, baseRate + fuelCost);
 
   // 12Hr Dedicated fixed Scheduled Rate lookup (see utils/warehouseRateMatrix.ts)
-  // - null (no auto-fill, Scheduled Rate stays manual) unless fixedHours is
-  // 12 and Warehouse Group + Vehicle Type + KM Slab resolve to a configured
-  // rate. Re-syncs scheduledRate whenever the match changes, so switching
-  // Warehouse Group/Vehicle Type/KM Slab always reflects the right rate.
+  // - the Warehouse Group is no longer a separate field the user picks; it's
+  // derived straight from the selected Warehouse Name (rateGroupForWarehouseName).
+  // matchedScheduledRate is null (no auto-fill, Scheduled Rate stays manual)
+  // unless fixedHours is 12 and the derived Warehouse Group + Vehicle Type +
+  // KM Slab resolve to a configured rate. Re-syncs scheduledRate whenever the
+  // match changes, so switching Warehouse Name/Vehicle Type/KM Slab always
+  // reflects the right rate.
+  const warehouseGroup = rateGroupForWarehouseName(warehouseName) || '';
   const matchedScheduledRate = fixedHours === 12 ? lookupScheduledRate(warehouseGroup, vehicleType, kmSlabNumber) : null;
   useEffect(() => {
     if (matchedScheduledRate != null) setScheduledRate(matchedScheduledRate);
@@ -223,6 +225,7 @@ export default function WarehouseDetails({
     tollCharges: editTollCharges, parkingCost: editParkingCost, hybridReeferCost: editHybridReeferCost
   });
   const { baseRate: editBaseRate, fuelCost: editFuelCost, extraKmAmount: editAdditionalKmCost, extraHourAmount: editAdditionalHourCost, grandTotal: editGrandTotal } = editRates;
+  const editWarehouseGroup = rateGroupForWarehouseName(editWarehouseName) || '';
   const editMatchedScheduledRate = editFixedHours === 12 ? lookupScheduledRate(editWarehouseGroup, editVehicleType, editKmSlabNumber) : null;
   useEffect(() => {
     if (editMatchedScheduledRate != null) setEditScheduledRate(editMatchedScheduledRate);
@@ -376,7 +379,6 @@ export default function WarehouseDetails({
       setExtraKm(0);
       setAddHour(0);
       setScheduledRate(0);
-      setWarehouseGroup('');
       setRatePerExtraKm(0);
       setRatePerExtraHour(0);
       setVariableCostPerKm(0);
@@ -448,7 +450,6 @@ export default function WarehouseDetails({
     setEditExtraKm(entry.extraKm || 0);
     setEditAddHour(entry.addHour || 0);
     setEditScheduledRate(entry.scheduledRate || 0);
-    setEditWarehouseGroup(entry.warehouseGroup || '');
     setEditRatePerExtraKm(entry.ratePerExtraKm || 0);
     setEditRatePerExtraHour(entry.ratePerExtraHour || 0);
     setEditVariableCostPerKm(entry.variableCostPerKm || 0);
@@ -1162,21 +1163,12 @@ export default function WarehouseDetails({
             <div className="p-2.5 bg-purple-50/40 rounded-xl border border-purple-100/50 space-y-2">
               <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wide">Rate Configuration</span>
 
-              {/* 12Hr Dedicated fixed rate lookup - Warehouse Group x Vehicle
-                  Type x KM Slab (see utils/warehouseRateMatrix.ts). Only
-                  shown for 12 Hr; 24 Hr/other deployments keep a plain
-                  manually-typed Scheduled Rate below, untouched. */}
-              {fixedHours === 12 && (
-                <div>
-                  <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Warehouse Group (12Hr Dedicated rate)</label>
-                  <select value={warehouseGroup} onChange={(e) => setWarehouseGroup(e.target.value)}
-                    className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800">
-                    <option value="">Not applicable - manual rate</option>
-                    {WAREHOUSE_GROUP_OPTIONS.map(g => <option key={g.value} value={g.value}>{g.value}</option>)}
-                  </select>
-                </div>
-              )}
-
+              {/* 12Hr Dedicated fixed rate lookup - Vehicle Type x KM Slab,
+                  Warehouse Group is derived automatically from the Warehouse
+                  Name field above (see utils/warehouseRateMatrix.ts), no
+                  separate selection needed here. Only applies for 12 Hr; 24
+                  Hr/other deployments keep a plain manually-typed Scheduled
+                  Rate below, untouched. */}
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Scheduled Rate (₹/month)</label>
@@ -1915,17 +1907,8 @@ export default function WarehouseDetails({
               <div className="p-3 bg-purple-50/40 rounded-xl border border-purple-100/50 space-y-2 text-xs">
                 <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wide">Rate Configuration</span>
 
-                {editFixedHours === 12 && (
-                  <div>
-                    <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Warehouse Group (12Hr Dedicated rate)</label>
-                    <select value={editWarehouseGroup} onChange={(e) => setEditWarehouseGroup(e.target.value)}
-                      className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800">
-                      <option value="">Not applicable - manual rate</option>
-                      {WAREHOUSE_GROUP_OPTIONS.map(g => <option key={g.value} value={g.value}>{g.value}</option>)}
-                    </select>
-                  </div>
-                )}
-
+                {/* Warehouse Group is derived automatically from Warehouse
+                    Name above - no separate selection here. */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   <div>
                     <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Scheduled Rate (₹/mo)</label>

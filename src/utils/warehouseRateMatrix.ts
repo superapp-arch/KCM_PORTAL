@@ -108,6 +108,37 @@ export function normalizeRateMatrixVehicleType(raw: string | undefined | null): 
   return null;
 }
 
+// Warehouse Name -> rate-group value (see WAREHOUSE_GROUP_OPTIONS above) -
+// lets the Warehouse Details form drive the Scheduled Rate lookup directly
+// off the single "Warehouse Name" field instead of asking for a separate
+// Warehouse Group selection. Keyed on the exact names from
+// WarehouseDetails.tsx's own WAREHOUSE_LOCATIONS list (case-insensitive
+// match, see rateGroupForWarehouseName below) - a name with no entry here
+// (e.g. "CHN COLD IM1", "GOA IM1", "Goravegere Cold WH", "HYD IM5", or any
+// new/ad-hoc name typed in that isn't in the known list at all) simply has
+// no rate group, so the Scheduled Rate stays a plain manual field for it,
+// same as today.
+const WAREHOUSE_NAME_TO_RATE_GROUP: Record<string, string> = {
+  'BLR DHL': 'BLR DHL',
+  'BLR ECOM2': 'BLR ECOM', // all 6 BLR entities share one rate table regardless
+  'BLR IM1': 'BLR IM1',
+  'BLR IM2': 'BLR IM2',
+  'BLR IM3': 'BLR IM3',
+  'BLR IM4': 'BLR IM4',
+  'HYD IM1': 'ECOM HYD (IM1, IM2, IM3)',
+  'HYD IM2': 'ECOM HYD (IM1, IM2, IM3)',
+  'HYD IM3 -Cold Star': 'ECOM HYD (IM1, IM2, IM3)',
+  'HYD IM4': 'HYD IM4',
+  'VIZ IM1': 'Vizag',
+};
+
+export function rateGroupForWarehouseName(warehouseName: string | undefined | null): string | null {
+  const name = (warehouseName || '').trim();
+  if (!name) return null;
+  const key = Object.keys(WAREHOUSE_NAME_TO_RATE_GROUP).find(k => k.toLowerCase() === name.toLowerCase());
+  return key ? WAREHOUSE_NAME_TO_RATE_GROUP[key] : null;
+}
+
 // Resolves the fixed Scheduled Rate for a (Warehouse Group, Vehicle Type, KM
 // Slab) combination - null when any part doesn't match a configured
 // combination (unrecognized group, unrecognized/unsupported vehicle type, or
