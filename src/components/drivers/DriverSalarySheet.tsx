@@ -8,6 +8,8 @@ import DriverSalarySlipModal from './DriverSalarySlipModal';
 import DocumentAttachment from '../DocumentAttachment';
 import { authFetch } from '../../authFetch';
 import { compareTrailingNumber } from '../../utils/sort';
+import { exportReportToExcel, exportReportToPdf, ReportTableSection } from '../../utils/reportExport';
+import DownloadMenu from './DownloadMenu';
 
 // Payable Amount = Gross Salary + Other Additions - (Petty Cash/Advance +
 // Loan Deduction + Recovery Amount + Driver Welfare + BATA) - LOP Amount -
@@ -46,6 +48,27 @@ const toDriverRow = (driver: DriverEmployee, i: number) => ({
   'Payable Amount': payableAmount(driver),
   'Location': driver.location
 });
+
+// Same column order as toDriverRow above - kept as an explicit array (rather
+// than derived from it) since ReportTableSection needs columns/rows as
+// parallel arrays, not row objects.
+const SALARY_COLUMNS = [
+  'Sl.No', 'Driver Name', 'Driver ID', 'Driver No', 'Vehicle No', 'A/C No', 'IFSC Code', 'Reporting',
+  'Remark', 'LOP Amount', 'Petty Cash/Advance', 'Month', 'Loan Deduction', 'Recovery Amount',
+  'Driver Welfare', 'BATA', 'Other Additions', 'Gross Salary', 'Payable Amount', 'Location'
+];
+
+const driverSalaryRows = (list: DriverEmployee[]): (string | number)[][] =>
+  list.map((driver, i) => Object.values(toDriverRow(driver, i)));
+
+// One section per location group - Excel gets one sheet per section, PDF
+// gets one table per section, so "Download All" and the per-location
+// download share the exact same section builder (a single group -> a
+// single-section export).
+const salarySections = (groups: { location: string; drivers: DriverEmployee[] }[]): ReportTableSection[] =>
+  groups.map(g => ({ heading: g.location, columns: SALARY_COLUMNS, rows: driverSalaryRows(g.drivers) }));
+
+const safeFileToken = (s: string): string => s.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
 
 interface DriverSalarySheetProps {
   performedBy: string; // current user's username - for the Salary Slip audit trail
@@ -141,15 +164,23 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
     XLSX.writeFile(workbook, `KCM_Driver_${driver.id}.xlsx`);
   };
 
-  const handleDownloadAll = () => {
-    if (flatFiltered.length === 0) {
-      triggerNotif('No driver records to download.', 'error');
-      return;
-    }
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(flatFiltered.map(toDriverRow)), 'Drivers');
-    XLSX.writeFile(workbook, `KCM_All_Drivers.xlsx`);
+  const handleDownloadAllExcel = () => {
+    if (flatFiltered.length === 0) { triggerNotif('No driver records to download.', 'error'); return; }
+    exportReportToExcel('KCM_All_Drivers', salarySections(groupedDrivers));
   };
+
+  const handleDownloadAllPdf = () => {
+    if (flatFiltered.length === 0) { triggerNotif('No driver records to download.', 'error'); return; }
+    exportReportToPdf('KCM_All_Drivers', 'Driver Salary', 'All Locations', salarySections(groupedDrivers));
+  };
+
+  // One location's drivers only - the Download control on that group's
+  // header row.
+  const handleDownloadLocationExcel = (location: string, list: DriverEmployee[]) =>
+    exportReportToExcel(`KCM_Driver_Salary_${safeFileToken(location)}`, salarySections([{ location, drivers: list }]));
+
+  const handleDownloadLocationPdf = (location: string, list: DriverEmployee[]) =>
+    exportReportToPdf(`KCM_Driver_Salary_${safeFileToken(location)}`, 'Driver Salary', location, salarySections([{ location, drivers: list }]));
 
   // Inline document upload from the expand panel - persists immediately
   // (same "no separate Save button" convention DocumentAttachment's callers
@@ -174,9 +205,10 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
           <p className="text-xs text-slate-500 font-mono mt-1">Master driver record, salary and bank details</p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={handleDownloadAll} className="bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all">
-            <Download className="w-3.5 h-3.5 text-teal-600" /> Download All
-          </button>
+          <DownloadMenu label="Download All" options={[
+            { key: 'excel', label: 'Excel (.xlsx)', icon: 'excel', onClick: handleDownloadAllExcel },
+            { key: 'pdf', label: 'PDF', icon: 'pdf', onClick: handleDownloadAllPdf },
+          ]} />
           {canAddAnywhere && (
             <button onClick={() => setModalDriver(null)} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all">
               <Plus className="w-3.5 h-3.5" /> Add Driver
@@ -232,10 +264,18 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                   <React.Fragment key={group.location}>
                     <tr className="bg-gradient-to-r from-emerald-600 to-emerald-700">
                       <td colSpan={13} className="px-3 py-2 text-white font-extrabold uppercase tracking-wide text-[11px]">
-                        {group.location}
-                        <span className="ml-2 font-semibold normal-case text-emerald-100 text-[10px]">
-                          ({group.drivers.length} driver{group.drivers.length === 1 ? '' : 's'})
-                        </span>
+                        <div className="flex items-center justify-between gap-2">
+                          <span>
+                            {group.location}
+                            <span className="ml-2 font-semibold normal-case text-emerald-100 text-[10px]">
+                              ({group.drivers.length} driver{group.drivers.length === 1 ? '' : 's'})
+                            </span>
+                          </span>
+                          <DownloadMenu variant="ghost" label="Download" options={[
+                            { key: 'excel', label: 'Excel (.xlsx)', icon: 'excel', onClick: () => handleDownloadLocationExcel(group.location, group.drivers) },
+                            { key: 'pdf', label: 'PDF', icon: 'pdf', onClick: () => handleDownloadLocationPdf(group.location, group.drivers) },
+                          ]} />
+                        </div>
                       </td>
                     </tr>
                     {group.drivers.map(driver => {
