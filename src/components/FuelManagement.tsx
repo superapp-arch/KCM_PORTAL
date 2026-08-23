@@ -494,9 +494,30 @@ export default function FuelManagement({
     if (matchedVendorByVehicle) {
       setVendorName(matchedVendorByVehicle.name);
       setVendorCode(matchedVendorByVehicle.code);
+      return;
+    }
+    // Not Fleet-owned and not registered in Vendor Management - fall back to
+    // this vehicle's own most recent Fuel Management entry: if it was last
+    // logged as a One Time Vendor, assume the same for this entry too, so
+    // the office doesn't have to re-select it every single time that
+    // vehicle shows up again. Any other/blank prior vendorName is left
+    // alone for manual entry, same as before.
+    const priorLog = [...logs]
+      .filter(l => (l.vehicleNumber || '').trim().toUpperCase() === trimmed.toUpperCase())
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+    if ((priorLog?.vendorName || '').trim().toLowerCase() === 'one time vendor') {
+      setVendorName('One Time Vendor');
+      setVendorCode('Vendor');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vehicleNumber, vehicles, matchedVendorByVehicle]);
+  }, [vehicleNumber, vehicles, matchedVendorByVehicle, logs]);
+
+  // Vendor Name = "One Time Vendor" auto-sets Vendor Code to "Vendor" - same
+  // one-directional auto-fill idea as Client=One Time Vendor -> Type=Vendor
+  // above; Vendor Code stays freely editable the rest of the time.
+  useEffect(() => {
+    if (vendorName.trim().toLowerCase() === 'one time vendor') setVendorCode('Vendor');
+  }, [vendorName]);
 
   // Bunk options for the currently selected location, per LOCATION_BUNK_MAP -
   // falls back to the full list if the location isn't mapped (or none picked).
@@ -2116,10 +2137,11 @@ export default function FuelManagement({
                         className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-800"
                       />
                       <datalist id="fuel-vendors-datalist">
+                        <option value="One Time Vendor" />
                         {vendorProfiles.map((v) => <option key={v.id} value={v.name} />)}
                       </datalist>
                       <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                        Type a name registered in Vendor Management, or enter one manually if not found. Also auto-fills from Vehicle Number above when that vehicle belongs to a registered vendor.
+                        Type a name registered in Vendor Management, pick "One Time Vendor" for a one-off (auto-sets Vendor Code to "Vendor"), or enter one manually if not found. Also auto-fills from Vehicle Number above when that vehicle belongs to a registered vendor, or was last logged as One Time Vendor.
                       </p>
                     </div>
                     <div>
