@@ -5,7 +5,8 @@ import { DriverEmployee, DriverAttendance, AttendanceStatusCode, DriverLocationC
 import { authFetch } from '../../authFetch';
 import { compareTrailingNumber } from '../../utils/sort';
 import DriverAttendanceSummaryModal from './DriverAttendanceSummaryModal';
-import { exportReportToExcel, exportReportToPdf, ReportTableSection } from '../../utils/reportExport';
+import { exportReportToExcel, ReportTableSection } from '../../utils/reportExport';
+import { buildDriverAttendancePdf, buildLocationAttendancePdf } from '../../utils/driverAttendancePdf';
 import DownloadMenu, { DownloadMenuOption } from './DownloadMenu';
 
 interface DriverAttendanceSheetProps {
@@ -191,31 +192,39 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
     return `${MONTH_ABBR[m - 1]} ${y}`;
   }, [month]);
 
+  // Excel keeps the on-screen day-grid shape (one column per day) - a
+  // spreadsheet handles many columns fine and some offices re-import this
+  // exact layout. PDF uses a proper report layout instead (Monthly Summary +
+  // Daily Log, covering every month on record, not just what's on screen
+  // right now) - see utils/driverAttendancePdf.ts for why.
   const handleDownloadLocationExcel = (location: string, list: DriverEmployee[]) =>
     exportReportToExcel(`KCM_Driver_Attendance_${safeFileToken(location)}_${month}`, [attendanceGridSection(month, list, attendance, location)]);
   const handleDownloadLocationPdf = (location: string, list: DriverEmployee[]) =>
-    exportReportToPdf(`KCM_Driver_Attendance_${safeFileToken(location)}_${month}`, 'Driver Attendance', `${location} - ${monthLabel}`, [attendanceGridSection(month, list, attendance, location)]);
+    buildLocationAttendancePdf('Driver Attendance', location, [{ location, drivers: list }], attendance, month)
+      .save(`KCM_Driver_Attendance_${safeFileToken(location)}_${month}.pdf`);
 
   const handleDownloadMyLocationsExcel = () =>
     exportReportToExcel(`KCM_Driver_Attendance_My_Locations_${month}`, myLocationGroups.map(g => attendanceGridSection(month, g.drivers, attendance, g.location)));
   const handleDownloadMyLocationsPdf = () =>
-    exportReportToPdf(`KCM_Driver_Attendance_My_Locations_${month}`, 'Driver Attendance', `My Locations - ${monthLabel}`, myLocationGroups.map(g => attendanceGridSection(month, g.drivers, attendance, g.location)));
+    buildLocationAttendancePdf('Driver Attendance', 'My Locations', myLocationGroups, attendance, month)
+      .save(`KCM_Driver_Attendance_My_Locations_${month}.pdf`);
 
   // "Download tab" (item 4) - every driver, every location, plus a Summary
   // sheet/table rolled up per location.
   const handleDownloadAllExcel = () =>
     exportReportToExcel(`KCM_Driver_Attendance_All_${month}`, [...groupedDrivers.map(g => attendanceGridSection(month, g.drivers, attendance, g.location)), attendanceSummarySection(month, groupedDrivers, attendance)]);
   const handleDownloadAllPdf = () =>
-    exportReportToPdf(`KCM_Driver_Attendance_All_${month}`, 'Driver Attendance', `All Locations - ${monthLabel}`, [...groupedDrivers.map(g => attendanceGridSection(month, g.drivers, attendance, g.location)), attendanceSummarySection(month, groupedDrivers, attendance)]);
+    buildLocationAttendancePdf('Driver Attendance', 'All Locations', groupedDrivers, attendance, month)
+      .save(`KCM_Driver_Attendance_All_${month}.pdf`);
 
   // Per-driver row download (item 3) - "both" full history and the
   // currently-selected month, each in Excel or PDF, so this one dropdown
   // carries 4 options rather than picking one scope for the user.
   const driverDownloadOptions = (driver: DriverEmployee): DownloadMenuOption[] => [
     { key: 'month-excel', label: `${monthLabel} - Excel`, icon: 'excel', onClick: () => exportReportToExcel(`KCM_Attendance_${driver.id}_${month}`, [attendanceGridSection(month, [driver], attendance, `${driver.id} - ${monthLabel}`)]) },
-    { key: 'month-pdf', label: `${monthLabel} - PDF`, icon: 'pdf', onClick: () => exportReportToPdf(`KCM_Attendance_${driver.id}_${month}`, 'Driver Attendance', `${driver.name} (${driver.id}) - ${monthLabel}`, [attendanceGridSection(month, [driver], attendance, `${driver.id} - ${monthLabel}`)]) },
+    { key: 'month-pdf', label: `${monthLabel} - PDF`, icon: 'pdf', onClick: () => buildDriverAttendancePdf(driver, attendance, 'month', month).save(`KCM_Attendance_${driver.id}_${month}.pdf`) },
     { key: 'history-excel', label: 'Full History - Excel', icon: 'excel', onClick: () => exportReportToExcel(`KCM_Attendance_${driver.id}_Full_History`, [driverHistorySection(driver, attendance)]) },
-    { key: 'history-pdf', label: 'Full History - PDF', icon: 'pdf', onClick: () => exportReportToPdf(`KCM_Attendance_${driver.id}_Full_History`, 'Driver Attendance - Full History', `${driver.name} (${driver.id})`, [driverHistorySection(driver, attendance)]) },
+    { key: 'history-pdf', label: 'Full History - PDF', icon: 'pdf', onClick: () => buildDriverAttendancePdf(driver, attendance, 'history').save(`KCM_Attendance_${driver.id}_Full_History.pdf`) },
   ];
 
   // LOP/Exemption Leave/Working Days summary columns - mirrors the server's
