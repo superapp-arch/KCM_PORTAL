@@ -28,34 +28,12 @@ import {
   computeAutoWorkingDays, resolveWorkingDays, computeWarehouseRates
 } from '../utils/warehouseRates';
 import { lookupScheduledRate, rateGroupForWarehouseName } from '../utils/warehouseRateMatrix';
+import {
+  lookup24hrDedicatedRate, lookupReeferWalkesRate, lookupAdHocRouteRate,
+  adHocFromCities, adHocToCities
+} from '../utils/warehouseRateMatrix24hr';
+import { WAREHOUSE_LOCATIONS, WAREHOUSE_CITIES, cityForWarehouseName } from '../utils/warehouseLocations';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
-
-// Known Warehouse Name -> Warehouse City pairs, replacing the old free-form
-// suggestion list. Both Warehouse Name fields below stay plain text inputs
-// with a datalist (not a locked-down <select>), so a brand-new warehouse not
-// in this list can always be typed in manually - selecting/typing an exact
-// match here just auto-fetches its city; it doesn't restrict entry to only
-// these names.
-const WAREHOUSE_LOCATIONS: { name: string; city: string }[] = [
-  { name: 'BLR DHL', city: 'Bangalore' },
-  { name: 'BLR ECOM2', city: 'Bangalore' },
-  { name: 'BLR IM1', city: 'Bangalore' },
-  { name: 'BLR IM2', city: 'Bangalore' },
-  { name: 'BLR IM3', city: 'Bangalore' },
-  { name: 'BLR IM4', city: 'Bangalore' },
-  { name: 'CHN COLD IM1', city: 'Chennai' },
-  { name: 'GOA IM1', city: 'Central Goa' },
-  { name: 'Goravegere Cold WH', city: 'Bangalore' },
-  { name: 'HYD IM1', city: 'Hyderabad' },
-  { name: 'HYD IM2', city: 'Hyderabad' },
-  { name: 'HYD IM3 -Cold Star', city: 'Hyderabad' },
-  { name: 'HYD IM4', city: 'Hyderabad' },
-  { name: 'HYD IM5', city: 'Hyderabad' },
-  { name: 'VIZ IM1', city: 'Vizag' },
-];
-const WAREHOUSE_CITIES = Array.from(new Set(WAREHOUSE_LOCATIONS.map(w => w.city)));
-const cityForWarehouseName = (name: string): string | undefined =>
-  WAREHOUSE_LOCATIONS.find(w => w.name.trim().toLowerCase() === name.trim().toLowerCase())?.city;
 
 // Suggestions only (not a locked list) for a vendor vehicle's Type field,
 // mirroring FleetSheet.tsx's own VEHICLE_TYPES - Vehicle Category instead
@@ -137,12 +115,16 @@ export default function WarehouseDetails({
   const [deductSundays, setDeductSundays] = useState(false);
   const [holidaysCount, setHolidaysCount] = useState<number>(0);
   const [workingDaysOverride, setWorkingDaysOverride] = useState<number | null>(null);
-  const [kmPerDayOverride, setKmPerDayOverride] = useState<number | null>(null); // 24 Hrs only
   const [tollCharges, setTollCharges] = useState<number>(0);
   const [parkingCost, setParkingCost] = useState<number>(0);
   const [hybridReeferCost, setHybridReeferCost] = useState<number>(0);
   const [vendorRemarks, setVendorRemarks] = useState('');
   const [newEntryDocs, setNewEntryDocs] = useState<VehicleDocument[]>([]);
+  // Ad-hoc 24Hr only - From/To City feeding the flat round-trip route-table
+  // lookup (see utils/warehouseRateMatrix24hr.ts) that replaces KM Slab/
+  // Working Days for this Deployment Type.
+  const [adHocFromCity, setAdHocFromCity] = useState('');
+  const [adHocToCity, setAdHocToCity] = useState('');
 
   // Modal State for Managing/Editing Entry
   const [selectedEntry, setSelectedEntry] = useState<WarehouseEntry | null>(null);
@@ -176,27 +158,29 @@ export default function WarehouseDetails({
   const [editDeductSundays, setEditDeductSundays] = useState(false);
   const [editHolidaysCount, setEditHolidaysCount] = useState<number>(0);
   const [editWorkingDaysOverride, setEditWorkingDaysOverride] = useState<number | null>(null);
-  const [editKmPerDayOverride, setEditKmPerDayOverride] = useState<number | null>(null);
   const [editTollCharges, setEditTollCharges] = useState<number>(0);
   const [editParkingCost, setEditParkingCost] = useState<number>(0);
   const [editHybridReeferCost, setEditHybridReeferCost] = useState<number>(0);
   const [editVendorRemarks, setEditVendorRemarks] = useState('');
+  const [editAdHocFromCity, setEditAdHocFromCity] = useState('');
+  const [editAdHocToCity, setEditAdHocToCity] = useState('');
 
   // Auto-calculated fields for new entry form
   const kmUtilised = Math.max(0, closingKm - openingKm);
   const workingDaysAuto = computeAutoWorkingDays(workingMonth, deductSundays, holidaysCount);
   const workingDays = resolveWorkingDays(workingDaysAuto, workingDaysOverride);
   const kmSlabNumber = parseFloat(kmSlab) || 0;
-  // KM per Day (24 Hrs only) is no longer auto-calculated from KM Slab /
-  // Working Days - it's optional and starts blank; kmPerDayAuto is still
-  // computed and saved alongside the record purely for reference/reports,
-  // it no longer feeds the input or the live rate calculation.
-  const kmPerDayAuto = workingDays > 0 ? round2(kmSlabNumber / workingDays) : 0;
-  const kmPerDay = kmPerDayOverride ?? 0;
+  const isAdHoc24 = fixedHours === 24 && deploymentType === 'ad-hoc';
+  // Ad-hoc 24Hr: flat round-trip rate from the route table, by From/To City +
+  // Vehicle Type/Category ("Hybrid Vehicle" <- Vehicle Category = Hybrid).
+  // No match (missing selection, or a genuinely unconfigured combination)
+  // means Base Rate is 0, not a leftover formula-based number.
+  const matchedAdHocRate = isAdHoc24 ? lookupAdHocRouteRate(adHocFromCity, adHocToCity, vehicleType, vehicleCategory) : null;
   const rates = computeWarehouseRates({
-    fixedHours, scheduledRate, workingDays, kmSlab: kmSlabNumber, variableCostPerKm, kmPerDay,
+    fixedHours, scheduledRate, workingDays, kmSlab: kmSlabNumber, variableCostPerKm, kmUtilised,
     addKm: extraKm, ratePerExtraKm, addHour, ratePerExtraHour,
-    tollCharges, parkingCost, hybridReeferCost
+    tollCharges, parkingCost, hybridReeferCost,
+    flatBaseRateOverride: isAdHoc24 ? (matchedAdHocRate ?? 0) : null
   });
   const { baseRate, fuelCost, extraKmAmount: additionalKmCost, extraHourAmount: additionalHourCost, grandTotal } = rates;
   const finalBaseRate = Math.max(0, baseRate + fuelCost);
@@ -211,30 +195,58 @@ export default function WarehouseDetails({
   // reflects the right rate.
   const warehouseGroup = rateGroupForWarehouseName(warehouseName) || '';
   const matchedScheduledRate = fixedHours === 12 ? lookupScheduledRate(warehouseGroup, vehicleType, kmSlabNumber) : null;
+  // 24Hr Dedicated (Regular, Dry vehicles, BLR only for now) and 24Hr Reefer
+  // & Walkes (Regular, by Location + Vehicle) - same auto-fill pattern as
+  // the 12Hr lookup above, see utils/warehouseRateMatrix24hr.ts. Neither
+  // applies to Ad-hoc (flat route lookup instead, see matchedAdHocRate).
+  const isRegular24 = fixedHours === 24 && deploymentType === 'regular';
+  const matched24hrDedicatedRate = isRegular24 ? lookup24hrDedicatedRate(warehouseName, vehicleType) : null;
+  const matchedReeferWalkesRate = (isRegular24 && !matched24hrDedicatedRate) ? lookupReeferWalkesRate(warehouseName, vehicleType, vehicleCategory) : null;
   useEffect(() => {
     if (matchedScheduledRate != null) setScheduledRate(matchedScheduledRate);
   }, [matchedScheduledRate]);
+  useEffect(() => {
+    if (matched24hrDedicatedRate) {
+      setScheduledRate(matched24hrDedicatedRate.fixed);
+      setVariableCostPerKm(matched24hrDedicatedRate.variable);
+    } else if (matchedReeferWalkesRate) {
+      setScheduledRate(matchedReeferWalkesRate.fc);
+      setVariableCostPerKm(matchedReeferWalkesRate.vc);
+    }
+  }, [matched24hrDedicatedRate, matchedReeferWalkesRate]);
 
   // Auto-calculated fields for edit modal
   const editKmUtilised = Math.max(0, editClosingKm - editOpeningKm);
   const editWorkingDaysAuto = computeAutoWorkingDays(editWorkingMonth, editDeductSundays, editHolidaysCount);
   const editWorkingDays = resolveWorkingDays(editWorkingDaysAuto, editWorkingDaysOverride);
   const editKmSlabNumber = parseFloat(editKmSlab) || 0;
-  // Same as kmPerDay above - no longer auto-calculated, optional/blank by default.
-  const editKmPerDayAuto = editWorkingDays > 0 ? round2(editKmSlabNumber / editWorkingDays) : 0;
-  const editKmPerDay = editKmPerDayOverride ?? 0;
+  const editIsAdHoc24 = editFixedHours === 24 && editDeploymentType === 'ad-hoc';
+  const editMatchedAdHocRate = editIsAdHoc24 ? lookupAdHocRouteRate(editAdHocFromCity, editAdHocToCity, editVehicleType, editVehicleCategory) : null;
   const editRates = computeWarehouseRates({
     fixedHours: editFixedHours, scheduledRate: editScheduledRate, workingDays: editWorkingDays, kmSlab: editKmSlabNumber,
-    variableCostPerKm: editVariableCostPerKm, kmPerDay: editKmPerDay,
+    variableCostPerKm: editVariableCostPerKm, kmUtilised: editKmUtilised,
     addKm: editExtraKm, ratePerExtraKm: editRatePerExtraKm, addHour: editAddHour, ratePerExtraHour: editRatePerExtraHour,
-    tollCharges: editTollCharges, parkingCost: editParkingCost, hybridReeferCost: editHybridReeferCost
+    tollCharges: editTollCharges, parkingCost: editParkingCost, hybridReeferCost: editHybridReeferCost,
+    flatBaseRateOverride: editIsAdHoc24 ? (editMatchedAdHocRate ?? 0) : null
   });
   const { baseRate: editBaseRate, fuelCost: editFuelCost, extraKmAmount: editAdditionalKmCost, extraHourAmount: editAdditionalHourCost, grandTotal: editGrandTotal } = editRates;
   const editWarehouseGroup = rateGroupForWarehouseName(editWarehouseName) || '';
   const editMatchedScheduledRate = editFixedHours === 12 ? lookupScheduledRate(editWarehouseGroup, editVehicleType, editKmSlabNumber) : null;
+  const editIsRegular24 = editFixedHours === 24 && editDeploymentType === 'regular';
+  const editMatched24hrDedicatedRate = editIsRegular24 ? lookup24hrDedicatedRate(editWarehouseName, editVehicleType) : null;
+  const editMatchedReeferWalkesRate = (editIsRegular24 && !editMatched24hrDedicatedRate) ? lookupReeferWalkesRate(editWarehouseName, editVehicleType, editVehicleCategory) : null;
   useEffect(() => {
     if (editMatchedScheduledRate != null) setEditScheduledRate(editMatchedScheduledRate);
   }, [editMatchedScheduledRate]);
+  useEffect(() => {
+    if (editMatched24hrDedicatedRate) {
+      setEditScheduledRate(editMatched24hrDedicatedRate.fixed);
+      setEditVariableCostPerKm(editMatched24hrDedicatedRate.variable);
+    } else if (editMatchedReeferWalkesRate) {
+      setEditScheduledRate(editMatchedReeferWalkesRate.fc);
+      setEditVariableCostPerKm(editMatchedReeferWalkesRate.vc);
+    }
+  }, [editMatched24hrDedicatedRate, editMatchedReeferWalkesRate]);
   const editFinalBaseRate = Math.max(0, editBaseRate + editFuelCost);
 
   // Trigger temporary toast notification
@@ -365,9 +377,8 @@ export default function WarehouseDetails({
         addHour: Number(addHour),
         ratePerExtraHour,
         variableCostPerKm,
-        kmPerDayAuto,
-        kmPerDayOverride: kmPerDayOverride ?? undefined,
-        kmPerDay
+        adHocFromCity: isAdHoc24 ? (adHocFromCity || undefined) : undefined,
+        adHocToCity: isAdHoc24 ? (adHocToCity || undefined) : undefined
       });
 
       // Reset
@@ -391,12 +402,13 @@ export default function WarehouseDetails({
       setDeductSundays(false);
       setHolidaysCount(0);
       setWorkingDaysOverride(null);
-      setKmPerDayOverride(null);
       setTollCharges(0);
       setParkingCost(0);
       setHybridReeferCost(0);
       setVendorRemarks('');
       setNewEntryDocs([]);
+      setAdHocFromCity('');
+      setAdHocToCity('');
       setShowAddSidebar(false);
 
       triggerNotif('🏬 New warehouse details log saved & calculated successfully!');
@@ -462,11 +474,12 @@ export default function WarehouseDetails({
     setEditDeductSundays(entry.deductSundays ?? false);
     setEditHolidaysCount(entry.holidaysCount || 0);
     setEditWorkingDaysOverride(entry.workingDaysOverride ?? null);
-    setEditKmPerDayOverride(entry.kmPerDayOverride ?? null);
     setEditTollCharges(entry.tollCharges || 0);
     setEditParkingCost(entry.parkingCost || 0);
     setEditHybridReeferCost(entry.hybridReeferCost || 0);
     setEditVendorRemarks(entry.vendorRemarks || '');
+    setEditAdHocFromCity(entry.adHocFromCity || '');
+    setEditAdHocToCity(entry.adHocToCity || '');
   };
 
   // Save Edits
@@ -523,9 +536,8 @@ export default function WarehouseDetails({
         addHour: Number(editAddHour),
         ratePerExtraHour: editRatePerExtraHour,
         variableCostPerKm: editVariableCostPerKm,
-        kmPerDayAuto: editKmPerDayAuto,
-        kmPerDayOverride: editKmPerDayOverride ?? undefined,
-        kmPerDay: editKmPerDay
+        adHocFromCity: editIsAdHoc24 ? (editAdHocFromCity || undefined) : undefined,
+        adHocToCity: editIsAdHoc24 ? (editAdHocToCity || undefined) : undefined
       };
 
       await onUpdateEntry(selectedEntry.id, updatedData);
@@ -627,6 +639,8 @@ export default function WarehouseDetails({
       'Vehicle Type': e.vehicleType,
       'Vehicle Category': e.vehicleCategory,
       'Deployment Type': e.deploymentType,
+      'From City (Ad-hoc)': e.adHocFromCity || '',
+      'To City (Ad-hoc)': e.adHocToCity || '',
       'POD Name': e.pod,
       'POD City': e.podCity,
       'Fixed Hours': e.fixedHours,
@@ -675,6 +689,8 @@ export default function WarehouseDetails({
     vehicletype: 'vehicleType', type: 'vehicleType',
     vehiclecategory: 'vehicleCategory', category: 'vehicleCategory',
     deploymenttype: 'deploymentType', deployment: 'deploymentType',
+    fromcityadhoc: 'adHocFromCity', fromcity: 'adHocFromCity',
+    tocityadhoc: 'adHocToCity', tocity: 'adHocToCity',
     podname: 'pod', pod: 'pod',
     podcity: 'podCity',
     fixedhours: 'fixedHours', fixedhrs: 'fixedHours',
@@ -763,6 +779,8 @@ export default function WarehouseDetails({
             vehicleType: String(mapped.vehicleType || '').trim(),
             vehicleCategory: String(mapped.vehicleCategory || '').trim(),
             deploymentType: String(mapped.deploymentType || 'regular').trim(),
+            adHocFromCity: String(mapped.adHocFromCity || '').trim() || undefined,
+            adHocToCity: String(mapped.adHocToCity || '').trim() || undefined,
             pod: String(mapped.pod || '').trim(),
             podCity: String(mapped.podCity || '').trim(),
             fixedHours: Number(mapped.fixedHours) || 12,
@@ -1056,7 +1074,7 @@ export default function WarehouseDetails({
             </div>
 
             {/* 5. Fixed Hours, Slab & Hours/Days */}
-            <div className="grid grid-cols-2 gap-2">
+            <div className={`grid gap-2 ${isAdHoc24 ? 'grid-cols-1' : 'grid-cols-2'}`}>
               <div>
                 <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Fixed Hrs</label>
                 <select
@@ -1068,20 +1086,27 @@ export default function WarehouseDetails({
                   <option value={24}>24 hrs</option>
                 </select>
               </div>
-              <div>
-                <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">KM Slab</label>
-                <input
-                  type="number"
-                  list="km-slab-suggestions"
-                  placeholder="e.g. 2000"
-                  value={kmSlab}
-                  onChange={(e) => setKmSlab(e.target.value)}
-                  className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
-                />
-                <datalist id="km-slab-suggestions">
-                  {KM_SLAB_SUGGESTIONS.map(s => <option key={s} value={s} />)}
-                </datalist>
-              </div>
+              {/* Ad-hoc 24Hr is trip-based (flat round-trip rate from a From
+                  City/To City/Vehicle lookup, see below) - KM Slab doesn't
+                  apply to it at all, so it's hidden rather than left sitting
+                  there unused. Every other combination (12Hr, 24Hr Regular)
+                  keeps it exactly as before. */}
+              {!isAdHoc24 && (
+                <div>
+                  <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">KM Slab</label>
+                  <input
+                    type="number"
+                    list="km-slab-suggestions"
+                    placeholder="e.g. 2000"
+                    value={kmSlab}
+                    onChange={(e) => setKmSlab(e.target.value)}
+                    className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
+                  />
+                  <datalist id="km-slab-suggestions">
+                    {KM_SLAB_SUGGESTIONS.map(s => <option key={s} value={s} />)}
+                  </datalist>
+                </div>
+              )}
             </div>
 
             {/* 6. Opening & Closing KM */}
@@ -1168,85 +1193,143 @@ export default function WarehouseDetails({
             <div className="p-2.5 bg-purple-50/40 rounded-xl border border-purple-100/50 space-y-2">
               <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wide">Rate Configuration</span>
 
-              {/* 12Hr Dedicated fixed rate lookup - Vehicle Type x KM Slab,
-                  Warehouse Group is derived automatically from the Warehouse
-                  Name field above (see utils/warehouseRateMatrix.ts), no
-                  separate selection needed here. Only applies for 12 Hr; 24
-                  Hr/other deployments keep a plain manually-typed Scheduled
-                  Rate below, untouched. */}
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Scheduled Rate (₹/month)</label>
-                  <input type="number" placeholder="e.g. 75000" value={scheduledRate || ''}
-                    readOnly={matchedScheduledRate != null}
-                    onChange={(e) => setScheduledRate(Number(e.target.value))}
-                    className={`w-full border border-purple-100 rounded-lg p-1.5 text-xs font-bold ${matchedScheduledRate != null ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white text-slate-800'}`} />
-                  {matchedScheduledRate != null ? (
-                    <p className="text-[9px] text-emerald-600 font-mono mt-0.5">Auto-filled from {warehouseGroup}'s 12Hr Dedicated rate table.</p>
-                  ) : fixedHours === 12 && warehouseGroup ? (
-                    <p className="text-[9px] text-rose-500 font-mono mt-0.5">Rate not configured for this combination. Contact admin.</p>
-                  ) : null}
-                </div>
-                <div>
-                  <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra KM (₹)</label>
-                  <input type="number" placeholder="0" value={ratePerExtraKm || ''} onChange={(e) => setRatePerExtraKm(Number(e.target.value))}
-                    className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
-                </div>
-              </div>
-              <div className={`grid gap-2 ${fixedHours === 24 ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                <div>
-                  <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra Hour (₹)</label>
-                  <input type="number" placeholder="0" value={ratePerExtraHour || ''} onChange={(e) => setRatePerExtraHour(Number(e.target.value))}
-                    className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
-                </div>
-                {fixedHours === 24 && (
+              {isAdHoc24 ? (
+                <>
+                  {/* Ad-hoc 24Hr is trip-based, not formula-based - Base Rate
+                      is a direct flat lookup from the round-trip route table
+                      (utils/warehouseRateMatrix24hr.ts) by From City + To
+                      City + Vehicle, so Scheduled Rate/Variable Cost/Working
+                      Days/KM per Day don't apply here at all. "Hybrid
+                      Vehicle" in that table is Vehicle Category = Hybrid,
+                      not a separate deployment type. */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">From City</label>
+                      <select value={adHocFromCity} onChange={(e) => { setAdHocFromCity(e.target.value); setAdHocToCity(''); }}
+                        className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800">
+                        <option value="">Select</option>
+                        {adHocFromCities().map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">To City</label>
+                      <select value={adHocToCity} onChange={(e) => setAdHocToCity(e.target.value)} disabled={!adHocFromCity}
+                        className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800 disabled:bg-slate-100 disabled:cursor-not-allowed">
+                        <option value="">Select</option>
+                        {adHocToCities(adHocFromCity).map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                  </div>
                   <div>
-                    <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Variable Cost (₹/km)</label>
-                    <input type="number" placeholder="e.g. 18" value={variableCostPerKm || ''} onChange={(e) => setVariableCostPerKm(Number(e.target.value))}
-                      className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
+                    <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Route Rate (₹, flat round-trip)</label>
+                    <input type="text" readOnly value={matchedAdHocRate != null ? formatINR(matchedAdHocRate) : ''}
+                      placeholder="Select From/To City and Vehicle"
+                      className="w-full bg-slate-100 border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-700 cursor-not-allowed" />
+                    {adHocFromCity && adHocToCity && matchedAdHocRate == null && (
+                      <p className="text-[9px] text-rose-500 font-mono mt-0.5">No rate configured for this route/vehicle combination. Contact admin.</p>
+                    )}
                   </div>
-                )}
-              </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra KM (₹)</label>
+                      <input type="number" placeholder="0" value={ratePerExtraKm || ''} onChange={(e) => setRatePerExtraKm(Number(e.target.value))}
+                        className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra Hour (₹)</label>
+                      <input type="number" placeholder="0" value={ratePerExtraHour || ''} onChange={(e) => setRatePerExtraHour(Number(e.target.value))}
+                        className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* 12Hr Dedicated / 24Hr Dedicated / 24Hr Reefer & Walkes
+                      fixed rate lookups - Vehicle Type (x KM Slab for 12Hr),
+                      Warehouse Group/City derived automatically from the
+                      Warehouse Name field above (see utils/warehouseRateMatrix.ts
+                      and utils/warehouseRateMatrix24hr.ts), no separate
+                      selection needed here. A combination with no configured
+                      rate leaves Scheduled Rate/Variable Cost as plain manual
+                      fields exactly as before. */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Scheduled Rate (₹/month)</label>
+                      <input type="number" placeholder="e.g. 75000" value={scheduledRate || ''}
+                        readOnly={matchedScheduledRate != null || matched24hrDedicatedRate != null || matchedReeferWalkesRate != null}
+                        onChange={(e) => setScheduledRate(Number(e.target.value))}
+                        className={`w-full border border-purple-100 rounded-lg p-1.5 text-xs font-bold ${(matchedScheduledRate != null || matched24hrDedicatedRate != null || matchedReeferWalkesRate != null) ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white text-slate-800'}`} />
+                      {matchedScheduledRate != null ? (
+                        <p className="text-[9px] text-emerald-600 font-mono mt-0.5">Auto-filled from {warehouseGroup}'s 12Hr Dedicated rate table.</p>
+                      ) : matched24hrDedicatedRate != null ? (
+                        <p className="text-[9px] text-emerald-600 font-mono mt-0.5">Auto-filled from {warehouseGroup}'s 24Hr Dedicated rate table.</p>
+                      ) : matchedReeferWalkesRate != null ? (
+                        <p className="text-[9px] text-emerald-600 font-mono mt-0.5">Auto-filled from the 24Hr Reefer &amp; Walkes rate table.</p>
+                      ) : fixedHours === 12 && warehouseGroup ? (
+                        <p className="text-[9px] text-rose-500 font-mono mt-0.5">Rate not configured for this combination. Contact admin.</p>
+                      ) : null}
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra KM (₹)</label>
+                      <input type="number" placeholder="0" value={ratePerExtraKm || ''} onChange={(e) => setRatePerExtraKm(Number(e.target.value))}
+                        className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
+                    </div>
+                  </div>
+                  <div className={`grid gap-2 ${fixedHours === 24 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                    <div>
+                      <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra Hour (₹)</label>
+                      <input type="number" placeholder="0" value={ratePerExtraHour || ''} onChange={(e) => setRatePerExtraHour(Number(e.target.value))}
+                        className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
+                    </div>
+                    {fixedHours === 24 && (
+                      <div>
+                        <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Variable Cost (₹/km)</label>
+                        <input type="number" placeholder="e.g. 18" value={variableCostPerKm || ''}
+                          readOnly={matched24hrDedicatedRate != null || matchedReeferWalkesRate != null}
+                          onChange={(e) => setVariableCostPerKm(Number(e.target.value))}
+                          className={`w-full border border-purple-100 rounded-lg p-1.5 text-xs font-bold ${(matched24hrDedicatedRate != null || matchedReeferWalkesRate != null) ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white text-slate-800'}`} />
+                      </div>
+                    )}
+                  </div>
 
-              {/* Working Days - auto-fills from the Month + Year calendar,
-                  never hard-coded to 30; stays editable with a Reset to
-                  auto link. */}
-              <div className="p-2 bg-white rounded-lg border border-purple-100 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[9px] font-bold text-purple-700 uppercase tracking-wide">Working Days</span>
-                  {workingDaysOverride != null && (
-                    <button type="button" onClick={() => setWorkingDaysOverride(null)} className="text-[9px] text-pink-600 hover:text-pink-800 underline cursor-pointer">Reset to auto</button>
+                  {/* Working Days - auto-fills from the Month + Year calendar,
+                      never hard-coded to 30; stays editable with a Reset to
+                      auto link. */}
+                  <div className="p-2 bg-white rounded-lg border border-purple-100 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[9px] font-bold text-purple-700 uppercase tracking-wide">Working Days</span>
+                      {workingDaysOverride != null && (
+                        <button type="button" onClick={() => setWorkingDaysOverride(null)} className="text-[9px] text-pink-600 hover:text-pink-800 underline cursor-pointer">Reset to auto</button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="month" value={workingMonth} onChange={(e) => setWorkingMonth(e.target.value)}
+                        className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 text-xs font-mono text-slate-800" />
+                      <input type="number" min={1} value={workingDaysOverride ?? workingDaysAuto}
+                        onChange={(e) => setWorkingDaysOverride(e.target.value ? Number(e.target.value) : null)}
+                        className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-1 text-[9px] font-semibold text-slate-600 cursor-pointer">
+                        <input type="checkbox" checked={deductSundays} onChange={(e) => setDeductSundays(e.target.checked)} /> Deduct Sundays
+                      </label>
+                      <div className="flex items-center gap-1">
+                        <span className="text-[9px] font-semibold text-slate-600">Holidays</span>
+                        <input type="number" min={0} value={holidaysCount || ''} onChange={(e) => setHolidaysCount(Number(e.target.value) || 0)}
+                          className="w-14 bg-slate-50 border border-purple-100 rounded p-1 text-[10px] font-bold text-slate-800" />
+                      </div>
+                    </div>
+                    <p className="text-[9px] text-slate-400 font-mono">
+                      Auto: {workingDaysAuto} days ({daysInMonth(workingMonth)} in month{deductSundays ? ` - ${countSundaysInMonth(workingMonth)} Sundays` : ''}{holidaysCount ? ` - ${holidaysCount} holidays` : ''})
+                    </p>
+                  </div>
+
+                  {fixedHours === 24 && (
+                    <p className="text-[9px] text-slate-400 font-mono">
+                      Variable Cost term uses KM Utilised ({kmUtilised} KM = Closing − Opening), shown above under Opening/Closing KM.
+                    </p>
                   )}
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <input type="month" value={workingMonth} onChange={(e) => setWorkingMonth(e.target.value)}
-                    className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 text-xs font-mono text-slate-800" />
-                  <input type="number" min={1} value={workingDaysOverride ?? workingDaysAuto}
-                    onChange={(e) => setWorkingDaysOverride(e.target.value ? Number(e.target.value) : null)}
-                    className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
-                </div>
-                <div className="flex items-center gap-3">
-                  <label className="flex items-center gap-1 text-[9px] font-semibold text-slate-600 cursor-pointer">
-                    <input type="checkbox" checked={deductSundays} onChange={(e) => setDeductSundays(e.target.checked)} /> Deduct Sundays
-                  </label>
-                  <div className="flex items-center gap-1">
-                    <span className="text-[9px] font-semibold text-slate-600">Holidays</span>
-                    <input type="number" min={0} value={holidaysCount || ''} onChange={(e) => setHolidaysCount(Number(e.target.value) || 0)}
-                      className="w-14 bg-slate-50 border border-purple-100 rounded p-1 text-[10px] font-bold text-slate-800" />
-                  </div>
-                </div>
-                <p className="text-[9px] text-slate-400 font-mono">
-                  Auto: {workingDaysAuto} days ({daysInMonth(workingMonth)} in month{deductSundays ? ` - ${countSundaysInMonth(workingMonth)} Sundays` : ''}{holidaysCount ? ` - ${holidaysCount} holidays` : ''})
-                </p>
-              </div>
-
-              {fixedHours === 24 && (
-                <div>
-                  <label className="block text-[9px] font-bold text-purple-700 uppercase tracking-wide">KM per Day (optional)</label>
-                  <input type="number" placeholder="Leave blank if not applicable" value={kmPerDayOverride ?? ''} onChange={(e) => setKmPerDayOverride(e.target.value ? Number(e.target.value) : null)}
-                    className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
-                  <p className="text-[9px] text-slate-400 font-mono mt-0.5">Not auto-calculated - enter only if this deployment has a variable per-km cost.</p>
-                </div>
+                </>
               )}
             </div>
 
@@ -1795,19 +1878,24 @@ export default function WarehouseDetails({
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:ring-1 focus:ring-pink-500 focus:outline-none"
                   />
                 </div>
-                <div>
-                  <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">KM Slab</label>
-                  <input
-                    type="number"
-                    list="km-slab-suggestions-edit"
-                    value={editKmSlab}
-                    onChange={(e) => setEditKmSlab(e.target.value)}
-                    className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:ring-1 focus:ring-pink-500 focus:outline-none"
-                  />
-                  <datalist id="km-slab-suggestions-edit">
-                    {KM_SLAB_SUGGESTIONS.map(s => <option key={s} value={s} />)}
-                  </datalist>
-                </div>
+                {/* Ad-hoc 24Hr doesn't use KM Slab at all - From/To City
+                    (Rate Configuration below) drives its flat route rate
+                    instead, same as Add Entry. */}
+                {!editIsAdHoc24 && (
+                  <div>
+                    <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">KM Slab</label>
+                    <input
+                      type="number"
+                      list="km-slab-suggestions-edit"
+                      value={editKmSlab}
+                      onChange={(e) => setEditKmSlab(e.target.value)}
+                      className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:ring-1 focus:ring-pink-500 focus:outline-none"
+                    />
+                    <datalist id="km-slab-suggestions-edit">
+                      {KM_SLAB_SUGGESTIONS.map(s => <option key={s} value={s} />)}
+                    </datalist>
+                  </div>
+                )}
                 <div>
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Contract Quantity</label>
                   <input
@@ -1907,74 +1995,125 @@ export default function WarehouseDetails({
               <div className="p-3 bg-purple-50/40 rounded-xl border border-purple-100/50 space-y-2 text-xs">
                 <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wide">Rate Configuration</span>
 
-                {/* Warehouse Group is derived automatically from Warehouse
-                    Name above - no separate selection here. */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  <div>
-                    <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Scheduled Rate (₹/mo)</label>
-                    <input type="number" value={editScheduledRate || ''}
-                      readOnly={editMatchedScheduledRate != null}
-                      onChange={(e) => setEditScheduledRate(Number(e.target.value))}
-                      className={`w-full border border-purple-100 rounded-lg p-1.5 font-bold ${editMatchedScheduledRate != null ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white text-slate-800'}`} />
-                    {editMatchedScheduledRate != null ? (
-                      <p className="text-[9px] text-emerald-600 font-mono mt-0.5">Auto-filled from {editWarehouseGroup}'s rate table.</p>
-                    ) : editFixedHours === 12 && editWarehouseGroup ? (
-                      <p className="text-[9px] text-rose-500 font-mono mt-0.5">Rate not configured for this combination. Contact admin.</p>
-                    ) : null}
-                  </div>
-                  <div>
-                    <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra KM</label>
-                    <input type="number" value={editRatePerExtraKm || ''} onChange={(e) => setEditRatePerExtraKm(Number(e.target.value))}
-                      className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
-                  </div>
-                  <div>
-                    <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra Hour</label>
-                    <input type="number" value={editRatePerExtraHour || ''} onChange={(e) => setEditRatePerExtraHour(Number(e.target.value))}
-                      className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
-                  </div>
-                  {editFixedHours === 24 && (
+                {editIsAdHoc24 ? (
+                  <>
+                    {/* Ad-hoc 24Hr - flat route-table lookup, same as Add
+                        Entry (see utils/warehouseRateMatrix24hr.ts). */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">From City</label>
+                        <select value={editAdHocFromCity} onChange={(e) => { setEditAdHocFromCity(e.target.value); setEditAdHocToCity(''); }}
+                          className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800">
+                          <option value="">Select</option>
+                          {adHocFromCities().map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">To City</label>
+                        <select value={editAdHocToCity} onChange={(e) => setEditAdHocToCity(e.target.value)} disabled={!editAdHocFromCity}
+                          className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800 disabled:bg-slate-100 disabled:cursor-not-allowed">
+                          <option value="">Select</option>
+                          {adHocToCities(editAdHocFromCity).map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
+                    </div>
                     <div>
-                      <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Variable Cost (₹/km)</label>
-                      <input type="number" value={editVariableCostPerKm || ''} onChange={(e) => setEditVariableCostPerKm(Number(e.target.value))}
-                        className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                      <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Route Rate (₹, flat round-trip)</label>
+                      <input type="text" readOnly value={editMatchedAdHocRate != null ? formatINR(editMatchedAdHocRate) : ''}
+                        placeholder="Select From/To City and Vehicle"
+                        className="w-full bg-slate-100 border border-purple-100 rounded-lg p-1.5 font-bold text-slate-700 cursor-not-allowed" />
+                      {editAdHocFromCity && editAdHocToCity && editMatchedAdHocRate == null && (
+                        <p className="text-[9px] text-rose-500 font-mono mt-0.5">No rate configured for this route/vehicle combination. Contact admin.</p>
+                      )}
                     </div>
-                  )}
-                </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra KM</label>
+                        <input type="number" value={editRatePerExtraKm || ''} onChange={(e) => setEditRatePerExtraKm(Number(e.target.value))}
+                          className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                      </div>
+                      <div>
+                        <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra Hour</label>
+                        <input type="number" value={editRatePerExtraHour || ''} onChange={(e) => setEditRatePerExtraHour(Number(e.target.value))}
+                          className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {/* Warehouse Group/City is derived automatically from
+                        Warehouse Name above - no separate selection here. */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      <div>
+                        <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Scheduled Rate (₹/mo)</label>
+                        <input type="number" value={editScheduledRate || ''}
+                          readOnly={editMatchedScheduledRate != null || editMatched24hrDedicatedRate != null || editMatchedReeferWalkesRate != null}
+                          onChange={(e) => setEditScheduledRate(Number(e.target.value))}
+                          className={`w-full border border-purple-100 rounded-lg p-1.5 font-bold ${(editMatchedScheduledRate != null || editMatched24hrDedicatedRate != null || editMatchedReeferWalkesRate != null) ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white text-slate-800'}`} />
+                        {editMatchedScheduledRate != null ? (
+                          <p className="text-[9px] text-emerald-600 font-mono mt-0.5">Auto-filled from {editWarehouseGroup}'s rate table.</p>
+                        ) : editMatched24hrDedicatedRate != null ? (
+                          <p className="text-[9px] text-emerald-600 font-mono mt-0.5">Auto-filled from {editWarehouseGroup}'s 24Hr Dedicated rate table.</p>
+                        ) : editMatchedReeferWalkesRate != null ? (
+                          <p className="text-[9px] text-emerald-600 font-mono mt-0.5">Auto-filled from the 24Hr Reefer &amp; Walkes rate table.</p>
+                        ) : editFixedHours === 12 && editWarehouseGroup ? (
+                          <p className="text-[9px] text-rose-500 font-mono mt-0.5">Rate not configured for this combination. Contact admin.</p>
+                        ) : null}
+                      </div>
+                      <div>
+                        <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra KM</label>
+                        <input type="number" value={editRatePerExtraKm || ''} onChange={(e) => setEditRatePerExtraKm(Number(e.target.value))}
+                          className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                      </div>
+                      <div>
+                        <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra Hour</label>
+                        <input type="number" value={editRatePerExtraHour || ''} onChange={(e) => setEditRatePerExtraHour(Number(e.target.value))}
+                          className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                      </div>
+                      {editFixedHours === 24 && (
+                        <div>
+                          <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Variable Cost (₹/km)</label>
+                          <input type="number" value={editVariableCostPerKm || ''}
+                            readOnly={editMatched24hrDedicatedRate != null || editMatchedReeferWalkesRate != null}
+                            onChange={(e) => setEditVariableCostPerKm(Number(e.target.value))}
+                            className={`w-full border border-purple-100 rounded-lg p-1.5 font-bold ${(editMatched24hrDedicatedRate != null || editMatchedReeferWalkesRate != null) ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white text-slate-800'}`} />
+                        </div>
+                      )}
+                    </div>
 
-                <div className="p-2 bg-white rounded-lg border border-purple-100 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[9px] font-bold text-purple-700 uppercase tracking-wide">Working Days</span>
-                    {editWorkingDaysOverride != null && (
-                      <button type="button" onClick={() => setEditWorkingDaysOverride(null)} className="text-[9px] text-pink-600 hover:text-pink-800 underline cursor-pointer">Reset to auto</button>
+                    <div className="p-2 bg-white rounded-lg border border-purple-100 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] font-bold text-purple-700 uppercase tracking-wide">Working Days</span>
+                        {editWorkingDaysOverride != null && (
+                          <button type="button" onClick={() => setEditWorkingDaysOverride(null)} className="text-[9px] text-pink-600 hover:text-pink-800 underline cursor-pointer">Reset to auto</button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input type="month" value={editWorkingMonth} onChange={(e) => setEditWorkingMonth(e.target.value)}
+                          className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 font-mono text-slate-800" />
+                        <input type="number" min={1} value={editWorkingDaysOverride ?? editWorkingDaysAuto}
+                          onChange={(e) => setEditWorkingDaysOverride(e.target.value ? Number(e.target.value) : null)}
+                          className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <label className="flex items-center gap-1 text-[9px] font-semibold text-slate-600 cursor-pointer">
+                          <input type="checkbox" checked={editDeductSundays} onChange={(e) => setEditDeductSundays(e.target.checked)} /> Deduct Sundays
+                        </label>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[9px] font-semibold text-slate-600">Holidays</span>
+                          <input type="number" min={0} value={editHolidaysCount || ''} onChange={(e) => setEditHolidaysCount(Number(e.target.value) || 0)}
+                            className="w-14 bg-slate-50 border border-purple-100 rounded p-1 text-[10px] font-bold text-slate-800" />
+                        </div>
+                      </div>
+                      <p className="text-[9px] text-slate-400 font-mono">Auto: {editWorkingDaysAuto} days</p>
+                    </div>
+
+                    {editFixedHours === 24 && (
+                      <p className="text-[9px] text-slate-400 font-mono">
+                        Variable Cost term uses KM Utilised ({editKmUtilised} KM = Closing − Opening).
+                      </p>
                     )}
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <input type="month" value={editWorkingMonth} onChange={(e) => setEditWorkingMonth(e.target.value)}
-                      className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 font-mono text-slate-800" />
-                    <input type="number" min={1} value={editWorkingDaysOverride ?? editWorkingDaysAuto}
-                      onChange={(e) => setEditWorkingDaysOverride(e.target.value ? Number(e.target.value) : null)}
-                      className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <label className="flex items-center gap-1 text-[9px] font-semibold text-slate-600 cursor-pointer">
-                      <input type="checkbox" checked={editDeductSundays} onChange={(e) => setEditDeductSundays(e.target.checked)} /> Deduct Sundays
-                    </label>
-                    <div className="flex items-center gap-1">
-                      <span className="text-[9px] font-semibold text-slate-600">Holidays</span>
-                      <input type="number" min={0} value={editHolidaysCount || ''} onChange={(e) => setEditHolidaysCount(Number(e.target.value) || 0)}
-                        className="w-14 bg-slate-50 border border-purple-100 rounded p-1 text-[10px] font-bold text-slate-800" />
-                    </div>
-                  </div>
-                  <p className="text-[9px] text-slate-400 font-mono">Auto: {editWorkingDaysAuto} days</p>
-                </div>
-
-                {editFixedHours === 24 && (
-                  <div>
-                    <label className="block text-[9px] font-bold text-purple-700 uppercase tracking-wide">KM per Day (optional)</label>
-                    <input type="number" placeholder="Leave blank if not applicable" value={editKmPerDayOverride ?? ''} onChange={(e) => setEditKmPerDayOverride(e.target.value ? Number(e.target.value) : null)}
-                      className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
-                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">Not auto-calculated - enter only if this deployment has a variable per-km cost.</p>
-                  </div>
+                  </>
                 )}
               </div>
 

@@ -814,16 +814,29 @@ export interface WarehouseEntry {
   addHour?: number; // "Add Hour" - hours run beyond fixedHours, manually entered
   ratePerExtraHour?: number; // Rs per hour beyond fixedHours - multiplies addHour into additionalHourCost
   variableCostPerKm?: number; // 24 Hrs only - Rs/km term in the 24 Hrs Base Rate formula
-  kmPerDayAuto?: number; // 24 Hrs only - auto = kmSlab / workingDays
-  kmPerDayOverride?: number; // 24 Hrs only - set only when the user overrides kmPerDayAuto
-  kmPerDay?: number; // 24 Hrs only - the value actually used = kmPerDayOverride ?? kmPerDayAuto
+  // Deprecated - the 24Hr Base Rate formula's Variable Cost term now
+  // multiplies against kmUtilised (Closing KM - Opening KM) directly, not a
+  // separately-entered "KM per Day". Kept only so already-saved entries from
+  // before this change still show their original stored value in
+  // reports/exports; the Add/Edit forms no longer have inputs for these.
+  kmPerDayAuto?: number;
+  kmPerDayOverride?: number;
+  kmPerDay?: number;
   // 12Hr Dedicated fixed Scheduled Rate lookup (see utils/warehouseRateMatrix.ts)
   // - one of WAREHOUSE_GROUP_OPTIONS' values, e.g. "BLR IM2" or "Vizag".
-  // Only meaningful/used when fixedHours is 12 and this group has a rate
-  // configured for the chosen Vehicle Type + KM Slab; otherwise
-  // scheduledRate above is manually typed exactly as before. Purely a fixed
-  // in-code lookup table for now, not a database-backed/admin-editable one.
+  // Also reused for the 24Hr Dedicated lookup (utils/warehouseRateMatrix24hr.ts,
+  // BLR only for now) - same "which rate group matched" concept either way.
+  // Only meaningful/used when a group has a rate configured for the chosen
+  // Vehicle Type (+ KM Slab for 12Hr); otherwise scheduledRate above is
+  // manually typed exactly as before. Purely a fixed in-code lookup table
+  // for now, not a database-backed/admin-editable one.
   warehouseGroup?: string;
+  // Ad-hoc 24Hr only - the From City/To City selected for the round-trip
+  // route-table lookup that replaces KM Slab/Working Days/Scheduled Rate for
+  // this Deployment Type (see utils/warehouseRateMatrix24hr.ts). Undefined
+  // for every other Deployment Type/Fixed Hrs combination.
+  adHocFromCity?: string;
+  adHocToCity?: string;
 }
 
 export interface MileageReport {

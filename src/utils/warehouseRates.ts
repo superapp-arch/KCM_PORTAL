@@ -60,7 +60,7 @@ export interface WarehouseRateInputs {
   workingDays: number; // already resolved (>= 1) - see resolveWorkingDays
   kmSlab: number; // numeric KM Slab value
   variableCostPerKm: number; // 24 Hrs only
-  kmPerDay: number; // 24 Hrs only - already resolved (auto or override)
+  kmUtilised: number; // 24 Hrs only - Closing KM - Opening KM, drives the Variable Cost term
   addKm: number; // "Add KM" - km beyond the slab
   ratePerExtraKm: number;
   addHour: number; // "Add Hour" - hours beyond fixedHours
@@ -68,6 +68,12 @@ export interface WarehouseRateInputs {
   tollCharges: number;
   parkingCost: number;
   hybridReeferCost: number;
+  // Ad-hoc 24Hr only - a direct flat Base Rate (from the round-trip route
+  // table) that bypasses the Scheduled Rate/Working Days/KM Utilised formula
+  // entirely. null/undefined for every other Deployment Type - Fuel
+  // Cost/Extra KM/Extra Hour/Grand Total are still computed normally on top
+  // of whichever Base Rate results, formula or flat.
+  flatBaseRateOverride?: number | null;
 }
 
 export interface WarehouseRateResult {
@@ -79,15 +85,18 @@ export interface WarehouseRateResult {
 }
 
 // Base Rate (12 Hrs) = Scheduled Rate / Working Days.
-// Base Rate (24 Hrs) = (Scheduled Rate / Working Days) + (KM per day x Variable Cost per km).
+// Base Rate (24 Hrs) = (Scheduled Rate / Working Days) + (KM Utilised x Variable Cost per km).
+// Base Rate (24 Hrs Ad-hoc) = flatBaseRateOverride (a flat route-table rate) directly.
 // Fuel Cost = Base Rate x FUEL_COST_PERCENT%, recalculating on any change.
 // Grand Total = Base Rate + Fuel Cost + Extra KM Amount + Extra Hour Amount
 // + whatever Toll/Parking/Hybrid-Reefer costs are already logged for this
 // trip (kept - those are real costs the new formula doesn't replace).
 export function computeWarehouseRates(inputs: WarehouseRateInputs): WarehouseRateResult {
   const workingDays = Math.max(1, inputs.workingDays || 1);
-  const baseRateRaw = inputs.fixedHours === 24
-    ? (inputs.scheduledRate / workingDays) + (inputs.kmPerDay * inputs.variableCostPerKm)
+  const baseRateRaw = inputs.flatBaseRateOverride != null
+    ? inputs.flatBaseRateOverride
+    : inputs.fixedHours === 24
+    ? (inputs.scheduledRate / workingDays) + (inputs.kmUtilised * inputs.variableCostPerKm)
     : inputs.scheduledRate / workingDays;
   const baseRate = round2(Math.max(0, baseRateRaw));
   const fuelCost = round2(baseRate * (FUEL_COST_PERCENT / 100));
