@@ -1075,4 +1075,28 @@ export interface BusinessLoan {
   remarks?: string;
 }
 
+// Audit Trail - see src/db/schema.ts's auditLogs table and
+// src/db/service.ts's createAuditLog/getAuditLogs. Do not force every module
+// to use every action - use whichever actually describes what happened.
+export type AuditAction =
+  | 'LOGIN' | 'LOGOUT' | 'CREATE' | 'UPDATE' | 'DELETE' | 'APPROVE' | 'REJECT'
+  | 'EXPORT' | 'IMPORT' | 'PASSWORD_CHANGE' | 'ROLE_CHANGE' | 'ACCESS_DENIED' | 'OTHER';
+
+export interface AuditLog {
+  id: string;
+  createdAt: string; // IST "YYYY-MM-DD HH:mm:ss" - see auth/time.ts's istTimestamp()
+  userId?: string; // acting user's username - absent for events with no resolvable session
+  userName?: string;
+  userRole?: string; // department at the time of the action
+  action: AuditAction;
+  module: string; // e.g. "Fleet & Vehicles", "Fuel Management" - reuses this app's own module names
+  entityType?: string; // e.g. "Vehicle", "Fuel Entry"
+  entityId?: string;
+  description: string;
+  oldData?: string; // JSON string, already redacted before storage - see db/auditRedact.ts
+  newData?: string; // JSON string, already redacted before storage
+  ipAddress?: string;
+  userAgent?: string;
+}
+
 

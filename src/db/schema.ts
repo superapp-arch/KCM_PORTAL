@@ -1,4 +1,4 @@
-import { pgTable, serial, text, bigint } from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, bigint, index } from 'drizzle-orm/pg-core';
 
 // Users table for application authentication and authorization
 export const users = pgTable('users', {
@@ -316,5 +316,38 @@ export const toolsChecklistRecords = pgTable('tools_checklist_records', {
   regNo: text('reg_no'),
   data: text('data').notNull(), // JSON string representing the full ToolsChecklistRecord object
 });
+
+// Audit Trail - security/business event log (see AuditLog in types.ts).
+// Deliberately NOT the id+data-JSON-blob shape every other table above uses:
+// audit logs need real server-side filtering/sorting/pagination (date range,
+// user, module, action, entity type - see getAuditLogs in service.ts) and are
+// expected to grow large and never be pruned, so plain typed/indexed columns
+// are used instead of loading a JSON blob table into memory to filter in JS.
+// oldData/newData are still JSON-string snapshots (already redacted before
+// insert - see auditRedact.ts) since their shape varies per module.
+// createdAt is the IST "YYYY-MM-DD HH:mm:ss" string istTimestamp() already
+// produces (see auth/time.ts) - it sorts correctly as plain text, so no new
+// timestamp convention is introduced just for this table.
+export const auditLogs = pgTable('audit_logs', {
+  id: text('id').primaryKey(),
+  createdAt: text('created_at').notNull(),
+  userId: text('user_id'), // acting user's username - null for events with no resolvable session (e.g. a failed login for an unrecognized account)
+  userName: text('user_name'),
+  userRole: text('user_role'), // department at the time of the action
+  action: text('action').notNull(),
+  module: text('module').notNull(),
+  entityType: text('entity_type'),
+  entityId: text('entity_id'),
+  description: text('description').notNull(),
+  oldData: text('old_data'), // redacted JSON snapshot, or null
+  newData: text('new_data'), // redacted JSON snapshot, or null
+  ipAddress: text('ip_address'),
+  userAgent: text('user_agent'),
+}, (table) => ({
+  createdAtIdx: index('audit_logs_created_at_idx').on(table.createdAt),
+  userIdIdx: index('audit_logs_user_id_idx').on(table.userId),
+  moduleIdx: index('audit_logs_module_idx').on(table.module),
+  actionIdx: index('audit_logs_action_idx').on(table.action),
+}));
 
 

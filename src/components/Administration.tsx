@@ -35,6 +35,7 @@ import Billing from './Billing';
 import PettyCash from './PettyCash';
 import Maintenance from './Maintenance';
 import Reports from './Reports';
+import AuditTrail from './AuditTrail';
 import Accounts from './Accounts';
 import HR from './HR';
 import WarehouseDetails from './WarehouseDetails';
@@ -49,7 +50,7 @@ import {
   LogOut, ShieldAlert, FileSpreadsheet, Fuel, FileText, Landmark,
   Settings, DollarSign, Contact, Bell, Mail, RefreshCw, CheckCircle, Clock,
   KeyRound, Cpu, Terminal, Copy, Check, Eye, EyeOff, Warehouse, Gauge, X,
-  Truck, Building2, HandCoins, Menu, BarChart3
+  Truck, Building2, HandCoins, Menu, BarChart3, History
 } from 'lucide-react';
 
 // Driver Details module gate - mirrors server.ts's DRIVER_LOCATION_SCOPES
@@ -475,6 +476,12 @@ export default function Administration({
     // matches 'reports', so this is never reachable by any other role. This
     // now surfaces Payroll/salary data, so keep it that way.
     { id: 'reports', label: 'Reports & Analytics', icon: BarChart3, iconColor: 'text-violet-400', active: 'bg-gradient-to-r from-violet-500/20 to-purple-500/20 text-violet-300 border-l-4 border-violet-500', visible: hasAccess('reports') },
+    // Super Admin / Principal only, same reasoning as Reports & Analytics
+    // above - hasAccess('audit') has no dedicated branch, so it only ever
+    // resolves true via the department === 'super_admin' check at the top
+    // of hasAccess(). Server-side, /api/audit-logs independently re-checks
+    // this on every request (see server.ts's requireAuditAccess).
+    { id: 'audit', label: 'Audit Trail', icon: History, iconColor: 'text-rose-400', active: 'bg-gradient-to-r from-rose-500/20 to-pink-500/20 text-rose-300 border-l-4 border-rose-500', visible: hasAccess('audit') },
     { id: 'fleet', label: 'Fleet & Vehicles', icon: FileSpreadsheet, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fleet') },
     { id: 'fuel', label: 'Fuel Management', icon: Fuel, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fuel') },
     { id: 'mileage', label: 'Mileage Report', icon: Gauge, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('mileage') },
@@ -989,6 +996,10 @@ export default function Administration({
               employees={employees}
               warehouseEntries={warehouseEntries}
             />
+          )}
+
+          {activeTab === 'audit' && hasAccess('audit') && (
+            <AuditTrail user={user} />
           )}
 
           {activeTab === 'accounts' && hasAccess('accounts') && (

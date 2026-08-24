@@ -27,12 +27,18 @@ export default defineConfig({
   out: "./drizzle", // Output directory for migrations.
   dialect: "postgresql",
   schemaFilter: ["public"],
-  dbCredentials: {
+   dbCredentials: {
     host: sqlHost,
     user: user,
     password: password,
     database: sqlDbName,
     ssl: { rejectUnauthorized: false },
   },
+
+  migrations: {
+    table: "__drizzle_migrations",
+    schema: "public",
+  },
+
   verbose: true,
 });

@@ -61,7 +61,8 @@ import {
   TireBrand,
   TireRecord,
   BatteryRecord,
-  ToolsChecklistRecord
+  ToolsChecklistRecord,
+  AuditAction
 } from './src/types.ts';
 import {
   seedDatabase,
@@ -187,7 +188,10 @@ import {
   deleteVehicleLoan,
   getBusinessLoans,
   saveBusinessLoan,
-  deleteBusinessLoan
+  deleteBusinessLoan,
+  createAuditLog,
+  getAuditLogs,
+  getAuditLogFilterOptions
 } from './src/db/service.ts';
 
 // Parses "DD.MM.YYYY" or "YYYY-MM-DD" expiry strings used across fleet records.
@@ -1710,9 +1714,28 @@ async function startServer() {
           read: false
         };
         await saveNotification(secNotif);
+
+        await createAuditLog({
+          usernameOverride: matchedUser?.username || cleanLoginId,
+          action: 'ACCESS_DENIED',
+          module: 'Authentication',
+          entityType: 'Login',
+          description: reason,
+          ipAddress: req.ip || '127.0.0.1',
+          userAgent: req.headers['user-agent']
+        });
       };
 
       if (!matchedUser) {
+        await createAuditLog({
+          usernameOverride: cleanLoginId,
+          action: 'ACCESS_DENIED',
+          module: 'Authentication',
+          entityType: 'Login',
+          description: `Login attempt for unrecognized account "${cleanLoginId}"`,
+          ipAddress: req.ip || '127.0.0.1',
+          userAgent: req.headers['user-agent']
+        });
         return res.status(401).json({ success: false, error: 'Account with this email or username not found.' });
       }
 
@@ -1734,6 +1757,15 @@ async function startServer() {
           email: matchedUser.email || undefined
         };
         const token = await createSession(userSession);
+        await createAuditLog({
+          user: userSession,
+          action: 'LOGIN',
+          module: 'Authentication',
+          entityType: 'Login',
+          description: `${userSession.name} (${userSession.username}) logged in`,
+          ipAddress: req.ip || '127.0.0.1',
+          userAgent: req.headers['user-agent']
+        });
         return res.json({ success: true, user: userSession, token });
       }
 
@@ -1751,6 +1783,15 @@ async function startServer() {
         email: matchedUser.email || undefined
       };
       const token = await createSession(userSession);
+      await createAuditLog({
+        user: userSession,
+        action: 'LOGIN',
+        module: 'Authentication',
+        entityType: 'Login',
+        description: `${userSession.name} (${userSession.username}) logged in (OTP-verified)`,
+        ipAddress: req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent']
+      });
       return res.json({ success: true, user: userSession, token });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -1821,6 +1862,18 @@ async function startServer() {
       }
 
       await updateUserPassword(cleanEmail, cleanPass);
+      const usersList = await getUsersWithFallback();
+      const resetUser = usersList.find((u: any) => (u.email || '').toLowerCase() === cleanEmail);
+      await createAuditLog({
+        usernameOverride: resetUser?.username || cleanEmail,
+        action: 'PASSWORD_CHANGE',
+        module: 'Authentication',
+        entityType: 'User',
+        entityId: resetUser?.username,
+        description: `Password reset via Forgot Password for "${resetUser?.username || cleanEmail}"`,
+        ipAddress: req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent']
+      });
       return res.json({ success: true, message: 'Password has been reset successfully. You can now login.' });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -1850,6 +1903,16 @@ async function startServer() {
         }
 
         await updateUserPassword(userObj.email || '', newPassword);
+        await createAuditLog({
+          user: sessionUser,
+          action: 'PASSWORD_CHANGE',
+          module: 'Authentication',
+          entityType: 'User',
+          entityId: sessionUser.username,
+          description: `${sessionUser.name} (${sessionUser.username}) changed their own password`,
+          ipAddress: req.ip || '127.0.0.1',
+          userAgent: req.headers['user-agent']
+        });
         return res.json({ success: true, message: 'Password changed successfully and persisted.' });
       } else {
         return res.status(404).json({ success: false, error: 'User account not found.' });
@@ -1861,7 +1924,20 @@ async function startServer() {
 
   // Logout endpoint - invalidates only this client's own token
   app.post('/api/logout', async (req, res) => {
-    await destroySession(extractBearerToken(req.headers.authorization));
+    const token = extractBearerToken(req.headers.authorization);
+    const sessionUser = await getSessionUser(token);
+    await destroySession(token);
+    if (sessionUser) {
+      await createAuditLog({
+        user: sessionUser,
+        action: 'LOGOUT',
+        module: 'Authentication',
+        entityType: 'Login',
+        description: `${sessionUser.name} (${sessionUser.username}) logged out`,
+        ipAddress: req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent']
+      });
+    }
     res.json({ success: true });
   });
 
@@ -1878,10 +1954,11 @@ async function startServer() {
   // Save / Update vehicle
   app.post('/api/fleet', async (req, res) => {
     try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const updatedVehicle: Vehicle = req.body;
       const vehiclesList = await getVehicles();
       const index = vehiclesList.findIndex((v: Vehicle) => v['Reg. No.'] === updatedVehicle['Reg. No.'] || v.regNo === updatedVehicle.regNo || v.id === updatedVehicle.id);
-      
+
       let newSi = vehiclesList.length + 1;
       if (index !== -1) {
         newSi = vehiclesList[index]['SI No'] || newSi;
@@ -1893,6 +1970,20 @@ async function startServer() {
       // Refresh compliance notifications and notify Super Admin + Vehicle Data Manager
       await checkAndNotifyComplianceAlerts(finalVehicle);
 
+      const regNoLabel = finalVehicle['Reg. No.'] || finalVehicle.regNo || finalVehicle.id;
+      await createAuditLog({
+        user: sessionUser,
+        action: index !== -1 ? 'UPDATE' : 'CREATE',
+        module: 'Fleet & Vehicles',
+        entityType: 'Vehicle',
+        entityId: String(finalVehicle.id || regNoLabel || ''),
+        description: `${index !== -1 ? 'Updated' : 'Created'} vehicle ${regNoLabel}`,
+        oldData: index !== -1 ? vehiclesList[index] : undefined,
+        newData: finalVehicle,
+        ipAddress: req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent']
+      });
+
       res.json({ success: true, vehicles: result });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1901,8 +1992,21 @@ async function startServer() {
 
   app.delete('/api/fleet/:id', async (req, res) => {
     try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const { id } = req.params;
+      const existing = (await getVehicles()).find((v: Vehicle) => v.id === id || v['Reg. No.'] === id || v.regNo === id);
       const result = await deleteVehicle(id);
+      await createAuditLog({
+        user: sessionUser,
+        action: 'DELETE',
+        module: 'Fleet & Vehicles',
+        entityType: 'Vehicle',
+        entityId: id,
+        description: `Deleted vehicle ${existing?.['Reg. No.'] || existing?.regNo || id}`,
+        oldData: existing,
+        ipAddress: req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent']
+      });
       res.json({ success: true, vehicles: result });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2137,7 +2241,21 @@ async function startServer() {
       if (findDuplicateFuelIndentNumber(allLogs, req.body?.indentNumber, req.body || {})) {
         return res.status(409).json({ error: `Indent No. ${req.body.indentNumber} already exists in the ${req.body?.bunkOrCard === 'Card' ? 'Card' : 'Bunk'} sequence.` });
       }
-      const result = await saveFuelLog({ ...req.body, enteredBy: sessionUser?.username });
+      // Pre-generated here (same fallback saveFuelLog itself would apply) just
+      // so the id is known for the audit record below - no behavior change.
+      const newId = req.body?.id || String(Date.now());
+      const result = await saveFuelLog({ ...req.body, id: newId, enteredBy: sessionUser?.username });
+      await createAuditLog({
+        user: sessionUser,
+        action: 'CREATE',
+        module: 'Fuel Management',
+        entityType: 'Fuel Entry',
+        entityId: newId,
+        description: `Created fuel entry ${req.body?.indentNumber || newId}`,
+        newData: { ...req.body, id: newId },
+        ipAddress: req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent']
+      });
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
@@ -2152,6 +2270,18 @@ async function startServer() {
         return res.status(409).json({ error: `Indent No. ${req.body.indentNumber} already exists in the ${req.body?.bunkOrCard === 'Card' ? 'Card' : 'Bunk'} sequence.` });
       }
       const result = await saveFuelLog({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
+      await createAuditLog({
+        user: sessionUser,
+        action: 'UPDATE',
+        module: 'Fuel Management',
+        entityType: 'Fuel Entry',
+        entityId: req.params.id,
+        description: `Updated fuel entry ${req.body?.indentNumber || existing?.indentNumber || req.params.id}`,
+        oldData: existing,
+        newData: { ...req.body, id: req.params.id },
+        ipAddress: req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent']
+      });
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
@@ -2179,6 +2309,17 @@ async function startServer() {
       // immediately, same as Petty Cash's Entry No (see
       // renumberFuelIndentSequence).
       await renumberFuelIndentSequence();
+      await createAuditLog({
+        user: sessionUser,
+        action: 'DELETE',
+        module: 'Fuel Management',
+        entityType: 'Fuel Entry',
+        entityId: req.params.id,
+        description: `Deleted fuel entry ${existing?.indentNumber || req.params.id}`,
+        oldData: existing,
+        ipAddress: req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent']
+      });
       const result = await getFuelLogs();
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -2188,13 +2329,44 @@ async function startServer() {
     try { res.json(await getBillingInvoices()); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/billing', async (req, res) => {
-    try { res.json({ success: true, data: await saveBillingInvoice(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const newId = req.body?.id || String(Date.now());
+      const data = await saveBillingInvoice({ ...req.body, id: newId });
+      await createAuditLog({
+        user: sessionUser, action: 'CREATE', module: 'Billing', entityType: 'Invoice', entityId: newId,
+        description: `Created invoice ${req.body?.invoiceNo || newId}`, newData: { ...req.body, id: newId },
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
+      res.json({ success: true, data });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/billing/:id', async (req, res) => {
-    try { res.json({ success: true, data: await saveBillingInvoice({ ...req.body, id: req.params.id }) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getBillingInvoices()).find(i => i.id === req.params.id);
+      const data = await saveBillingInvoice({ ...req.body, id: req.params.id });
+      await createAuditLog({
+        user: sessionUser, action: 'UPDATE', module: 'Billing', entityType: 'Invoice', entityId: req.params.id,
+        description: `Updated invoice ${req.body?.invoiceNo || existing?.invoiceNo || req.params.id}`,
+        oldData: existing, newData: { ...req.body, id: req.params.id },
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
+      res.json({ success: true, data });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/billing/:id', async (req, res) => {
-    try { res.json({ success: true, data: await deleteBillingInvoice(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getBillingInvoices()).find(i => i.id === req.params.id);
+      const data = await deleteBillingInvoice(req.params.id);
+      await createAuditLog({
+        user: sessionUser, action: 'DELETE', module: 'Billing', entityType: 'Invoice', entityId: req.params.id,
+        description: `Deleted invoice ${existing?.invoiceNo || req.params.id}`, oldData: existing,
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
+      res.json({ success: true, data });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   // Petty Cash (vouchers, Market POD, Amount Received advances) is restricted
@@ -2220,7 +2392,13 @@ async function startServer() {
         return res.status(409).json({ error: `Entry No. ${entryNo} already exists.` });
       }
       if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Petty cash entry date cannot be in the future.' });
-      const result = await savePettyCashVoucher({ ...req.body, entryNo, enteredBy: sessionUser?.username });
+      const newId = req.body?.id || String(Date.now());
+      const result = await savePettyCashVoucher({ ...req.body, id: newId, entryNo, enteredBy: sessionUser?.username });
+      await createAuditLog({
+        user: sessionUser, action: 'CREATE', module: 'Petty Cash', entityType: 'Petty Cash Entry', entityId: newId,
+        description: `Created petty cash entry ${entryNo}`, newData: { ...req.body, id: newId, entryNo },
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
@@ -2235,6 +2413,12 @@ async function startServer() {
       }
       if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Petty cash entry date cannot be in the future.' });
       const result = await savePettyCashVoucher({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
+      await createAuditLog({
+        user: sessionUser, action: 'UPDATE', module: 'Petty Cash', entityType: 'Petty Cash Entry', entityId: req.params.id,
+        description: `Updated petty cash entry ${req.body?.entryNo || existing?.entryNo || req.params.id}`,
+        oldData: existing, newData: { ...req.body, id: req.params.id },
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
@@ -2248,6 +2432,11 @@ async function startServer() {
       // immediately rather than leaving a permanent hole (see
       // renumberPettyCashSequence).
       await renumberPettyCashSequence();
+      await createAuditLog({
+        user: sessionUser, action: 'DELETE', module: 'Petty Cash', entityType: 'Petty Cash Entry', entityId: req.params.id,
+        description: `Deleted petty cash entry ${existing?.entryNo || req.params.id}`, oldData: existing,
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
       const result = await getPettyCashVouchers();
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -2970,8 +3159,23 @@ async function startServer() {
 
   app.post('/api/warehouse', async (req, res) => {
     try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const entry: WarehouseEntry = req.body;
+      const existing = entry.id ? (await getWarehouseEntries()).find(e => e.id === entry.id) : undefined;
       const result = await saveWarehouseEntry(entry);
+      const label = `${entry.vehicleNumber || ''} (${entry.date || ''})`.trim();
+      await createAuditLog({
+        user: sessionUser,
+        action: existing ? 'UPDATE' : 'CREATE',
+        module: 'Warehouse Details',
+        entityType: 'Warehouse Deployment',
+        entityId: entry.id || existing?.id,
+        description: `${existing ? 'Updated' : 'Created'} warehouse deployment ${label}`,
+        oldData: existing,
+        newData: entry,
+        ipAddress: req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent']
+      });
       res.json({ success: true, data: result });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2980,8 +3184,21 @@ async function startServer() {
 
   app.delete('/api/warehouse/:id', async (req, res) => {
     try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const { id } = req.params;
+      const existing = (await getWarehouseEntries()).find(e => e.id === id);
       const result = await deleteWarehouseEntry(id);
+      await createAuditLog({
+        user: sessionUser,
+        action: 'DELETE',
+        module: 'Warehouse Details',
+        entityType: 'Warehouse Deployment',
+        entityId: id,
+        description: `Deleted warehouse deployment ${existing?.vehicleNumber || id} (${existing?.date || ''})`,
+        oldData: existing,
+        ipAddress: req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent']
+      });
       res.json({ success: true, data: result });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -3211,7 +3428,13 @@ async function startServer() {
       if (!canWriteDriverLocation(entry.location, sessionUser)) {
         return res.status(403).json({ error: 'You cannot add a driver in this location.' });
       }
-      const result = await saveDriverEmployee(entry);
+      const newId = entry.id || String(Date.now());
+      const result = await saveDriverEmployee({ ...entry, id: newId });
+      await createAuditLog({
+        user: sessionUser, action: 'CREATE', module: 'Driver Details', entityType: 'Driver', entityId: newId,
+        description: `Created driver ${entry.name || newId} (${newId})`, newData: { ...entry, id: newId },
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
       const allowed = getAllowedDriverViewLocations(sessionUser);
       res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => allowed.includes(d.location)) });
     } catch (err: any) {
@@ -3228,6 +3451,12 @@ async function startServer() {
         return res.status(403).json({ error: 'You cannot modify this driver.' });
       }
       const result = await saveDriverEmployee({ ...req.body, id: req.params.id });
+      await createAuditLog({
+        user: sessionUser, action: 'UPDATE', module: 'Driver Details', entityType: 'Driver', entityId: req.params.id,
+        description: `Updated driver ${req.body?.name || existing.name || req.params.id} (${req.params.id})`,
+        oldData: existing, newData: { ...req.body, id: req.params.id },
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
       const allowed = getAllowedDriverViewLocations(sessionUser);
       res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => allowed.includes(d.location)) });
     } catch (err: any) {
@@ -3243,6 +3472,11 @@ async function startServer() {
         return res.status(403).json({ error: 'You cannot delete this driver.' });
       }
       const result = await deleteDriverEmployee(req.params.id);
+      await createAuditLog({
+        user: sessionUser, action: 'DELETE', module: 'Driver Details', entityType: 'Driver', entityId: req.params.id,
+        description: `Deleted driver ${existing.name || req.params.id} (${req.params.id})`, oldData: existing,
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
       const allowed = getAllowedDriverViewLocations(sessionUser);
       res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => allowed.includes(d.location)) });
     } catch (err: any) {
@@ -3481,6 +3715,72 @@ async function startServer() {
   app.delete('/api/business-loans/:id', async (req, res) => {
     try {
       res.json({ success: true, data: await deleteBusinessLoan(req.params.id) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Audit Trail - read-only, Super Admin only (Principal's own account is
+  // department 'super_admin' too - see src/db/service.ts's DEFAULT_USERS
+  // "Super Admin Principal" seed row - so this single department check
+  // already covers both, same as every other "Super Admin / Principal only"
+  // gate in this app, e.g. Reports.tsx's isSuperAdmin). There is
+  // deliberately no create/update/delete route here - audit records are
+  // only ever written by createAuditLog() from trusted server-side code
+  // above, never accepted from a client request body.
+  const requireAuditAccess = async (req: express.Request, res: express.Response) => {
+    const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+    if (!sessionUser || sessionUser.department !== 'super_admin') {
+      await createAuditLog({
+        user: sessionUser,
+        usernameOverride: sessionUser ? undefined : 'unauthenticated',
+        action: 'ACCESS_DENIED',
+        module: 'Administration',
+        entityType: 'Audit Trail',
+        description: sessionUser
+          ? `${sessionUser.name} (${sessionUser.username}) attempted to access Audit Trail without permission`
+          : 'Unauthenticated request attempted to access Audit Trail',
+        ipAddress: req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent']
+      });
+      res.status(403).json({ error: 'Access denied. Audit Trail is restricted to Super Admin.' });
+      return null;
+    }
+    return sessionUser;
+  };
+
+  app.get('/api/audit-logs', async (req, res) => {
+    try {
+      const sessionUser = await requireAuditAccess(req, res);
+      if (!sessionUser) return;
+
+      const { page, pageSize, sortDir, dateFrom, dateTo, userId, userRole, module, action, entityType, q } = req.query;
+      const result = await getAuditLogs({
+        page: page ? Number(page) : undefined,
+        pageSize: pageSize ? Number(pageSize) : undefined,
+        sortDir: sortDir === 'asc' ? 'asc' : 'desc',
+        dateFrom: typeof dateFrom === 'string' && dateFrom ? dateFrom : undefined,
+        dateTo: typeof dateTo === 'string' && dateTo ? dateTo : undefined,
+        userId: typeof userId === 'string' && userId ? userId : undefined,
+        userRole: typeof userRole === 'string' && userRole ? userRole : undefined,
+        module: typeof module === 'string' && module ? module : undefined,
+        action: typeof action === 'string' && action ? action : undefined,
+        entityType: typeof entityType === 'string' && entityType ? entityType : undefined,
+        q: typeof q === 'string' && q ? q : undefined,
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Distinct User/Module/Action/Entity Type values actually present in the
+  // table, for the Audit Trail UI's filter dropdowns.
+  app.get('/api/audit-logs/filter-options', async (req, res) => {
+    try {
+      const sessionUser = await requireAuditAccess(req, res);
+      if (!sessionUser) return;
+      res.json(await getAuditLogFilterOptions());
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

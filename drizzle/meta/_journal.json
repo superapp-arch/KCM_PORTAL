@@ -8,6 +8,13 @@
       "when": 1784193445820,
       "tag": "0000_omniscient_harrier",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787548236127,
+      "tag": "0001_audit_logs",
+      "breakpoints": true
     }
   ]
 }

@@ -43,10 +43,13 @@ import {
   tireBrands,
   tireRecords,
   batteryRecords,
-  toolsChecklistRecords
+  toolsChecklistRecords,
+  auditLogs
 } from './schema.ts';
-import { eq, ne } from 'drizzle-orm';
+import { eq, ne, and, or, ilike, gte, lte, asc, desc, sql } from 'drizzle-orm';
 import { hashPassword, isHashed } from '../auth/password.ts';
+import { istTimestamp } from '../auth/time.ts';
+import { redactSensitive } from './auditRedact.ts';
 import {
   User,
   Vehicle,
@@ -91,7 +94,9 @@ import {
   TireBrand,
   TireRecord,
   BatteryRecord,
-  ToolsChecklistRecord
+  ToolsChecklistRecord,
+  AuditLog,
+  AuditAction
 } from '../types.ts';
 
 // Default Users Seed
@@ -2204,6 +2209,161 @@ export async function deleteBusinessLoan(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteBusinessLoan:", error);
     throw new Error("Failed to delete business loan.", { cause: error });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Audit Trail (see types.ts's AuditLog, db/schema.ts's auditLogs table,
+// db/auditRedact.ts's redactSensitive). This is the only place in the app
+// that ever writes to the audit_logs table - callers across server.ts pass
+// in whatever old/new object they have; redaction happens once, here, so no
+// call site can forget it.
+// ---------------------------------------------------------------------------
+
+export interface CreateAuditLogInput {
+  // The acting user, straight from getSessionUser() - null/undefined for an
+  // event with no resolvable session (e.g. a failed login for an
+  // unrecognized account). usernameOverride covers that case: the attempted
+  // login identifier, kept even though it never became a real session.
+  user?: { username?: string; name?: string; department?: string } | null;
+  usernameOverride?: string;
+  action: AuditAction;
+  module: string;
+  entityType?: string;
+  entityId?: string;
+  description: string;
+  oldData?: unknown; // raw object - redacted and JSON-stringified internally, never store pre-serialized
+  newData?: unknown;
+  ipAddress?: string;
+  userAgent?: string;
+}
+
+// Deliberately swallows its own errors (logged loudly via console.error, the
+// same visibility every other function here already gets) rather than
+// throwing - per the audit spec, a broken audit insert must never take down
+// the real business operation that triggered it (a fuel entry save
+// succeeding is more important than its own audit record succeeding). This
+// is the one function in this file that intentionally does NOT rethrow.
+export async function createAuditLog(input: CreateAuditLogInput): Promise<void> {
+  try {
+    const id = `AUD-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await db.insert(auditLogs).values({
+      id,
+      createdAt: istTimestamp(),
+      userId: input.user?.username || input.usernameOverride || null,
+      userName: input.user?.name || null,
+      userRole: input.user?.department || null,
+      action: input.action,
+      module: input.module,
+      entityType: input.entityType || null,
+      entityId: input.entityId || null,
+      description: input.description,
+      oldData: input.oldData !== undefined ? JSON.stringify(redactSensitive(input.oldData)) : null,
+      newData: input.newData !== undefined ? JSON.stringify(redactSensitive(input.newData)) : null,
+      ipAddress: input.ipAddress || null,
+      userAgent: input.userAgent || null,
+    });
+  } catch (error) {
+    console.error('[AUDIT LOG FAILURE] Failed to record audit event - the triggering operation still completed.', {
+      action: input.action, module: input.module, entityType: input.entityType, entityId: input.entityId, error
+    });
+  }
+}
+
+export interface AuditLogFilters {
+  page?: number; // 1-based
+  pageSize?: number; // capped at MAX_AUDIT_PAGE_SIZE regardless of what's requested
+  sortDir?: 'asc' | 'desc'; // defaults to 'desc' (newest first)
+  dateFrom?: string; // YYYY-MM-DD, inclusive
+  dateTo?: string; // YYYY-MM-DD, inclusive
+  userId?: string;
+  userRole?: string;
+  module?: string;
+  action?: string;
+  entityType?: string;
+  q?: string; // keyword search across description/userName/entityId
+}
+
+const DEFAULT_AUDIT_PAGE_SIZE = 25;
+const MAX_AUDIT_PAGE_SIZE = 2000; // export uses this ceiling too - see /api/audit-logs in server.ts
+
+// Server-side filtered + paginated audit log query - the audit table is
+// expected to grow large and is never pruned (see schema.ts's comment), so
+// this never loads the full table into memory the way most of this file's
+// other getX() functions do; every filter maps to a real indexed WHERE
+// clause instead.
+export async function getAuditLogs(filters: AuditLogFilters = {}): Promise<{ data: AuditLog[]; total: number }> {
+  try {
+    const conditions = [];
+    if (filters.dateFrom) conditions.push(gte(auditLogs.createdAt, `${filters.dateFrom} 00:00:00`));
+    if (filters.dateTo) conditions.push(lte(auditLogs.createdAt, `${filters.dateTo} 23:59:59`));
+    if (filters.userId) conditions.push(eq(auditLogs.userId, filters.userId));
+    if (filters.userRole) conditions.push(eq(auditLogs.userRole, filters.userRole));
+    if (filters.module) conditions.push(eq(auditLogs.module, filters.module));
+    if (filters.action) conditions.push(eq(auditLogs.action, filters.action));
+    if (filters.entityType) conditions.push(eq(auditLogs.entityType, filters.entityType));
+    if (filters.q && filters.q.trim()) {
+      const like = `%${filters.q.trim()}%`;
+      conditions.push(or(ilike(auditLogs.description, like), ilike(auditLogs.userName, like), ilike(auditLogs.entityId, like)));
+    }
+    const whereClause = conditions.length ? and(...conditions) : undefined;
+
+    const pageSize = Math.min(Math.max(Math.floor(filters.pageSize || DEFAULT_AUDIT_PAGE_SIZE), 1), MAX_AUDIT_PAGE_SIZE);
+    const page = Math.max(Math.floor(filters.page || 1), 1);
+    const offset = (page - 1) * pageSize;
+    const orderFn = filters.sortDir === 'asc' ? asc : desc;
+
+    let rowsQuery = db.select().from(auditLogs).orderBy(orderFn(auditLogs.createdAt)).limit(pageSize).offset(offset);
+    let countQuery = db.select({ count: sql<number>`count(*)` }).from(auditLogs);
+    if (whereClause) {
+      rowsQuery = rowsQuery.where(whereClause) as typeof rowsQuery;
+      countQuery = countQuery.where(whereClause) as typeof countQuery;
+    }
+    const [rows, countRows] = await Promise.all([rowsQuery, countQuery]);
+
+    const data: AuditLog[] = rows.map(r => ({
+      id: r.id,
+      createdAt: r.createdAt,
+      userId: r.userId ?? undefined,
+      userName: r.userName ?? undefined,
+      userRole: r.userRole ?? undefined,
+      action: r.action as AuditAction,
+      module: r.module,
+      entityType: r.entityType ?? undefined,
+      entityId: r.entityId ?? undefined,
+      description: r.description,
+      oldData: r.oldData ?? undefined,
+      newData: r.newData ?? undefined,
+      ipAddress: r.ipAddress ?? undefined,
+      userAgent: r.userAgent ?? undefined,
+    }));
+    return { data, total: Number(countRows[0]?.count || 0) };
+  } catch (error) {
+    console.error("Database query failed in getAuditLogs:", error);
+    throw new Error("Failed to retrieve audit logs.", { cause: error });
+  }
+}
+
+// Distinct values actually present in the table, for the Audit Trail UI's
+// filter dropdowns (User/Module/Action/Entity Type) - cheap indexed
+// DISTINCT scans, not a full-table load.
+export async function getAuditLogFilterOptions(): Promise<{ users: { userId: string; userName: string }[]; modules: string[]; actions: string[]; entityTypes: string[] }> {
+  try {
+    const [userRows, moduleRows, actionRows, entityTypeRows] = await Promise.all([
+      db.selectDistinct({ userId: auditLogs.userId, userName: auditLogs.userName }).from(auditLogs),
+      db.selectDistinct({ module: auditLogs.module }).from(auditLogs),
+      db.selectDistinct({ action: auditLogs.action }).from(auditLogs),
+      db.selectDistinct({ entityType: auditLogs.entityType }).from(auditLogs),
+    ]);
+    return {
+      users: userRows.filter(r => r.userId).map(r => ({ userId: r.userId as string, userName: r.userName || (r.userId as string) })),
+      modules: moduleRows.map(r => r.module).filter(Boolean).sort(),
+      actions: actionRows.map(r => r.action).filter(Boolean).sort(),
+      entityTypes: entityTypeRows.map(r => r.entityType).filter((v): v is string => !!v).sort(),
+    };
+  } catch (error) {
+    console.error("Database query failed in getAuditLogFilterOptions:", error);
+    throw new Error("Failed to retrieve audit log filter options.", { cause: error });
   }
 }
 
