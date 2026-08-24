@@ -64,7 +64,8 @@ const DRIVER_ACCESS_EMAILS = [
   'hemanth@kcmlogistics.in',
   'vinod@kcmlogistics.in',
   'bhagya@kcmlogistics.in',
-  'divya@kcmlogistics.in'
+  'divya@kcmlogistics.in',
+  'ln.chandana@kcmlogistics.in'
 ];
 
 // Petty Cash's 3 logins - mirrors server.ts's PETTY_CASH_ACCESS_EMAILS
@@ -416,7 +417,12 @@ export default function Administration({
     if (tabName === 'fuel' && FUEL_RQ_ID_ONLY_EMAILS.includes(user.email || '')) return true;
     if (tabName === 'fleet' && (user.department === 'vehicle_manager' || user.email === 'bhagya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in')) return true;
     if (tabName === 'billing' && (user.department === 'billing' || user.email === 'bhagya@kcmlogistics.in')) return true;
-    if (tabName === 'pettycash' && (user.department === 'petty_cash' || PETTY_CASH_ACCESS_EMAILS.includes(user.email || ''))) return true;
+    // Rakshina (finance@kcmlogistics.in) gets full Petty Cash access - not
+    // one of the 3 handler logins above, an Accounts & Finance oversight
+    // role instead (see PettyCash.tsx's own isSuperAdmin, which already
+    // treats her the same as Super Admin for full cross-handler visibility
+    // + manage rights, and server.ts's PETTY_CASH_FULL_VIEW_EMAILS).
+    if (tabName === 'pettycash' && (user.department === 'petty_cash' || PETTY_CASH_ACCESS_EMAILS.includes(user.email || '') || user.email === 'finance@kcmlogistics.in')) return true;
     if (tabName === 'maintenance' && user.department === 'maintenance') return true;
     if (tabName === 'accounts' && user.department === 'accounts_finance') return true;
     if (tabName === 'hr' && user.email === 'bhagya@kcmlogistics.in') return true;

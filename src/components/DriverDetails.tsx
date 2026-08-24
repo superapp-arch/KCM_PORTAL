@@ -33,7 +33,7 @@ const DRIVER_WRITE_LOCATION_SCOPES: Record<string, DriverLocationCategory[]> = {
 // Full read+write everywhere - mirrors server.ts's DRIVER_ALL_LOCATIONS_EMAILS.
 // Note Vinod is deliberately NOT here: he can view every location (server
 // already sends him every driver) but only write within his scope above.
-const DRIVER_ALL_LOCATIONS_EMAILS = ['bhagya@kcmlogistics.in', 'divya@kcmlogistics.in'];
+const DRIVER_ALL_LOCATIONS_EMAILS = ['bhagya@kcmlogistics.in', 'divya@kcmlogistics.in', 'ln.chandana@kcmlogistics.in'];
 
 export default function DriverDetails({ user, drivers, vehicles, onAddDriver, onUpdateDriver, onDeleteDriver }: DriverDetailsProps) {
   const [moduleTab, setModuleTab] = useState<ModuleTab>('salary');

@@ -176,7 +176,15 @@ export default function PettyCash({
   onAddPettyCashAdvance,
   onDeletePettyCashAdvance
 }: PettyCashProps) {
-  const isSuperAdmin = user.department === 'super_admin';
+  // Rakshina (Accounts & Finance, finance@kcmlogistics.in) gets the same
+  // full cross-handler visibility + manage rights as Super Admin here - an
+  // oversight/reconciliation role, not one of the 3 Petty Cash handlers who
+  // only ever see their own rows. Every "isSuperAdmin" check in this file is
+  // specifically about that full-view/manage capability (Entered By column,
+  // Per-Handler Breakdown, editing another handler's row, etc.), not general
+  // admin rights, so broadening this one flag is enough - mirrors
+  // server.ts's PETTY_CASH_FULL_VIEW_EMAILS exactly.
+  const isSuperAdmin = user.department === 'super_admin' || user.email === 'finance@kcmlogistics.in';
   const [activeTab, setActiveTab] = useState<'ledger' | 'summary' | 'marketpod'>('ledger');
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
 
