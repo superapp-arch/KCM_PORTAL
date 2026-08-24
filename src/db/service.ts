@@ -2111,12 +2111,21 @@ export async function saveDriverAttendanceRecord(record: DriverAttendance) {
     const complete = { ...record, id };
     const dataString = JSON.stringify(complete);
 
-    const existing = await db.select().from(driverAttendance).where(eq(driverAttendance.id, id));
-    if (existing.length > 0) {
-      await db.update(driverAttendance).set({ driverId: complete.driverId, data: dataString }).where(eq(driverAttendance.id, id));
-    } else {
-      await db.insert(driverAttendance).values({ id, driverId: complete.driverId, data: dataString });
-    }
+    await db
+      .insert(driverAttendance)
+      .values({
+        id,
+        driverId: complete.driverId,
+        data: dataString,
+      })
+      .onConflictDoUpdate({
+        target: driverAttendance.id,
+        set: {
+          driverId: complete.driverId,
+          data: dataString,
+        },
+      });
+
     return await getDriverAttendance();
   } catch (error) {
     console.error("Database action failed in saveDriverAttendanceRecord:", error);
