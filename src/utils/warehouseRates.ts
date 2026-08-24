@@ -100,7 +100,14 @@ export function computeWarehouseRates(inputs: WarehouseRateInputs): WarehouseRat
     : inputs.scheduledRate / workingDays;
   const baseRate = round2(Math.max(0, baseRateRaw));
   const fuelCost = round2(baseRate * (FUEL_COST_PERCENT / 100));
-  const extraKmAmount = round2(Math.max(0, inputs.addKm || 0) * (inputs.ratePerExtraKm || 0));
+  // Extra KM Amount is NOT clamped at 0 - for 12Hr, Add KM is itself allowed
+  // to be negative (this entry's KM Utilised came in under the month's daily
+  // average - see the live Add KM formula in WarehouseDetails.tsx), and that
+  // negative genuinely flows through as a credit here, verified against a
+  // real rate sheet: Add KM -17/-15 lined up with Extra KM Amount -286/-247
+  // at that vehicle's own ~16.41/km rate. A positive addKm (24Hr's "km run
+  // beyond the slab" sense) behaves exactly as before.
+  const extraKmAmount = round2((inputs.addKm || 0) * (inputs.ratePerExtraKm || 0));
   const extraHourAmount = round2(Math.max(0, inputs.addHour || 0) * (inputs.ratePerExtraHour || 0));
   const grandTotal = round2(
     baseRate + fuelCost + extraKmAmount + extraHourAmount +

@@ -33,7 +33,6 @@ import {
   adHocFromCities, adHocToCities
 } from '../utils/warehouseRateMatrix24hr';
 import { WAREHOUSE_LOCATIONS, WAREHOUSE_CITIES, cityForWarehouseName } from '../utils/warehouseLocations';
-import CloseMonthKmSlab from './warehouse/CloseMonthKmSlab';
 import RatesSummary from './warehouse/RatesSummary';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 
@@ -80,9 +79,6 @@ export default function WarehouseDetails({
   // Management/Mileage Report's own +Add Entry pattern), closed by default,
   // instead of sitting permanently open as a left-hand panel.
   const [showAddSidebar, setShowAddSidebar] = useState(false);
-  // 12Hr Km Slab is a whole-month budget, not per-entry - see
-  // components/warehouse/CloseMonthKmSlab.tsx.
-  const [showCloseMonthTool, setShowCloseMonthTool] = useState(false);
   // 'deployments' = the existing ledger/log view below, untouched. 'rates' =
   // the new read-only Rate Card summary (components/warehouse/RatesSummary.tsx).
   const [moduleTab, setModuleTab] = useState<'deployments' | 'rates'>('deployments');
@@ -223,6 +219,25 @@ export default function WarehouseDetails({
     }
   }, [matched24hrDedicatedRate, matchedReeferWalkesRate]);
 
+  // 12Hr Add KM (Extra KM) - Km Slab is a whole-month contracted KM budget,
+  // not a per-entry limit, so each entry's Add KM is its own KM Utilised
+  // against that month's average daily allowance (Km Slab / Working Days) -
+  // can come out negative on a lighter day (verified against a real rate
+  // sheet: 3000 slab / 31 working days = 96.77, matching entry after entry).
+  // "Working Days" here is exactly the Working Days value already resolved
+  // above for the Base Rate formula, entered as-is (no Sunday/holiday
+  // deduction logic layered on for this) - not a separate calendar-days
+  // calculation. Auto-fills live the moment Km Utilised/Km Slab/Working Days
+  // are known, no month-end step needed - but stays a plain editable field
+  // afterward, same "auto-fills, still overridable" pattern Opening KM
+  // already uses above (unlike Scheduled Rate, which locks read-only once matched).
+  useEffect(() => {
+    if (fixedHours === 12 && kmSlabNumber > 0 && workingDays > 0) {
+      setExtraKm(round2(kmUtilised - (kmSlabNumber / workingDays)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fixedHours, kmUtilised, kmSlabNumber, workingDays]);
+
   // Auto-calculated fields for edit modal
   const editKmUtilised = Math.max(0, editClosingKm - editOpeningKm);
   const editWorkingDaysAuto = computeAutoWorkingDays(editWorkingMonth, editDeductSundays, editHolidaysCount);
@@ -255,6 +270,16 @@ export default function WarehouseDetails({
       setEditVariableCostPerKm(editMatchedReeferWalkesRate.vc);
     }
   }, [editMatched24hrDedicatedRate, editMatchedReeferWalkesRate]);
+
+  // Same live 12Hr Add KM auto-fill as the Add Entry form above - see that
+  // effect's comment for the formula/reasoning.
+  useEffect(() => {
+    if (editFixedHours === 12 && editKmSlabNumber > 0 && editWorkingDays > 0) {
+      setEditExtraKm(round2(editKmUtilised - (editKmSlabNumber / editWorkingDays)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editFixedHours, editKmUtilised, editKmSlabNumber, editWorkingDays]);
+
   const editFinalBaseRate = Math.max(0, editBaseRate + editFuelCost);
 
   // 24Hr dedicated vehicles don't have a shift start/end - In Time/Closure
@@ -979,14 +1004,6 @@ export default function WarehouseDetails({
             {isImporting ? 'Importing...' : 'Import'}
           </button>
           <button
-            onClick={() => setShowCloseMonthTool(true)}
-            title="12Hr Km Slab is a whole-month KM budget per vehicle - total it up and apply any excess to Add KM"
-            className="bg-white border border-purple-200 hover:bg-purple-50 text-purple-800 font-bold text-xs py-2.5 px-4 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
-          >
-            <Calculator className="w-4 h-4" />
-            Close Month (12Hr)
-          </button>
-          <button
             onClick={() => setShowAddSidebar(true)}
             className="bg-gradient-to-r from-pink-600 to-purple-800 hover:from-pink-700 hover:to-purple-900 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
           >
@@ -996,10 +1013,6 @@ export default function WarehouseDetails({
           </div>
         </div>
       </div>
-
-      {showCloseMonthTool && (
-        <CloseMonthKmSlab entries={entries} onUpdateEntry={onUpdateEntry} onClose={() => setShowCloseMonthTool(false)} />
-      )}
 
       {/* Ledger - full width; Log New Warehouse Deployment lives in its own
           slide-out sidebar below (triggered by the button above), matching
@@ -1284,7 +1297,7 @@ export default function WarehouseDetails({
                 />
               </div>
               <div className="col-span-1">
-                <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide" title="km run beyond the KM Slab, e.g. slab 2000 + 100 run over = 100">Add KM</label>
+                <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide" title={fixedHours === 12 ? 'Auto = this entry\'s KM Utilised - (Km Slab / Working Days) - can go negative on a lighter day. Still editable by hand.' : 'km run beyond the KM Slab'}>Add KM</label>
                 <input
                   type="number"
                   placeholder="0"
@@ -2081,7 +2094,7 @@ export default function WarehouseDetails({
                   instead of the old separate OT Vehicle Yes/No field. */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
                 <div>
-                  <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1" title="km run beyond the KM Slab">Add KM</label>
+                  <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1" title={editFixedHours === 12 ? 'Auto = this entry\'s KM Utilised - (Km Slab / Working Days) - can go negative on a lighter day. Still editable by hand.' : 'km run beyond the KM Slab'}>Add KM</label>
                   <input
                     type="number"
                     value={editExtraKm}
