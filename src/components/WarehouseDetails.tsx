@@ -734,6 +734,7 @@ export default function WarehouseDetails({
     intime: 'inTime',
     closuretime: 'closureTime', closure: 'closureTime',
     contractperioddayshrs: 'hoursDaysAsPerContract', contractperiod: 'hoursDaysAsPerContract',
+    hourdayaspercontract: 'hoursDaysAsPerContract', hourdayascontract: 'hoursDaysAsPerContract',
     overtimevehicle: 'overtimeVehicle', ot: 'overtimeVehicle', otvehicle: 'overtimeVehicle',
     extrakm: 'extraKm', addkm: 'extraKm',
     baserate: 'baseRate',
@@ -751,18 +752,36 @@ export default function WarehouseDetails({
   };
 
   // Tolerant of an already-ISO date, dd.mm.yyyy/dd-mm-yyyy/dd/mm/yyyy (same
-  // formats DateInput.tsx's own normalizer accepts), or an Excel date
-  // serial number (sheet_to_json's raw:false + dateNF below normally
-  // formats these as text already, this is just a safety net).
+  // formats DateInput.tsx's own normalizer accepts), a month-name text date
+  // ("11 July 2026", "July 11, 2026", "11 Jul 2026" - seen from Google
+  // Sheets exports whose Date column is formatted as a month-name string,
+  // which has no numeric/ISO form at all once exported to CSV/XLSX), or an
+  // Excel date serial number (sheet_to_json's raw:false + dateNF below
+  // normally formats these as text already, this is just a safety net).
   const normalizeImportDate = (raw: string | number): string => {
     if (typeof raw === 'number') {
       const d = new Date(Math.round((raw - 25569) * 86400 * 1000));
       return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
     }
     const s = String(raw || '').trim();
+    if (!s) return '';
     if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
     const dmy = /^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/.exec(s);
     if (dmy) { const [, d, m, y] = dmy; return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`; }
+    // Only attempted when the string contains a letter (a month name) -
+    // JS's Date parser is otherwise ambiguous about numeric-only formats
+    // (e.g. would read "07/11/2026" as US-style MM/DD), which the explicit
+    // dd/mm/yyyy regex above already handles unambiguously.
+    if (/[a-zA-Z]/.test(s)) {
+      const parsed = new Date(s);
+      // Local getters, not toISOString() (which converts to UTC) - a
+      // month-name string like "11 July 2026" parses as local midnight, and
+      // for any timezone ahead of UTC (IST included, this app's own
+      // userbase) toISOString would silently shift the date back a day.
+      if (!isNaN(parsed.getTime())) {
+        return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+      }
+    }
     return '';
   };
 
