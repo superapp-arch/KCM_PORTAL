@@ -27,7 +27,9 @@ import { cityForWarehouseName } from './warehouseLocations';
 // 1. BLR Dedicated (24Hr) - effective 1st Feb.
 // ---------------------------------------------------------------------------
 
-const BLR_24HR_DEDICATED: Partial<Record<RateMatrixVehicleType, { fixed: number; variable: number }>> = {
+// Exported for the read-only Rates tab (components/warehouse/RatesSummary.tsx)
+// to enumerate directly, same reasoning as warehouseRateMatrix.ts's RATE_TABLES.
+export const BLR_24HR_DEDICATED: Partial<Record<RateMatrixVehicleType, { fixed: number; variable: number }>> = {
   '207': { fixed: 34837, variable: 11.58 }, // "Bolero/207" in the rate card
   '407': { fixed: 38504, variable: 13.51 },
   '14 FT': { fixed: 44004, variable: 15.44 },
@@ -51,10 +53,10 @@ export function lookup24hrDedicatedRate(warehouseName: string, vehicleType: stri
 //    1st July'26.
 // ---------------------------------------------------------------------------
 
-type ReeferWalkesKey = '14 FT Reefer' | '14 FT Walkes' | '207/V70 Walkes';
-type ReeferWalkesLocation = 'BLR' | 'Chennai' | 'HYD' | 'Vizag' | 'Goa';
+export type ReeferWalkesKey = '14 FT Reefer' | '14 FT Walkes' | '207/V70 Walkes';
+export type ReeferWalkesLocation = 'BLR' | 'Chennai' | 'HYD' | 'Vizag' | 'Goa';
 
-const REEFER_WALKES_TABLE: Record<ReeferWalkesLocation, Partial<Record<ReeferWalkesKey, { fc: number; vc: number }>>> = {
+export const REEFER_WALKES_TABLE: Record<ReeferWalkesLocation, Partial<Record<ReeferWalkesKey, { fc: number; vc: number }>>> = {
   BLR: { '14 FT Reefer': { fc: 76000, vc: 21 }, '14 FT Walkes': { fc: 70000, vc: 18 }, '207/V70 Walkes': { fc: 60000, vc: 13 } },
   Chennai: { '14 FT Reefer': { fc: 76000, vc: 25 }, '14 FT Walkes': { fc: 70000, vc: 19 }, '207/V70 Walkes': { fc: 60000, vc: 14 } },
   HYD: { '14 FT Reefer': { fc: 76000, vc: 23 }, '14 FT Walkes': { fc: 70000, vc: 21 }, '207/V70 Walkes': { fc: 60000, vc: 14 } },
@@ -116,6 +118,13 @@ export const ADHOC_ROUTES: AdHocRouteRow[] = [
   { from: 'Bangalore', to: 'Davanagere', rates: { 'Bolero(207)': 14475, '407': 16405, '14 FT': 18335, '17 FT': 20265, '20 FT': 22195, 'Hybrid Vehicle': 24356 } },
   { from: 'Bangalore', to: 'Shimoga', rates: { 'Bolero(207)': 15440, '407': 17370, '14 FT': 20265, '17 FT': 22195, '20 FT': 24125, 'Hybrid Vehicle': 26499 } },
   { from: 'Bangalore', to: 'Tumakuru', rates: { 'Bolero(207)': 5790, '407': 6755, '14 FT': 7720, '17 FT': 8685, '20 FT': 9650, 'Hybrid Vehicle': 0 } },
+  // Goa routes - 0 for Bolero/407/14 FT/17 FT means no rate configured for
+  // those vehicle types on these routes (see lookupAdHocRouteRate below),
+  // not a real ₹0 fare.
+  { from: 'Goa', to: 'Belgaum', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 15633, 'Hybrid Vehicle': 17500 } },
+  { from: 'Goa', to: 'Hubli', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 14958, 'Hybrid Vehicle': 16500 } },
+  { from: 'Goa', to: 'Hubli + Belgaum', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 17370, 'Hybrid Vehicle': 19500 } },
+  { from: 'Goa', to: 'Kholapur', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 22678, 'Hybrid Vehicle': 25200 } },
 ];
 
 export const adHocFromCities = (): string[] => Array.from(new Set(ADHOC_ROUTES.map(r => r.from)));
@@ -143,4 +152,40 @@ export function lookupAdHocRouteRate(from: string, to: string, vehicleType: stri
   if (!column) return null;
   const rate = route.rates[column];
   return rate > 0 ? rate : null;
+}
+
+// ---------------------------------------------------------------------------
+// 4. Ad-hoc Daily/Local rate table - the OTHER Ad-hoc pricing model,
+//    separate from the Route table above. A per-vehicle-type flat day rate
+//    (100 Kms/12 Hrs included) plus its own Extra Km/Extra Hr overage rates,
+//    for local Ad-hoc use with no fixed From/To route - BLR only so far,
+//    effective 1st Feb. Not yet surfaced as its own selector in the Add/Edit
+//    Entry form (only shown on the read-only Rates tab for now) - Ad-hoc
+//    there still only offers the Route table; wiring a Route vs Daily/Local
+//    choice into the live form is a separate follow-up.
+// ---------------------------------------------------------------------------
+
+export interface AdHocDailyRateRow {
+  dailyKms: number;
+  hrs: number;
+  rate: number;
+  extraKm: number;
+  extraHr: number;
+}
+
+export const BLR_ADHOC_DAILY_RATES: Partial<Record<RateMatrixVehicleType, AdHocDailyRateRow>> = {
+  'Tata Ace': { dailyKms: 100, hrs: 12, rate: 1737, extraKm: 8.7, extraHr: 87 },
+  '207': { dailyKms: 100, hrs: 12, rate: 1930, extraKm: 9.7, extraHr: 97 }, // "Bolero" in the rate card
+  '407': { dailyKms: 100, hrs: 12, rate: 2702, extraKm: 11.6, extraHr: 116 },
+  '14 FT': { dailyKms: 100, hrs: 12, rate: 3571, extraKm: 12.5, extraHr: 135 },
+  '17 FT': { dailyKms: 100, hrs: 12, rate: 3667, extraKm: 13.5, extraHr: 145 },
+  '20 FT': { dailyKms: 100, hrs: 12, rate: 4150, extraKm: 16.4, extraHr: 174 },
+};
+
+export function lookupAdHocDailyRate(warehouseName: string, vehicleType: string): AdHocDailyRateRow | null {
+  const group = rateGroupForWarehouseName(warehouseName);
+  if (!group || !group.startsWith('BLR')) return null;
+  const normType = normalizeRateMatrixVehicleType(vehicleType);
+  if (!normType) return null;
+  return BLR_ADHOC_DAILY_RATES[normType] ?? null;
 }

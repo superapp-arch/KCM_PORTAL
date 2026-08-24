@@ -34,6 +34,7 @@ import {
 } from '../utils/warehouseRateMatrix24hr';
 import { WAREHOUSE_LOCATIONS, WAREHOUSE_CITIES, cityForWarehouseName } from '../utils/warehouseLocations';
 import CloseMonthKmSlab from './warehouse/CloseMonthKmSlab';
+import RatesSummary from './warehouse/RatesSummary';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 
 // Suggestions only (not a locked list) for a vendor vehicle's Type field,
@@ -82,6 +83,9 @@ export default function WarehouseDetails({
   // 12Hr Km Slab is a whole-month budget, not per-entry - see
   // components/warehouse/CloseMonthKmSlab.tsx.
   const [showCloseMonthTool, setShowCloseMonthTool] = useState(false);
+  // 'deployments' = the existing ledger/log view below, untouched. 'rates' =
+  // the new read-only Rate Card summary (components/warehouse/RatesSummary.tsx).
+  const [moduleTab, setModuleTab] = useState<'deployments' | 'rates'>('deployments');
 
   // Form State for Adding New Entry
   const [date, setDate] = useState(new Date().toISOString().substring(0, 10));
@@ -855,6 +859,52 @@ export default function WarehouseDetails({
     }
   };
 
+  // Deployments/Rates switcher - shared between the early return below (Rates
+  // tab) and the main return's Header Widget (Deployments tab), so there's
+  // one definition instead of two copies drifting apart.
+  const moduleTabBar = (
+    <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-lg border border-slate-200 text-xs font-semibold w-fit">
+      {([
+        ['deployments', 'Deployments', Warehouse],
+        ['rates', 'Rates', Calculator],
+      ] as const).map(([key, label, Icon]) => (
+        <button key={key} onClick={() => setModuleTab(key)}
+          className={`px-3.5 py-1.5 rounded-md transition-all cursor-pointer flex items-center gap-1.5 ${
+            moduleTab === key ? 'bg-gradient-to-r from-pink-600 to-purple-700 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+          }`}>
+          <Icon className="w-3.5 h-3.5" /> {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  // Rates tab is a completely separate, much smaller return - safer than
+  // threading a conditional through the large Deployments JSX below (every
+  // hook above has already run unconditionally by this point, so an early
+  // return here doesn't violate the Rules of Hooks). See
+  // components/warehouse/RatesSummary.tsx for why this is read-only for now.
+  if (moduleTab === 'rates') {
+    return (
+      <div className="space-y-6" id="warehouse-details-root">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-pink-100/50 shadow-xs">
+          <div>
+            <h1 className="text-xl font-black text-slate-900 tracking-tight flex items-center gap-2.5">
+              <Warehouse className="text-pink-600 w-6 h-6" />
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-pink-600 to-purple-800">
+                Warehouse Operations Details
+              </span>
+            </h1>
+            <p className="text-xs text-slate-500 font-medium mt-1">
+              Every rate that drives Log Warehouse Deployment's auto-fills, in one place.
+            </p>
+          </div>
+          {moduleTabBar}
+        </div>
+        <RatesSummary />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6" id="warehouse-details-root">
       
@@ -880,7 +930,9 @@ export default function WarehouseDetails({
           </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
+        <div className="flex items-center gap-3 shrink-0 self-start sm:self-auto flex-wrap">
+          {moduleTabBar}
+          <div className="flex items-center gap-2">
           <button
             onClick={handleExportCSV}
             className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
@@ -922,6 +974,7 @@ export default function WarehouseDetails({
             <Plus className="w-4 h-4" />
             Log New Deployment
           </button>
+          </div>
         </div>
       </div>
 

@@ -46,8 +46,8 @@ export type RateMatrixKmSlab = typeof RATE_MATRIX_KM_SLABS[number];
 export const RATE_MATRIX_VEHICLE_TYPES = ['Tata Ace', '207', '407', '14 FT', '17 FT', '20 FT'] as const;
 export type RateMatrixVehicleType = typeof RATE_MATRIX_VEHICLE_TYPES[number];
 
-type RateRow = Record<RateMatrixKmSlab, number>;
-type RateTable = Partial<Record<RateMatrixVehicleType, RateRow>>;
+export type RateRow = Record<RateMatrixKmSlab, number>;
+export type RateTable = Partial<Record<RateMatrixVehicleType, RateRow>>;
 
 const BLR_TABLE: RateTable = {
   'Tata Ace': { 2000: 38378, 2500: 41186, 3000: 43994 },
@@ -85,12 +85,43 @@ const HYD_IM4_TABLE: RateTable = {
   '20 FT': { 2000: 101962, 2500: 106092, 3000: 113320 },
 };
 
-const RATE_TABLES: Record<RateTableKey, RateTable> = {
+// Exported (not just used internally by lookupScheduledRate below) so the
+// read-only Rates tab (components/warehouse/RatesSummary.tsx) can enumerate
+// every configured Vehicle Type x KM Slab combination per group, rather than
+// only ever resolving one cell at a time.
+export const RATE_TABLES: Record<RateTableKey, RateTable> = {
   blr: BLR_TABLE,
   ecomHyd: ECOM_HYD_TABLE,
   vizag: VIZAG_TABLE,
   hydIm4: HYD_IM4_TABLE,
 };
+
+// Extra Km/Extra Hr rates per Vehicle Type - unlike Scheduled Rate above,
+// these don't vary by KM Slab (same rate across the 2000/2500/3000 rows on
+// the source rate card). Only BLR's rate card has this data so far (HYD
+// etc. still pending) - RATES_SUMMARY in warehouseRatesSummary.ts reads this
+// for the read-only Rates tab; not yet wired into the Add/Edit Entry form's
+// own Rate/Extra KM and Rate/Extra Hour fields, which stay manually typed as
+// today until that's asked for.
+export interface ExtraRateRow { extraKm: number; extraHr: number }
+type ExtraRateTable = Partial<Record<RateMatrixVehicleType, ExtraRateRow>>;
+
+const BLR_EXTRA_RATES: ExtraRateTable = {
+  'Tata Ace': { extraKm: 8.69, extraHr: 87 },
+  '207': { extraKm: 9.65, extraHr: 97 },
+  '407': { extraKm: 11.58, extraHr: 116 },
+  '14 FT': { extraKm: 12.55, extraHr: 135 },
+  '17 FT': { extraKm: 13.51, extraHr: 145 },
+  '20 FT': { extraKm: 16.41, extraHr: 174 },
+};
+
+const EXTRA_RATE_TABLES: Partial<Record<RateTableKey, ExtraRateTable>> = {
+  blr: BLR_EXTRA_RATES,
+};
+
+export function lookupExtraRates(rateTableKey: RateTableKey, vehicleType: RateMatrixVehicleType): ExtraRateRow | null {
+  return EXTRA_RATE_TABLES[rateTableKey]?.[vehicleType] ?? null;
+}
 
 // Tolerant of the source sheets' own varied spellings ("Bolero/207",
 // "14ft/LPT", "19/20ft", "T407") as well as Fleet & Vehicles' canonical
