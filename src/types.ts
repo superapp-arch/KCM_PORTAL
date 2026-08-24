@@ -837,6 +837,19 @@ export interface WarehouseEntry {
   // for every other Deployment Type/Fixed Hrs combination.
   adHocFromCity?: string;
   adHocToCity?: string;
+
+  // 12Hr only - set on the ONE entry (this vehicle's chronologically last
+  // 12Hr entry that month) that received a Close Month KM Slab adjustment
+  // (see components/warehouse/CloseMonthKmSlab.tsx). Km Slab for 12Hr is the
+  // vehicle's whole-month contracted KM budget, not a per-entry limit - this
+  // records the cumulative total/excess as of the last time Close Month was
+  // run for this vehicle+month, so the tool can detect when that vehicle's
+  // entries for the month have since changed (stale) and need re-closing.
+  // Undefined on every entry that never received such an adjustment.
+  monthlyKmSlabMonth?: string; // YYYY-MM this closure covers
+  monthlyKmSlabTotalAtClose?: number; // sum of kmUtilised across the vehicle's 12Hr entries that month, as of closing
+  monthlyKmSlabExcessApplied?: number; // = max(0, total - slab) at closing time - what was written into extraKm
+  monthlyKmClosedAt?: string; // ISO timestamp Close Month was last (re-)run for this vehicle+month
 }
 
 export interface MileageReport {

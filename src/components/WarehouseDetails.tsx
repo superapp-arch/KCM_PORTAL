@@ -33,6 +33,7 @@ import {
   adHocFromCities, adHocToCities
 } from '../utils/warehouseRateMatrix24hr';
 import { WAREHOUSE_LOCATIONS, WAREHOUSE_CITIES, cityForWarehouseName } from '../utils/warehouseLocations';
+import CloseMonthKmSlab from './warehouse/CloseMonthKmSlab';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 
 // Suggestions only (not a locked list) for a vendor vehicle's Type field,
@@ -78,6 +79,9 @@ export default function WarehouseDetails({
   // Management/Mileage Report's own +Add Entry pattern), closed by default,
   // instead of sitting permanently open as a left-hand panel.
   const [showAddSidebar, setShowAddSidebar] = useState(false);
+  // 12Hr Km Slab is a whole-month budget, not per-entry - see
+  // components/warehouse/CloseMonthKmSlab.tsx.
+  const [showCloseMonthTool, setShowCloseMonthTool] = useState(false);
 
   // Form State for Adding New Entry
   const [date, setDate] = useState(new Date().toISOString().substring(0, 10));
@@ -248,6 +252,32 @@ export default function WarehouseDetails({
     }
   }, [editMatched24hrDedicatedRate, editMatchedReeferWalkesRate]);
   const editFinalBaseRate = Math.max(0, editBaseRate + editFuelCost);
+
+  // 24Hr dedicated vehicles don't have a shift start/end - In Time/Closure
+  // Time are forced to "0" and locked read-only while Fixed Hrs is 24; going
+  // back to 12Hr restores the normal editable defaults instead of leaving
+  // the auto-set "0" sitting there for the office to clear by hand.
+  useEffect(() => {
+    if (fixedHours === 24) {
+      setInTime('0');
+      setClosureTime('0');
+    } else if (inTime === '0' && closureTime === '0') {
+      setInTime('08:00');
+      setClosureTime('20:00');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fixedHours]);
+
+  useEffect(() => {
+    if (editFixedHours === 24) {
+      setEditInTime('0');
+      setEditClosureTime('0');
+    } else if (editInTime === '0' && editClosureTime === '0') {
+      setEditInTime('08:00');
+      setEditClosureTime('20:00');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editFixedHours]);
 
   // Trigger temporary toast notification
   const triggerNotif = (msg: string) => {
@@ -878,6 +908,14 @@ export default function WarehouseDetails({
             {isImporting ? 'Importing...' : 'Import'}
           </button>
           <button
+            onClick={() => setShowCloseMonthTool(true)}
+            title="12Hr Km Slab is a whole-month KM budget per vehicle - total it up and apply any excess to Add KM"
+            className="bg-white border border-purple-200 hover:bg-purple-50 text-purple-800 font-bold text-xs py-2.5 px-4 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
+          >
+            <Calculator className="w-4 h-4" />
+            Close Month (12Hr)
+          </button>
+          <button
             onClick={() => setShowAddSidebar(true)}
             className="bg-gradient-to-r from-pink-600 to-purple-800 hover:from-pink-700 hover:to-purple-900 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
           >
@@ -886,6 +924,10 @@ export default function WarehouseDetails({
           </button>
         </div>
       </div>
+
+      {showCloseMonthTool && (
+        <CloseMonthKmSlab entries={entries} onUpdateEntry={onUpdateEntry} onClose={() => setShowCloseMonthTool(false)} />
+      )}
 
       {/* Ledger - full width; Log New Warehouse Deployment lives in its own
           slide-out sidebar below (triggered by the button above), matching
@@ -1146,23 +1188,27 @@ export default function WarehouseDetails({
                 any entry that already has one). */}
             <div className="grid grid-cols-4 gap-1.5">
               <div className="col-span-1">
-                <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">In Time</label>
+                <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">In Time{fixedHours === 24 ? ' (N/A)' : ''}</label>
                 <input
                   type="text"
                   placeholder="08:00"
                   value={inTime}
+                  readOnly={fixedHours === 24}
                   onChange={(e) => setInTime(e.target.value)}
-                  className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1 text-center font-mono focus:outline-none text-xs"
+                  title={fixedHours === 24 ? "24Hr dedicated vehicles don't have a shift start time" : undefined}
+                  className={`w-full border border-purple-100 rounded-lg p-1 text-center font-mono focus:outline-none text-xs ${fixedHours === 24 ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`}
                 />
               </div>
               <div className="col-span-1">
-                <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Closure</label>
+                <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Closure{fixedHours === 24 ? ' (N/A)' : ''}</label>
                 <input
                   type="text"
                   placeholder="20:00"
                   value={closureTime}
+                  readOnly={fixedHours === 24}
                   onChange={(e) => setClosureTime(e.target.value)}
-                  className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1 text-center font-mono focus:outline-none text-xs"
+                  title={fixedHours === 24 ? "24Hr dedicated vehicles don't have a shift end time" : undefined}
+                  className={`w-full border border-purple-100 rounded-lg p-1 text-center font-mono focus:outline-none text-xs ${fixedHours === 24 ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`}
                 />
               </div>
               <div className="col-span-1">
@@ -1935,21 +1981,25 @@ export default function WarehouseDetails({
                 </div>
                 <div className="grid grid-cols-2 gap-1 font-sans">
                   <div>
-                    <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wide mb-1">In Time</label>
+                    <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wide mb-1">In Time{editFixedHours === 24 ? ' (N/A)' : ''}</label>
                     <input
                       type="text"
                       value={editInTime}
+                      readOnly={editFixedHours === 24}
                       onChange={(e) => setEditInTime(e.target.value)}
-                      className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 font-mono"
+                      title={editFixedHours === 24 ? "24Hr dedicated vehicles don't have a shift start time" : undefined}
+                      className={`w-full border border-purple-100 rounded-lg p-1.5 font-mono ${editFixedHours === 24 ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`}
                     />
                   </div>
                   <div>
-                    <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wide mb-1">Closure</label>
+                    <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wide mb-1">Closure{editFixedHours === 24 ? ' (N/A)' : ''}</label>
                     <input
                       type="text"
                       value={editClosureTime}
+                      readOnly={editFixedHours === 24}
                       onChange={(e) => setEditClosureTime(e.target.value)}
-                      className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 font-mono"
+                      title={editFixedHours === 24 ? "24Hr dedicated vehicles don't have a shift end time" : undefined}
+                      className={`w-full border border-purple-100 rounded-lg p-1.5 font-mono ${editFixedHours === 24 ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`}
                     />
                   </div>
                 </div>
