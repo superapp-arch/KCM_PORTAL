@@ -247,3 +247,56 @@ export function buildLocationAttendancePdf(
   drawFooter(doc, cursorY, 'Each location\'s Monthly Summary above covers every month on record for its drivers; Location Totals reflects the month named above only.');
   return doc;
 }
+
+// One row per driver, for whichever month is currently selected on screen -
+// the "Download All" PDF (see DriverAttendanceSheet.tsx's handleDownloadAllPdf).
+// Deliberately the same shape as the Excel "Download All" export's own
+// summary columns (No. of Days/Working Days/LOP/Exemption Leave/Gross
+// Salary/Payable Amount - see attendanceGridSection there), just without
+// Excel's day-by-day P/A/PL grid columns, which would be unreadable crammed
+// into a PDF table (same reasoning buildDriverAttendancePdf's own comment
+// already gives for why PDF diverges from the raw day-grid). autoTable
+// repeats the header row on every page by default, so a long driver list
+// paginates cleanly without extra handling here.
+export interface DriverAttendanceSummaryRow {
+  driverId: string;
+  driverName: string;
+  location: string;
+  noOfDays: number;
+  workingDays: number;
+  lop: number;
+  exemptionLeave: number;
+  grossSalary: number | string;
+  payableAmount: number | string;
+}
+
+export function buildDriverAttendanceSummaryPdf(subtitle: string, rows: DriverAttendanceSummaryRow[]): jsPDF {
+  const doc = new jsPDF();
+  const cursorY = drawReportHeader(doc, 'Driver Attendance Report', subtitle);
+
+  autoTable(doc, {
+    startY: cursorY,
+    head: [['Driver ID', 'Driver Name', 'Location', 'No. of Days', 'Working Days', 'LOP', 'Exemption Leave', 'Gross Salary', 'Payable Amount']],
+    body: rows.length
+      ? rows.map(r => [
+          r.driverId, r.driverName, r.location, r.noOfDays, r.workingDays, r.lop, r.exemptionLeave,
+          typeof r.grossSalary === 'number' ? r.grossSalary.toLocaleString('en-IN') : r.grossSalary,
+          typeof r.payableAmount === 'number' ? r.payableAmount.toLocaleString('en-IN') : r.payableAmount
+        ])
+      : [['No drivers found for this selection', '', '', '', '', '', '', '', '']],
+    theme: 'grid',
+    styles: { fontSize: 8, cellPadding: 2 },
+    headStyles: { fillColor: [30, 64, 175] },
+    columnStyles: {
+      0: { halign: 'left' }, 1: { halign: 'left' }, 2: { halign: 'left' },
+      3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'right' },
+      7: { halign: 'right' }, 8: { halign: 'right' }
+    },
+    showHead: 'everyPage',
+    margin: { left: 14, right: 14, top: 20 }
+  });
+  const finalY = (doc as any).lastAutoTable.finalY + 6;
+
+  drawFooter(doc, finalY, 'Gross Salary/Payable Amount are blank ("N/A") for any driver whose Driver Salary snapshot is not for this same month.');
+  return doc;
+}

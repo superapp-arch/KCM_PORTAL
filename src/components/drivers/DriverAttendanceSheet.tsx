@@ -6,7 +6,7 @@ import { authFetch } from '../../authFetch';
 import { compareTrailingNumber } from '../../utils/sort';
 import DriverAttendanceSummaryModal from './DriverAttendanceSummaryModal';
 import { exportReportToExcel, ReportTableSection } from '../../utils/reportExport';
-import { buildDriverAttendancePdf, buildLocationAttendancePdf } from '../../utils/driverAttendancePdf';
+import { buildDriverAttendancePdf, buildLocationAttendancePdf, buildDriverAttendanceSummaryPdf, DriverAttendanceSummaryRow } from '../../utils/driverAttendancePdf';
 import DownloadMenu, { DownloadMenuOption } from './DownloadMenu';
 
 interface DriverAttendanceSheetProps {
@@ -134,6 +134,34 @@ function attendanceGridSection(month: string, list: DriverEmployee[], attendance
   return { heading, columns, rows };
 }
 
+// Same one-row-per-driver summary the Excel "Download All" export's own
+// columns already carry (see attendanceGridSection above), minus the
+// day-by-day P/A/PL grid - reused by the PDF "Download All" export so both
+// formats show identical data for the same month (see
+// buildDriverAttendanceSummaryPdf).
+function driverAttendanceSummaryRows(month: string, groups: { location: string; drivers: DriverEmployee[] }[], attendance: DriverAttendance[]): DriverAttendanceSummaryRow[] {
+  const total = daysInMonth(month);
+  return groups.flatMap(g => g.drivers.map(driver => {
+    const driverRows = attendance.filter(a => a.driverId === driver.id && a.date.startsWith(month));
+    const { lopDays, exemptionLeaveDays, workingDays } = summarizeMonthRows(driverRows);
+    const { grossSalary, payable } = driverSalarySnapshotFor(driver, month);
+    return {
+      driverId: driver.id, driverName: driver.name, location: g.location,
+      noOfDays: total, workingDays, lop: lopDays, exemptionLeave: exemptionLeaveDays,
+      grossSalary, payableAmount: payable
+    };
+  }));
+}
+
+// "driver_attendance_<full month name>_<year>" - the file naming convention
+// for the "Download All" trigger specifically (Excel + PDF); other download
+// buttons elsewhere in this file keep their own existing convention.
+const FULL_MONTH_NAMES_LOWER = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+function downloadAllFileBase(month: string): string {
+  const [y, m] = month.split('-').map(Number);
+  return `driver_attendance_${FULL_MONTH_NAMES_LOWER[m - 1]}_${y}`;
+}
+
 // Per-location headcount/status-count rollup for the "download everything"
 // tab's Summary sheet/table - deliberately separate from the raw day-grid
 // sections so the export carries both the full detail and an at-a-glance
@@ -237,13 +265,19 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
     buildLocationAttendancePdf('Driver Attendance', 'My Locations', myLocationGroups, attendance, month)
       .save(`KCM_Driver_Attendance_My_Locations_${month}.pdf`);
 
-  // "Download tab" (item 4) - every driver, every location, plus a Summary
-  // sheet/table rolled up per location.
+  // "Download tab" (item 4) - every driver, every location. Excel keeps its
+  // full day-by-day grid (plus a per-location Summary sheet) - a spreadsheet
+  // handles that many columns fine. PDF shows the same one-row-per-driver
+  // data (Driver ID/Name/Location/No. of Days/Working Days/LOP/Exemption
+  // Leave/Gross Salary/Payable Amount) as a clean table instead - identical
+  // dataset to Excel, just without the day-grid columns that would be
+  // unreadable in a PDF (see buildDriverAttendanceSummaryPdf). Both use the
+  // same driver_attendance_<month>_<year> file naming convention.
   const handleDownloadAllExcel = () =>
-    exportReportToExcel(`KCM_Driver_Attendance_All_${month}`, [...groupedDrivers.map(g => attendanceGridSection(month, g.drivers, attendance, g.location)), attendanceSummarySection(month, groupedDrivers, attendance)]);
+    exportReportToExcel(downloadAllFileBase(month), [...groupedDrivers.map(g => attendanceGridSection(month, g.drivers, attendance, g.location)), attendanceSummarySection(month, groupedDrivers, attendance)]);
   const handleDownloadAllPdf = () =>
-    buildLocationAttendancePdf('Driver Attendance', 'All Locations', groupedDrivers, attendance, month)
-      .save(`KCM_Driver_Attendance_All_${month}.pdf`);
+    buildDriverAttendanceSummaryPdf(`All Locations - ${monthLabel}`, driverAttendanceSummaryRows(month, groupedDrivers, attendance))
+      .save(`${downloadAllFileBase(month)}.pdf`);
 
   // Per-driver row download (item 3) - "both" full history and the
   // currently-selected month, each in Excel or PDF, so this one dropdown

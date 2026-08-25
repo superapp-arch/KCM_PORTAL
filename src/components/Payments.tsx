@@ -8,7 +8,7 @@ interface PaymentsProps {
   user: User;
   fuelLogs: FuelLog[];
   bunkPaymentPeriods: BunkPaymentPeriod[];
-  onSaveBunkPaymentPeriod: (period: Omit<BunkPaymentPeriod, 'id'> & { id?: string }) => Promise<void>;
+  onSaveBunkPaymentPeriod: (period: Omit<BunkPaymentPeriod, 'id'> & { id?: string }) => Promise<string | undefined>;
   onDeleteBunkPaymentPeriod: (id: string) => Promise<void>;
   bunkPayments: BunkPayment[];
   onAddBunkPayment: (payment: Omit<BunkPayment, 'id' | 'enteredBy'>) => Promise<void>;
@@ -46,22 +46,26 @@ export default function Payments({
   const isSuperAdmin = user.department === 'super_admin';
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [showAddPeriod, setShowAddPeriod] = useState(false);
-  // Set while editing an existing period (Period From/To - and the bunk
-  // itself - stay fully editable after creation, per "not a fixed
-  // system-wide cycle; set per entry and editable"); undefined = adding a
-  // brand-new one. The same modal/form below handles both.
+  // One merged modal now covers three entry points (see openCreatePeriod/
+  // openEditPeriod/openAddPayment below): a brand-new period + optional
+  // first payment, editing an existing period's own Bunk/dates, and logging
+  // a further payment against an existing period. `periodLocked` is what
+  // tells the three apart in the JSX - true only for "Add Payment" (Bunk/
+  // Period stay fixed, only the payment fields matter there).
+  const [showPeriodModal, setShowPeriodModal] = useState(false);
   const [editingPeriodId, setEditingPeriodId] = useState<string | null>(null);
+  const [periodLocked, setPeriodLocked] = useState(false);
   const [periodBunkKey, setPeriodBunkKey] = useState('');
   const [periodFrom, setPeriodFrom] = useState('');
   const [periodTo, setPeriodTo] = useState('');
-  const [isSubmittingPeriod, setIsSubmittingPeriod] = useState(false);
-
-  const [payingPeriodId, setPayingPeriodId] = useState<string | null>(null);
+  // Inline overlap-conflict error (point 4) - separate from the generic
+  // toast notif below since it needs to sit right under the Period fields,
+  // naming the conflicting existing period.
+  const [periodError, setPeriodError] = useState('');
   const [payAmount, setPayAmount] = useState('');
   const [payMode, setPayMode] = useState<BunkPayment['mode']>('cash');
   const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
-  const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
+  const [isSubmittingPeriod, setIsSubmittingPeriod] = useState(false);
 
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
@@ -88,7 +92,7 @@ export default function Payments({
   // never drift into a second source of truth. Changing Period From/To
   // recalculates this instantly since it's plain derived state, not a
   // separate fetch.
-  const totalAmountFor = (period: BunkPaymentPeriod): number =>
+  const totalAmountFor = (period: { bunkName: string; location: string; periodFrom: string; periodTo: string }): number =>
     fuelLogs
       .filter(l => l.bunkName === period.bunkName && l.location === period.location && l.date >= period.periodFrom && l.date <= period.periodTo)
       .reduce((s, l) => s + (l.amount || 0), 0);
@@ -98,47 +102,54 @@ export default function Payments({
 
   const amountPaidFor = (periodId: string): number => paymentsFor(periodId).reduce((s, p) => s + (p.amount || 0), 0);
 
-  const resetPeriodForm = () => {
-    setShowAddPeriod(false);
+  // A bunk's periods must be sequential/non-overlapping (point 4) - two
+  // date ranges overlap the instant one starts on/before the other ends AND
+  // ends on/after the other starts. Excludes the period being edited itself
+  // (editingPeriodId), so re-saving a period's own unchanged dates never
+  // flags itself as a conflict.
+  const findOverlappingPeriod = (bunkName: string, location: string, from: string, to: string, excludeId?: string): BunkPaymentPeriod | undefined =>
+    bunkPaymentPeriods.find(p => p.id !== excludeId && p.bunkName === bunkName && p.location === location && p.periodFrom <= to && p.periodTo >= from);
+
+  const resetPeriodModal = () => {
+    setShowPeriodModal(false);
     setEditingPeriodId(null);
+    setPeriodLocked(false);
     setPeriodBunkKey('');
     setPeriodFrom('');
     setPeriodTo('');
+    setPeriodError('');
+    setPayAmount('');
+    setPayMode('cash');
+    setPayDate(new Date().toISOString().slice(0, 10));
   };
 
+  // Three entry points into the same merged modal (points 1-3):
+  const openCreatePeriod = () => { resetPeriodModal(); setShowPeriodModal(true); };
   const openEditPeriod = (period: BunkPaymentPeriod) => {
+    resetPeriodModal();
     setEditingPeriodId(period.id);
     setPeriodBunkKey(bunkKey(period.bunkName, period.location));
     setPeriodFrom(period.periodFrom);
     setPeriodTo(period.periodTo);
-    setShowAddPeriod(true);
+    setShowPeriodModal(true);
+  };
+  const openAddPayment = (period: BunkPaymentPeriod) => {
+    resetPeriodModal();
+    setEditingPeriodId(period.id);
+    setPeriodLocked(true);
+    setPeriodBunkKey(bunkKey(period.bunkName, period.location));
+    setPeriodFrom(period.periodFrom);
+    setPeriodTo(period.periodTo);
+    setShowPeriodModal(true);
   };
 
-  const handleSavePeriod = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const selected = bunkOptions.find(b => bunkKey(b.bunkName, b.location) === periodBunkKey);
-    if (!selected || !periodFrom || !periodTo) {
-      triggerNotif('Pick a Bunk and both Period dates.', 'error');
-      return;
-    }
-    if (periodFrom > periodTo) {
-      triggerNotif('Period From cannot be after Period To.', 'error');
-      return;
-    }
-    setIsSubmittingPeriod(true);
-    try {
-      await onSaveBunkPaymentPeriod({
-        id: editingPeriodId || undefined,
-        bunkName: selected.bunkName, location: selected.location, periodFrom, periodTo
-      });
-      setSaveConfirmation({ label: 'Payment period', identifier: `${selected.bunkName} (${selected.location})`, key: Date.now() });
-      resetPeriodForm();
-    } catch (err) {
-      triggerNotif(err instanceof Error ? err.message : 'Failed to save payment period.', 'error');
-    } finally {
-      setIsSubmittingPeriod(false);
-    }
-  };
+  // Live Bunk/Period selection state, used by the modal for both the Total
+  // Amount/Balance preview (points 1 and 3) and the save handler below.
+  const selectedBunk = bunkOptions.find(b => bunkKey(b.bunkName, b.location) === periodBunkKey);
+  const periodValid = !!selectedBunk && !!periodFrom && !!periodTo && periodFrom <= periodTo;
+  const modalTotalAmount = periodValid ? totalAmountFor({ bunkName: selectedBunk!.bunkName, location: selectedBunk!.location, periodFrom, periodTo }) : 0;
+  const modalAmountPaid = editingPeriodId ? amountPaidFor(editingPeriodId) : 0;
+  const modalAmountDue = parseFloat((modalTotalAmount - modalAmountPaid).toFixed(2));
 
   const handleDeletePeriod = async (period: BunkPaymentPeriod) => {
     if (!confirm(`Delete the payment period for ${period.bunkName} (${period.location}), ${period.periodFrom} to ${period.periodTo}? This also removes its ${paymentsFor(period.id).length} logged payment(s). This cannot be undone.`)) return;
@@ -150,30 +161,64 @@ export default function Payments({
     }
   };
 
-  const openAddPayment = (periodId: string) => {
-    setPayingPeriodId(periodId);
-    setPayAmount('');
-    setPayMode('cash');
-    setPayDate(new Date().toISOString().slice(0, 10));
-  };
-
-  const handleAddPayment = async (e: React.FormEvent) => {
+  // Merged save (points 1-3): saves the period (create or update - skipped
+  // when periodLocked, i.e. this open was purely "Add Payment" against an
+  // already-fixed period) and, only if an Amount was actually typed in,
+  // also logs a payment against it - one submit, one flow. Leaving Amount
+  // blank while creating/editing a period is fine (payment stays optional -
+  // "register now, pay later").
+  const handleSavePeriodAndPayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!payingPeriodId) return;
-    const amt = parseFloat(payAmount);
-    if (!amt || amt <= 0 || !payDate) {
-      triggerNotif('Enter a valid Amount and Paid Date.', 'error');
+    setPeriodError('');
+    if (!selectedBunk || !periodFrom || !periodTo) {
+      triggerNotif('Pick a Bunk and both Period dates.', 'error');
       return;
     }
-    setIsSubmittingPayment(true);
+    if (periodFrom > periodTo) {
+      triggerNotif('Period From cannot be after Period To.', 'error');
+      return;
+    }
+    if (!periodLocked) {
+      const conflict = findOverlappingPeriod(selectedBunk.bunkName, selectedBunk.location, periodFrom, periodTo, editingPeriodId || undefined);
+      if (conflict) {
+        setPeriodError(`Overlaps an existing period for this bunk: ${conflict.periodFrom} → ${conflict.periodTo}. The next period must start after it ends.`);
+        return;
+      }
+    }
+    const amt = payAmount.trim() ? parseFloat(payAmount) : 0;
+    if (payAmount.trim() && (!amt || amt <= 0)) {
+      triggerNotif('Enter a valid payment Amount, or leave it blank to just save the period.', 'error');
+      return;
+    }
+    if (payAmount.trim() && !payDate) {
+      triggerNotif('Pick a Paid Date for the payment.', 'error');
+      return;
+    }
+
+    setIsSubmittingPeriod(true);
     try {
-      await onAddBunkPayment({ bunkPeriodId: payingPeriodId, amount: amt, mode: payMode, paidDate: payDate });
-      setSaveConfirmation({ label: 'Payment', identifier: `₹${amt.toLocaleString('en-IN')} (${PAYMENT_MODES.find(m => m.value === payMode)?.label})`, key: Date.now() });
-      setPayingPeriodId(null);
+      let periodId = editingPeriodId;
+      if (!periodLocked) {
+        periodId = (await onSaveBunkPaymentPeriod({
+          id: editingPeriodId || undefined,
+          bunkName: selectedBunk.bunkName, location: selectedBunk.location, periodFrom, periodTo
+        })) || editingPeriodId;
+      }
+      if (amt > 0 && periodId) {
+        await onAddBunkPayment({ bunkPeriodId: periodId, amount: amt, mode: payMode, paidDate: payDate });
+      }
+      setSaveConfirmation({
+        label: amt > 0 ? 'Payment period + payment' : 'Payment period',
+        identifier: amt > 0
+          ? `${selectedBunk.bunkName} (${selectedBunk.location}) — ₹${amt.toLocaleString('en-IN')}`
+          : `${selectedBunk.bunkName} (${selectedBunk.location})`,
+        key: Date.now()
+      });
+      resetPeriodModal();
     } catch (err) {
-      triggerNotif(err instanceof Error ? err.message : 'Failed to log payment.', 'error');
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save.', 'error');
     } finally {
-      setIsSubmittingPayment(false);
+      setIsSubmittingPeriod(false);
     }
   };
 
@@ -205,7 +250,7 @@ export default function Payments({
           </p>
         </div>
         <button
-          onClick={() => setShowAddPeriod(true)}
+          onClick={openCreatePeriod}
           className="mt-3 md:mt-0 bg-gradient-to-r from-emerald-600 to-teal-700 hover:shadow-md text-white text-xs font-bold py-2.5 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap w-fit"
         >
           <Plus className="w-4 h-4" /> Add Payment Period
@@ -271,16 +316,20 @@ export default function Payments({
                         {balance > 0 ? <span className="text-rose-600">₹{balance.toLocaleString('en-IN')}</span> : <span className="text-slate-300">-</span>}
                       </td>
                       <td className="px-3 py-2.5 text-center">
-                        {/* Removed entirely (not just disabled) once Balance
-                            reaches 0 - a fully settled period shouldn't
-                            invite further payment entries. */}
-                        {balance > 0 && (
+                        {/* "Completed" once Balance reaches 0 (point 5) -
+                            no button, no further payment action on a
+                            settled entry. */}
+                        {balance > 0 ? (
                           <button
-                            onClick={() => openAddPayment(period.id)}
+                            onClick={() => openAddPayment(period)}
                             className="text-teal-600 hover:text-teal-800 bg-teal-50 hover:bg-teal-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer inline-flex items-center gap-1"
                           >
                             <Plus className="w-3 h-3" /> Add Payment
                           </button>
+                        ) : (
+                          <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-md font-bold text-[10px] inline-block">
+                            Completed
+                          </span>
                         )}
                       </td>
                       <td className="px-3 py-2.5 text-center whitespace-nowrap">
@@ -343,87 +392,99 @@ export default function Payments({
         </div>
       </div>
 
-      {/* Add/Edit Payment Period modal */}
-      {showAddPeriod && (
+      {/* Merged Add/Edit Payment Period + Add Payment modal (points 1-3) -
+          one flow for all three entry points: a brand-new period (+
+          optional first payment), editing an existing period's own Bunk/
+          dates, and logging a further payment against a period that's
+          already fixed (periodLocked - Bunk/Period shown but disabled). */}
+      {showPeriodModal && (
         <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full">
-            <div className="p-4 bg-gradient-to-r from-slate-900 to-emerald-950 text-white flex items-center justify-between">
-              <h3 className="font-extrabold text-sm flex items-center gap-2"><Landmark className="w-4 h-4 text-emerald-400" /> {editingPeriodId ? 'Edit Payment Period' : 'Add Payment Period'}</h3>
-              <button onClick={resetPeriodForm} className="p-1.5 rounded-lg hover:bg-white/10 text-white cursor-pointer"><X className="w-4 h-4" /></button>
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-4 bg-gradient-to-r from-slate-900 to-emerald-950 text-white flex items-center justify-between sticky top-0 z-10">
+              <h3 className="font-extrabold text-sm flex items-center gap-2">
+                <Landmark className="w-4 h-4 text-emerald-400" />
+                {periodLocked ? 'Add Payment' : editingPeriodId ? 'Edit Payment Period' : 'Add Payment Period'}
+              </h3>
+              <button onClick={resetPeriodModal} className="p-1.5 rounded-lg hover:bg-white/10 text-white cursor-pointer"><X className="w-4 h-4" /></button>
             </div>
-            <form onSubmit={handleSavePeriod} className="p-5 space-y-3 text-xs">
+            <form onSubmit={handleSavePeriodAndPayment} className="p-5 space-y-3 text-xs">
               <div>
                 <label className="block font-semibold text-slate-600 mb-1">Bunk *</label>
                 <select
                   required
+                  disabled={periodLocked}
                   value={periodBunkKey}
-                  onChange={(e) => setPeriodBunkKey(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
+                  onChange={(e) => { setPeriodBunkKey(e.target.value); setPeriodError(''); }}
+                  className={`w-full border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800 ${periodLocked ? 'bg-slate-100 cursor-not-allowed' : 'bg-slate-50'}`}
                 >
                   <option value="">Select a bunk...</option>
                   {bunkOptions.map(b => (
                     <option key={bunkKey(b.bunkName, b.location)} value={bunkKey(b.bunkName, b.location)}>{b.bunkName} ({b.location})</option>
                   ))}
                 </select>
-                <p className="text-[9px] text-slate-400 font-mono mt-0.5">Pulled straight from Fuel Management - only bunks that actually have fuel entries logged.</p>
+                {!periodLocked && <p className="text-[9px] text-slate-400 font-mono mt-0.5">Pulled straight from Fuel Management - only bunks that actually have fuel entries logged.</p>}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-600 mb-1">Period From *</label>
-                  <DateInput required value={periodFrom} onChange={(e) => setPeriodFrom(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
+                  <DateInput required disabled={periodLocked} value={periodFrom} onChange={(e) => { setPeriodFrom(e.target.value); setPeriodError(''); }} className={`w-full border border-slate-200 rounded-lg p-2 font-mono text-slate-800 ${periodLocked ? 'bg-slate-100' : 'bg-slate-50'}`} />
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-600 mb-1">Period To *</label>
-                  <DateInput required value={periodTo} onChange={(e) => setPeriodTo(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
+                  <DateInput required disabled={periodLocked} value={periodTo} onChange={(e) => { setPeriodTo(e.target.value); setPeriodError(''); }} className={`w-full border border-slate-200 rounded-lg p-2 font-mono text-slate-800 ${periodLocked ? 'bg-slate-100' : 'bg-slate-50'}`} />
                 </div>
               </div>
-              <p className="text-[9px] text-slate-400 font-mono">Every bunk settles on its own cycle - set whatever From/To this one actually runs (e.g. 11th-20th, or a full calendar month).</p>
-              <div className="flex gap-2 pt-2">
-                <button type="button" onClick={resetPeriodForm} className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 uppercase text-[10px] cursor-pointer">Cancel</button>
-                <button type="submit" disabled={isSubmittingPeriod} className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md uppercase text-[10px] cursor-pointer">
-                  {isSubmittingPeriod ? 'Saving...' : editingPeriodId ? 'Save Changes' : 'Save Period'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+              {periodError ? (
+                <p className="text-[10px] text-rose-600 font-semibold bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1.5">{periodError}</p>
+              ) : !periodLocked && (
+                <p className="text-[9px] text-slate-400 font-mono">Every bunk settles on its own cycle - set whatever From/To this one actually runs (e.g. 11th-20th, or a full calendar month). Periods for the same bunk can't overlap.</p>
+              )}
 
-      {/* Add Payment modal */}
-      {payingPeriodId && (
-        <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-sm w-full">
-            <div className="p-4 bg-gradient-to-r from-slate-900 to-teal-950 text-white flex items-center justify-between">
-              <h3 className="font-extrabold text-sm flex items-center gap-2"><Plus className="w-4 h-4 text-teal-400" /> Add Payment</h3>
-              <button onClick={() => setPayingPeriodId(null)} className="p-1.5 rounded-lg hover:bg-white/10 text-white cursor-pointer"><X className="w-4 h-4" /></button>
-            </div>
-            <form onSubmit={handleAddPayment} className="p-5 space-y-3 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-600 mb-1">Amount *</label>
-                <input
-                  type="number" step="0.01" required min="0.01" autoFocus
-                  value={payAmount} onChange={(e) => setPayAmount(e.target.value)}
-                  placeholder="₹ Amount"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-600 mb-1">Payment Mode *</label>
-                  <select required value={payMode} onChange={(e) => setPayMode(e.target.value as BunkPayment['mode'])} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-bold text-slate-800">
-                    {PAYMENT_MODES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-                  </select>
+              {/* Total Amount / Balance preview - appears the instant Bunk +
+                  both Period dates are valid (point 1), no extra click. */}
+              {periodValid && (
+                <div className="p-2.5 bg-emerald-50 rounded-lg border border-emerald-100 flex items-center justify-between font-mono">
+                  <span className="text-[9px] text-emerald-600 uppercase font-bold">{modalAmountPaid > 0 ? 'Balance' : 'Total Amount'}</span>
+                  <span className="text-sm font-black text-emerald-800">₹{(modalAmountPaid > 0 ? modalAmountDue : modalTotalAmount).toLocaleString('en-IN')}</span>
                 </div>
-                <div>
-                  <label className="block font-semibold text-slate-600 mb-1">Paid Date *</label>
-                  <DateInput required value={payDate} onChange={(e) => setPayDate(e.target.value)} max={new Date().toISOString().slice(0, 10)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
+              )}
+
+              {/* Add Payment fields, merged right into this same modal
+                  (point 2) - optional while creating/editing a period
+                  (register now, pay later is fine), the actual point of
+                  the periodLocked "Add Payment" entry. */}
+              {periodValid && (
+                <div className="pt-2 border-t border-slate-100 space-y-2.5">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase">{periodLocked ? 'Log Payment' : 'Log a Payment (optional)'}</span>
+                  <div>
+                    <label className="block font-semibold text-slate-600 mb-1">Amount{periodLocked && <span className="text-rose-500"> *</span>}</label>
+                    <input
+                      type="number" step="0.01" min="0.01" required={periodLocked}
+                      value={payAmount} onChange={(e) => setPayAmount(e.target.value)}
+                      placeholder="₹ Amount"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1">Payment Mode</label>
+                      <select value={payMode} onChange={(e) => setPayMode(e.target.value as BunkPayment['mode'])} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-bold text-slate-800">
+                        {PAYMENT_MODES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1">Paid Date</label>
+                      <DateInput value={payDate} onChange={(e) => setPayDate(e.target.value)} max={new Date().toISOString().slice(0, 10)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
+                    </div>
+                  </div>
+                  <p className="text-[9px] text-slate-400 font-mono">Always adds a new payment line - never overwrites a prior one, so split settlements (different amounts/modes/dates) just keep appending here.</p>
                 </div>
-              </div>
-              <p className="text-[9px] text-slate-400 font-mono">This always adds a new payment line - it never overwrites a prior one, so split settlements (different amounts/modes/dates) just keep appending here.</p>
+              )}
+
               <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setPayingPeriodId(null)} className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 uppercase text-[10px] cursor-pointer">Cancel</button>
-                <button type="submit" disabled={isSubmittingPayment} className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md uppercase text-[10px] cursor-pointer">
-                  {isSubmittingPayment ? 'Saving...' : 'Add Payment'}
+                <button type="button" onClick={resetPeriodModal} className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 uppercase text-[10px] cursor-pointer">Cancel</button>
+                <button type="submit" disabled={isSubmittingPeriod} className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md uppercase text-[10px] cursor-pointer">
+                  {isSubmittingPeriod ? 'Saving...' : periodLocked ? 'Add Payment' : editingPeriodId ? 'Save Changes' : 'Save Period'}
                 </button>
               </div>
             </form>

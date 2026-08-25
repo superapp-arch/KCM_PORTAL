@@ -176,7 +176,7 @@ interface AdministrationProps {
   onUpdateMileageReport: (id: string, report: Partial<MileageReport>) => Promise<void>;
   onDeleteMileageReport: (id: string) => Promise<void>;
   bunkPaymentPeriods: BunkPaymentPeriod[];
-  onSaveBunkPaymentPeriod: (period: Omit<BunkPaymentPeriod, 'id'> & { id?: string }) => Promise<void>;
+  onSaveBunkPaymentPeriod: (period: Omit<BunkPaymentPeriod, 'id'> & { id?: string }) => Promise<string | undefined>;
   onDeleteBunkPaymentPeriod: (id: string) => Promise<void>;
   bunkPayments: BunkPayment[];
   onAddBunkPayment: (payment: Omit<BunkPayment, 'id' | 'enteredBy'>) => Promise<void>;

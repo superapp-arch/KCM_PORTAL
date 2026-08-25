@@ -3547,6 +3547,16 @@ async function startServer() {
       }
       const allPeriods = await getBunkPaymentPeriods();
       const existing = body.id ? allPeriods.find(p => p.id === body.id) : undefined;
+      // Sequential/non-overlapping periods per bunk (mirrors Payments.tsx's
+      // own findOverlappingPeriod client-side check) - the backstop for a
+      // direct API call bypassing the UI's inline validation.
+      const conflict = allPeriods.find(p =>
+        p.id !== body.id && p.bunkName === body.bunkName && p.location === body.location &&
+        p.periodFrom <= body.periodTo && p.periodTo >= body.periodFrom
+      );
+      if (conflict) {
+        return res.status(409).json({ error: `Overlaps an existing period for this bunk: ${conflict.periodFrom} to ${conflict.periodTo}. The next period must start after it ends.` });
+      }
       const newId = body.id || String(Date.now());
       const result = await saveBunkPaymentPeriod({ ...body, id: newId, enteredBy: existing?.enteredBy || sessionUser?.username });
       await createAuditLog({

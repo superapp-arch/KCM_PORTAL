@@ -978,19 +978,23 @@ export default function App() {
 
   // Payments module - one POST route upserts a bunk payment period by id
   // (create vs. update decided by whether `id` is present), same "no
-  // separate PUT" pattern /api/mileage already uses.
-  const handleSaveBunkPaymentPeriod = async (period: Omit<BunkPaymentPeriod, 'id'> & { id?: string }) => {
+  // separate PUT" pattern /api/mileage already uses. Returns the id (server
+  // generates and echoes it back for a create) so the Payments screen can
+  // immediately log a first payment against a brand-new period in the same
+  // flow, same "return the id" pattern handleAddMileageReport already uses.
+  const handleSaveBunkPaymentPeriod = async (period: Omit<BunkPaymentPeriod, 'id'> & { id?: string }): Promise<string | undefined> => {
     const res = await authFetch('/api/bunk-payment-periods', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(period)
     });
     if (res.ok) {
+      const data = await res.json();
       await fetchAllData();
-    } else {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || 'Failed to save payment period.');
+      return data.id as string | undefined;
     }
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to save payment period.');
   };
 
   const handleDeleteBunkPaymentPeriod = async (id: string) => {
