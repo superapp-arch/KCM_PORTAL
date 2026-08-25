@@ -27,7 +27,9 @@ import {
   TireBrand,
   TireRecord,
   BatteryRecord,
-  ToolsChecklistRecord
+  ToolsChecklistRecord,
+  BunkPaymentPeriod,
+  BunkPayment
 } from '../types';
 import FleetSheet from './FleetSheet';
 import FuelManagement from './FuelManagement';
@@ -40,6 +42,7 @@ import Accounts from './Accounts';
 import HR from './HR';
 import WarehouseDetails from './WarehouseDetails';
 import MileageReportModule from './MileageReport';
+import Payments from './Payments';
 import VendorManagement from './VendorManagement';
 import DriverDetails from './DriverDetails';
 import LoanManagement from './LoanManagement';
@@ -50,7 +53,7 @@ import {
   LogOut, ShieldAlert, FileSpreadsheet, Fuel, FileText, Landmark,
   Settings, DollarSign, Contact, Bell, Mail, RefreshCw, CheckCircle, Clock,
   KeyRound, Cpu, Terminal, Copy, Check, Eye, EyeOff, Warehouse, Gauge, X,
-  Truck, Building2, HandCoins, Menu, BarChart3, History
+  Truck, Building2, HandCoins, Menu, BarChart3, History, CreditCard
 } from 'lucide-react';
 
 // Driver Details module gate - mirrors server.ts's DRIVER_LOCATION_SCOPES
@@ -82,6 +85,12 @@ const FUEL_ACCESS_EMAILS = ['chandanreddy@kcmlogistics.in', 'praveenkumar@kcmlog
 // FUEL_RQ_ID_ONLY_EMAILS), but not Mileage Report - kept separate from
 // FUEL_ACCESS_EMAILS above since her access is much narrower.
 const FUEL_RQ_ID_ONLY_EMAILS = ['divya@kcmlogistics.in'];
+
+// Payments module - mirrors server.ts's PAYMENTS_ACCESS_EMAILS exactly.
+// Restricted to Praveen + Super Admins (Principal included, same as every
+// other "Super Admin / Principal only" gate here - department 'super_admin'
+// covers both, hasAccess()'s top-of-function check already grants it).
+const PAYMENTS_ACCESS_EMAILS = ['praveenkumar@kcmlogistics.in'];
 
 // Displays the live header clock in Indian Standard Time regardless of the
 // device/browser's own timezone, so the portal reads consistently for an
@@ -166,6 +175,12 @@ interface AdministrationProps {
   onAddMileageReport: (report: Omit<MileageReport, 'id'>) => Promise<string | undefined>;
   onUpdateMileageReport: (id: string, report: Partial<MileageReport>) => Promise<void>;
   onDeleteMileageReport: (id: string) => Promise<void>;
+  bunkPaymentPeriods: BunkPaymentPeriod[];
+  onSaveBunkPaymentPeriod: (period: Omit<BunkPaymentPeriod, 'id'> & { id?: string }) => Promise<void>;
+  onDeleteBunkPaymentPeriod: (id: string) => Promise<void>;
+  bunkPayments: BunkPayment[];
+  onAddBunkPayment: (payment: Omit<BunkPayment, 'id' | 'enteredBy'>) => Promise<void>;
+  onDeleteBunkPayment: (id: string) => Promise<void>;
   marketPodEntries: MarketPodEntry[];
   onAddMarketPodEntry: (entry: Omit<MarketPodEntry, 'id'>) => Promise<void>;
   onUpdateMarketPodEntry: (id: string, entry: Partial<MarketPodEntry>) => Promise<void>;
@@ -263,6 +278,12 @@ export default function Administration({
   onAddMileageReport,
   onUpdateMileageReport,
   onDeleteMileageReport,
+  bunkPaymentPeriods,
+  onSaveBunkPaymentPeriod,
+  onDeleteBunkPaymentPeriod,
+  bunkPayments,
+  onAddBunkPayment,
+  onDeleteBunkPayment,
   marketPodEntries,
   onAddMarketPodEntry,
   onUpdateMarketPodEntry,
@@ -415,6 +436,7 @@ export default function Administration({
     if (tabName === 'warehouse' && user.email === 'bhagya@kcmlogistics.in') return true;
     if ((tabName === 'fuel' || tabName === 'mileage') && FUEL_ACCESS_EMAILS.includes(user.email || '')) return true;
     if (tabName === 'fuel' && FUEL_RQ_ID_ONLY_EMAILS.includes(user.email || '')) return true;
+    if (tabName === 'payments' && PAYMENTS_ACCESS_EMAILS.includes(user.email || '')) return true;
     if (tabName === 'fleet' && (user.department === 'vehicle_manager' || user.email === 'bhagya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in')) return true;
     if (tabName === 'billing' && (user.department === 'billing' || user.email === 'bhagya@kcmlogistics.in')) return true;
     // Rakshina (finance@kcmlogistics.in) gets full Petty Cash access - not
@@ -491,6 +513,7 @@ export default function Administration({
     { id: 'fleet', label: 'Fleet & Vehicles', icon: FileSpreadsheet, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fleet') },
     { id: 'fuel', label: 'Fuel Management', icon: Fuel, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fuel') },
     { id: 'mileage', label: 'Mileage Report', icon: Gauge, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('mileage') },
+    { id: 'payments', label: 'Payments', icon: CreditCard, iconColor: 'text-emerald-400', active: 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-300 border-l-4 border-emerald-500', visible: hasAccess('payments') },
     { id: 'vendors', label: 'Vendor Management', icon: Building2, iconColor: 'text-indigo-400', active: 'bg-gradient-to-r from-indigo-500/20 to-sky-500/20 text-indigo-300 border-l-4 border-indigo-500', visible: hasAccess('vendors') },
     { id: 'hr', label: 'HR & Payroll', icon: Contact, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('hr') },
     { id: 'drivers', label: 'Driver Details', icon: Truck, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('drivers') },
@@ -1087,6 +1110,19 @@ export default function Administration({
               onDeleteVehicleMileage={onDeleteVehicleMileage}
               employees={employees}
               readOnly
+            />
+          )}
+
+          {activeTab === 'payments' && hasAccess('payments') && (
+            <Payments
+              user={user}
+              fuelLogs={fuelLogs}
+              bunkPaymentPeriods={bunkPaymentPeriods}
+              onSaveBunkPaymentPeriod={onSaveBunkPaymentPeriod}
+              onDeleteBunkPaymentPeriod={onDeleteBunkPaymentPeriod}
+              bunkPayments={bunkPayments}
+              onAddBunkPayment={onAddBunkPayment}
+              onDeleteBunkPayment={onDeleteBunkPayment}
             />
           )}
 

@@ -5,6 +5,8 @@ import {
   fuelLogs,
   billingInvoices,
   pettyCashVouchers,
+  bunkPaymentPeriods,
+  bunkPayments,
   maintenanceRecords,
   accountsEntries,
   staffEmployees,
@@ -56,6 +58,8 @@ import {
   FuelLog,
   BillingInvoice,
   PettyCashVoucher,
+  BunkPaymentPeriod,
+  BunkPayment,
   MaintenanceRecord,
   AccountsEntry,
   StaffEmployee,
@@ -618,6 +622,89 @@ export async function deletePettyCashVoucher(id: string) {
   } catch (error) {
     console.error("Database action failed in deletePettyCashVoucher:", error);
     throw new Error("Failed to delete petty cash voucher.", { cause: error });
+  }
+}
+
+// --- PAYMENTS MODULE OPERATIONS (bunk payment periods + their payments) ---
+export async function getBunkPaymentPeriods(): Promise<BunkPaymentPeriod[]> {
+  try {
+    const rows = await db.select().from(bunkPaymentPeriods);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getBunkPaymentPeriods:", error);
+    throw new Error("Failed to retrieve bunk payment periods.", { cause: error });
+  }
+}
+
+export async function saveBunkPaymentPeriod(period: BunkPaymentPeriod) {
+  try {
+    const id = period.id || String(Date.now());
+    const completePeriod = { ...period, id };
+    const dataString = JSON.stringify(completePeriod);
+
+    const existing = await db.select().from(bunkPaymentPeriods).where(eq(bunkPaymentPeriods.id, id));
+    if (existing.length > 0) {
+      await db.update(bunkPaymentPeriods).set({ data: dataString }).where(eq(bunkPaymentPeriods.id, id));
+    } else {
+      await db.insert(bunkPaymentPeriods).values({ id, data: dataString });
+    }
+    return await getBunkPaymentPeriods();
+  } catch (error) {
+    console.error("Database action failed in saveBunkPaymentPeriod:", error);
+    throw new Error("Failed to save bunk payment period.", { cause: error });
+  }
+}
+
+export async function deleteBunkPaymentPeriod(id: string) {
+  try {
+    await db.delete(bunkPaymentPeriods).where(eq(bunkPaymentPeriods.id, id));
+    return await getBunkPaymentPeriods();
+  } catch (error) {
+    console.error("Database action failed in deleteBunkPaymentPeriod:", error);
+    throw new Error("Failed to delete bunk payment period.", { cause: error });
+  }
+}
+
+export async function getBunkPayments(): Promise<BunkPayment[]> {
+  try {
+    const rows = await db.select().from(bunkPayments);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getBunkPayments:", error);
+    throw new Error("Failed to retrieve bunk payments.", { cause: error });
+  }
+}
+
+// Add Payment always appends - callers never pass an existing id for a new
+// payment, so this only ever inserts in practice; the upsert-by-id shape is
+// kept purely for consistency with every other save* function here (and as
+// a safety net, not a feature this module's UI exposes).
+export async function saveBunkPayment(payment: BunkPayment) {
+  try {
+    const id = payment.id || String(Date.now());
+    const completePayment = { ...payment, id };
+    const dataString = JSON.stringify(completePayment);
+
+    const existing = await db.select().from(bunkPayments).where(eq(bunkPayments.id, id));
+    if (existing.length > 0) {
+      await db.update(bunkPayments).set({ data: dataString }).where(eq(bunkPayments.id, id));
+    } else {
+      await db.insert(bunkPayments).values({ id, data: dataString });
+    }
+    return await getBunkPayments();
+  } catch (error) {
+    console.error("Database action failed in saveBunkPayment:", error);
+    throw new Error("Failed to save bunk payment.", { cause: error });
+  }
+}
+
+export async function deleteBunkPayment(id: string) {
+  try {
+    await db.delete(bunkPayments).where(eq(bunkPayments.id, id));
+    return await getBunkPayments();
+  } catch (error) {
+    console.error("Database action failed in deleteBunkPayment:", error);
+    throw new Error("Failed to delete bunk payment.", { cause: error });
   }
 }
 

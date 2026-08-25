@@ -36,6 +36,7 @@ import { SortState, SortDirection, extractLeadingNumber, extractTrailingNumber, 
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 import { exportReportToExcel, exportReportToPdf, ReportTableSection } from '../utils/reportExport';
 import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
+import { PETTY_CASH_USERS } from '../utils/pettyCashUsers';
 
 interface PettyCashProps {
   user: User;
@@ -81,12 +82,8 @@ const PAYMENT_MODE_LABELS: Record<MarketPodPaymentMode, string> = {
 // Administration.tsx/server.ts. Used to label/select whose ledger a Super
 // Admin/Principal is viewing, since vouchers/advances arrive unfiltered (with
 // `enteredBy`/`username` intact) for them but per-user-filtered for everyone
-// else.
-const PETTY_CASH_USERS: { username: string; label: string }[] = [
-  { username: 'vinoda', label: 'Vinod' },
-  { username: 'ramesh', label: 'Ramesh' },
-  { username: 'saneel', label: 'Saneel' }
-];
+// else. Now shared from utils/pettyCashUsers.ts - see that file's comment for
+// every other place that also reads this same list.
 
 const EXPENSE_CATEGORIES = [
   "ACCIDENT AND SETTELMENT",
@@ -1637,13 +1634,14 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <th className="px-3 py-2.5">Trip Sheet</th>
                     <th className="px-3 py-2.5">Remarks</th>
                     {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
+                    <th className="px-3 py-2.5">Source</th>
                     <th className="px-3 py-2.5 text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
                   {filteredVouchers.length === 0 ? (
                     <tr>
-                      <td colSpan={18 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
+                      <td colSpan={19 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
                         NO RECORDED PETTY CASH VOUCHERS MATCH THE SELECTION.
                         <div className="text-[10px] text-slate-400 font-sans mt-1">Use "Add Petty Cash Entry" above to authorize new cash disbursements.</div>
                       </td>
@@ -1708,6 +1706,18 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                             {v.enteredBy || '-'}
                           </td>
                         )}
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {v.source === 'fuel-management' ? (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200"
+                              title={`Auto-generated from Fuel Management's Extra Fuel${v.mileageReportId ? ` (Mileage Report ${v.mileageReportId})` : ''} - edit/delete via the linked Fuel Entry.`}
+                            >
+                              Fuel Management
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">Petty Cash</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 whitespace-nowrap text-center">
                           <div className="flex items-center justify-center gap-1.5">
                             <button
@@ -1718,25 +1728,36 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                               <Paperclip className="w-3 h-3" />
                               {v.documents && v.documents.length > 0 ? `Docs (${v.documents.length})` : 'Docs'}
                             </button>
-                            <button
-                              onClick={() => handleStartEdit(v)}
-                              className="text-teal-600 hover:text-teal-800 bg-teal-50 hover:bg-teal-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
-                              title="Edit this entry"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => {
-                                if (window.confirm(`Are you sure you want to delete entry ${v.entryNo}?`)) {
-                                  onDeleteVoucher(v.id);
-                                  setDeleteConfirmation({ label: 'Entry', identifier: `Entry no. ${v.entryNo}`, key: Date.now() });
-                                }
-                              }}
-                              className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
-                              title="Delete this entry"
-                            >
-                              Delete
-                            </button>
+                            {v.source === 'fuel-management' ? (
+                              <span
+                                className="text-slate-400 bg-slate-50 border border-slate-200 px-2 py-1 rounded-md font-bold text-[10px] cursor-not-allowed"
+                                title="This entry was generated from Fuel Management. To edit or remove it, update the linked Fuel Entry instead."
+                              >
+                                Locked
+                              </span>
+                            ) : (
+                              <>
+                                <button
+                                  onClick={() => handleStartEdit(v)}
+                                  className="text-teal-600 hover:text-teal-800 bg-teal-50 hover:bg-teal-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+                                  title="Edit this entry"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    if (window.confirm(`Are you sure you want to delete entry ${v.entryNo}?`)) {
+                                      onDeleteVoucher(v.id);
+                                      setDeleteConfirmation({ label: 'Entry', identifier: `Entry no. ${v.entryNo}`, key: Date.now() });
+                                    }
+                                  }}
+                                  className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+                                  title="Delete this entry"
+                                >
+                                  Delete
+                                </button>
+                              </>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -2320,33 +2341,44 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                                 <Paperclip className="w-3 h-3" />
                                 {v.documents && v.documents.length > 0 ? `Docs (${v.documents.length})` : 'Docs'}
                               </button>
-                              <button
-                                onClick={() => {
-                                  handleStartEdit(v);
-                                  setSelectedCellFilter(null);
-                                }}
-                                className="px-2 py-1 text-teal-600 hover:text-teal-800 bg-teal-50 hover:bg-teal-100 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
-                                title="Edit Entry"
-                              >
-                                Edit
-                              </button>
-                              <button
-                                onClick={async () => {
-                                  if (confirm(`Are you sure you want to delete entry ${v.entryNo}?`)) {
-                                    try {
-                                      await onDeleteVoucher(v.id!);
-                                      setDeleteConfirmation({ label: 'Entry', identifier: `Entry no. ${v.entryNo}`, key: Date.now() });
-                                    } catch (err) {
-                                      console.error(err);
-                                      triggerNotif('Failed to delete voucher.', 'error');
-                                    }
-                                  }
-                                }}
-                                className="px-2 py-1 text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
-                                title="Delete Entry"
-                              >
-                                Delete
-                              </button>
+                              {v.source === 'fuel-management' ? (
+                                <span
+                                  className="text-slate-400 bg-slate-50 border border-slate-200 px-2 py-1 rounded-md font-bold text-[10px] cursor-not-allowed"
+                                  title="This entry was generated from Fuel Management. To edit or remove it, update the linked Fuel Entry instead."
+                                >
+                                  Locked (Fuel Mgmt)
+                                </span>
+                              ) : (
+                                <>
+                                  <button
+                                    onClick={() => {
+                                      handleStartEdit(v);
+                                      setSelectedCellFilter(null);
+                                    }}
+                                    className="px-2 py-1 text-teal-600 hover:text-teal-800 bg-teal-50 hover:bg-teal-100 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+                                    title="Edit Entry"
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    onClick={async () => {
+                                      if (confirm(`Are you sure you want to delete entry ${v.entryNo}?`)) {
+                                        try {
+                                          await onDeleteVoucher(v.id!);
+                                          setDeleteConfirmation({ label: 'Entry', identifier: `Entry no. ${v.entryNo}`, key: Date.now() });
+                                        } catch (err) {
+                                          console.error(err);
+                                          triggerNotif('Failed to delete voucher.', 'error');
+                                        }
+                                      }
+                                    }}
+                                    className="px-2 py-1 text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+                                    title="Delete Entry"
+                                  >
+                                    Delete
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </td>
                         </tr>

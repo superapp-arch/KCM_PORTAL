@@ -30,7 +30,9 @@ import {
   TireBrand,
   TireRecord,
   BatteryRecord,
-  ToolsChecklistRecord
+  ToolsChecklistRecord,
+  BunkPaymentPeriod,
+  BunkPayment
 } from './types';
 
 export default function App() {
@@ -72,6 +74,8 @@ export default function App() {
   const [driverVehicleLookup, setDriverVehicleLookup] = useState<DriverVehicleLookup[]>([]);
   const [vehicleLoans, setVehicleLoans] = useState<VehicleLoan[]>([]);
   const [businessLoans, setBusinessLoans] = useState<BusinessLoan[]>([]);
+  const [bunkPaymentPeriods, setBunkPaymentPeriods] = useState<BunkPaymentPeriod[]>([]);
+  const [bunkPayments, setBunkPayments] = useState<BunkPayment[]>([]);
 
   // 1. Initial Session Handshake
   // Restores strictly from THIS browser's own stored token - never from a
@@ -137,7 +141,9 @@ export default function App() {
         driversRes,
         driverVehicleLookupRes,
         vehicleLoansRes,
-        businessLoansRes
+        businessLoansRes,
+        bunkPaymentPeriodsRes,
+        bunkPaymentsRes
       ] = await Promise.all([
         fetch('/api/fleet'),
         authFetch('/api/fuel'),
@@ -164,7 +170,9 @@ export default function App() {
         authFetch('/api/drivers/employees'),
         authFetch('/api/drivers/vehicle-lookup'),
         authFetch('/api/vehicle-loans'),
-        authFetch('/api/business-loans')
+        authFetch('/api/business-loans'),
+        authFetch('/api/bunk-payment-periods'),
+        authFetch('/api/bunk-payments')
       ]);
 
       if (fleetRes.ok) setVehicles(await fleetRes.json());
@@ -193,6 +201,8 @@ export default function App() {
       if (driverVehicleLookupRes.ok) setDriverVehicleLookup(await driverVehicleLookupRes.json());
       if (vehicleLoansRes.ok) setVehicleLoans(await vehicleLoansRes.json());
       if (businessLoansRes.ok) setBusinessLoans(await businessLoansRes.json());
+      if (bunkPaymentPeriodsRes.ok) setBunkPaymentPeriods(await bunkPaymentPeriodsRes.json());
+      if (bunkPaymentsRes.ok) setBunkPayments(await bunkPaymentsRes.json());
     } catch (err) {
       console.error('Failed to populate core ledgers:', err);
     }
@@ -966,6 +976,57 @@ export default function App() {
     }
   };
 
+  // Payments module - one POST route upserts a bunk payment period by id
+  // (create vs. update decided by whether `id` is present), same "no
+  // separate PUT" pattern /api/mileage already uses.
+  const handleSaveBunkPaymentPeriod = async (period: Omit<BunkPaymentPeriod, 'id'> & { id?: string }) => {
+    const res = await authFetch('/api/bunk-payment-periods', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(period)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save payment period.');
+    }
+  };
+
+  const handleDeleteBunkPaymentPeriod = async (id: string) => {
+    const res = await authFetch(`/api/bunk-payment-periods/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete payment period.');
+    }
+  };
+
+  const handleAddBunkPayment = async (payment: Omit<BunkPayment, 'id' | 'enteredBy'>) => {
+    const res = await authFetch('/api/bunk-payments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payment)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to log payment.');
+    }
+  };
+
+  const handleDeleteBunkPayment = async (id: string) => {
+    const res = await authFetch(`/api/bunk-payments/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete payment.');
+    }
+  };
+
   const handleAddFuelVendor = async (vendor: Omit<FuelVendor, 'id'>) => {
     const res = await authFetch('/api/fuel-vendors', {
       method: 'POST',
@@ -1135,6 +1196,12 @@ export default function App() {
         notifications={notifications}
         warehouseEntries={warehouseEntries}
         mileageReports={mileageReports}
+        bunkPaymentPeriods={bunkPaymentPeriods}
+        onSaveBunkPaymentPeriod={handleSaveBunkPaymentPeriod}
+        onDeleteBunkPaymentPeriod={handleDeleteBunkPaymentPeriod}
+        bunkPayments={bunkPayments}
+        onAddBunkPayment={handleAddBunkPayment}
+        onDeleteBunkPayment={handleDeleteBunkPayment}
         onUpdateVehicle={handleUpdateVehicle}
         onDeleteVehicle={handleDeleteVehicle}
         onAddFuelLog={handleAddFuelLog}

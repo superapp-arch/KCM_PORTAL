@@ -39,6 +39,19 @@ export const fuelLogs = pgTable('fuel_logs', {
   data: text('data').notNull(), // JSON string representing the full FuelLog object
 });
 
+// Payments module - bunk payment periods (Total Amount is derived from
+// fuelLogs at read time, never stored here - see src/types.ts's
+// BunkPaymentPeriod) and their individual payments (one-to-many).
+export const bunkPaymentPeriods = pgTable('bunk_payment_periods', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full BunkPaymentPeriod object
+});
+
+export const bunkPayments = pgTable('bunk_payments', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full BunkPayment object
+});
+
 // Billing invoices table
 export const billingInvoices = pgTable('billing_invoices', {
   id: text('id').primaryKey(),

@@ -21,6 +21,7 @@ import {
   REMINDER_DAYS_BEFORE_DUE
 } from './src/utils/vehicleCycleDefaults.ts';
 import { latestOdometerFor, computeKmStatus, computeAlignmentStatus, nextAlignmentDueKm, projectDueDate, daysUntil } from './src/utils/maintenanceDates.ts';
+import { PETTY_CASH_USERS } from './src/utils/pettyCashUsers.ts';
 import {
   User,
   Vehicle,
@@ -62,7 +63,9 @@ import {
   TireRecord,
   BatteryRecord,
   ToolsChecklistRecord,
-  AuditAction
+  AuditAction,
+  BunkPaymentPeriod,
+  BunkPayment
 } from './src/types.ts';
 import {
   seedDatabase,
@@ -116,6 +119,12 @@ import {
   getToolsChecklistRecords,
   saveToolsChecklistRecord,
   deleteToolsChecklistRecord,
+  getBunkPaymentPeriods,
+  saveBunkPaymentPeriod,
+  deleteBunkPaymentPeriod,
+  getBunkPayments,
+  saveBunkPayment,
+  deleteBunkPayment,
   migrateLegacyMaintenanceProfiles,
   migrateMileageReportTotalLitres,
   getAccountsEntries,
@@ -470,6 +479,22 @@ async function requireWarehouseAccess(req: express.Request, res: express.Respons
   }
   if (sessionUser.department !== 'super_admin' && sessionUser.email !== 'bhagya@kcmlogistics.in') {
     return res.status(403).json({ error: 'You do not have access to Warehouse Details.' });
+  }
+  next();
+}
+
+// Payments module (bunk payment periods + their payments) is restricted to
+// Praveen and super admins (Principal included - department 'super_admin'
+// covers both, same as every other "Super Admin / Principal only" gate in
+// this app) - mirrors Administration.tsx's own hasAccess('payments') check.
+const PAYMENTS_ACCESS_EMAILS = ['praveenkumar@kcmlogistics.in'];
+async function requirePaymentsAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (sessionUser.department !== 'super_admin' && !PAYMENTS_ACCESS_EMAILS.includes(sessionUser.email || '')) {
+    return res.status(403).json({ error: 'You do not have access to Payments.' });
   }
   next();
 }
@@ -865,6 +890,81 @@ async function removeMarketPodPettyCashLinks(entry: MarketPodEntry): Promise<voi
   for (const receipt of entry.balanceReceipts || []) {
     await deletePettyCashAdvance(`mp-bal-${entry.id}-${receipt.id}`);
   }
+}
+
+// Extra Fuel "Paid by Petty Cash" (see FuelManagement.tsx's Mileage tab) -
+// same spirit as syncMarketPodPettyCashLinks above, but writes a real
+// numbered Petty Cash Ledger VOUCHER (Category = Diesel Expenses, an expense
+// against the selected holder's float), not an Advance, since that's what
+// actually shows as a Ledger row with an Entry No./Category/Receiver -
+// matching what was asked for, not the simpler Advance shape.
+//
+// Deterministic id (`fuel-pc-<mileageReportId>`) makes this idempotent on
+// every save of the report - a second save with the same/changed amount
+// updates the SAME voucher in place (keeping its original Entry No.) rather
+// than creating a duplicate; a flip back to 'normal' (or the report losing
+// its Extra Fuel/holder) deletes it. Entry No. generation for a genuinely
+// new voucher reuses nextPettyCashEntryNo against the live vouchers list -
+// the exact same server-side authority POST /api/petty-cash itself uses, so
+// Fuel Management never invents its own numbering.
+//
+// Returns the linked voucher's id (or undefined once removed) so the caller
+// can write it back onto the MileageReport's own pettyCashEntryId field.
+async function syncFuelExtraPettyCashLink(report: MileageReport): Promise<string | undefined> {
+  const linkId = `fuel-pc-${report.id}`;
+  const extraLitres = report.extraFuel || 0;
+  const isPettyCash = report.extraFuelPaymentMode === 'petty_cash' && extraLitres > 0 && !!report.pettyCashHolderUsername;
+
+  if (!isPettyCash) {
+    const existing = (await getPettyCashVouchers()).find(v => v.id === linkId);
+    if (existing) {
+      await deletePettyCashVoucher(linkId);
+      await renumberPettyCashSequence();
+    }
+    return undefined;
+  }
+
+  const amount = parseFloat((extraLitres * (report.ratePerLitreNew || 0)).toFixed(2));
+  // Receiver: the driver on this trip if one's recorded, else just the
+  // vehicle - mirrors the same "who actually took the cash" logic a manually
+  // logged voucher's Receiver field is filled in with by hand.
+  const receiver = (report.driverName || '').trim() || report.vehicleNo;
+
+  const allVouchers = await getPettyCashVouchers();
+  const existing = allVouchers.find(v => v.id === linkId);
+  const entryNo = existing?.entryNo || nextPettyCashEntryNo(allVouchers);
+
+  await savePettyCashVoucher({
+    id: linkId,
+    entryNo,
+    date: report.date,
+    category: 'DIESEL EXPENSES',
+    location: report.location || '',
+    clientName: 'KCM',
+    vendor: 'kcm supply',
+    vehicleNumber: report.vehicleNo,
+    receiver,
+    vendorId: '',
+    amountReceived: 0,
+    cashPaid: amount,
+    balance: 0,
+    // Credit = a settlement/expense against the float (see
+    // PettyCashVoucher.transactionType) - this is cash paid out for fuel,
+    // same direction as an ordinary Cash Paid voucher.
+    transactionType: 'credit',
+    tripSheet: '',
+    remarks: `Extra fuel (${extraLitres} L) for trip - linked to Fuel Entry${report.driverName ? ` (${report.driverName})` : ''}`,
+    source: 'fuel-management',
+    mileageReportId: report.id,
+    // The selected Petty Cash holder, not whoever is logged into Fuel
+    // Management - this is whose float the cash actually came out of, and
+    // is what every Balance Net/running-balance calculation in PettyCash.tsx
+    // keys off (vouchersFor/balanceNetAt/voucherRunningBalance all group by
+    // enteredBy).
+    enteredBy: report.pettyCashHolderUsername
+  } as PettyCashVoucher);
+
+  return linkId;
 }
 
 // One-time backfill (safe to run on every startup - cheap no-op once caught
@@ -2517,6 +2617,13 @@ async function startServer() {
       const allVouchers = await getPettyCashVouchers();
       const existing = allVouchers.find(v => v.id === req.params.id);
       if (!canModifyPettyCashRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
+      // Generated from Fuel Management's Extra Fuel - hand-editing it here
+      // would desync it from the Fuel Entry that owns it (see
+      // syncFuelExtraPettyCashLink); the linked Fuel Entry is the only
+      // place it should change.
+      if (existing?.source === 'fuel-management') {
+        return res.status(409).json({ error: 'This entry was generated from Fuel Management. To edit it, update the linked Fuel Entry instead.' });
+      }
       if (req.body.entryNo && findDuplicateEntryNo(allVouchers, req.body.entryNo, req.params.id)) {
         return res.status(409).json({ error: `Entry No. ${req.body.entryNo} already exists.` });
       }
@@ -2536,6 +2643,13 @@ async function startServer() {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getPettyCashVouchers()).find(v => v.id === req.params.id);
       if (!canModifyPettyCashRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
+      // Option A (accounting integrity over convenience) - don't let this
+      // silently vanish from Petty Cash while the Fuel Entry still says
+      // "Paid by Petty Cash". Un-checking that box on the Fuel Entry is what
+      // removes it (see syncFuelExtraPettyCashLink).
+      if (existing?.source === 'fuel-management') {
+        return res.status(409).json({ error: 'This entry was generated from Fuel Management. To remove it, update the linked Fuel Entry instead.' });
+      }
       await deletePettyCashVoucher(req.params.id);
       // Deleting a voucher leaves a gap in its Entry No sequence - close it
       // immediately rather than leaving a permanent hole (see
@@ -3348,12 +3462,22 @@ async function startServer() {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const entry: MileageReport = req.body;
       if (isFutureDate(entry.date)) return res.status(400).json({ error: 'Mileage entry date cannot be in the future.' });
+      if (entry.pettyCashHolderUsername && !PETTY_CASH_USERS.some(u => u.username === entry.pettyCashHolderUsername)) {
+        return res.status(400).json({ error: 'Invalid Petty Cash Paid By selection.' });
+      }
       if (entry.id) {
         const existing = (await getMileageReports()).find(r => r.id === entry.id);
         if (!canModifyEntryRow(existing, sessionUser)) {
           return res.status(403).json({ error: 'You cannot modify this entry.' });
         }
-        const result = await saveMileageReport({ ...entry, enteredBy: existing?.enteredBy });
+        let result = await saveMileageReport({ ...entry, enteredBy: existing?.enteredBy });
+        const saved = result.find(r => r.id === entry.id);
+        if (saved) {
+          const linkedEntryId = await syncFuelExtraPettyCashLink(saved);
+          if (linkedEntryId !== saved.pettyCashEntryId) {
+            result = await saveMileageReport({ ...saved, pettyCashEntryId: linkedEntryId });
+          }
+        }
         return res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
       }
       // New entry: generate the id here (rather than leaving it to
@@ -3361,7 +3485,12 @@ async function startServer() {
       // caller - Fuel Entry's combined form needs it back immediately to
       // link the fuel log it's being saved alongside (see FuelLog.mileageReportId).
       const newId = String(Date.now());
-      const result = await saveMileageReport({ ...entry, id: newId, enteredBy: sessionUser?.username });
+      let result = await saveMileageReport({ ...entry, id: newId, enteredBy: sessionUser?.username });
+      const saved = result.find(r => r.id === newId);
+      if (saved) {
+        const linkedEntryId = await syncFuelExtraPettyCashLink(saved);
+        if (linkedEntryId) result = await saveMileageReport({ ...saved, pettyCashEntryId: linkedEntryId });
+      }
       res.json({ success: true, id: newId, data: filterEntryRowsForViewer(result, sessionUser) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -3374,8 +3503,134 @@ async function startServer() {
       const { id } = req.params;
       const existing = (await getMileageReports()).find(r => r.id === id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
+      // Reverse the linked Petty Cash voucher (if any) before the report
+      // itself is gone - same "delete cascades to its linked entry" rule
+      // Fuel Entry -> Mileage Report deletion already follows.
+      if (existing?.pettyCashEntryId || existing?.extraFuelPaymentMode === 'petty_cash') {
+        const linkId = `fuel-pc-${id}`;
+        if ((await getPettyCashVouchers()).some(v => v.id === linkId)) {
+          await deletePettyCashVoucher(linkId);
+          await renumberPettyCashSequence();
+        }
+      }
       const result = await deleteMileageReport(id);
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Payments module - reconciling what's owed to a fuel bunk (see
+  // src/types.ts's BunkPaymentPeriod/BunkPayment). Restricted to Praveen +
+  // Super Admins (requirePaymentsAccess above).
+  app.use('/api/bunk-payment-periods', requirePaymentsAccess);
+  app.use('/api/bunk-payments', requirePaymentsAccess);
+
+  app.get('/api/bunk-payment-periods', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      res.json(maskAttributionField(await getBunkPaymentPeriods(), 'enteredBy', sessionUser));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/bunk-payment-periods', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const body: BunkPaymentPeriod = req.body;
+      if (!body.bunkName || !body.location || !body.periodFrom || !body.periodTo) {
+        return res.status(400).json({ error: 'Bunk Name, Location, and both Period dates are required.' });
+      }
+      if (body.periodFrom > body.periodTo) {
+        return res.status(400).json({ error: 'Period From cannot be after Period To.' });
+      }
+      const allPeriods = await getBunkPaymentPeriods();
+      const existing = body.id ? allPeriods.find(p => p.id === body.id) : undefined;
+      const newId = body.id || String(Date.now());
+      const result = await saveBunkPaymentPeriod({ ...body, id: newId, enteredBy: existing?.enteredBy || sessionUser?.username });
+      await createAuditLog({
+        user: sessionUser, action: existing ? 'UPDATE' : 'CREATE', module: 'Payments', entityType: 'Bunk Payment Period', entityId: newId,
+        description: `${existing ? 'Updated' : 'Created'} payment period for ${body.bunkName} (${body.location}): ${body.periodFrom} to ${body.periodTo}`,
+        oldData: existing, newData: { ...body, id: newId },
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
+      res.json({ success: true, id: newId, data: maskAttributionField(result, 'enteredBy', sessionUser) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/bunk-payment-periods/:id', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const { id } = req.params;
+      const existing = (await getBunkPaymentPeriods()).find(p => p.id === id);
+      // Cascade - a period's payment history is meaningless once the period
+      // itself is gone, same "delete reverses everything it caused" rule
+      // Fuel Entry -> Mileage Report -> linked Petty Cash voucher follows.
+      const orphanedPayments = (await getBunkPayments()).filter(p => p.bunkPeriodId === id);
+      for (const payment of orphanedPayments) await deleteBunkPayment(payment.id);
+      const result = await deleteBunkPaymentPeriod(id);
+      await createAuditLog({
+        user: sessionUser, action: 'DELETE', module: 'Payments', entityType: 'Bunk Payment Period', entityId: id,
+        description: `Deleted payment period for ${existing?.bunkName || id} (${existing?.location || ''})${orphanedPayments.length > 0 ? ` and its ${orphanedPayments.length} payment(s)` : ''}`,
+        oldData: existing,
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
+      res.json({ success: true, data: maskAttributionField(result, 'enteredBy', sessionUser) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/bunk-payments', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      res.json(maskAttributionField(await getBunkPayments(), 'enteredBy', sessionUser));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Add Payment always appends - this only ever creates a new row (the UI
+  // never sends an existing id), never overwrites a prior payment. Balance
+  // is derived client-side from the full payment history, not enforced here.
+  app.post('/api/bunk-payments', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const body: BunkPayment = req.body;
+      if (!body.bunkPeriodId || !body.amount || body.amount <= 0 || !body.mode || !body.paidDate) {
+        return res.status(400).json({ error: 'Amount, Payment Mode, and Paid Date are required.' });
+      }
+      if (isFutureDate(body.paidDate)) return res.status(400).json({ error: 'Paid Date cannot be in the future.' });
+      const newId = String(Date.now());
+      const result = await saveBunkPayment({ ...body, id: newId, enteredBy: sessionUser?.username });
+      await createAuditLog({
+        user: sessionUser, action: 'CREATE', module: 'Payments', entityType: 'Bunk Payment', entityId: newId,
+        description: `Logged a ${body.mode} payment of ₹${body.amount} against payment period ${body.bunkPeriodId}`,
+        newData: { ...body, id: newId },
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
+      res.json({ success: true, data: maskAttributionField(result, 'enteredBy', sessionUser) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/bunk-payments/:id', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const { id } = req.params;
+      const existing = (await getBunkPayments()).find(p => p.id === id);
+      const result = await deleteBunkPayment(id);
+      await createAuditLog({
+        user: sessionUser, action: 'DELETE', module: 'Payments', entityType: 'Bunk Payment', entityId: id,
+        description: `Deleted a ${existing?.mode || ''} payment of ₹${existing?.amount || 0} from payment period ${existing?.bunkPeriodId || id}`,
+        oldData: existing,
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
+      res.json({ success: true, data: maskAttributionField(result, 'enteredBy', sessionUser) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

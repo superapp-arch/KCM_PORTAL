@@ -212,6 +212,18 @@ export interface PettyCashVoucher {
   // its per-holder running Balance column (debit adds cashPaid, credit
   // subtracts it) - see voucherRunningBalance in PettyCash.tsx.
   transactionType?: 'debit' | 'credit';
+  // Marks a voucher auto-created by another module rather than typed by hand
+  // in Petty Cash - currently only Fuel Management's petty-cash-paid Extra
+  // Fuel (see server.ts's syncFuelExtraPettyCashLink). Drives the Ledger's
+  // Source badge and the "generated from Fuel Management - edit the linked
+  // Fuel Entry instead" edit/delete guard in both PettyCash.tsx and
+  // server.ts. Absent for every ordinary manually-logged entry.
+  source?: 'fuel-management';
+  // The MileageReport this entry was generated from (see MileageReport.
+  // pettyCashEntryId, the reverse pointer) - only set alongside source =
+  // 'fuel-management'. One report -> at most one voucher: the deterministic
+  // id `fuel-pc-<mileageReportId>` is upserted, never duplicated.
+  mileageReportId?: string;
 }
 
 // One-off (or top-up) cash-advance entry for a Petty Cash user's running
@@ -880,9 +892,70 @@ export interface MileageReport {
   // total (70), never the raw expression text.
   extraFuel?: number;
   ratePerLitreNew?: number; // rate applied to extraFuel in the Total Amount calc
-  totalAmount?: number; // auto = dieselAmount + (extraFuel * ratePerLitreNew)
+  // auto = dieselAmount + (extraFuel * ratePerLitreNew) - EXCEPT when
+  // extraFuelPaymentMode is 'petty_cash' below, where it's dieselAmount only
+  // (the extra fuel's cost lives entirely in the linked Petty Cash voucher
+  // instead, so it isn't double-counted here). totalLitres follows the same
+  // rule: litres only, not litres+extraFuel, when petty-cash-paid.
+  totalAmount?: number;
+  // "Paid by Petty Cash" for Extra Fuel (see FuelManagement.tsx's Mileage
+  // tab) - undefined/'normal' (the default) is today's original behavior
+  // (extraFuel folds into totalLitres/totalAmount above). 'petty_cash' means
+  // this specific top-up was paid out of a Petty Cash handler's float
+  // instead of the normal fuel/vendor account: extraFuel/ratePerLitreNew
+  // stay stored as-is (still shown on this record), but totalLitres/
+  // totalAmount exclude them, and a real Petty Cash Ledger voucher is
+  // auto-created/kept in sync server-side (see server.ts's
+  // syncFuelExtraPettyCashLink) - one linked voucher per report, upserted by
+  // a deterministic id, never duplicated.
+  extraFuelPaymentMode?: 'normal' | 'petty_cash';
+  // Which of the 3 Petty Cash logins (see utils/pettyCashUsers.ts) this
+  // extra fuel is charged against - required whenever extraFuelPaymentMode
+  // is 'petty_cash'. Determines whose running float balance the linked
+  // voucher counts against (PettyCashVoucher.enteredBy is set to this).
+  pettyCashHolderUsername?: string;
+  // The linked PettyCashVoucher's id, once created - lets the UI show "Paid
+  // by Petty Cash - Ramesh: ₹2,000" without re-deriving the deterministic
+  // id, and lets deleting/un-checking this report clean up that voucher.
+  pettyCashEntryId?: string;
   documents?: VehicleDocument[];
   enteredBy?: string; // username, stamped server-side; visible only to super admins
+}
+
+// Payments module - reconciling what's owed to a fuel bunk (Bunk Name +
+// Location, both pulled straight from Fuel Management's own FuelLog.bunkName/
+// location, never re-typed here) against however many payments actually
+// settle it. One row per (bunk, custom date period) - the same (Location,
+// Bunk Name) pair Fuel Management's own Bunk Summary panel already groups
+// by, just with a period the office sets themselves instead of a fixed
+// Till-Date/This-Month toggle. Total Amount is deliberately NOT a field
+// here - it's always derived at read time as SUM of FuelLog.amount for this
+// bunkName+location within periodFrom..periodTo (see Payments.tsx's
+// computeTotalAmount / server.ts's own mirror of it), so it can never drift
+// from what Fuel Management actually shows.
+export interface BunkPaymentPeriod {
+  id: string;
+  bunkName: string;
+  location: string;
+  periodFrom: string; // YYYY-MM-DD
+  periodTo: string; // YYYY-MM-DD
+  enteredBy?: string; // username, stamped server-side; visible only to super admins, same masking every other module's enteredBy already uses
+}
+
+// One individual payment against a BunkPaymentPeriod - never overwritten;
+// settling a period across Cash/Card/Netbanking or multiple installments is
+// just more rows against the same bunkPeriodId, not edits to a single total.
+export interface BunkPayment {
+  id: string;
+  bunkPeriodId: string; // FK -> BunkPaymentPeriod.id
+  amount: number;
+  mode: 'card' | 'cash' | 'netbanking';
+  paidDate: string; // YYYY-MM-DD
+  // username, stamped server-side - visible only to Super Admins/Principal
+  // (department === 'super_admin'), NOT Praveen even though he has module
+  // access - same maskAttributionField treatment server.ts already applies
+  // to FuelLog.enteredBy.
+  enteredBy?: string;
 }
 
 // Driver Details module - a driver-focused counterpart to HR & Payroll.
