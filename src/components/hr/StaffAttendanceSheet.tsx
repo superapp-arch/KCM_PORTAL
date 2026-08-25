@@ -71,8 +71,38 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+// StaffEmployee.dateOfLeaving is free-text "DD/MM/YYYY" (no date picker, see
+// StaffFormModal) - tolerate "-" as a separator and single-digit day/month
+// too, since nothing enforces the exact format on entry. Returns a "YYYY-MM"
+// month key, or null if the field is empty/unparsable (treated as "never
+// left" below, so an odd manual entry can never wrongly hide someone).
+function parseDateOfLeavingMonthKey(raw?: string): string | null {
+  if (!raw) return null;
+  const m = raw.trim().match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (!m) return null;
+  const day = parseInt(m[1], 10);
+  const month = parseInt(m[2], 10);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return `${m[3]}-${String(month).padStart(2, '0')}`;
+}
+
+// An employee who has left stays visible for the month they actually left in
+// (and every month before it) - e.g. leaving Aug 25 still shows their August
+// attendance in full - but drops out of every month from the following one
+// onward, regardless of the Active/Inactive tab selected. An employee with
+// no Date of Leaving (or an unparsable one) is always visible.
+function isEmployeeVisibleForMonth(emp: StaffEmployee, month: string): boolean {
+  const leavingMonth = parseDateOfLeavingMonthKey(emp.dateOfLeaving);
+  return !leavingMonth || month <= leavingMonth;
+}
+
 export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheetProps) {
   const [month, setMonth] = useState(currentMonthKey());
+  // Active/Inactive/All tab - same convention/default as Staff Salary's own
+  // status tab. Narrows within whatever the month cutoff below already
+  // allows through, so switching to Inactive still only shows someone who
+  // left up through the selected month, never a future one.
+  const [statusFilter, setStatusFilter] = useState<'Active' | 'Inactive' | 'All'>('Active');
   const [attendance, setAttendance] = useState<StaffAttendance[]>([]);
   const [holidays, setHolidays] = useState<StaffHoliday[]>([]);
   const [summaryEmp, setSummaryEmp] = useState<StaffEmployee | null>(null);
@@ -86,6 +116,14 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
 
   const totalDays = daysInMonth(month);
   const monthAttendance = useMemo(() => attendance.filter(a => a.date.startsWith(month)), [attendance, month]);
+
+  // The list this whole sheet (grid + auto-fill) actually operates on for
+  // the selected month - see isEmployeeVisibleForMonth above for the "still
+  // shows through the month they left, hidden after" rule.
+  const visibleEmployees = useMemo(
+    () => employees.filter(e => isEmployeeVisibleForMonth(e, month) && (statusFilter === 'All' || e.status === statusFilter)),
+    [employees, month, statusFilter]
+  );
 
   // "Days Worked / Working Days" summary column - working days excludes this
   // employee's own Holiday/WeekOff-marked days, mirroring the server's
@@ -152,7 +190,7 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
       const date = `${month}-${String(day).padStart(2, '0')}`;
       const dow = new Date(date).getDay();
       const holiday = holidays.find(h => h.date === date);
-      employees.forEach(emp => {
+      visibleEmployees.forEach(emp => {
         if (cellRecord(emp.id, day)) return;
         if (holiday) entries.push({ empId: emp.id, date, status: 'Holiday' });
         else if (dow === 0) entries.push({ empId: emp.id, date, status: 'WeekOff' });
@@ -182,10 +220,27 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
           <button onClick={() => setMonth(shiftMonth(month, -1))} className="p-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"><ChevronLeft className="w-3.5 h-3.5" /></button>
           <input type="month" value={month} max={currentMonthKey()} onChange={e => setMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
           <button onClick={() => setMonth(shiftMonth(month, 1))} disabled={month >= currentMonthKey()} className="p-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent cursor-pointer"><ChevronRight className="w-3.5 h-3.5" /></button>
+          {/* Active/Inactive/All - same tab convention as Staff Salary's own
+              status filter. A leaver still shows here for any month through
+              the one they left in (see isEmployeeVisibleForMonth) - this tab
+              only narrows within that, e.g. Inactive to browse just past
+              leavers for a given month. */}
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 font-semibold">
+            {(['Active', 'Inactive', 'All'] as const).map(s => (
+              <button key={s} onClick={() => setStatusFilter(s)}
+                className={`px-2.5 py-1 rounded-md cursor-pointer ${statusFilter === s ? 'bg-gradient-to-r from-pink-600 to-purple-700 text-white' : 'text-slate-600 hover:bg-slate-200'}`}>
+                {s}
+              </button>
+            ))}
+          </div>
           <button onClick={autoFillSundaysAndHolidays} className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-lg font-semibold cursor-pointer">
             Auto-fill Sundays (Week Off) &amp; Holidays
           </button>
           <div className="ml-auto">
+            {/* Full employee list, not visibleEmployees - its per-employee
+                dropdown and Last 6 Months range are independent of the grid's
+                single selected month, so a recent leaver should still be
+                pickable here even when the grid itself has moved past them. */}
             <AttendanceReportDownload employees={employees} />
           </div>
         </div>
@@ -209,7 +264,13 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {employees.map(emp => {
+              {visibleEmployees.length === 0 ? (
+                <tr>
+                  <td colSpan={totalDays + 2} className="text-center py-10 text-slate-400 font-mono text-xs">
+                    NO {statusFilter.toUpperCase()} EMPLOYEES FOR THIS MONTH.
+                  </td>
+                </tr>
+              ) : visibleEmployees.map(emp => {
                 const { daysWorked, workingDays } = employeeMonthSummary(emp.id);
                 return (
                   <tr key={emp.id} className="hover:bg-purple-50/40">

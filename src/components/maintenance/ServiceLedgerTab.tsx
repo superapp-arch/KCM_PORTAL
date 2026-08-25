@@ -22,6 +22,7 @@ import SortHeader from '../SortHeader';
 import { authFetch } from '../../authFetch';
 import { latestOdometerFor, computeKmStatus, computeWarrantyStatus } from '../../utils/maintenanceDates';
 import { SortState, compareText, compareNumber } from '../../utils/sort';
+import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
 
 interface ServiceLedgerTabProps {
   performedBy: string; // current user's username - for the Service Invoice audit trail
@@ -68,6 +69,9 @@ export default function ServiceLedgerTab({
   const toggleExpand = (id: string) => setExpandedId(prev => prev === id ? null : id);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  // Big, centered save/delete confirmation (see ConfirmationModal.tsx).
+  const [saveConfirmation, setSaveConfirmation] = useState<{ identifier: string; key: number } | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{ identifier: string; key: number } | null>(null);
 
   // Form state
   const [regNo, setRegNo] = useState('');
@@ -243,11 +247,10 @@ export default function ServiceLedgerTab({
       };
       if (editingId) {
         await onUpdateRecord(editingId, payload);
-        triggerNotif('✏️ Maintenance record updated successfully!');
       } else {
         await onAddRecord(payload);
-        triggerNotif('🔧 Maintenance report published and archived in active logs!');
       }
+      setSaveConfirmation({ identifier: payload.regNo, key: Date.now() });
       resetForm();
     } catch (err) {
       console.error(err);
@@ -261,7 +264,7 @@ export default function ServiceLedgerTab({
     if (!confirm(`Delete maintenance entry for vehicle ${r.regNo}? This action is irreversible.`)) return;
     try {
       await onDeleteRecord(r.id);
-      triggerNotif('🗑️ Maintenance log successfully deleted from server.');
+      setDeleteConfirmation({ identifier: r.regNo, key: Date.now() });
     } catch (err) {
       console.error(err);
       triggerNotif(err instanceof Error ? err.message : 'Failed to delete maintenance log.', 'error');
@@ -763,6 +766,9 @@ export default function ServiceLedgerTab({
           }}
         />
       )}
+
+      <SaveConfirmationModal key={saveConfirmation?.key} open={!!saveConfirmation} label="Maintenance record" identifier={saveConfirmation?.identifier} onDone={() => setSaveConfirmation(null)} />
+      <DeleteConfirmationModal key={deleteConfirmation?.key} open={!!deleteConfirmation} label="Maintenance record" identifier={deleteConfirmation?.identifier} onDone={() => setDeleteConfirmation(null)} />
     </div>
   );
 }

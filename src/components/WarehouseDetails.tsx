@@ -35,11 +35,26 @@ import {
 import { WAREHOUSE_LOCATIONS, WAREHOUSE_CITIES, cityForWarehouseName } from '../utils/warehouseLocations';
 import RatesSummary from './warehouse/RatesSummary';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
+import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
 
 // Suggestions only (not a locked list) for a vendor vehicle's Type field,
 // mirroring FleetSheet.tsx's own VEHICLE_TYPES - Vehicle Category instead
 // reuses the real shared VEHICLE_CATEGORIES (Dry/Hybrid/Walkes/Reefer) above.
 const VEHICLE_TYPE_SUGGESTIONS = ['Tata Ace', '207', '407', '14 FT', '17 FT', '20 FT', '32 FT'];
+
+// Opening KM/Closing KM/Add KM/Odometer Utilised are whole-number-only
+// (Group A KM-tracking fields, see the Log New Deployment decimal-
+// restriction requirement) - Rate/Extra KM, Rate/Extra Hour, Extra KM/Hour
+// Amount, and Variable Cost (Group B) are untouched and keep accepting
+// decimals as before. "." (and the numpad-decimal "," some locales send) is
+// blocked at the keystroke level here, not just rejected on submit;
+// roundToWhole below (standard round-half-up via Math.round, never
+// Math.floor/truncate) is the belt-and-braces backstop for a pasted or
+// programmatically-set decimal value slipping past the keydown block.
+const blockDecimalKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  if (e.key === '.' || e.key === ',') e.preventDefault();
+};
+const roundToWhole = (n: number): number => Math.round(n);
 
 interface WarehouseDetailsProps {
   user: User;
@@ -75,6 +90,11 @@ export default function WarehouseDetails({
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<string | null>(null);
+  // Big, centered save/delete confirmation (see ConfirmationModal.tsx) for
+  // the "Post Warehouse Details Log" action - `key` increments on every
+  // save/delete so React remounts it fresh each time.
+  const [saveConfirmation, setSaveConfirmation] = useState<{ identifier: string; key: number } | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{ identifier: string; key: number } | null>(null);
   // "Log New Warehouse Deployment" is a slide-out sidebar now (matching Fuel
   // Management/Mileage Report's own +Add Entry pattern), closed by default,
   // instead of sitting permanently open as a left-hand panel.
@@ -170,7 +190,9 @@ export default function WarehouseDetails({
   const [editAdHocToCity, setEditAdHocToCity] = useState('');
 
   // Auto-calculated fields for new entry form
-  const kmUtilised = Math.max(0, closingKm - openingKm);
+  // Odometer Utilised is whole-number-only - round-half-up (Math.round), not
+  // truncate, so e.g. 12.5 -> 13 rather than 12 (see roundToWhole above).
+  const kmUtilised = roundToWhole(Math.max(0, closingKm - openingKm));
   const workingDaysAuto = computeAutoWorkingDays(workingMonth, deductSundays, holidaysCount);
   const workingDays = resolveWorkingDays(workingDaysAuto, workingDaysOverride);
   const kmSlabNumber = parseFloat(kmSlab) || 0;
@@ -233,13 +255,16 @@ export default function WarehouseDetails({
   // already uses above (unlike Scheduled Rate, which locks read-only once matched).
   useEffect(() => {
     if (fixedHours === 12 && kmSlabNumber > 0 && workingDays > 0) {
-      setExtraKm(round2(kmUtilised - (kmSlabNumber / workingDays)));
+      // Add KM is whole-number-only (Group A) - round-half-up, not round2's
+      // 2-decimal precision, so the auto-fill never lands a decimal in a
+      // field the input itself blocks "." on.
+      setExtraKm(roundToWhole(kmUtilised - (kmSlabNumber / workingDays)));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fixedHours, kmUtilised, kmSlabNumber, workingDays]);
 
   // Auto-calculated fields for edit modal
-  const editKmUtilised = Math.max(0, editClosingKm - editOpeningKm);
+  const editKmUtilised = roundToWhole(Math.max(0, editClosingKm - editOpeningKm));
   const editWorkingDaysAuto = computeAutoWorkingDays(editWorkingMonth, editDeductSundays, editHolidaysCount);
   const editWorkingDays = resolveWorkingDays(editWorkingDaysAuto, editWorkingDaysOverride);
   const editKmSlabNumber = parseFloat(editKmSlab) || 0;
@@ -275,7 +300,7 @@ export default function WarehouseDetails({
   // effect's comment for the formula/reasoning.
   useEffect(() => {
     if (editFixedHours === 12 && editKmSlabNumber > 0 && editWorkingDays > 0) {
-      setEditExtraKm(round2(editKmUtilised - (editKmSlabNumber / editWorkingDays)));
+      setEditExtraKm(roundToWhole(editKmUtilised - (editKmSlabNumber / editWorkingDays)));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editFixedHours, editKmUtilised, editKmSlabNumber, editWorkingDays]);
@@ -470,7 +495,7 @@ export default function WarehouseDetails({
       setAdHocToCity('');
       setShowAddSidebar(false);
 
-      triggerNotif('🏬 New warehouse details log saved & calculated successfully!');
+      setSaveConfirmation({ identifier: `${vehicleNumber.toUpperCase().trim()} (SL No. ${nextSlNo})`, key: Date.now() });
     } catch (err) {
       console.error(err);
       alert('Failed to save warehouse entry.');
@@ -641,7 +666,7 @@ export default function WarehouseDetails({
   ].includes(userEmail);
 
   // Delete Entry
-  const handleDelete = async (id: string, slNo: number) => {
+  const handleDelete = async (id: string, slNo: number, vehicleNumber: string) => {
     if (!canDelete) {
       alert('You do not have permission to delete warehouse entry logs.');
       return;
@@ -649,7 +674,7 @@ export default function WarehouseDetails({
     if (!confirm(`Are you sure you want to delete warehouse entry SL No. ${slNo}? This cannot be undone.`)) return;
     try {
       await onDeleteEntry(id);
-      triggerNotif('🗑️ Warehouse entry log removed.');
+      setDeleteConfirmation({ identifier: `${vehicleNumber || '-'} (SL No. ${slNo})`, key: Date.now() });
     } catch (err) {
       console.error(err);
       alert(err instanceof Error ? err.message : 'Failed to delete warehouse entry log.');
@@ -1242,8 +1267,10 @@ export default function WarehouseDetails({
                 <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Opening KM (Auto)</label>
                 <input
                   type="number"
+                  step="1"
                   value={openingKm}
-                  onChange={(e) => setOpeningKm(Number(e.target.value))}
+                  onKeyDown={blockDecimalKey}
+                  onChange={(e) => setOpeningKm(roundToWhole(Number(e.target.value)))}
                   className="w-full bg-slate-200 border border-purple-100 rounded-lg p-2 text-xs font-mono font-bold focus:outline-none"
                   placeholder="Odometer"
                 />
@@ -1253,9 +1280,11 @@ export default function WarehouseDetails({
                 <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Closing KM *</label>
                 <input
                   type="number"
+                  step="1"
                   required
                   value={closingKm || ''}
-                  onChange={(e) => setClosingKm(Number(e.target.value))}
+                  onKeyDown={blockDecimalKey}
+                  onChange={(e) => setClosingKm(roundToWhole(Number(e.target.value)))}
                   className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 text-xs font-mono font-bold focus:ring-2 focus:ring-pink-500 focus:outline-none text-purple-950"
                   placeholder="Enter ending KM"
                 />
@@ -1300,9 +1329,11 @@ export default function WarehouseDetails({
                 <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide" title={fixedHours === 12 ? 'Auto = this entry\'s KM Utilised - (Km Slab / Working Days) - can go negative on a lighter day. Still editable by hand.' : 'km run beyond the KM Slab'}>Add KM</label>
                 <input
                   type="number"
+                  step="1"
                   placeholder="0"
                   value={extraKm || ''}
-                  onChange={(e) => setExtraKm(Number(e.target.value))}
+                  onKeyDown={blockDecimalKey}
+                  onChange={(e) => setExtraKm(roundToWhole(Number(e.target.value)))}
                   className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1 text-xs focus:outline-none"
                 />
               </div>
@@ -1814,7 +1845,7 @@ export default function WarehouseDetails({
                             </button>
                             {canDelete && (
                               <button
-                                onClick={() => handleDelete(e.id, idx + 1)}
+                                onClick={() => handleDelete(e.id, idx + 1, e.vehicleNumber)}
                                 className="p-1.5 text-pink-600 hover:bg-pink-50 rounded-lg transition-colors cursor-pointer"
                                 title="Delete record"
                               >
@@ -2045,8 +2076,10 @@ export default function WarehouseDetails({
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Opening KM (Manual Override)</label>
                   <input
                     type="number"
+                    step="1"
                     value={editOpeningKm}
-                    onChange={(e) => setEditOpeningKm(Number(e.target.value))}
+                    onKeyDown={blockDecimalKey}
+                    onChange={(e) => setEditOpeningKm(roundToWhole(Number(e.target.value)))}
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 font-mono font-bold focus:outline-none"
                   />
                 </div>
@@ -2054,9 +2087,11 @@ export default function WarehouseDetails({
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Closing KM *</label>
                   <input
                     type="number"
+                    step="1"
                     required
                     value={editClosingKm}
-                    onChange={(e) => setEditClosingKm(Number(e.target.value))}
+                    onKeyDown={blockDecimalKey}
+                    onChange={(e) => setEditClosingKm(roundToWhole(Number(e.target.value)))}
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 font-mono font-bold focus:outline-none text-purple-950"
                   />
                 </div>
@@ -2097,8 +2132,10 @@ export default function WarehouseDetails({
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1" title={editFixedHours === 12 ? 'Auto = this entry\'s KM Utilised - (Km Slab / Working Days) - can go negative on a lighter day. Still editable by hand.' : 'km run beyond the KM Slab'}>Add KM</label>
                   <input
                     type="number"
+                    step="1"
                     value={editExtraKm}
-                    onChange={(e) => setEditExtraKm(Number(e.target.value))}
+                    onKeyDown={blockDecimalKey}
+                    onChange={(e) => setEditExtraKm(roundToWhole(Number(e.target.value)))}
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2"
                   />
                 </div>
@@ -2350,6 +2387,23 @@ export default function WarehouseDetails({
         </div>
       )}
 
+      {/* Big, centered save/delete confirmation for "Post Warehouse Details
+          Log" (see ConfirmationModal.tsx) - keyed by .key so each fully
+          remounts (fresh confetti/shake) on every save/delete. */}
+      <SaveConfirmationModal
+        key={saveConfirmation?.key}
+        open={!!saveConfirmation}
+        label="Warehouse log"
+        identifier={saveConfirmation?.identifier}
+        onDone={() => setSaveConfirmation(null)}
+      />
+      <DeleteConfirmationModal
+        key={deleteConfirmation?.key}
+        open={!!deleteConfirmation}
+        label="Warehouse log"
+        identifier={deleteConfirmation?.identifier}
+        onDone={() => setDeleteConfirmation(null)}
+      />
     </div>
   );
 }

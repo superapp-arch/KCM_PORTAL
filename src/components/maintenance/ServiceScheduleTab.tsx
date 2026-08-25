@@ -14,6 +14,7 @@ import {
   AC_SERVICE_CYCLE_DAYS, AC_SERVICE_CATEGORIES, isAcServiceEligible,
   REMINDER_DAYS_BEFORE_DUE
 } from '../../utils/vehicleCycleDefaults';
+import { SaveConfirmationModal } from '../ConfirmationModal';
 
 interface ServiceScheduleTabProps {
   vehicles: Vehicle[];
@@ -88,10 +89,11 @@ const emptySchedule = (regNo: string): VehicleServiceSchedule => ({
 // Invoice generation both still read them for their own km-remaining
 // alert/"next service due" note - removing them would silently break those).
 function VehicleScheduleTable({
-  vehicles, mileageReports, vehicleServiceSchedules, onSave, triggerNotif
+  vehicles, mileageReports, vehicleServiceSchedules, onSave, triggerNotif, onSaved
 }: {
   vehicles: Vehicle[]; mileageReports: MileageReport[]; vehicleServiceSchedules: VehicleServiceSchedule[];
   onSave: (s: VehicleServiceSchedule) => Promise<void>; triggerNotif: (msg: string, type?: 'success' | 'error') => void;
+  onSaved: (label: string, identifier: string) => void;
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
@@ -138,7 +140,7 @@ function VehicleScheduleTable({
         toSave.serviceHistory = [{ date: original.lastServiceDate, km: original.lastServiceKm }, ...(toSave.serviceHistory || [])].slice(0, 10);
       }
       await onSave(toSave);
-      triggerNotif(`Service schedule saved for ${form.regNo}.`);
+      onSaved('Service schedule', form.regNo);
       closeEdit();
     } catch (err) {
       triggerNotif(err instanceof Error ? err.message : 'Failed to save service schedule.', 'error');
@@ -339,10 +341,11 @@ const CYCLE_TAB_CONFIG: Record<'washing' | 'acservice', CycleTabConfig> = {
 };
 
 function CycleTable({
-  kind, vehicles, vehicleServiceSchedules, onSave, triggerNotif
+  kind, vehicles, vehicleServiceSchedules, onSave, triggerNotif, onSaved
 }: {
   kind: 'washing' | 'acservice'; vehicles: Vehicle[]; vehicleServiceSchedules: VehicleServiceSchedule[];
   onSave: (s: VehicleServiceSchedule) => Promise<void>; triggerNotif: (msg: string, type?: 'success' | 'error') => void;
+  onSaved: (label: string, identifier: string) => void;
 }) {
   const cfg = CYCLE_TAB_CONFIG[kind];
   const [searchTerm, setSearchTerm] = useState('');
@@ -399,7 +402,7 @@ function CycleTable({
         (toSave as any)[cfg.historyField] = history;
       }
       await onSave(toSave);
-      triggerNotif(`${cfg.label} schedule saved for ${form.regNo}.`);
+      onSaved(`${cfg.label} schedule`, form.regNo);
       closeEdit();
     } catch (err) {
       triggerNotif(err instanceof Error ? err.message : `Failed to save ${cfg.label.toLowerCase()} schedule.`, 'error');
@@ -553,6 +556,12 @@ export default function ServiceScheduleTab({
   const [activeTab, setActiveTab] = useState<'schedule' | 'washing' | 'acservice'>('schedule');
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
+  // Big, centered save confirmation (see ConfirmationModal.tsx) - no delete
+  // action exists here (Service Schedule is an upsert-only register), so
+  // only the save variant is wired in. Shared across all three sub-tabs
+  // (Vehicle Service Schedule, Washing, AC Service).
+  const [saveConfirmation, setSaveConfirmation] = useState<{ label: string; identifier: string; key: number } | null>(null);
+  const handleSaved = (label: string, identifier: string) => setSaveConfirmation({ label, identifier, key: Date.now() });
 
   return (
     <div className="space-y-4">
@@ -585,14 +594,16 @@ export default function ServiceScheduleTab({
       </div>
 
       {activeTab === 'schedule' && (
-        <VehicleScheduleTable vehicles={vehicles} mileageReports={mileageReports} vehicleServiceSchedules={vehicleServiceSchedules} onSave={onSaveVehicleServiceSchedule} triggerNotif={triggerNotif} />
+        <VehicleScheduleTable vehicles={vehicles} mileageReports={mileageReports} vehicleServiceSchedules={vehicleServiceSchedules} onSave={onSaveVehicleServiceSchedule} triggerNotif={triggerNotif} onSaved={handleSaved} />
       )}
       {activeTab === 'washing' && (
-        <CycleTable kind="washing" vehicles={vehicles} vehicleServiceSchedules={vehicleServiceSchedules} onSave={onSaveVehicleServiceSchedule} triggerNotif={triggerNotif} />
+        <CycleTable kind="washing" vehicles={vehicles} vehicleServiceSchedules={vehicleServiceSchedules} onSave={onSaveVehicleServiceSchedule} triggerNotif={triggerNotif} onSaved={handleSaved} />
       )}
       {activeTab === 'acservice' && (
-        <CycleTable kind="acservice" vehicles={vehicles} vehicleServiceSchedules={vehicleServiceSchedules} onSave={onSaveVehicleServiceSchedule} triggerNotif={triggerNotif} />
+        <CycleTable kind="acservice" vehicles={vehicles} vehicleServiceSchedules={vehicleServiceSchedules} onSave={onSaveVehicleServiceSchedule} triggerNotif={triggerNotif} onSaved={handleSaved} />
       )}
+
+      <SaveConfirmationModal key={saveConfirmation?.key} open={!!saveConfirmation} label={saveConfirmation?.label || 'Entry'} identifier={saveConfirmation?.identifier} onDone={() => setSaveConfirmation(null)} />
     </div>
   );
 }

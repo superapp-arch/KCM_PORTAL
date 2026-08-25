@@ -4,6 +4,7 @@ import { Wrench, Search, Trash2, Plus, X, Check, CheckCircle2, AlertCircle } fro
 import DateInput from '../DateInput';
 import SortHeader from '../SortHeader';
 import { SortState, compareText } from '../../utils/sort';
+import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
 
 interface ToolsChecklistTabProps {
   vehicles: Vehicle[];
@@ -31,6 +32,9 @@ export default function ToolsChecklistTab({ vehicles, toolsChecklistRecords, onS
   const [form, setForm] = useState(emptyForm());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  // Big, centered save/delete confirmation (see ConfirmationModal.tsx).
+  const [saveConfirmation, setSaveConfirmation] = useState<{ identifier: string; key: number } | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{ identifier: string; key: number } | null>(null);
   // Newest-first by Check Date was already this table's default - now
   // exposed as the same Sort By dropdown convention used elsewhere.
   const [sort, setSort] = useState<SortState | null>({ key: 'checkDate', direction: 'desc' });
@@ -69,7 +73,7 @@ export default function ToolsChecklistTab({ vehicles, toolsChecklistRecords, onS
     setIsSubmitting(true);
     try {
       await onSaveToolsChecklistRecord({ ...form, regNo: form.regNo.trim().toUpperCase(), checkedBy: form.checkedBy.trim() || undefined, remarks: form.remarks.trim() || undefined });
-      triggerNotif('Tools checklist logged.');
+      setSaveConfirmation({ identifier: `${form.regNo.trim().toUpperCase()} (${form.checkDate})`, key: Date.now() });
       resetForm();
     } catch (err) {
       console.error(err);
@@ -83,7 +87,7 @@ export default function ToolsChecklistTab({ vehicles, toolsChecklistRecords, onS
     if (!confirm(`Delete the tools checklist entry for ${r.regNo} on ${r.checkDate}?`)) return;
     try {
       await onDeleteToolsChecklistRecord(r.id);
-      triggerNotif('Tools checklist entry deleted.');
+      setDeleteConfirmation({ identifier: `${r.regNo} (${r.checkDate})`, key: Date.now() });
     } catch (err) {
       console.error(err);
       triggerNotif(err instanceof Error ? err.message : 'Failed to delete tools checklist entry.', 'error');
@@ -209,6 +213,9 @@ export default function ToolsChecklistTab({ vehicles, toolsChecklistRecords, onS
           </div>
         </div>
       )}
+
+      <SaveConfirmationModal key={saveConfirmation?.key} open={!!saveConfirmation} label="Tools checklist entry" identifier={saveConfirmation?.identifier} onDone={() => setSaveConfirmation(null)} />
+      <DeleteConfirmationModal key={deleteConfirmation?.key} open={!!deleteConfirmation} label="Tools checklist entry" identifier={deleteConfirmation?.identifier} onDone={() => setDeleteConfirmation(null)} />
     </div>
   );
 }

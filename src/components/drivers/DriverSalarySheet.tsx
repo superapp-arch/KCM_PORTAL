@@ -10,6 +10,7 @@ import { authFetch } from '../../authFetch';
 import { compareTrailingNumber } from '../../utils/sort';
 import { exportReportToExcel, exportReportToPdf, ReportTableSection } from '../../utils/reportExport';
 import DownloadMenu from './DownloadMenu';
+import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
 
 // Payable Amount = Gross Salary + Other Additions - (Petty Cash/Advance +
 // Loan Deduction + Recovery Amount + Driver Welfare + BATA) - LOP Amount -
@@ -84,6 +85,11 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
   const [searchTerm, setSearchTerm] = useState('');
   const [modalDriver, setModalDriver] = useState<DriverEmployee | null | undefined>(undefined); // undefined = closed
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  // Big, centered save/delete confirmation (see ConfirmationModal.tsx) for
+  // Add/Save Driver. `key` increments on every save/delete so React remounts
+  // it fresh each time.
+  const [saveConfirmation, setSaveConfirmation] = useState<{ identifier: string; key: number } | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{ identifier: string; key: number } | null>(null);
   // Click-to-expand on the Driver ID cell (mirrors Fleet & Vehicles' row
   // expand pattern) - shows basic info plus inline document upload, so
   // Aadhar/Driving License/Other docs no longer require opening the full
@@ -151,11 +157,11 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
   const handleDelete = async (driver: DriverEmployee) => {
     if (!confirm(`Delete driver ${driver.id} - ${driver.name}? This cannot be undone.`)) return;
     await onDeleteDriver(driver.id);
-    triggerNotif(`Driver ${driver.id} removed.`, 'success');
+    setDeleteConfirmation({ identifier: `${driver.name} (${driver.id})`, key: Date.now() });
   };
 
-  const handleSaved = () => {
-    triggerNotif('Driver record saved.', 'success');
+  const handleSaved = (driver: { id: string; name: string }) => {
+    setSaveConfirmation({ identifier: `${driver.name} (${driver.id})`, key: Date.now() });
   };
 
   const handleDownloadOne = (driver: DriverEmployee) => {
@@ -404,6 +410,24 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
           })}
         />
       )}
+
+      {/* Big, centered save/delete confirmation for Add/Save Driver (see
+          ConfirmationModal.tsx) - keyed by .key so each fully remounts
+          (fresh confetti/shake) on every save/delete. */}
+      <SaveConfirmationModal
+        key={saveConfirmation?.key}
+        open={!!saveConfirmation}
+        label="Driver"
+        identifier={saveConfirmation?.identifier}
+        onDone={() => setSaveConfirmation(null)}
+      />
+      <DeleteConfirmationModal
+        key={deleteConfirmation?.key}
+        open={!!deleteConfirmation}
+        label="Driver"
+        identifier={deleteConfirmation?.identifier}
+        onDone={() => setDeleteConfirmation(null)}
+      />
     </div>
   );
 }

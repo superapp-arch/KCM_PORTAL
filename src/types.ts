@@ -204,6 +204,14 @@ export interface PettyCashVoucher {
   remarks: string; // Remarks
   documents?: VehicleDocument[];
   enteredBy?: string; // username, stamped server-side; row-level-filtered to the 3 Petty Cash logins, visible only to super admins
+  // Debit = company tops up this custodian's (enteredBy's) float; Credit =
+  // custodian returns/settles cash against it (the far more common case -
+  // most entries are a Cash Paid expense against the float). Optional so
+  // older rows saved before this existed keep working - PettyCash.tsx
+  // treats a missing value as 'credit'. Drives the ledger's Type badge and
+  // its per-holder running Balance column (debit adds cashPaid, credit
+  // subtracts it) - see voucherRunningBalance in PettyCash.tsx.
+  transactionType?: 'debit' | 'credit';
 }
 
 // One-off (or top-up) cash-advance entry for a Petty Cash user's running

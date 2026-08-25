@@ -35,6 +35,7 @@ import SortHeader from './SortHeader';
 import { SortState, SortDirection, extractLeadingNumber, extractTrailingNumber, compareText } from '../utils/sort';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 import { exportReportToExcel, exportReportToPdf, ReportTableSection } from '../utils/reportExport';
+import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
 
 interface PettyCashProps {
   user: User;
@@ -187,6 +188,13 @@ export default function PettyCash({
   const isSuperAdmin = user.department === 'super_admin' || user.email === 'finance@kcmlogistics.in';
   const [activeTab, setActiveTab] = useState<'ledger' | 'summary' | 'marketpod'>('ledger');
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
+  // Big, centered save/delete confirmation (see ConfirmationModal.tsx),
+  // shared across every Petty Cash sub-module (Ledger vouchers, Market POD
+  // trips, Amount Received) - `label`/`identifier` are set per sub-module at
+  // the call site, `key` increments on every save/delete so React remounts
+  // it fresh each time.
+  const [saveConfirmation, setSaveConfirmation] = useState<{ label: string; identifier: string; key: number } | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{ label: string; identifier: string; key: number } | null>(null);
 
   // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -201,6 +209,9 @@ export default function PettyCash({
   // Search & Filters state
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('All');
+  // Transaction Type filter (All Types / Debit / Credit) - see
+  // PettyCashVoucher.transactionType. ANDs with every other filter below.
+  const [selectedTransactionTypeFilter, setSelectedTransactionTypeFilter] = useState<'All' | 'debit' | 'credit'>('All');
   // Client / Vehicle No / Receiver filters - all populated dynamically from
   // whatever's actually been entered in the ledger (see usedClientNames/
   // usedVehicleNumbers/usedReceivers below), not a fixed suggestion list, so
@@ -243,6 +254,11 @@ export default function PettyCash({
   const [amountReceived, setAmountReceived] = useState('');
   const [cashPaid, setCashPaid] = useState('');
   const [balance, setBalance] = useState('');
+  // Debit = float top-up to this custodian, Credit = custodian settlement/
+  // expense against it - see PettyCashVoucher.transactionType. Defaults to
+  // 'credit' since that's what the vast majority of entries logged through
+  // this form already are (a Cash Paid expense against the float).
+  const [transactionType, setTransactionType] = useState<'debit' | 'credit'>('credit');
   const [tripSheet, setTripSheet] = useState('');
   const [remarks, setRemarks] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -333,8 +349,8 @@ export default function PettyCash({
     setMpBalanceReceiptSubmitting(true);
     try {
       await onMarketPodBalanceReceipt(mpEditingId, amt, mpBalanceReceiptDate);
+      setSaveConfirmation({ label: 'Balance receipt', identifier: `₹${amt.toLocaleString('en-IN')} on ${mpBalanceReceiptDate}`, key: Date.now() });
       setMpBalanceReceiptAmount('');
-      triggerNotif('Balance receipt recorded and added to the Petty Cash float.', 'success');
     } catch (err) {
       triggerNotif(err instanceof Error ? err.message : 'Failed to record the balance receipt.', 'error');
     } finally {
@@ -514,11 +530,10 @@ export default function PettyCash({
       };
       if (mpEditingId) {
         await onUpdateMarketPodEntry(mpEditingId, payload);
-        triggerNotif('Market Trip entry updated successfully!', 'success');
       } else {
         await onAddMarketPodEntry(payload);
-        triggerNotif('Market Trip entry logged successfully!', 'success');
       }
+      setSaveConfirmation({ label: 'Market trip', identifier: `Entry no. ${payload.entryNo}`, key: Date.now() });
       resetMarketPodForm();
     } catch (err) {
       console.error(err);
@@ -673,6 +688,7 @@ export default function PettyCash({
     setAmountReceived(v.amountReceived ? String(v.amountReceived) : '');
     setCashPaid(v.cashPaid ? String(v.cashPaid) : '');
     setBalance(v.balance ? String(v.balance) : '');
+    setTransactionType(v.transactionType || 'credit');
     setTripSheet(v.tripSheet);
     setRemarks(v.remarks);
     setShowSidebar(true);
@@ -690,6 +706,7 @@ export default function PettyCash({
     setAmountReceived('');
     setCashPaid('');
     setBalance('');
+    setTransactionType('credit');
     setTripSheet('');
     setRemarks('');
     setCustomClientName('');
@@ -729,6 +746,7 @@ export default function PettyCash({
         amountReceived: parseFloat(amountReceived) || 0,
         cashPaid: parseFloat(cashPaid) || 0,
         balance: parseFloat(balance) || 0,
+        transactionType,
         tripSheet: tripSheet.trim(),
         remarks: remarks.trim()
       };
@@ -736,11 +754,10 @@ export default function PettyCash({
       if (editingId) {
         await onUpdateVoucher(editingId, voucherData);
         setEditingId(null);
-        triggerNotif('💸 Petty cash voucher successfully updated and synced with Cloud DB!', 'success');
       } else {
         await onAddVoucher(voucherData);
-        triggerNotif('💸 Petty cash voucher successfully logged and synced with Cloud DB!', 'success');
       }
+      setSaveConfirmation({ label: 'Entry', identifier: `Entry no. ${voucherData.entryNo}`, key: Date.now() });
 
       resetVoucherForm();
       setShowSidebar(false);
@@ -822,6 +839,26 @@ export default function PettyCash({
     return totalAdvances - spent;
   };
 
+  // New Type/Balance column pair (see PettyCashVoucher.transactionType) -
+  // a running float total per custodian (entry-holder, same "owner" scoping
+  // as balanceNetAt above), built purely from each entry's own Debit/Credit
+  // tag and its Cash Paid amount: Debit adds it (a top-up), Credit subtracts
+  // it (a settlement/expense - the default, so an untagged legacy row behaves
+  // exactly as it always implicitly has). Independent of the Amount Received
+  // ledger/balanceNetAt above - starts at 0, not totalAdvances - since this
+  // is a self-contained running total of just these tagged entries.
+  const voucherRunningBalance = (voucher: PettyCashVoucher): number => {
+    const owner = voucher.enteredBy || user.username;
+    const ordered = [...vouchersFor(owner)].sort((a, b) => extractTrailingNumber(a.entryNo) - extractTrailingNumber(b.entryNo));
+    let bal = 0;
+    for (const v of ordered) {
+      const amt = v.cashPaid || 0;
+      bal += (v.transactionType || 'credit') === 'debit' ? amt : -amt;
+      if (v.id === voucher.id) break;
+    }
+    return bal;
+  };
+
   const handleAddAdvance = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!advanceAmount || parseFloat(advanceAmount) <= 0 || !advanceDate) {
@@ -836,9 +873,9 @@ export default function PettyCash({
         date: advanceDate,
         remarks: advanceRemarks.trim()
       });
+      setSaveConfirmation({ label: 'Amount Received', identifier: `₹${parseFloat(advanceAmount).toLocaleString('en-IN')} on ${advanceDate}`, key: Date.now() });
       setAdvanceAmount('');
       setAdvanceRemarks('');
-      triggerNotif('Amount Received logged successfully!', 'success');
     } catch (err) {
       console.error(err);
       triggerNotif('Failed to log Amount Received.', 'error');
@@ -870,6 +907,7 @@ export default function PettyCash({
     const matchesVehicle = selectedVehicleFilter === 'All' || v.vehicleNumber === selectedVehicleFilter || v.vendorVehicleNumber === selectedVehicleFilter;
     const matchesReceiver = selectedReceiverFilter === 'All' || v.receiver === selectedReceiverFilter;
     const matchesCategory = selectedCategoryFilter === 'All' || v.category === selectedCategoryFilter;
+    const matchesTransactionType = selectedTransactionTypeFilter === 'All' || (v.transactionType || 'credit') === selectedTransactionTypeFilter;
 
     // Date filtering (Date structure is YYYY-MM-DD or DD-MM-YYYY)
     if (!v.date) return false;
@@ -878,7 +916,7 @@ export default function PettyCash({
     const matchesYear = filterYear === 'All' || year === filterYear;
     const matchesMonth = filterMonth === 'All' || month === filterMonth;
 
-    return matchesSearch && matchesClient && matchesVehicle && matchesReceiver && matchesCategory && matchesYear && matchesMonth;
+    return matchesSearch && matchesClient && matchesVehicle && matchesReceiver && matchesCategory && matchesTransactionType && matchesYear && matchesMonth;
   });
 
   const filteredVouchers = sort
@@ -946,9 +984,11 @@ export default function PettyCash({
       'Vehicle Number': v.vehicleNumber,
       'Receiver': v.receiver,
       'Vendor ID': v.vendorId,
+      'Transaction Type': (v.transactionType || 'credit') === 'debit' ? 'Debit' : 'Credit',
       'Amount Received': receivedFor(v.enteredBy || user.username), // that holder's current Total Received Float, not a stored per-entry figure
       'Cash Paid': v.cashPaid,
       'Balance': v.balance,
+      'Running Balance': voucherRunningBalance(v),
       'Trip Sheet': v.tripSheet,
       'Remarks': v.remarks
     }));
@@ -1424,7 +1464,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 <span className="flex items-center gap-1"><Filter className="w-3 h-3 text-teal-600" /> Filters & Historical Lookup</span>
                 <span>Matches: {filteredVouchers.length} entries</span>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-9 gap-2.5">
                 {/* Sort By - Newest First (default) / Oldest First. Reuses
                     the same `sort` state the column headers drive, so it's
                     always exactly what's currently applied - re-sorts the
@@ -1483,6 +1523,22 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     {EXPENSE_CATEGORIES.map((cat, idx) => (
                       <option key={idx} value={cat}>{cat}</option>
                     ))}
+                  </select>
+                </div>
+
+                {/* Transaction Type Filter - Debit (float top-up) / Credit
+                    (settlement/expense), see PettyCashVoucher.transactionType.
+                    ANDs with every filter here, same as the rest. */}
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Transaction Type</label>
+                  <select
+                    value={selectedTransactionTypeFilter}
+                    onChange={(e) => setSelectedTransactionTypeFilter(e.target.value as 'All' | 'debit' | 'credit')}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-semibold text-slate-700"
+                  >
+                    <option value="All">All Types</option>
+                    <option value="debit">Debit</option>
+                    <option value="credit">Credit</option>
                   </select>
                 </div>
 
@@ -1573,9 +1629,11 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <th className="px-3 py-2.5">Vendor Vehicle #</th>
                     <th className="px-3 py-2.5">Receiver</th>
                     <th className="px-3 py-2.5">Vendor ID</th>
+                    <th className="px-3 py-2.5">Type</th>
                     <th className="px-3 py-2.5 text-right">Amt Rec</th>
                     <th className="px-3 py-2.5 text-right">Cash Paid</th>
                     <th className="px-3 py-2.5 text-right">Balance Net</th>
+                    <th className="px-3 py-2.5 text-right">Balance</th>
                     <th className="px-3 py-2.5">Trip Sheet</th>
                     <th className="px-3 py-2.5">Remarks</th>
                     {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
@@ -1585,7 +1643,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
                   {filteredVouchers.length === 0 ? (
                     <tr>
-                      <td colSpan={16 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
+                      <td colSpan={18 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
                         NO RECORDED PETTY CASH VOUCHERS MATCH THE SELECTION.
                         <div className="text-[10px] text-slate-400 font-sans mt-1">Use "Add Petty Cash Entry" above to authorize new cash disbursements.</div>
                       </td>
@@ -1613,6 +1671,15 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">{v.vendorVehicleNumber || '-'}</td>
                         <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{v.receiver}</td>
                         <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{v.vendorId || '-'}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border ${
+                            (v.transactionType || 'credit') === 'debit'
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          }`}>
+                            {(v.transactionType || 'credit') === 'debit' ? 'Debit' : 'Credit'}
+                          </span>
+                        </td>
                         <td className="px-3 py-2 text-right font-mono text-slate-600" title="This holder's current Total Received Float (from the Dashboard's Amount Received ledger), not a per-entry figure">
                           ₹{receivedFor(v.enteredBy || user.username).toLocaleString('en-IN')}
                         </td>
@@ -1623,6 +1690,14 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                             <td className={`px-3 py-2 text-right font-mono font-black ${net < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`} title="This holder's running balance in Entry No order: Total Received Float minus cash paid up to and including this entry">
                               {net < 0 && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
                               ₹{net.toLocaleString('en-IN')}
+                            </td>
+                          );
+                        })()}
+                        {(() => {
+                          const runningBal = voucherRunningBalance(v);
+                          return (
+                            <td className={`px-3 py-2 text-right font-mono font-black ${runningBal < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-slate-700'}`} title="This holder's running float total in Entry No order, built from each entry's own Debit/Credit tag: Debit adds, Credit subtracts">
+                              ₹{runningBal.toLocaleString('en-IN')}
                             </td>
                           );
                         })()}
@@ -1654,7 +1729,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                               onClick={() => {
                                 if (window.confirm(`Are you sure you want to delete entry ${v.entryNo}?`)) {
                                   onDeleteVoucher(v.id);
-                                  triggerNotif(`Deleted entry ${v.entryNo} successfully!`, 'success');
+                                  setDeleteConfirmation({ label: 'Entry', identifier: `Entry no. ${v.entryNo}`, key: Date.now() });
                                 }
                               }}
                               className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
@@ -2093,7 +2168,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                             onClick={() => {
                               if (window.confirm(`Are you sure you want to delete trip entry ${entry.entryNo}?`)) {
                                 onDeleteMarketPodEntry(entry.id);
-                                triggerNotif(`Deleted trip entry ${entry.entryNo} successfully!`, 'success');
+                                setDeleteConfirmation({ label: 'Market trip', identifier: `Entry no. ${entry.entryNo}`, key: Date.now() });
                               }
                             }}
                             className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
@@ -2260,7 +2335,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                                   if (confirm(`Are you sure you want to delete entry ${v.entryNo}?`)) {
                                     try {
                                       await onDeleteVoucher(v.id!);
-                                      triggerNotif(`Deleted entry ${v.entryNo} successfully!`, 'success');
+                                      setDeleteConfirmation({ label: 'Entry', identifier: `Entry no. ${v.entryNo}`, key: Date.now() });
                                     } catch (err) {
                                       console.error(err);
                                       triggerNotif('Failed to delete voucher.', 'error');
@@ -2727,16 +2802,33 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   </div>
 
                   {/* Cash Paid (Amount Received/Balance were removed - that
-                      information now only lives on the module dashboard) */}
-                  <div className="pt-1.5 border-t border-slate-100">
-                    <label className="block font-bold text-teal-700 mb-0.5 text-[9px] uppercase">Cash Paid (Exp)</label>
-                    <input
-                      type="number"
-                      placeholder="₹ Paid"
-                      value={cashPaid}
-                      onChange={(e) => setCashPaid(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-teal-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
-                    />
+                      information now only lives on the module dashboard) +
+                      Transaction Type (see PettyCashVoucher.transactionType) -
+                      Debit = this entry tops up the custodian's float,
+                      Credit = it's a settlement/expense against it (the
+                      default - almost every entry logged here is one). */}
+                  <div className="pt-1.5 border-t border-slate-100 grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-bold text-teal-700 mb-0.5 text-[9px] uppercase">Cash Paid (Exp)</label>
+                      <input
+                        type="number"
+                        placeholder="₹ Paid"
+                        value={cashPaid}
+                        onChange={(e) => setCashPaid(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-teal-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-teal-700 mb-0.5 text-[9px] uppercase">Transaction Type</label>
+                      <select
+                        value={transactionType}
+                        onChange={(e) => setTransactionType(e.target.value as 'debit' | 'credit')}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-bold text-[11px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      >
+                        <option value="debit">Debit (Float Top-up)</option>
+                        <option value="credit">Credit (Settlement/Expense)</option>
+                      </select>
+                    </div>
                   </div>
 
                   {/* Remarks */}
@@ -3177,6 +3269,25 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
           </div>
         )}
       </AnimatePresence>
+
+      {/* Big, centered save/delete confirmation (see ConfirmationModal.tsx),
+          shared by every Petty Cash sub-module (Ledger vouchers, Market POD
+          trips, Amount Received, Balance receipts) - keyed by .key so each
+          fully remounts (fresh confetti/shake) on every save/delete. */}
+      <SaveConfirmationModal
+        key={saveConfirmation?.key}
+        open={!!saveConfirmation}
+        label={saveConfirmation?.label || 'Entry'}
+        identifier={saveConfirmation?.identifier}
+        onDone={() => setSaveConfirmation(null)}
+      />
+      <DeleteConfirmationModal
+        key={deleteConfirmation?.key}
+        open={!!deleteConfirmation}
+        label={deleteConfirmation?.label || 'Entry'}
+        identifier={deleteConfirmation?.identifier}
+        onDone={() => setDeleteConfirmation(null)}
+      />
     </div>
   );
 

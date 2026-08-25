@@ -1505,6 +1505,11 @@ async function startServer() {
   // easy to change if a different time is wanted. Matches day+month only
   // (ignores year) against each Active employee's stored Date of Birth.
   const BIRTHDAY_EMAIL_HOUR_IST = 9;
+  // Evening-before heads-up to admins/Bhagya (see sendUpcomingBirthdayReminder
+  // below) - separate from BIRTHDAY_EMAIL_HOUR_IST, which gates the actual
+  // day-of wish email to the employee.
+  const BIRTHDAY_REMINDER_EVENING_HOUR_IST = 18;
+  const BHAGYA_EMAIL = 'bhagya@kcmlogistics.in';
 
   async function getTodaysBirthdayEmployees(): Promise<StaffEmployee[]> {
     const employees = await getStaffEmployees();
@@ -1515,6 +1520,20 @@ async function startServer() {
       if (isNaN(dob.getTime())) return false;
       const dobKey = `${String(dob.getMonth() + 1).padStart(2, '0')}-${String(dob.getDate()).padStart(2, '0')}`;
       return dobKey === todayKey;
+    });
+  }
+
+  // Same day+month match as getTodaysBirthdayEmployees, but against
+  // tomorrow's date - feeds the evening-before admin reminder below.
+  async function getTomorrowsBirthdayEmployees(): Promise<StaffEmployee[]> {
+    const employees = await getStaffEmployees();
+    const tomorrowKey = istMonthDayKey(new Date(Date.now() + 24 * 60 * 60 * 1000));
+    return employees.filter(e => {
+      if (e.status !== 'Active' || !e.dateOfBirth) return false;
+      const dob = new Date(e.dateOfBirth);
+      if (isNaN(dob.getTime())) return false;
+      const dobKey = `${String(dob.getMonth() + 1).padStart(2, '0')}-${String(dob.getDate()).padStart(2, '0')}`;
+      return dobKey === tomorrowKey;
     });
   }
 
@@ -1536,7 +1555,14 @@ async function startServer() {
     const todayKey = istDateKey();
     const existingNotifs = await getNotifications();
     const usersList = await getUsersWithFallback();
-    const superAdminEmails = usersList.filter((u: any) => u.department === 'super_admin').map((u: any) => u.email).filter(Boolean) as string[];
+    // Bhagya isn't a super admin but runs HR & Payroll day-to-day (same
+    // access grant as Warehouse Details - see requireHrAccess above), so she
+    // gets this notice too, alongside every super admin. Deduped via Set in
+    // case she's ever also flagged super_admin.
+    const superAdminEmails = Array.from(new Set([
+      ...usersList.filter((u: any) => u.department === 'super_admin').map((u: any) => u.email).filter(Boolean) as string[],
+      BHAGYA_EMAIL
+    ]));
 
     let sentCount = 0;
     const sentNames: string[] = [];
@@ -1595,14 +1621,73 @@ async function startServer() {
     return { sent: sentCount, names: sentNames };
   }
 
+  // Evening-before heads-up: admins + Bhagya only (never the employee - the
+  // actual wish email to them is still the day-of sendTodaysBirthdayWishes
+  // above, unchanged) get a "tomorrow is X's birthday" notice so there's
+  // time to arrange something before the day itself. Dedup'd per employee/
+  // day via its own marker (separate id namespace from the day-of one) so
+  // the hourly interval never double-sends once it's gone out for the
+  // evening.
+  async function sendUpcomingBirthdayReminders(): Promise<{ sent: number; names: string[] }> {
+    const upcoming = await getTomorrowsBirthdayEmployees();
+    if (upcoming.length === 0) return { sent: 0, names: [] };
+
+    const todayKey = istDateKey();
+    const existingNotifs = await getNotifications();
+    const usersList = await getUsersWithFallback();
+    const recipientEmails = Array.from(new Set([
+      ...usersList.filter((u: any) => u.department === 'super_admin').map((u: any) => u.email).filter(Boolean) as string[],
+      BHAGYA_EMAIL
+    ]));
+
+    let sentCount = 0;
+    const sentNames: string[] = [];
+
+    for (const emp of upcoming) {
+      const markerId = `birthday-eve-reminder-${emp.id}-${todayKey}`;
+      if (existingNotifs.some((n: any) => n.id === markerId)) continue;
+
+      try {
+        if (recipientEmails.length > 0) {
+          await resend.emails.send({
+            from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
+            to: recipientEmails,
+            subject: `Birthday Tomorrow - ${emp.name}`,
+            html: `<p>Heads up - tomorrow is <strong>${emp.name}</strong>'s birthday.</p>`
+          });
+        }
+
+        await saveNotification({
+          id: markerId,
+          title: 'Birthday Tomorrow',
+          message: `Tomorrow is ${emp.name}'s birthday.`,
+          type: 'birthday',
+          timestamp: istTimestamp(),
+          read: false
+        });
+
+        sentCount++;
+        sentNames.push(emp.name);
+        console.log(`[BIRTHDAY] Sent evening-before reminder for ${emp.name} (${emp.id}).`);
+      } catch (error) {
+        console.error(`[BIRTHDAY] Failed to send evening-before reminder for ${emp.name} (${emp.id}):`, error);
+      }
+    }
+
+    return { sent: sentCount, names: sentNames };
+  }
+
   // Automatic trigger - runs on the same hourly interval as the compliance
   // digest, but only actually sends from BIRTHDAY_EMAIL_HOUR_IST onward each
   // day (never earlier), and only once per employee per day regardless of
-  // how many times the hourly tick lands after that hour.
+  // how many times the hourly tick lands after that hour. Also fires the
+  // evening-before admin/Bhagya reminder once it's past
+  // BIRTHDAY_REMINDER_EVENING_HOUR_IST, same "only once per employee per day"
+  // guarantee via its own marker.
   async function runScheduledBirthdayCheck() {
     try {
-      if (istHour() < BIRTHDAY_EMAIL_HOUR_IST) return;
-      await sendTodaysBirthdayWishes();
+      if (istHour() >= BIRTHDAY_EMAIL_HOUR_IST) await sendTodaysBirthdayWishes();
+      if (istHour() >= BIRTHDAY_REMINDER_EVENING_HOUR_IST) await sendUpcomingBirthdayReminders();
     } catch (error) {
       console.error('Failed to run scheduled birthday check:', error);
     }
@@ -3186,6 +3271,18 @@ async function startServer() {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const entry: WarehouseEntry = req.body;
+      // Opening KM/Closing KM/Add KM/Odometer Utilised are whole-number-only
+      // fields (see WarehouseDetails.tsx Log New Deployment) - the UI already
+      // blocks "." on entry, but round here too (standard round-half-up, not
+      // truncate) in case a direct API call bypasses the UI. Km Utilised is
+      // re-derived from the rounded Opening/Closing KM rather than trusting
+      // whatever the client sent, so it can never disagree with them.
+      if (entry.openingKm != null) entry.openingKm = Math.round(entry.openingKm);
+      if (entry.closingKm != null) entry.closingKm = Math.round(entry.closingKm);
+      if (entry.extraKm != null) entry.extraKm = Math.round(entry.extraKm);
+      if (entry.openingKm != null && entry.closingKm != null) {
+        entry.kmUtilised = Math.round(Math.max(0, entry.closingKm - entry.openingKm));
+      }
       const existing = entry.id ? (await getWarehouseEntries()).find(e => e.id === entry.id) : undefined;
       const result = await saveWarehouseEntry(entry);
       const label = `${entry.vehicleNumber || ''} (${entry.date || ''})`.trim();

@@ -7,6 +7,7 @@ import DateInput from '../DateInput';
 import DocumentAttachment from '../DocumentAttachment';
 import SortHeader from '../SortHeader';
 import { SortState } from '../../utils/sort';
+import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
 
 const BREAKDOWN_TYPES: { value: BreakdownReport['type']; label: string }[] = [
   { value: 'EnRouteBreakdown', label: 'En-Route Breakdown' },
@@ -34,6 +35,10 @@ export default function BreakdownsTab({
 }: BreakdownsTabProps) {
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
+  // Big, centered save/delete confirmation (see ConfirmationModal.tsx),
+  // shared by both save flows here (Report Breakdown, Log Workshop Visit).
+  const [saveConfirmation, setSaveConfirmation] = useState<{ label: string; identifier: string; key: number } | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{ identifier: string; key: number } | null>(null);
 
   const vehicleList = Array.from(new Set(vehicles.map(v => v.regNo || v['Reg. No.'] || '').filter(Boolean))).sort();
   const driverNameList = Array.from(new Set(drivers.map(d => d.name).filter(Boolean))).sort();
@@ -76,7 +81,7 @@ export default function BreakdownsTab({
         paymentType: paymentType.trim() || undefined, amount: parseFloat(amount) || undefined,
         documents: docs, status: 'Open'
       });
-      triggerNotif('🚨 Breakdown reported.');
+      setSaveConfirmation({ label: 'Breakdown report', identifier: regNo.trim().toUpperCase(), key: Date.now() });
       resetReportForm();
     } catch (err) {
       console.error(err);
@@ -90,7 +95,7 @@ export default function BreakdownsTab({
     if (!confirm(`Delete the breakdown report for ${b.regNo}?`)) return;
     try {
       await onDeleteBreakdownReport(b.id);
-      triggerNotif('Breakdown report deleted.');
+      setDeleteConfirmation({ identifier: b.regNo, key: Date.now() });
     } catch (err) {
       console.error(err);
       triggerNotif(err instanceof Error ? err.message : 'Failed to delete breakdown report.', 'error');
@@ -155,7 +160,7 @@ export default function BreakdownsTab({
         breakdownReportId: visitFor.id
       } as any);
       await onUpdateBreakdownReport(visitFor.id, { status: 'Resolved', workshopVisitId });
-      triggerNotif('🔧 Workshop visit logged - breakdown marked resolved.');
+      setSaveConfirmation({ label: 'Workshop visit', identifier: visitFor.regNo, key: Date.now() });
       setVisitFor(null);
     } catch (err) {
       console.error(err);
@@ -414,6 +419,9 @@ export default function BreakdownsTab({
           </div>
         </div>
       )}
+
+      <SaveConfirmationModal key={saveConfirmation?.key} open={!!saveConfirmation} label={saveConfirmation?.label || 'Entry'} identifier={saveConfirmation?.identifier} onDone={() => setSaveConfirmation(null)} />
+      <DeleteConfirmationModal key={deleteConfirmation?.key} open={!!deleteConfirmation} label="Breakdown report" identifier={deleteConfirmation?.identifier} onDone={() => setDeleteConfirmation(null)} />
     </div>
   );
 }

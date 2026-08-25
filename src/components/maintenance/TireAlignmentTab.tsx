@@ -4,6 +4,7 @@ import { Vehicle, TireRecord, TireBrand, MileageReport } from '../../types';
 import { CircleDot, Search, Edit2, Trash2, Plus, X, Gauge, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import DateInput from '../DateInput';
 import { latestOdometerFor, computeAlignmentStatus, nextAlignmentDueKm, ALIGNMENT_INTERVAL_KM, KmStatus } from '../../utils/maintenanceDates';
+import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
 
 interface TireAlignmentTabProps {
   vehicles: Vehicle[];
@@ -114,6 +115,9 @@ export default function TireAlignmentTab({
   const [searchTerm, setSearchTerm] = useState('');
   const [notif, setNotif] = useState<string | null>(null);
   const [showAlignmentPopup, setShowAlignmentPopup] = useState(false);
+  // Big, centered save/delete confirmation (see ConfirmationModal.tsx).
+  const [saveConfirmation, setSaveConfirmation] = useState<{ identifier: string; key: number } | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{ identifier: string; key: number } | null>(null);
 
   const triggerNotif = (msg: string) => { setNotif(msg); setTimeout(() => setNotif(null), 4000); };
 
@@ -319,7 +323,7 @@ export default function TireAlignmentTab({
           isCurrent: true
         });
       }
-      triggerNotif(`Tire configuration saved for ${matchedVehicle}.`);
+      setSaveConfirmation({ identifier: matchedVehicle, key: Date.now() });
       resetConfigForm();
     } catch (err) {
       console.error(err);
@@ -332,7 +336,7 @@ export default function TireAlignmentTab({
   const handleDelete = async (t: TireRecord) => {
     if (!confirm(`Delete the tire record for ${t.regNo} (${t.position})?`)) return;
     await onDeleteTireRecord(t.id);
-    triggerNotif('Tire record deleted.');
+    setDeleteConfirmation({ identifier: `${t.regNo} (${t.position})`, key: Date.now() });
   };
 
   return (
@@ -664,6 +668,9 @@ export default function TireAlignmentTab({
           </div>
         </div>
       )}
+
+      <SaveConfirmationModal key={saveConfirmation?.key} open={!!saveConfirmation} label="Tire configuration" identifier={saveConfirmation?.identifier} onDone={() => setSaveConfirmation(null)} />
+      <DeleteConfirmationModal key={deleteConfirmation?.key} open={!!deleteConfirmation} label="Tire record" identifier={deleteConfirmation?.identifier} onDone={() => setDeleteConfirmation(null)} />
     </div>
   );
 }

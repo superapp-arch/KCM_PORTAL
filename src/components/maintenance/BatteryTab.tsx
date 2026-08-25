@@ -4,6 +4,7 @@ import { Battery, Search, Edit2, Trash2, Plus, X, CheckCircle2, AlertCircle } fr
 import DateInput from '../DateInput';
 import SortHeader from '../SortHeader';
 import { SortState, compareText } from '../../utils/sort';
+import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
 
 interface BatteryTabProps {
   vehicles: Vehicle[];
@@ -22,6 +23,9 @@ export default function BatteryTab({ vehicles, batteryRecords, onSaveBatteryReco
   const [form, setForm] = useState<Omit<BatteryRecord, 'id'> & { id?: string }>(emptyForm());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  // Big, centered save/delete confirmation (see ConfirmationModal.tsx).
+  const [saveConfirmation, setSaveConfirmation] = useState<{ identifier: string; key: number } | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{ identifier: string; key: number } | null>(null);
   // No default (null) - keeps the original Reg No / current-first /
   // most-recently-installed compound order until the user actively picks a
   // sort, same convention as Service Schedule.
@@ -69,7 +73,7 @@ export default function BatteryTab({ vehicles, batteryRecords, onSaveBatteryReco
     try {
       const id = form.id || `${form.regNo.trim().toUpperCase()}-${Date.now()}`;
       await onSaveBatteryRecord({ ...form, id, regNo: form.regNo.trim().toUpperCase(), batteryNumber: form.batteryNumber.trim() } as BatteryRecord);
-      triggerNotif(form.id ? 'Battery record updated.' : 'Battery record added.');
+      setSaveConfirmation({ identifier: `${form.batteryNumber.trim()} (${form.regNo.trim().toUpperCase()})`, key: Date.now() });
       resetForm();
     } catch (err) {
       console.error(err);
@@ -93,7 +97,7 @@ export default function BatteryTab({ vehicles, batteryRecords, onSaveBatteryReco
     if (!confirm(`Delete the battery record ${b.batteryNumber} for ${b.regNo}?`)) return;
     try {
       await onDeleteBatteryRecord(b.id);
-      triggerNotif('Battery record deleted.');
+      setDeleteConfirmation({ identifier: `${b.batteryNumber} (${b.regNo})`, key: Date.now() });
     } catch (err) {
       console.error(err);
       triggerNotif(err instanceof Error ? err.message : 'Failed to delete battery record.', 'error');
@@ -229,6 +233,9 @@ export default function BatteryTab({ vehicles, batteryRecords, onSaveBatteryReco
           </div>
         </div>
       )}
+
+      <SaveConfirmationModal key={saveConfirmation?.key} open={!!saveConfirmation} label="Battery record" identifier={saveConfirmation?.identifier} onDone={() => setSaveConfirmation(null)} />
+      <DeleteConfirmationModal key={deleteConfirmation?.key} open={!!deleteConfirmation} label="Battery record" identifier={deleteConfirmation?.identifier} onDone={() => setDeleteConfirmation(null)} />
     </div>
   );
 }

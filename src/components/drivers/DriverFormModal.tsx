@@ -11,7 +11,7 @@ interface DriverFormModalProps {
   onAddDriver: (driver: Omit<DriverEmployee, 'id'> & { id: string }) => Promise<void>;
   onUpdateDriver: (id: string, driver: Partial<DriverEmployee>) => Promise<void>;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (driver: { id: string; name: string }) => void;
 }
 
 type FormTab = 'basic' | 'documents' | 'salary';
@@ -130,7 +130,7 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
       } else {
         await onAddDriver(payload as DriverEmployee);
       }
-      onSaved();
+      onSaved({ id: basic.id, name: basic.name });
       onClose();
     } catch (err) {
       setError('Something went wrong while saving. Please try again.');

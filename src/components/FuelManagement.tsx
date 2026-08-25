@@ -29,6 +29,7 @@ import {
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
 import { authFetch } from '../authFetch';
+import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
 
 const LOCATIONS = [
   'AP', 'Nelmangala', 'Belagaum', 'BLR', 'Chennai', 'Goa', 'Hyderabad', 'Hassan',
@@ -174,70 +175,6 @@ function RqIdEditableCell({ log, onSave }: { log: FuelLog; onSave: (id: string, 
   );
 }
 
-// Save-confirmation toast - anchored directly below the Commit/Update Entry
-// button (not a screen-corner snackbar) so it lands exactly where the
-// user's attention already is right after they click, useful for someone
-// logging many entries back-to-back. Auto-dismisses itself after ~3s; no
-// manual close needed. The parent remounts this with a fresh React `key` on
-// every save (see saveConfirmation state below), which re-runs the
-// useMemo'd confetti burst from scratch each time - including two saves in
-// a row for the same or different Indent No.
-function SaveConfirmationToast({ indentNumber, onDone }: { indentNumber: string; onDone: () => void }) {
-  useEffect(() => {
-    const t = setTimeout(onDone, 3000);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // A mixed-color, mixed-shape confetti burst radiating outward from the
-  // checkmark - angles/distances/colors/shapes randomized once per mount.
-  const pieces = React.useMemo(() => {
-    const colors = ['#f43f5e', '#f59e0b', '#10b981', '#3b82f6', '#a855f7', '#ec4899', '#facc15', '#14b8a6'];
-    return Array.from({ length: 14 }, (_, i) => {
-      const angle = (Math.PI * 2 * i) / 14 + (Math.random() - 0.5) * 0.7;
-      const distance = 24 + Math.random() * 20;
-      return {
-        id: i,
-        color: colors[i % colors.length],
-        shape: i % 3, // 0 circle, 1 square, 2 diamond
-        x: Math.cos(angle) * distance,
-        y: Math.sin(angle) * distance,
-        rotate: Math.random() * 360,
-        size: 5 + Math.random() * 4
-      };
-    });
-  }, []);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: -6, scale: 0.95 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -6, scale: 0.95 }}
-      transition={{ type: 'spring', damping: 22, stiffness: 320 }}
-      className="mt-2 bg-white border border-emerald-200 rounded-xl shadow-md px-3 py-2.5 flex items-center gap-2.5"
-    >
-      <div className="relative shrink-0 w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center">
-        <Check className="w-3.5 h-3.5 text-white" strokeWidth={3} />
-        {pieces.map(p => (
-          <motion.span
-            key={p.id}
-            initial={{ opacity: 1, x: 0, y: 0, scale: 1, rotate: 0 }}
-            animate={{ opacity: 0, x: p.x, y: p.y, scale: 0.4, rotate: p.rotate }}
-            transition={{ duration: 0.7, ease: 'easeOut' }}
-            className="absolute left-1/2 top-1/2 pointer-events-none"
-            style={{
-              width: p.size, height: p.size, backgroundColor: p.color,
-              borderRadius: p.shape === 0 ? '9999px' : p.shape === 1 ? '2px' : '1px',
-              transform: p.shape === 2 ? 'rotate(45deg)' : undefined
-            }}
-          />
-        ))}
-      </div>
-      <span className="text-xs font-bold text-slate-800">Indent no. <span className="font-mono text-emerald-700">{indentNumber}</span> saved</span>
-    </motion.div>
-  );
-}
-
 export default function FuelManagement({
   user,
   logs,
@@ -283,11 +220,12 @@ export default function FuelManagement({
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  // Save-confirmation toast (confetti + "Indent no. X saved") anchored below
-  // the Commit/Update Entry button - see SaveConfirmationToast. `key`
-  // increments on every save so React remounts it fresh each time, even for
-  // back-to-back saves of the same Indent No.
+  // Big, centered save/delete confirmation (see ConfirmationModal.tsx) -
+  // replaces the old small below-button toast. `key` increments on every
+  // save/delete so React remounts it fresh each time, even for back-to-back
+  // actions on the same Indent No.
   const [saveConfirmation, setSaveConfirmation] = useState<{ indentNumber: string; key: number } | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{ indentNumber: string; key: number } | null>(null);
 
   // Period-based report download - reference date + day/month/year-till-date dropdown.
   const [downloadDate, setDownloadDate] = useState(new Date().toISOString().slice(0, 10));
@@ -994,11 +932,11 @@ export default function FuelManagement({
         await onAddLog(payload);
         triggerNotif('Fuel entry logged successfully!');
       }
-      // Save-confirmation toast (below the Commit/Update button) - captures
-      // the just-saved Indent No. before resetForm() clears the field, and
-      // bumps `key` so a fresh confetti burst plays even for back-to-back
-      // saves. The form is already reset/ready for the next entry by the
-      // time this shows.
+      // Big centered save-confirmation modal (see ConfirmationModal.tsx) -
+      // captures the just-saved Indent No. before resetForm() clears the
+      // field, and bumps `key` so a fresh confetti burst plays even for
+      // back-to-back saves. The form is already reset/ready for the next
+      // entry by the time this shows.
       setSaveConfirmation({ indentNumber: payload.indentNumber || '-', key: Date.now() });
       resetForm(true);
     } catch (err) {
@@ -1020,7 +958,7 @@ export default function FuelManagement({
       if (log.mileageReportId) {
         await onDeleteMileageReport(log.mileageReportId);
       }
-      triggerNotif('Fuel entry deleted successfully.');
+      setDeleteConfirmation({ indentNumber: log.indentNumber || '-', key: Date.now() });
     } catch (err) {
       console.error(err);
       triggerNotif(err instanceof Error ? err.message : 'Failed to delete fuel entry.', 'error');
@@ -2220,26 +2158,31 @@ export default function FuelManagement({
                   ) : editingId ? 'Update Entry' : 'Commit Entry'}
                 </button>
               </div>
-              {/* Save-confirmation toast - directly below the button, not a
-                  screen-corner snackbar (see SaveConfirmationToast above).
-                  Keyed by saveConfirmation.key so it fully remounts (fresh
-                  confetti) on every save, including consecutive ones. */}
-              <div className="px-4 pb-4 bg-slate-50">
-                <AnimatePresence>
-                  {saveConfirmation && (
-                    <SaveConfirmationToast
-                      key={saveConfirmation.key}
-                      indentNumber={saveConfirmation.indentNumber}
-                      onDone={() => setSaveConfirmation(null)}
-                    />
-                  )}
-                </AnimatePresence>
-              </div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
 
+      {/* Big, centered save/delete confirmation (see ConfirmationModal.tsx) -
+          rendered at the module root (not inside the sidebar) so it still
+          shows even though handleDeleteLog runs from the ledger row, with
+          the sidebar closed. Keyed by .key so each fully remounts (fresh
+          confetti/shake) on every save/delete, including consecutive ones
+          on the same Indent No. */}
+      <SaveConfirmationModal
+        key={saveConfirmation?.key}
+        open={!!saveConfirmation}
+        label="Entry"
+        identifier={saveConfirmation ? `Indent no. ${saveConfirmation.indentNumber}` : undefined}
+        onDone={() => setSaveConfirmation(null)}
+      />
+      <DeleteConfirmationModal
+        key={deleteConfirmation?.key}
+        open={!!deleteConfirmation}
+        label="Entry"
+        identifier={deleteConfirmation ? `Indent no. ${deleteConfirmation.indentNumber}` : undefined}
+        onDone={() => setDeleteConfirmation(null)}
+      />
     </div>
   );
 }
