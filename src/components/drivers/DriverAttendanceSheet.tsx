@@ -86,13 +86,40 @@ function summarizeMonthRows(rows: DriverAttendance[]): { lopDays: number; exempt
   return { lopDays, exemptionLeaveDays, workingDays };
 }
 
+// Payable Amount = Gross Salary + Other Additions - (Petty Cash/Advance +
+// Loan Deduction + Recovery Amount + Driver Welfare + BATA) - LOP Amount -
+// duplicated from DriverSalarySheet.tsx's own `payableAmount` (keep both in
+// sync if that formula ever changes) rather than importing across the
+// drivers/ subtree, same "small pure formula, synced by comment" precedent
+// utils/driverSalarySlipGenerate.ts already follows for this exact formula.
+const payableAmount = (driver: DriverEmployee): number =>
+  (driver.grossSalary || 0) + (driver.otherAdditions || 0)
+  - (driver.pettyCashAdvance || 0) - (driver.loanDeduction || 0) - (driver.recoveryAmount || 0) - (driver.driverWelfare || 0) - (driver.bata || 0)
+  - (driver.lopAmount || 0);
+
+// Gross Salary/Payable Amount for the "Download All" export (and every other
+// Excel export below, for consistency) - read straight off the driver record
+// already passed into this sheet (DriverEmployee carries one salary
+// snapshot per driver, tagged with `month` - see types.ts), so no separate
+// fetch/join is needed to line it up by driver ID: same object, same list
+// Driver Salary edits. Blank ('N/A') whenever that snapshot isn't actually
+// for the month being exported, rather than showing a stale figure from
+// whatever month Driver Salary was last saved for.
+function driverSalarySnapshotFor(driver: DriverEmployee, month: string): { grossSalary: number | string; payable: number | string } {
+  if (driver.month !== month) return { grossSalary: 'N/A', payable: 'N/A' };
+  return { grossSalary: driver.grossSalary || 0, payable: payableAmount(driver) };
+}
+
 // The on-screen day-grid (Driver | day-by-day status | Working Days / LOP /
 // Exemption Leave), as an export section - used for a single location, a set
 // of a user's writable locations, or every location, depending on what
 // `list` is handed.
 function attendanceGridSection(month: string, list: DriverEmployee[], attendance: DriverAttendance[], heading: string): ReportTableSection {
   const total = daysInMonth(month);
-  const columns = ['Driver ID', 'Driver Name', ...Array.from({ length: total }, (_, i) => dayLabel(month, i + 1)), 'Working Days', 'LOP', 'Exemption Leave'];
+  const columns = [
+    'Driver ID', 'Driver Name', ...Array.from({ length: total }, (_, i) => dayLabel(month, i + 1)),
+    'No. of Days', 'Working Days', 'LOP', 'Exemption Leave', 'Gross Salary', 'Payable Amount'
+  ];
   const rows = list.map(driver => {
     const driverRows = attendance.filter(a => a.driverId === driver.id && a.date.startsWith(month));
     const dayCells = Array.from({ length: total }, (_, i) => {
@@ -101,7 +128,8 @@ function attendanceGridSection(month: string, list: DriverEmployee[], attendance
       return record ? STATUS_ABBR[record.status] : '-';
     });
     const { lopDays, exemptionLeaveDays, workingDays } = summarizeMonthRows(driverRows);
-    return [driver.id, driver.name, ...dayCells, workingDays, lopDays, exemptionLeaveDays];
+    const { grossSalary, payable } = driverSalarySnapshotFor(driver, month);
+    return [driver.id, driver.name, ...dayCells, total, workingDays, lopDays, exemptionLeaveDays, grossSalary, payable];
   });
   return { heading, columns, rows };
 }
@@ -347,7 +375,8 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
                 {Array.from({ length: totalDays }, (_, i) => i + 1).map(day => (
                   <th key={day} className="px-1 py-2 text-center font-bold text-purple-200 w-9">{dayLabel(month, day)}</th>
                 ))}
-                <th className="px-2 py-2 text-center font-bold text-emerald-200 uppercase tracking-wider min-w-[70px]">Working Days</th>
+                <th className="px-2 py-2 text-center font-bold text-teal-200 uppercase tracking-wider min-w-[70px]" title="Total calendar days in the selected month">No. of Days</th>
+                <th className="px-2 py-2 text-center font-bold text-emerald-200 uppercase tracking-wider min-w-[70px]" title="Present + Paid Leave days this month">Working Days</th>
                 <th className="px-2 py-2 text-center font-bold text-orange-200 uppercase tracking-wider min-w-[50px]">LOP</th>
                 <th className="px-2 py-2 text-center font-bold text-sky-200 uppercase tracking-wider min-w-[70px]">Exemption Leave</th>
                 <th className="px-2 py-2 text-center font-bold text-purple-200 uppercase tracking-wider min-w-[40px]">Download</th>
@@ -355,11 +384,11 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
             </thead>
             <tbody className="divide-y divide-slate-100">
               {groupedDrivers.length === 0 ? (
-                <tr><td colSpan={totalDays + 5} className="text-center py-10 text-slate-400">No driver records found.</td></tr>
+                <tr><td colSpan={totalDays + 6} className="text-center py-10 text-slate-400">No driver records found.</td></tr>
               ) : groupedDrivers.map(group => (
                 <React.Fragment key={group.location}>
                   <tr className="bg-gradient-to-r from-emerald-600 to-emerald-700">
-                    <td colSpan={totalDays + 5} className="px-2 py-2 text-white font-extrabold uppercase tracking-wide text-[11px]">
+                    <td colSpan={totalDays + 6} className="px-2 py-2 text-white font-extrabold uppercase tracking-wide text-[11px]">
                       <div className="flex items-center justify-between gap-2">
                         <span>
                           {group.location}
@@ -417,6 +446,9 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
                             </td>
                           );
                         })}
+                        <td className="px-2 py-1 text-center">
+                          <span className="inline-block bg-teal-50 text-teal-700 border border-teal-200 rounded-full px-2 py-0.5 font-bold">{totalDays}</span>
+                        </td>
                         <td className="px-2 py-1 text-center">
                           <span className="inline-block bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-2 py-0.5 font-bold">{workingDays}</span>
                         </td>
