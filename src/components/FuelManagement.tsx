@@ -308,8 +308,10 @@ export default function FuelManagement({
   const [mileageFormVehicleNo, setMileageFormVehicleNo] = useState('');
   const [mileageFormValue, setMileageFormValue] = useState('');
 
-  // Bunk Summary panel (below the Fuel Entry ledger): Till Date vs This Month
-  const [bunkSummaryPeriod, setBunkSummaryPeriod] = useState<'all' | 'month'>('all');
+  // Bunk-wise Summary panel (top of page, beside Average Rate/Litre): For
+  // the Day (today's entries only - was "Till Date"/all-time before) vs
+  // This Month (unchanged).
+  const [bunkSummaryPeriod, setBunkSummaryPeriod] = useState<'day' | 'month'>('day');
 
   const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => {
     setNotif({ message, type });
@@ -1145,13 +1147,16 @@ export default function FuelManagement({
     triggerNotif('Fuel entries report downloaded successfully!');
   };
 
-  // Bunk Summary panel download: every entry for one (Location, Bunk Name)
-  // pair, scoped to "Till Date" (all-time) or "This Month", with a TOTAL row.
+  // Bunk-wise Summary panel download: every entry for one (Location, Bunk
+  // Name) pair, scoped to whichever tab is active - For the Day (today's
+  // entries only) or This Month - with a TOTAL row. Works identically in
+  // both tabs, per-bunk.
   const handleDownloadBunkSummary = (location: string, bunkNameVal: string) => {
+    const today = new Date().toISOString().slice(0, 10);
     const nowMonth = new Date().toISOString().slice(0, 7);
     const groupLogs = logs.filter(l =>
       l.location === location && l.bunkName === bunkNameVal &&
-      (bunkSummaryPeriod === 'all' || l.date.slice(0, 7) === nowMonth)
+      (bunkSummaryPeriod === 'day' ? l.date === today : l.date.slice(0, 7) === nowMonth)
     );
     if (groupLogs.length === 0) {
       triggerNotif('No fuel entries found for this bunk in the selected period.');
@@ -1167,16 +1172,17 @@ export default function FuelManagement({
     const workbook = XLSX.utils.book_new();
     const sheetName = toSheetName(location, bunkNameVal, new Set());
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([...toFuelSheetRows(groupLogs), summaryRow]), sheetName);
-    const periodLabel = bunkSummaryPeriod === 'all' ? 'TillDate' : 'ThisMonth';
+    const periodLabel = bunkSummaryPeriod === 'day' ? 'ForTheDay' : 'ThisMonth';
     XLSX.writeFile(workbook, `KCM_Bunk_Summary_${sheetName}_${periodLabel}.xlsx`);
     triggerNotif('Bunk summary downloaded successfully!');
   };
 
-  // Bunk Summary panel data: grouped by (Location, Bunk Name), cumulative
-  // Litres/Amount either Till Date (all-time) or This Month.
+  // Bunk-wise Summary panel data: grouped by (Location, Bunk Name), scoped
+  // to For the Day (today only) or This Month.
   const bunkSummaryRows = (() => {
+    const today = new Date().toISOString().slice(0, 10);
     const nowMonth = new Date().toISOString().slice(0, 7);
-    const scopedLogs = bunkSummaryPeriod === 'all' ? logs : logs.filter(l => l.date.slice(0, 7) === nowMonth);
+    const scopedLogs = bunkSummaryPeriod === 'day' ? logs.filter(l => l.date === today) : logs.filter(l => l.date.slice(0, 7) === nowMonth);
     const groups = new Map<string, { location: string; bunkName: string; litres: number; amount: number }>();
     scopedLogs.forEach(l => {
       const key = bunkLocationKey(l);
@@ -1217,8 +1223,75 @@ export default function FuelManagement({
         </div>
       )}
 
-      {/* KPI Cards - unchanged */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      {/* Average Rate/Litre + Bunk-wise Summary - side by side, first thing
+          visible above the entries table (moved up from below the ledger,
+          see bunkSummaryRows/handleDownloadBunkSummary above). */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4 items-start">
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between h-full">
+          <div>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Average Rate / Litre</p>
+            <h3 className="text-xl font-bold text-slate-800 mt-1">₹{avgRate.toFixed(2)}</h3>
+            <p className="text-xs text-slate-400 mt-0.5">National Fuel Index Linked</p>
+          </div>
+          <div className="p-3 bg-slate-50 text-slate-500 rounded-lg">
+            <Landmark className="w-5 h-5" />
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-4">
+          <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-100">
+            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+              <Building2 className="w-3.5 h-3.5 text-blue-600" />
+              Bunk-wise Summary
+            </h3>
+            <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-[10px] font-bold">
+              <button
+                onClick={() => setBunkSummaryPeriod('day')}
+                className={`px-2 py-1 rounded-md cursor-pointer transition-colors ${bunkSummaryPeriod === 'day' ? 'bg-white shadow-xs text-blue-700' : 'text-slate-500'}`}
+              >
+                For the Day
+              </button>
+              <button
+                onClick={() => setBunkSummaryPeriod('month')}
+                className={`px-2 py-1 rounded-md cursor-pointer transition-colors ${bunkSummaryPeriod === 'month' ? 'bg-white shadow-xs text-blue-700' : 'text-slate-500'}`}
+              >
+                This Month
+              </button>
+            </div>
+          </div>
+          <div className="max-h-56 overflow-y-auto space-y-1.5">
+            {bunkSummaryRows.length === 0 ? (
+              <p className="text-center text-slate-400 text-[11px] py-4">
+                {bunkSummaryPeriod === 'day' ? 'No fuel entries recorded today.' : 'No fuel entries recorded this month.'}
+              </p>
+            ) : (
+              bunkSummaryRows.map((b, i) => (
+                <div key={i} className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 text-[11px]">
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-800 truncate">{b.bunkName}</p>
+                    <p className="text-slate-400 font-mono text-[9.5px]">{b.location}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="font-mono text-slate-600">{b.litres.toFixed(1)} L</p>
+                    <p className="font-mono font-bold text-emerald-700">₹{b.amount.toLocaleString('en-IN')}</p>
+                  </div>
+                  <button
+                    onClick={() => handleDownloadBunkSummary(b.location, b.bunkName)}
+                    title={`Download ${b.bunkName} (${b.location})`}
+                    className="p-1.5 bg-teal-50 text-teal-600 hover:bg-teal-100 rounded-lg cursor-pointer shrink-0 transition-colors"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Total Fuel Expended + Download Fuel Report - unchanged, just moved
+          to their own row beneath Average Rate/Litre + Bunk-wise Summary. */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between">
           <div>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Fuel Expended</p>
@@ -1227,17 +1300,6 @@ export default function FuelManagement({
           </div>
           <div className="p-3 bg-emerald-50 text-emerald-600 rounded-lg">
             <Fuel className="w-5 h-5" />
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Average Rate / Litre</p>
-            <h3 className="text-xl font-bold text-slate-800 mt-1">₹{avgRate.toFixed(2)}</h3>
-            <p className="text-xs text-slate-400 mt-0.5">National Fuel Index Linked</p>
-          </div>
-          <div className="p-3 bg-slate-50 text-slate-500 rounded-lg">
-            <Landmark className="w-5 h-5" />
           </div>
         </div>
 
@@ -1494,56 +1556,6 @@ export default function FuelManagement({
                 )}
               </tbody>
             </table>
-          </div>
-
-          <div className="mt-5 flex justify-end">
-            <div className="w-full sm:w-96 bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-              <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-100">
-                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                  <Building2 className="w-3.5 h-3.5 text-blue-600" />
-                  Bunk-wise Summary
-                </h3>
-                <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-[10px] font-bold">
-                  <button
-                    onClick={() => setBunkSummaryPeriod('all')}
-                    className={`px-2 py-1 rounded-md cursor-pointer transition-colors ${bunkSummaryPeriod === 'all' ? 'bg-white shadow-xs text-blue-700' : 'text-slate-500'}`}
-                  >
-                    Till Date
-                  </button>
-                  <button
-                    onClick={() => setBunkSummaryPeriod('month')}
-                    className={`px-2 py-1 rounded-md cursor-pointer transition-colors ${bunkSummaryPeriod === 'month' ? 'bg-white shadow-xs text-blue-700' : 'text-slate-500'}`}
-                  >
-                    This Month
-                  </button>
-                </div>
-              </div>
-              <div className="max-h-72 overflow-y-auto space-y-1.5">
-                {bunkSummaryRows.length === 0 ? (
-                  <p className="text-center text-slate-400 text-[11px] py-4">No fuel entries recorded yet.</p>
-                ) : (
-                  bunkSummaryRows.map((b, i) => (
-                    <div key={i} className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 text-[11px]">
-                      <div className="min-w-0">
-                        <p className="font-bold text-slate-800 truncate">{b.bunkName}</p>
-                        <p className="text-slate-400 font-mono text-[9.5px]">{b.location}</p>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <p className="font-mono text-slate-600">{b.litres.toFixed(1)} L</p>
-                        <p className="font-mono font-bold text-emerald-700">₹{b.amount.toLocaleString('en-IN')}</p>
-                      </div>
-                      <button
-                        onClick={() => handleDownloadBunkSummary(b.location, b.bunkName)}
-                        title={`Download ${b.bunkName} (${b.location})`}
-                        className="p-1.5 bg-teal-50 text-teal-600 hover:bg-teal-100 rounded-lg cursor-pointer shrink-0 transition-colors"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
           </div>
         </div>
 
