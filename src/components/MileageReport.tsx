@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { MileageReport, Vehicle, User, VehicleMileage, StaffEmployee } from '../types';
+import { PETTY_CASH_USERS } from '../utils/pettyCashUsers';
 import {
   Gauge,
   Plus,
@@ -460,6 +461,9 @@ export default function MileageReportModule({
       'Fixed Mileage': r.actualMileage || 0,
       'Difference (Litres)': r.difference ?? '',
       'Extra Fuel': r.extraFuel || 0,
+      'Extra Fuel Paid By': r.extraFuel && r.extraFuelPaymentMode === 'petty_cash'
+        ? `Petty Cash${r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : ''}`
+        : '',
       'Rate per Ltr (new)': r.ratePerLitreNew || 0,
       'Total Amount': r.totalAmount || 0,
       'Authorized Driver': r.driverName,
@@ -755,7 +759,17 @@ export default function MileageReportModule({
                     <td className={`px-3 py-2 text-right font-mono font-bold ${r.difference == null ? 'text-slate-400' : r.difference > 0 ? 'text-emerald-600' : r.difference < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
                       {r.difference == null ? '-' : `${r.difference > 0 ? '+' : ''}${r.difference.toFixed(2)} L`}
                     </td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-600">{r.extraFuel ? r.extraFuel.toFixed(2) : '-'}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-600">
+                      {r.extraFuel ? r.extraFuel.toFixed(2) : '-'}
+                      {r.extraFuel && r.extraFuelPaymentMode === 'petty_cash' && (
+                        <span
+                          className="ml-1 px-1 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200 align-middle"
+                          title={`Paid by Petty Cash${r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : ''} - excluded from Total Litres/Total Amount`}
+                        >
+                          PC
+                        </span>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.ratePerLitreNew ? `₹${r.ratePerLitreNew.toFixed(2)}` : '-'}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{(r.totalLitres ?? r.litres ?? 0).toFixed(2)} L</td>
                     <td className="px-3 py-2 text-right font-mono font-bold text-teal-700 bg-teal-50/20">{r.totalAmount ? `₹${r.totalAmount.toLocaleString('en-IN')}` : '-'}</td>
