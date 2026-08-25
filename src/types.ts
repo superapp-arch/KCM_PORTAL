@@ -204,13 +204,11 @@ export interface PettyCashVoucher {
   remarks: string; // Remarks
   documents?: VehicleDocument[];
   enteredBy?: string; // username, stamped server-side; row-level-filtered to the 3 Petty Cash logins, visible only to super admins
-  // Debit = company tops up this custodian's (enteredBy's) float; Credit =
-  // custodian returns/settles cash against it (the far more common case -
-  // most entries are a Cash Paid expense against the float). Optional so
-  // older rows saved before this existed keep working - PettyCash.tsx
-  // treats a missing value as 'credit'. Drives the ledger's Type badge and
-  // its per-holder running Balance column (debit adds cashPaid, credit
-  // subtracts it) - see voucherRunningBalance in PettyCash.tsx.
+  // Legacy field - no longer read anywhere. The Ledger's Type badge is now
+  // fully determined by Source: every Petty Cash-sourced row (this table)
+  // displays as Debit, every Market Trip credit row displays as Credit -
+  // never a per-voucher choice. Kept only so old rows/exports that stored a
+  // value here don't lose it; new saves always write 'debit'.
   transactionType?: 'debit' | 'credit';
   // Marks a voucher auto-created by another module rather than typed by hand
   // in Petty Cash - currently only Fuel Management's petty-cash-paid Extra

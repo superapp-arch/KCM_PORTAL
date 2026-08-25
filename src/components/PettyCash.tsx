@@ -260,8 +260,10 @@ export default function PettyCash({
   // Search & Filters state
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('All');
-  // Transaction Type filter (All Types / Debit / Credit) - see
-  // PettyCashVoucher.transactionType. ANDs with every other filter below.
+  // Transaction Type filter (All Types / Debit / Credit) - Type is fully
+  // determined by Source now (every Petty Cash row is a Debit, every Market
+  // Trip credit row is a Credit), not a per-voucher field. ANDs with every
+  // other filter below.
   const [selectedTransactionTypeFilter, setSelectedTransactionTypeFilter] = useState<'All' | 'debit' | 'credit'>('All');
   // Source filter (All / Petty cash / Market trip) - which ledger a merged
   // row actually came from (see the Ledger's merged petty-cash-vouchers +
@@ -312,11 +314,6 @@ export default function PettyCash({
   const [amountReceived, setAmountReceived] = useState('');
   const [cashPaid, setCashPaid] = useState('');
   const [balance, setBalance] = useState('');
-  // Debit = float top-up to this custodian, Credit = custodian settlement/
-  // expense against it - see PettyCashVoucher.transactionType. Defaults to
-  // 'credit' since that's what the vast majority of entries logged through
-  // this form already are (a Cash Paid expense against the float).
-  const [transactionType, setTransactionType] = useState<'debit' | 'credit'>('credit');
   const [tripSheet, setTripSheet] = useState('');
   const [remarks, setRemarks] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -746,7 +743,6 @@ export default function PettyCash({
     setAmountReceived(v.amountReceived ? String(v.amountReceived) : '');
     setCashPaid(v.cashPaid ? String(v.cashPaid) : '');
     setBalance(v.balance ? String(v.balance) : '');
-    setTransactionType(v.transactionType || 'credit');
     setTripSheet(v.tripSheet);
     setRemarks(v.remarks);
     setShowSidebar(true);
@@ -764,7 +760,6 @@ export default function PettyCash({
     setAmountReceived('');
     setCashPaid('');
     setBalance('');
-    setTransactionType('credit');
     setTripSheet('');
     setRemarks('');
     setCustomClientName('');
@@ -804,7 +799,10 @@ export default function PettyCash({
         amountReceived: parseFloat(amountReceived) || 0,
         cashPaid: parseFloat(cashPaid) || 0,
         balance: parseFloat(balance) || 0,
-        transactionType,
+        // Every Petty Cash-sourced row is a Debit now, full stop - no
+        // longer a per-voucher choice (see the removed Transaction Type
+        // selector this form used to have).
+        transactionType: 'debit' as const,
         tripSheet: tripSheet.trim(),
         remarks: remarks.trim()
       };
@@ -988,7 +986,9 @@ export default function PettyCash({
     const matchesVehicle = selectedVehicleFilter === 'All' || v.vehicleNumber === selectedVehicleFilter || v.vendorVehicleNumber === selectedVehicleFilter;
     const matchesReceiver = selectedReceiverFilter === 'All' || v.receiver === selectedReceiverFilter;
     const matchesCategory = selectedCategoryFilter === 'All' || v.category === selectedCategoryFilter;
-    const matchesTransactionType = selectedTransactionTypeFilter === 'All' || (v.transactionType || 'credit') === selectedTransactionTypeFilter;
+    // Every Petty Cash-sourced row is a Debit, full stop - see the Type
+    // column render below (matches this exactly, no per-voucher exception).
+    const matchesTransactionType = selectedTransactionTypeFilter === 'All' || selectedTransactionTypeFilter === 'debit';
     const matchesSource = selectedSourceFilter === 'All' || selectedSourceFilter === 'petty-cash';
 
     // Date filtering (Date structure is YYYY-MM-DD or DD-MM-YYYY)
@@ -1138,7 +1138,7 @@ export default function PettyCash({
       'Vehicle Number': v.vehicleNumber,
       'Receiver': v.receiver,
       'Vendor ID': v.vendorId,
-      'Transaction Type': (v.transactionType || 'credit') === 'debit' ? 'Debit' : 'Credit',
+      'Transaction Type': 'Debit', // every Petty Cash-sourced row is a Debit
       'Source': 'Petty cash',
       'Amount Received': receivedFor(v.enteredBy || user.username), // that holder's current Total Received Float, not a stored per-entry figure
       'Cash Paid': v.cashPaid,
@@ -1728,9 +1728,10 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   </select>
                 </div>
 
-                {/* Transaction Type Filter - Debit (float top-up) / Credit
-                    (settlement/expense), see PettyCashVoucher.transactionType.
-                    ANDs with every filter here, same as the rest. */}
+                {/* Transaction Type Filter - Debit (every Petty Cash-sourced
+                    row) / Credit (every Market Trip credit row) - fully
+                    determined by Source, not a per-voucher field. ANDs with
+                    every filter here, same as the rest. */}
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Transaction Type</label>
                   <select
@@ -1893,13 +1894,15 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">{v.vendorVehicleNumber || '-'}</td>
                         <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{v.receiver}</td>
                         <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{v.vendorId || '-'}</td>
+                        {/* Type is fully determined by Source now - every
+                            Petty Cash-sourced row is a Debit (money paid
+                            out), full stop. Market Trip rows are always
+                            Credit (see MarketTripCreditRow) - the old
+                            per-voucher transactionType toggle no longer
+                            drives this. */}
                         <td className="px-3 py-2 whitespace-nowrap">
-                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border ${
-                            (v.transactionType || 'credit') === 'debit'
-                              ? 'bg-rose-50 text-rose-700 border-rose-200'
-                              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          }`}>
-                            {(v.transactionType || 'credit') === 'debit' ? 'Debit' : 'Credit'}
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-rose-50 text-rose-700 border-rose-200">
+                            Debit
                           </span>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-slate-400">Petty cash</td>
@@ -3052,33 +3055,20 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   </div>
 
                   {/* Cash Paid (Amount Received/Balance were removed - that
-                      information now only lives on the module dashboard) +
-                      Transaction Type (see PettyCashVoucher.transactionType) -
-                      Debit = this entry tops up the custodian's float,
-                      Credit = it's a settlement/expense against it (the
-                      default - almost every entry logged here is one). */}
-                  <div className="pt-1.5 border-t border-slate-100 grid grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="block font-bold text-teal-700 mb-0.5 text-[9px] uppercase">Cash Paid (Exp)</label>
-                      <input
-                        type="number"
-                        placeholder="₹ Paid"
-                        value={cashPaid}
-                        onChange={(e) => setCashPaid(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-teal-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-teal-700 mb-0.5 text-[9px] uppercase">Transaction Type</label>
-                      <select
-                        value={transactionType}
-                        onChange={(e) => setTransactionType(e.target.value as 'debit' | 'credit')}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-bold text-[11px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                      >
-                        <option value="debit">Debit (Float Top-up)</option>
-                        <option value="credit">Credit (Settlement/Expense)</option>
-                      </select>
-                    </div>
+                      information now only lives on the module dashboard).
+                      No Transaction Type selector here anymore - Type is now
+                      fully determined by Source (every Petty Cash entry is a
+                      Debit, every Market Trip credit row is a Credit), not a
+                      per-voucher choice. */}
+                  <div className="pt-1.5 border-t border-slate-100">
+                    <label className="block font-bold text-teal-700 mb-0.5 text-[9px] uppercase">Cash Paid (Exp)</label>
+                    <input
+                      type="number"
+                      placeholder="₹ Paid"
+                      value={cashPaid}
+                      onChange={(e) => setCashPaid(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-teal-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    />
                   </div>
 
                   {/* Remarks */}

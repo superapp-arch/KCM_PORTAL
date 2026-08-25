@@ -948,10 +948,10 @@ async function syncFuelExtraPettyCashLink(report: MileageReport): Promise<string
     amountReceived: 0,
     cashPaid: amount,
     balance: 0,
-    // Credit = a settlement/expense against the float (see
-    // PettyCashVoucher.transactionType) - this is cash paid out for fuel,
-    // same direction as an ordinary Cash Paid voucher.
-    transactionType: 'credit',
+    // Every Petty Cash-sourced voucher is a Debit now (PettyCash.tsx's Type
+    // column no longer reads this field at all - it's fully determined by
+    // Source), kept only for the underlying field's own record.
+    transactionType: 'debit',
     tripSheet: '',
     remarks: `Extra fuel (${extraLitres} L) for trip - linked to Fuel Entry${report.driverName ? ` (${report.driverName})` : ''}`,
     source: 'fuel-management',
