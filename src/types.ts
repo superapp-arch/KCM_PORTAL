@@ -241,6 +241,12 @@ export interface PettyCashAdvance {
   remarks?: string;
   source?: 'market-pod-advance' | 'market-pod-balance';
   marketPodEntryId?: string;
+  // Which company account this top-up actually came from - only meaningful
+  // for a manually-logged advance (source absent); a market-pod-sourced one
+  // has no account concept of its own. Shown in the Ledger's merged Credit
+  // row (see PettyCash.tsx) in the same Vendor column real vouchers already
+  // use for this same kcm insta/kcm supply distinction.
+  account?: 'kcm insta' | 'kcm supply';
 }
 
 export type MarketPodStatus = 'Pending' | 'Closed';
@@ -749,6 +755,12 @@ export interface StaffAttendance {
   date: string; // YYYY-MM-DD
   status: AttendanceStatusCode;
   remarks?: string;
+  // username, stamped server-side every time this specific employee+date
+  // cell is marked/re-marked - always reflects whoever most recently set
+  // *this* day's status (each cell is its own record, same convention as
+  // DriverAttendance.markedBy). Server strips it out for anyone who isn't a
+  // Super Admin.
+  markedBy?: string;
 }
 
 export interface StaffHoliday {
@@ -901,20 +913,19 @@ export interface MileageReport {
   // (extraFuel folds into totalLitres/totalAmount above). 'petty_cash' means
   // this specific top-up was paid out of a Petty Cash handler's float
   // instead of the normal fuel/vendor account: extraFuel/ratePerLitreNew
-  // stay stored as-is (still shown on this record), but totalLitres/
-  // totalAmount exclude them, and a real Petty Cash Ledger voucher is
-  // auto-created/kept in sync server-side (see server.ts's
-  // syncFuelExtraPettyCashLink) - one linked voucher per report, upserted by
-  // a deterministic id, never duplicated.
+  // stay stored as-is (still shown on this record, plus a "(PC)"/holder
+  // badge - see FuelManagement.tsx and MileageReport.tsx), and totalLitres/
+  // totalAmount exclude them. Deliberately does NOT create/sync any linked
+  // Petty Cash entry - showing the badge is enough, per direct instruction.
   extraFuelPaymentMode?: 'normal' | 'petty_cash';
   // Which of the 3 Petty Cash logins (see utils/pettyCashUsers.ts) this
   // extra fuel is charged against - required whenever extraFuelPaymentMode
-  // is 'petty_cash'. Determines whose running float balance the linked
-  // voucher counts against (PettyCashVoucher.enteredBy is set to this).
+  // is 'petty_cash'. Display-only (the "(PC) - Ramesh" badge); does not
+  // affect any Petty Cash balance.
   pettyCashHolderUsername?: string;
-  // The linked PettyCashVoucher's id, once created - lets the UI show "Paid
-  // by Petty Cash - Ramesh: ₹2,000" without re-deriving the deterministic
-  // id, and lets deleting/un-checking this report clean up that voucher.
+  // Legacy - a linked-voucher mechanism that used to exist here was removed;
+  // never populated by new saves. Kept only so old rows that already have a
+  // value don't lose it.
   pettyCashEntryId?: string;
   documents?: VehicleDocument[];
   enteredBy?: string; // username, stamped server-side; visible only to super admins

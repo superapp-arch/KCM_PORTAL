@@ -147,6 +147,16 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
   // enforces (see /api/staff/attendance/mark) as a safety net.
   const isFutureDay = (day: number): boolean => `${month}-${String(day).padStart(2, '0')}` > todayIso();
 
+  // Who entered this attendance cell - same "Entered By" hover convention
+  // Driver Attendance already uses (see DriverAttendanceSheet.tsx's own
+  // cellTitle). markedBy is stripped entirely for anyone who isn't a Super
+  // Admin (server-side), so this naturally shows nothing extra otherwise.
+  const cellTitle = (record: StaffAttendance | null): string | undefined => {
+    if (!record) return undefined;
+    const parts = [record.remarks, record.markedBy ? `Marked by: ${record.markedBy}` : undefined].filter(Boolean);
+    return parts.length > 0 ? parts.join(' • ') : undefined;
+  };
+
   const markCell = async (empId: string, day: number, status: AttendanceStatusCode, remarks?: string) => {
     const date = `${month}-${String(day).padStart(2, '0')}`;
     const res = await authFetch('/api/staff/attendance/mark', {
@@ -288,7 +298,7 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
                         <td key={day} className="p-0.5 relative group">
                           <button onClick={() => !future && handleQuickClick(emp.id, day)}
                             disabled={future}
-                            title={future ? 'Future date - attendance cannot be marked ahead of today' : undefined}
+                            title={future ? 'Future date - attendance cannot be marked ahead of today' : cellTitle(record)}
                             className={`w-9 h-6 rounded text-[9px] font-bold border ${future ? 'bg-slate-100 border-slate-100 text-slate-300 cursor-not-allowed' : `cursor-pointer ${record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}`}>
                             {record ? STATUS_ABBR[record.status] : '-'}
                           </button>

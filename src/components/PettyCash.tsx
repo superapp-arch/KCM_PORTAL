@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
-import { PettyCashVoucher, VehicleDocument, Vehicle, MarketPodEntry, MarketPodStatus, MarketPodPaymentMode, User, DriverVehicleLookup, Vendor, PettyCashAdvance } from '../types';
+import { PettyCashVoucher, VehicleDocument, Vehicle, MarketPodEntry, MarketPodBalanceReceipt, MarketPodStatus, MarketPodPaymentMode, User, DriverVehicleLookup, Vendor, PettyCashAdvance } from '../types';
 import {
   Landmark,
   Plus,
@@ -165,14 +165,13 @@ NIDAGATTA_VEHICLES.forEach(v => { DEDICATED_VEHICLE_LOCATIONS[v] = "Nidagatta"; 
 // deep link: it switches to the Market Trip tab and opens this trip's own
 // edit sidebar. Column order matches the voucher row exactly so cells line
 // up (see the header this shares).
-function MarketTripCreditRow({ trip, amount, balanceNet, isSuperAdmin, onViewInMarketTrip }: {
-  trip: MarketPodEntry; amount: number; balanceNet: number; isSuperAdmin: boolean; onViewInMarketTrip: () => void;
+function MarketTripCreditRow({ trip, date, amount, balanceNet, isSuperAdmin, onViewInMarketTrip }: {
+  trip: MarketPodEntry; date: string; amount: number; balanceNet: number; isSuperAdmin: boolean; onViewInMarketTrip: () => void;
 }) {
-  const reference = `MT-${(trip.entryNo || '').replace(/^TRIP-?/i, '')}`;
   return (
     <tr className="hover:bg-emerald-50/50 transition-colors text-[11px] bg-emerald-50/20 border-l-4 border-emerald-400">
-      <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{trip.date}</td>
-      <td className="px-3 py-2 font-mono text-slate-400 whitespace-nowrap" title="Market Trip rows don't consume a Petty Cash Entry No - see their own reference in the Vendor ID column">-</td>
+      <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{date}</td>
+      <td className="px-3 py-2 font-mono font-bold text-emerald-700 whitespace-nowrap" title="This trip's own real Market Trip entry number - shared by its advance row and every balance-settlement row it later generates, until the trip's balance reaches 0">{trip.entryNo}</td>
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
       <td className="px-3 py-2 text-slate-600 whitespace-nowrap max-w-[120px] truncate" title={`${trip.from} → ${trip.to}`}>{trip.from} &rarr; {trip.to}</td>
       <td className="px-3 py-2 text-slate-800 font-semibold whitespace-nowrap">{trip.customer || '-'}</td>
@@ -180,7 +179,7 @@ function MarketTripCreditRow({ trip, amount, balanceNet, isSuperAdmin, onViewInM
       <td className="px-3 py-2 font-mono font-bold text-slate-800 whitespace-nowrap">{trip.vehicleNumber || '-'}</td>
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
       <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{trip.coordinator || '-'}</td>
-      <td className="px-3 py-2 font-mono font-bold text-emerald-700 whitespace-nowrap" title="Market Trip reference - view/edit it from the Market Trip Ledger">{reference}</td>
+      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
       <td className="px-3 py-2 whitespace-nowrap">
         <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-emerald-50 text-emerald-700 border-emerald-200">Credit</span>
       </td>
@@ -189,7 +188,7 @@ function MarketTripCreditRow({ trip, amount, balanceNet, isSuperAdmin, onViewInM
       </td>
       <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700 bg-emerald-50/40">₹{amount.toLocaleString('en-IN')}</td>
       <td className="px-3 py-2 text-right font-mono text-slate-400">&mdash;</td>
-      <td className={`px-3 py-2 text-right font-mono font-black ${balanceNet < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`} title="This holder's running balance across the merged, date-sorted Petty Cash + Market Trip credit list">
+      <td className={`px-3 py-2 text-right font-mono font-black ${balanceNet < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`} title="This holder's running balance across the merged, date-sorted Petty Cash + Market Trip + Amount Received credit list">
         {balanceNet < 0 && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
         ₹{balanceNet.toLocaleString('en-IN')}
       </td>
@@ -204,6 +203,57 @@ function MarketTripCreditRow({ trip, amount, balanceNet, isSuperAdmin, onViewInM
           title="Open this trip in the Market Trip Ledger"
         >
           View in Market Trip
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+// A manually-logged Amount Received top-up (Petty Cash change request part
+// 3/4) merged into the Ledger as its own read-only Credit row - amber left
+// border + tint so it's visibly distinct from both a real voucher and a
+// Market Trip credit row at a glance. No "View in ..." link (there's no
+// other module this row belongs to - it lives only here), but does reuse
+// the existing Amount Received delete handler so it can still be removed
+// from this merged view.
+function AmountReceivedCreditRow({ advance, balanceNet, isSuperAdmin, onDelete }: {
+  advance: PettyCashAdvance; balanceNet: number; isSuperAdmin: boolean; onDelete: () => void;
+}) {
+  const receiverLabel = PETTY_CASH_USERS.find(u => u.username === advance.username)?.label || advance.username;
+  return (
+    <tr className="hover:bg-amber-50/50 transition-colors text-[11px] bg-amber-50/20 border-l-4 border-amber-400">
+      <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{advance.date}</td>
+      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
+      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
+      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
+      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
+      <td className="px-3 py-2 text-slate-700 font-semibold whitespace-nowrap capitalize">{advance.account || '-'}</td>
+      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
+      <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{receiverLabel}</td>
+      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
+      <td className="px-3 py-2 whitespace-nowrap">
+        <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-emerald-50 text-emerald-700 border-emerald-200">Credit</span>
+      </td>
+      <td className="px-3 py-2 whitespace-nowrap">
+        <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-amber-100 text-amber-800 border-amber-300">Amount received</span>
+      </td>
+      <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700 bg-emerald-50/40">₹{advance.amount.toLocaleString('en-IN')}</td>
+      <td className="px-3 py-2 text-right font-mono text-slate-400">&mdash;</td>
+      <td className={`px-3 py-2 text-right font-mono font-black ${balanceNet < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`} title="This holder's running balance across the merged, date-sorted Petty Cash + Market Trip + Amount Received credit list">
+        {balanceNet < 0 && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
+        ₹{balanceNet.toLocaleString('en-IN')}
+      </td>
+      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
+      <td className="px-3 py-2 text-slate-500 max-w-[120px] truncate" title={advance.remarks}>{advance.remarks || '-'}</td>
+      {isSuperAdmin && <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">{advance.username}</td>}
+      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
+      <td className="px-3 py-2 whitespace-nowrap text-center">
+        <button
+          onClick={onDelete}
+          className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+          title="Delete this Amount Received entry"
+        >
+          Delete
         </button>
       </td>
     </tr>
@@ -271,7 +321,7 @@ export default function PettyCash({
   // Transaction Type above. Distinct from the per-voucher "Origin" badge
   // (Fuel Management vs manually-entered Petty Cash), which is about how a
   // single voucher record was created, not which table a row came from.
-  const [selectedSourceFilter, setSelectedSourceFilter] = useState<'All' | 'petty-cash' | 'market-trip'>('All');
+  const [selectedSourceFilter, setSelectedSourceFilter] = useState<'All' | 'petty-cash' | 'market-trip' | 'amount-received'>('All');
   // Client / Vehicle No / Receiver filters - all populated dynamically from
   // whatever's actually been entered in the ledger (see usedClientNames/
   // usedVehicleNumbers/usedReceivers below), not a fixed suggestion list, so
@@ -369,6 +419,12 @@ export default function PettyCash({
   const [showAdvanceModal, setShowAdvanceModal] = useState(false);
   const [advanceAmount, setAdvanceAmount] = useState('');
   const [advanceDate, setAdvanceDate] = useState(new Date().toISOString().slice(0, 10));
+  // Which company account this top-up actually came from - "this amount
+  // receiving is also have two accounts sometimes 'KCM INSTA' ,AND 'KCM
+  // SUPPLY'" - shown afterwards in the merged Ledger row's Vendor column
+  // (see AmountReceivedCreditRow), same two options real vouchers already
+  // use for this same distinction.
+  const [advanceAccount, setAdvanceAccount] = useState<'kcm insta' | 'kcm supply'>('kcm insta');
   const [advanceRemarks, setAdvanceRemarks] = useState('');
   const [advanceIsSubmitting, setAdvanceIsSubmitting] = useState(false);
   // Which user's ledger the balance card/modal is scoped to - only meaningful
@@ -868,66 +924,71 @@ export default function PettyCash({
   // otherwise (server-filtered data means there's nothing else to show).
   const dashboardSummaryUsers = isSuperAdmin ? PETTY_CASH_USERS : [{ username: user.username, label: user.name }];
 
-  // Balance Net as of one specific voucher (for the table's "Balance Net"
-  // column) - same formula, but only summing that user's cash paid up to and
-  // including this entry, in chronological order.
-  // Ordered by Entry No (the sequence entries were actually created in, see
-  // nextPettyCashEntryNo) rather than the user-editable Date field - Date can
-  // be backdated independently of when an entry was actually logged, which
-  // made this column look like it was jumping around at random.
-  // Known gap: nextPettyCashEntryNo's numbering format changes at the Sep
-  // 2026 cutover (flat ENT-2026-NNNN before, monthly ENT-2026-MMNN from
-  // then on) - extractTrailingNumber alone can't distinguish an old flat
-  // number from a new monthly one just by digit value (e.g. Sep's "0901"
-  // reads as 901, numerically less than Aug's "2673"), so a list mixing
-  // entries from both sides of that boundary could still order strangely
-  // right at the seam. Not fixed here since it wasn't part of what was
-  // asked - flag if it turns out to matter in practice.
-  // A Market Trip's total Petty-Cash credit to the float: its Received
-  // Advance plus every Balance Settlement receipt logged against it since -
-  // combined into one figure (one merged row per trip, not one per
-  // settlement event), matching the same total the existing PettyCashAdvance
-  // auto-sync already credits (mp-adv-<id>/mp-bal-<id>-<receiptId> - see
-  // server.ts's syncMarketPodPettyCashLinks), just surfaced here as a single
-  // number instead of split across separate advance records.
-  const marketTripCreditAmount = (trip: MarketPodEntry): number =>
-    (trip.receivedAdvance || 0) + (trip.balanceReceipts || []).reduce((s, r) => s + (r.amount || 0), 0);
+  // --- Merged Ledger rows: real vouchers (Debit) + two kinds of Credit ---
+  // Market Trip credit events - one row PER EVENT, not one combined row per
+  // trip: a trip's Received Advance is its own row, and each later Balance
+  // Settlement receipt (often logged a month+ after the trip itself, once
+  // the customer actually pays) is its own separate row too, dated whenever
+  // it was actually received - never backdated onto/merged into the
+  // original advance row. Every row from the SAME trip shares that trip's
+  // own real entryNo (e.g. "TRIP-000001", shown directly in the Entry No
+  // column - not a synthetic "MT-" reference) for as long as that trip still
+  // has money coming in; a different trip gets its own distinct entryNo, so
+  // nothing about the sequence is shared across trips.
+  const marketTripAdvanceAmount = (trip: MarketPodEntry): number => trip.receivedAdvance || 0;
 
-  // Market Trip entries that show up as merged Credit rows in the Ledger
-  // (point 2) - Payment Mode = Petty Cash and an actual credit to show,
-  // scoped to one owner the same "isSuperAdmin sees everyone, everyone else
-  // only ever has their own rows" way vouchersFor/advancesFor already work.
   const marketTripEntriesFor = (username: string): MarketPodEntry[] =>
     (isSuperAdmin ? marketPodEntries.filter(e => e.enteredBy === username) : marketPodEntries)
-      .filter(e => e.paymentMode === 'Petty Cash' && marketTripCreditAmount(e) > 0);
+      .filter(e => e.paymentMode === 'Petty Cash');
+
+  // Manually-logged "Amount Received" top-ups (Add Amount Received modal) -
+  // excludes the market-pod-auto-synced ones (source starts with
+  // 'market-pod'), since those are already represented above as their own
+  // Market Trip credit rows; merging both would double the same money.
+  const manualAdvancesFor = (username: string): PettyCashAdvance[] =>
+    advancesFor(username).filter(a => !a.source);
+
+  type MergedOwnerRow =
+    | { key: string; date: string; id: string; kind: 'voucher'; voucher: PettyCashVoucher }
+    | { key: string; date: string; id: string; kind: 'trip-advance'; trip: MarketPodEntry }
+    | { key: string; date: string; id: string; kind: 'trip-balance'; trip: MarketPodEntry; receipt: MarketPodBalanceReceipt }
+    | { key: string; date: string; id: string; kind: 'amount-received'; advance: PettyCashAdvance };
 
   // Balance Net (single source of truth for running balance - see the
-  // removed "Balance" column) now walks the MERGED, date-sorted list of this
-  // owner's real vouchers (Cash Paid, subtracted) and Market Trip credit
-  // rows (Amt Rec, already inside Total Received Float via the existing
-  // advance auto-sync - see marketTripEntriesFor above - so they are NOT
-  // added again here, only used to place a snapshot point in the sequence).
-  // Ties (same date) break on the numeric id - both vouchers and Market Trip
-  // entries fall back to a Date.now() id when none is supplied, so this is a
-  // genuine chronological tiebreak across both row types, not a per-source
-  // sequence number (Entry No formats differ between the two and were never
-  // meant to interleave).
-  const mergedOwnerRows = (owner: string): Array<{ key: string; date: string; id: string; voucher?: PettyCashVoucher; trip?: MarketPodEntry }> => {
-    const voucherRows = vouchersFor(owner).map(v => ({ key: `PC:${v.id}`, date: v.date, id: v.id, voucher: v }));
-    const tripRows = marketTripEntriesFor(owner).map(t => ({ key: `MT:${t.id}`, date: t.date, id: t.id, trip: t }));
-    return [...voucherRows, ...tripRows].sort((a, b) => {
+  // removed "Balance" column) is a genuine chronological walk, starting at 0
+  // - not "Total Received Float minus cumulative Cash Paid" anymore, since
+  // that treated every credit as already banked from day one. Now a credit
+  // only raises the balance from the date it's actually logged onward, so
+  // adding a new Amount Received/Market Trip credit today can never change
+  // what an earlier row already displayed (point 4's core ask). Ties (same
+  // date) break on the numeric id - every row type here falls back to a
+  // Date.now()-based id when none is supplied, so this is a genuine
+  // chronological tiebreak across all four row kinds, not a per-source
+  // sequence number (Entry No formats differ and were never meant to
+  // interleave).
+  const mergedOwnerRows = (owner: string): MergedOwnerRow[] => {
+    const rows: MergedOwnerRow[] = [];
+    vouchersFor(owner).forEach(v => rows.push({ key: `PC:${v.id}`, date: v.date, id: v.id, kind: 'voucher', voucher: v }));
+    marketTripEntriesFor(owner).forEach(t => {
+      if (marketTripAdvanceAmount(t) > 0) rows.push({ key: `MT:${t.id}:adv`, date: t.date, id: t.id, kind: 'trip-advance', trip: t });
+      (t.balanceReceipts || []).forEach(r => rows.push({ key: `MT:${t.id}:bal:${r.id}`, date: r.date, id: r.id, kind: 'trip-balance', trip: t, receipt: r }));
+    });
+    manualAdvancesFor(owner).forEach(a => rows.push({ key: `AR:${a.id}`, date: a.date, id: a.id, kind: 'amount-received', advance: a }));
+    return rows.sort((a, b) => {
       if (a.date !== b.date) return a.date < b.date ? -1 : 1;
       return (parseInt(a.id, 10) || 0) - (parseInt(b.id, 10) || 0);
     });
   };
 
   const balanceNetMapFor = (owner: string): Map<string, number> => {
-    const totalAdvances = advancesFor(owner).reduce((s, a) => s + (a.amount || 0), 0);
     const map = new Map<string, number>();
-    let spent = 0;
+    let bal = 0;
     for (const row of mergedOwnerRows(owner)) {
-      if (row.voucher) spent += row.voucher.cashPaid || 0;
-      map.set(row.key, totalAdvances - spent);
+      if (row.kind === 'voucher') bal -= row.voucher.cashPaid || 0;
+      else if (row.kind === 'trip-advance') bal += marketTripAdvanceAmount(row.trip);
+      else if (row.kind === 'trip-balance') bal += row.receipt.amount || 0;
+      else bal += row.advance.amount || 0;
+      map.set(row.key, bal);
     }
     return map;
   };
@@ -935,8 +996,14 @@ export default function PettyCash({
   const balanceNetAt = (voucher: PettyCashVoucher): number =>
     balanceNetMapFor(voucher.enteredBy || user.username).get(`PC:${voucher.id}`) ?? 0;
 
-  const balanceNetAtTrip = (trip: MarketPodEntry): number =>
-    balanceNetMapFor(trip.enteredBy || user.username).get(`MT:${trip.id}`) ?? 0;
+  const balanceNetAtTripAdvance = (trip: MarketPodEntry): number =>
+    balanceNetMapFor(trip.enteredBy || user.username).get(`MT:${trip.id}:adv`) ?? 0;
+
+  const balanceNetAtTripBalance = (trip: MarketPodEntry, receipt: MarketPodBalanceReceipt): number =>
+    balanceNetMapFor(trip.enteredBy || user.username).get(`MT:${trip.id}:bal:${receipt.id}`) ?? 0;
+
+  const balanceNetAtAdvance = (advance: PettyCashAdvance): number =>
+    balanceNetMapFor(advance.username).get(`AR:${advance.id}`) ?? 0;
 
   const handleAddAdvance = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -950,6 +1017,7 @@ export default function PettyCash({
         username: isSuperAdmin ? balanceUserFilter : user.username,
         amount: parseFloat(advanceAmount),
         date: advanceDate,
+        account: advanceAccount,
         remarks: advanceRemarks.trim()
       });
       setSaveConfirmation({ label: 'Amount Received', identifier: `₹${parseFloat(advanceAmount).toLocaleString('en-IN')} on ${advanceDate}`, key: Date.now() });
@@ -1014,54 +1082,71 @@ export default function PettyCash({
       })
     : filteredVouchersUnsorted;
 
-  // Market Trip entries with Payment Mode = Petty Cash, as read-only Credit
-  // rows merged into the Ledger (point 2) - every such trip with an actual
-  // credit to show (Received Advance + any Balance Settlement receipts, see
-  // marketTripCreditAmount above). This is the module-wide list (not scoped
-  // to one owner - marketPodEntries is already server-filtered to whatever
-  // this viewer may see, same as `vouchers` itself), used for both the
-  // Ledger table below and the Super-Admin summary strip.
-  const allMarketTripCreditEntries = marketPodEntries.filter(e => e.paymentMode === 'Petty Cash' && marketTripCreditAmount(e) > 0);
+  // The Ledger's merged, read-only view (point 2 + the Market Trip/Amount
+  // Received rework) - petty cash vouchers (Debit) + Market Trip credit
+  // EVENTS (Received Advance and each Balance Settlement receipt, as their
+  // own separate rows - never combined) + manually-logged Amount Received
+  // top-ups (Credit), composite-keyed so ids/events never collide:
+  // PC:<voucherId>, MT:<tripId>:adv, MT:<tripId>:bal:<receiptId>,
+  // AR:<advanceId>. Sorted by whatever the on-screen Sort By/column headers
+  // already drive (same `sort` state), so switching to Date genuinely
+  // interleaves every row type instead of grouping by source.
+  type LedgerRow =
+    | { key: string; source: 'petty-cash'; date: string; entryNo: string; vehicleNumberSort: string; voucher: PettyCashVoucher }
+    | { key: string; source: 'market-trip'; date: string; entryNo: string; vehicleNumberSort: string; trip: MarketPodEntry; amount: number; balanceNet: number }
+    | { key: string; source: 'amount-received'; date: string; entryNo: string; vehicleNumberSort: string; advance: PettyCashAdvance; balanceNet: number };
 
-  // Category/Client/Receiver don't apply to Market Trip rows (no matching
-  // concept on that entity) - picking a specific value for any of those
-  // simply excludes every Market Trip row, same "AND against a field this
-  // row type doesn't have" rule the rest of this filter set already follows.
-  const filteredMarketTripRows = allMarketTripCreditEntries.filter(t => {
-    const matchesSearch =
-      (t.entryNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (t.vehicleNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (t.customer || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (t.from || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (t.to || '').toLowerCase().includes(searchTerm.toLowerCase());
+  // Category/Client/Receiver/Vehicle don't apply to Credit rows (no matching
+  // concept on either entity) - picking a specific value for any of those
+  // simply excludes every Credit row, same "AND against a field this row
+  // type doesn't have" rule the rest of this filter set already follows.
+  const matchesCreditRowFilters = (date: string, searchable: string[]): boolean => {
+    const matchesSearch = searchable.some(s => (s || '').toLowerCase().includes(searchTerm.toLowerCase()));
     const matchesClient = selectedClientFilter === 'All';
     const matchesReceiver = selectedReceiverFilter === 'All';
     const matchesCategory = selectedCategoryFilter === 'All';
-    const matchesVehicle = selectedVehicleFilter === 'All' || t.vehicleNumber === selectedVehicleFilter;
+    const matchesVehicle = selectedVehicleFilter === 'All';
     const matchesTransactionType = selectedTransactionTypeFilter === 'All' || selectedTransactionTypeFilter === 'credit';
-    const matchesSource = selectedSourceFilter === 'All' || selectedSourceFilter === 'market-trip';
-
-    if (!t.date) return false;
-    const year = getYearFromDate(t.date);
-    const month = getMonthFromDate(t.date);
+    if (!date) return false;
+    const year = getYearFromDate(date);
+    const month = getMonthFromDate(date);
     const matchesYear = filterYear === 'All' || year === filterYear;
     const matchesMonth = filterMonth === 'All' || month === filterMonth;
+    return matchesSearch && matchesClient && matchesReceiver && matchesCategory && matchesVehicle && matchesTransactionType && matchesYear && matchesMonth;
+  };
 
-    return matchesSearch && matchesClient && matchesReceiver && matchesCategory && matchesVehicle && matchesTransactionType && matchesSource && matchesYear && matchesMonth;
+  // Every Market Trip credit EVENT across every trip this viewer can see
+  // (marketPodEntries is already server-filtered, same as `vouchers`),
+  // pre-computed here (not scoped to one owner) so the same list feeds the
+  // on-screen table, the Super-Admin summary strip, and the export.
+  const allMarketTripCreditRows: { trip: MarketPodEntry; amount: number; date: string; key: string }[] = [];
+  marketPodEntries.filter(e => e.paymentMode === 'Petty Cash').forEach(t => {
+    if (marketTripAdvanceAmount(t) > 0) allMarketTripCreditRows.push({ trip: t, amount: marketTripAdvanceAmount(t), date: t.date, key: `MT:${t.id}:adv` });
+    (t.balanceReceipts || []).forEach(r => allMarketTripCreditRows.push({ trip: t, amount: r.amount || 0, date: r.date, key: `MT:${t.id}:bal:${r.id}` }));
   });
 
-  // The Ledger's actual merged, read-only view (point 2) - petty cash
-  // vouchers (Debit) + Market Trip credit rows (Credit), composite-keyed
-  // PC:<id>/MT:<id> so ids from the two tables never collide, sorted by
-  // whatever the on-screen Sort By/column headers already drive (same `sort`
-  // state, so switching to Date genuinely interleaves both row types
-  // instead of grouping every voucher before every trip).
-  type LedgerRow =
-    | { key: string; source: 'petty-cash'; date: string; entryNo: string; vehicleNumberSort: string; voucher: PettyCashVoucher }
-    | { key: string; source: 'market-trip'; date: string; entryNo: string; vehicleNumberSort: string; trip: MarketPodEntry };
+  const filteredMarketTripRows = allMarketTripCreditRows.filter(({ trip: t, date }) =>
+    matchesCreditRowFilters(date, [t.entryNo, t.vehicleNumber, t.customer, t.from, t.to]) &&
+    (selectedSourceFilter === 'All' || selectedSourceFilter === 'market-trip')
+  );
+
+  // Manually-logged Amount Received top-ups, module-wide (same scoping as
+  // `vouchers`/`pettyCashAdvances` themselves - already server-filtered per
+  // viewer) - excludes market-pod-auto-synced ones (already represented
+  // above as Market Trip credit rows).
+  const allAmountReceivedRows = pettyCashAdvances.filter(a => !a.source);
+  const filteredAmountReceivedRows = allAmountReceivedRows.filter(a =>
+    matchesCreditRowFilters(a.date, [a.remarks || '', PETTY_CASH_USERS.find(u => u.username === a.username)?.label || a.username]) &&
+    (selectedSourceFilter === 'All' || selectedSourceFilter === 'amount-received')
+  );
+
   const mergedLedgerRowsUnsorted: LedgerRow[] = [
     ...filteredVouchersUnsorted.map((v): LedgerRow => ({ key: `PC:${v.id}`, source: 'petty-cash', date: v.date, entryNo: v.entryNo, vehicleNumberSort: v.vehicleNumber, voucher: v })),
-    ...filteredMarketTripRows.map((t): LedgerRow => ({ key: `MT:${t.id}`, source: 'market-trip', date: t.date, entryNo: t.entryNo, vehicleNumberSort: t.vehicleNumber, trip: t }))
+    ...filteredMarketTripRows.map(({ trip, amount, date, key }): LedgerRow => ({
+      key, source: 'market-trip', date, entryNo: trip.entryNo, vehicleNumberSort: trip.vehicleNumber, trip, amount,
+      balanceNet: key.includes(':adv') ? balanceNetAtTripAdvance(trip) : balanceNetAtTripBalance(trip, trip.balanceReceipts!.find(r => key.endsWith(`:${r.id}`))!)
+    })),
+    ...filteredAmountReceivedRows.map((a): LedgerRow => ({ key: `AR:${a.id}`, source: 'amount-received', date: a.date, entryNo: '', vehicleNumberSort: '', advance: a, balanceNet: balanceNetAtAdvance(a) }))
   ];
   const mergedLedgerRows = sort
     ? [...mergedLedgerRowsUnsorted].sort((a, b) => {
@@ -1074,12 +1159,17 @@ export default function PettyCash({
       })
     : mergedLedgerRowsUnsorted;
 
-  // "7 entries (5 petty cash + 2 market trip)" - the mixed-source breakdown
-  // for the entry-count label, so the two kinds of rows are never confused
-  // for one another at a glance.
-  const ledgerEntryCountLabel = filteredMarketTripRows.length > 0
-    ? `${mergedLedgerRows.length} entries (${filteredVouchers.length} petty cash + ${filteredMarketTripRows.length} market trip)`
-    : `${mergedLedgerRows.length} entries`;
+  // "7 entries (5 petty cash + 1 market trip + 1 amount received)" - the
+  // mixed-source breakdown for the entry-count label, so the different kinds
+  // of rows are never confused for one another at a glance.
+  const ledgerEntryCountLabel = (() => {
+    const parts = [
+      `${filteredVouchers.length} petty cash`,
+      filteredMarketTripRows.length > 0 ? `${filteredMarketTripRows.length} market trip` : null,
+      filteredAmountReceivedRows.length > 0 ? `${filteredAmountReceivedRows.length} amount received` : null
+    ].filter(Boolean);
+    return parts.length > 1 ? `${mergedLedgerRows.length} entries (${parts.join(' + ')})` : `${mergedLedgerRows.length} entries`;
+  })();
 
   // Unique years list from existing vouchers to populate filter
   const availableYears = Array.from(new Set(vouchers.map(v => getYearFromDate(v.date)))).filter(Boolean).sort().reverse();
@@ -1115,15 +1205,19 @@ export default function PettyCash({
     return { start: `${refDate.slice(0, 4)}-01-01`, end: refDate };
   };
 
-  // Same merged Petty Cash + Market Trip credit rows the on-screen Ledger
-  // shows (point 2's export requirement: same columns, same order, plus a
-  // Source column) - single "Balance" field removed, "Balance Net" is the
-  // one balance column, matching the table exactly.
+  // Same merged Petty Cash + Market Trip credit event + Amount Received rows
+  // the on-screen Ledger shows (point 2's export requirement: same columns,
+  // same order, plus a Source column) - single "Balance" field removed,
+  // "Balance Net" is the one balance column, matching the table exactly.
+  // Amount Received is blank for real vouchers (a per-row figure now, not
+  // the holder's repeated running total) and only populated on the actual
+  // credit row it belongs to.
   const handleDownload = () => {
     const { start, end } = getDownloadDateRange(downloadPeriod, downloadDate);
     const rangeFilteredVouchers = filteredVouchersUnsorted.filter(v => v.date >= start && v.date <= end);
-    const rangeFilteredTrips = filteredMarketTripRows.filter(t => t.date >= start && t.date <= end);
-    if (rangeFilteredVouchers.length === 0 && rangeFilteredTrips.length === 0) {
+    const rangeFilteredTrips = filteredMarketTripRows.filter(({ date }) => date >= start && date <= end);
+    const rangeFilteredAdvances = filteredAmountReceivedRows.filter(a => a.date >= start && a.date <= end);
+    if (rangeFilteredVouchers.length === 0 && rangeFilteredTrips.length === 0 && rangeFilteredAdvances.length === 0) {
       triggerNotif('No data available to download for the selected period.', 'info');
       return;
     }
@@ -1140,34 +1234,49 @@ export default function PettyCash({
       'Vendor ID': v.vendorId,
       'Transaction Type': 'Debit', // every Petty Cash-sourced row is a Debit
       'Source': 'Petty cash',
-      'Amount Received': receivedFor(v.enteredBy || user.username), // that holder's current Total Received Float, not a stored per-entry figure
+      'Amount Received': '',
       'Cash Paid': v.cashPaid,
       'Balance Net': balanceNetAt(v),
       'Trip Sheet': v.tripSheet,
       'Remarks': v.remarks
     }));
-    const tripRows = rangeFilteredTrips.map(t => {
-      const reference = `MT-${(t.entryNo || '').replace(/^TRIP-?/i, '')}`;
-      return {
-        'Date': t.date,
-        'Entry No': '-', // never consumes a Petty Cash Entry No - see Vendor ID for this trip's own reference
-        'Category': '-',
-        'Location': `${t.from} -> ${t.to}`,
-        'Client Name': t.customer,
-        'Vendor': '-',
-        'Vehicle Number': t.vehicleNumber,
-        'Receiver': t.coordinator || '-',
-        'Vendor ID': reference,
-        'Transaction Type': 'Credit',
-        'Source': 'Market trip',
-        'Amount Received': marketTripCreditAmount(t),
-        'Cash Paid': 0,
-        'Balance Net': balanceNetAtTrip(t),
-        'Trip Sheet': '-',
-        'Remarks': t.remarks
-      };
-    });
-    const data = [...voucherRows, ...tripRows].sort((a, b) => (a.Date < b.Date ? -1 : a.Date > b.Date ? 1 : 0));
+    const tripRows = rangeFilteredTrips.map(({ trip: t, amount, key }) => ({
+      'Date': key.includes(':adv') ? t.date : (t.balanceReceipts!.find(r => key.endsWith(`:${r.id}`))!.date),
+      'Entry No': t.entryNo, // the trip's own real reference - shared by every credit event this same trip generates
+      'Category': '-',
+      'Location': `${t.from} -> ${t.to}`,
+      'Client Name': t.customer,
+      'Vendor': '-',
+      'Vehicle Number': t.vehicleNumber,
+      'Receiver': t.coordinator || '-',
+      'Vendor ID': '-',
+      'Transaction Type': 'Credit',
+      'Source': 'Market trip',
+      'Amount Received': amount,
+      'Cash Paid': 0,
+      'Balance Net': key.includes(':adv') ? balanceNetAtTripAdvance(t) : balanceNetAtTripBalance(t, t.balanceReceipts!.find(r => key.endsWith(`:${r.id}`))!),
+      'Trip Sheet': '-',
+      'Remarks': t.remarks
+    }));
+    const advanceRows = rangeFilteredAdvances.map(a => ({
+      'Date': a.date,
+      'Entry No': '-',
+      'Category': '-',
+      'Location': '-',
+      'Client Name': '-',
+      'Vendor': a.account || '-',
+      'Vehicle Number': '-',
+      'Receiver': PETTY_CASH_USERS.find(u => u.username === a.username)?.label || a.username,
+      'Vendor ID': '-',
+      'Transaction Type': 'Credit',
+      'Source': 'Amount received',
+      'Amount Received': a.amount,
+      'Cash Paid': 0,
+      'Balance Net': balanceNetAtAdvance(a),
+      'Trip Sheet': '-',
+      'Remarks': a.remarks || ''
+    }));
+    const data = [...voucherRows, ...tripRows, ...advanceRows].sort((a, b) => (a.Date < b.Date ? -1 : a.Date > b.Date ? 1 : 0));
 
     const worksheet = XLSX.utils.json_to_sheet(data);
     const workbook = XLSX.utils.book_new();
@@ -1561,13 +1670,15 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
       {/* Market Trip credit summary strip (point 2) - Super Admin only, so
           they can spot the inflow at a glance without opening the Ledger
           table itself. Scoped to whatever's actually visible to this viewer
-          (allMarketTripCreditEntries already reflects the same server-side
-          row filtering every other list here does). */}
-      {activeTab === 'ledger' && isSuperAdmin && allMarketTripCreditEntries.length > 0 && (
+          (allMarketTripCreditRows already reflects the same server-side row
+          filtering every other list here does) - one entry per credit EVENT
+          now (advance + each balance receipt counted separately), not one
+          per trip. */}
+      {activeTab === 'ledger' && isSuperAdmin && allMarketTripCreditRows.length > 0 && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 flex items-center gap-2 text-xs">
           <ArrowRightLeft className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
           <span className="font-bold text-emerald-800">
-            Market trip credit — ₹{allMarketTripCreditEntries.reduce((s, t) => s + marketTripCreditAmount(t), 0).toLocaleString('en-IN')} across {allMarketTripCreditEntries.length} {allMarketTripCreditEntries.length === 1 ? 'entry' : 'entries'}
+            Market trip credit — ₹{allMarketTripCreditRows.reduce((s, t) => s + t.amount, 0).toLocaleString('en-IN')} across {allMarketTripCreditRows.length} {allMarketTripCreditRows.length === 1 ? 'entry' : 'entries'}
           </span>
         </div>
       )}
@@ -1752,12 +1863,13 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Source</label>
                   <select
                     value={selectedSourceFilter}
-                    onChange={(e) => setSelectedSourceFilter(e.target.value as 'All' | 'petty-cash' | 'market-trip')}
+                    onChange={(e) => setSelectedSourceFilter(e.target.value as 'All' | 'petty-cash' | 'market-trip' | 'amount-received')}
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-semibold text-slate-700"
                   >
                     <option value="All">All Sources</option>
                     <option value="petty-cash">Petty cash</option>
                     <option value="market-trip">Market trip</option>
+                    <option value="amount-received">Amount received</option>
                   </select>
                 </div>
 
@@ -1870,7 +1982,9 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     </tr>
                   ) : (
                     mergedLedgerRows.map((row) => row.source === 'market-trip' ? (
-                      <MarketTripCreditRow key={row.key} trip={row.trip} amount={marketTripCreditAmount(row.trip)} isSuperAdmin={isSuperAdmin} balanceNet={balanceNetAtTrip(row.trip)} onViewInMarketTrip={() => { setActiveTab('marketpod'); handleStartEditMarketPod(row.trip); }} />
+                      <MarketTripCreditRow key={row.key} trip={row.trip} date={row.date} amount={row.amount} isSuperAdmin={isSuperAdmin} balanceNet={row.balanceNet} onViewInMarketTrip={() => { setActiveTab('marketpod'); handleStartEditMarketPod(row.trip); }} />
+                    ) : row.source === 'amount-received' ? (
+                      <AmountReceivedCreditRow key={row.key} advance={row.advance} isSuperAdmin={isSuperAdmin} balanceNet={row.balanceNet} onDelete={() => onDeletePettyCashAdvance(row.advance.id)} />
                     ) : (() => { const v = row.voucher;
                       return (
                       <tr key={v.id} className="hover:bg-slate-50/70 transition-colors text-[11px]">
@@ -2722,9 +2836,20 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     />
                   </div>
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Date *</label>
-                    <DateInput required value={advanceDate} onChange={(e) => setAdvanceDate(e.target.value)} max={new Date().toISOString().slice(0, 10)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
+                    <label className="block font-semibold text-slate-700 mb-1">Account *</label>
+                    <select
+                      value={advanceAccount}
+                      onChange={(e) => setAdvanceAccount(e.target.value as 'kcm insta' | 'kcm supply')}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-semibold text-slate-800 capitalize"
+                    >
+                      <option value="kcm insta">KCM Insta</option>
+                      <option value="kcm supply">KCM Supply</option>
+                    </select>
                   </div>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Date *</label>
+                  <DateInput required value={advanceDate} onChange={(e) => setAdvanceDate(e.target.value)} max={new Date().toISOString().slice(0, 10)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Remarks</label>
@@ -2759,6 +2884,9 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           <div className="min-w-0">
                             <span className="font-mono font-bold text-slate-800">₹{a.amount.toLocaleString('en-IN')}</span>
                             <span className="text-slate-400 font-mono ml-1.5">{a.date}</span>
+                            {a.account && (
+                              <span className="ml-1.5 px-1 py-0.5 rounded text-[8px] font-black uppercase bg-slate-200 text-slate-600 border border-slate-300 align-middle">{a.account}</span>
+                            )}
                             {a.source && (
                               <span className="ml-1.5 px-1 py-0.5 rounded text-[8px] font-black uppercase bg-indigo-100 text-indigo-700 border border-indigo-200 align-middle">Auto</span>
                             )}

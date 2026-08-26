@@ -6,7 +6,7 @@ import { authFetch } from '../../authFetch';
 import { compareTrailingNumber } from '../../utils/sort';
 import DriverAttendanceSummaryModal from './DriverAttendanceSummaryModal';
 import { exportReportToExcel, ReportTableSection } from '../../utils/reportExport';
-import { buildDriverAttendancePdf, buildLocationAttendancePdf, buildDriverAttendanceSummaryPdf, DriverAttendanceSummaryRow } from '../../utils/driverAttendancePdf';
+import { buildDriverAttendancePdf, buildDriverAttendanceSummaryPdf, DriverAttendanceSummaryRow } from '../../utils/driverAttendancePdf';
 import DownloadMenu, { DownloadMenuOption } from './DownloadMenu';
 
 interface DriverAttendanceSheetProps {
@@ -248,21 +248,24 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
     return `${MONTH_ABBR[m - 1]} ${y}`;
   }, [month]);
 
-  // Excel keeps the on-screen day-grid shape (one column per day) - a
-  // spreadsheet handles many columns fine and some offices re-import this
-  // exact layout. PDF uses a proper report layout instead (Monthly Summary +
-  // Daily Log, covering every month on record, not just what's on screen
-  // right now) - see utils/driverAttendancePdf.ts for why.
+  // Same format-consistency fix as "Download All" below, applied here too:
+  // Excel keeps the on-screen day-grid shape (one column per day) plus a
+  // per-location Summary sheet, and PDF shows the identical one-row-per-
+  // driver dataset (Driver ID/Name/Location/No. of Days/Working Days/LOP/
+  // Exemption Leave/Gross Salary/Payable Amount) via
+  // buildDriverAttendanceSummaryPdf - both formats now carry the same
+  // current-month figures instead of PDF's old separate multi-month
+  // historical shape (buildLocationAttendancePdf, removed).
   const handleDownloadLocationExcel = (location: string, list: DriverEmployee[]) =>
-    exportReportToExcel(`KCM_Driver_Attendance_${safeFileToken(location)}_${month}`, [attendanceGridSection(month, list, attendance, location)]);
+    exportReportToExcel(`KCM_Driver_Attendance_${safeFileToken(location)}_${month}`, [attendanceGridSection(month, list, attendance, location), attendanceSummarySection(month, [{ location, drivers: list }], attendance)]);
   const handleDownloadLocationPdf = (location: string, list: DriverEmployee[]) =>
-    buildLocationAttendancePdf('Driver Attendance', location, [{ location, drivers: list }], attendance, month)
+    buildDriverAttendanceSummaryPdf(`${location} - ${monthLabel}`, driverAttendanceSummaryRows(month, [{ location, drivers: list }], attendance))
       .save(`KCM_Driver_Attendance_${safeFileToken(location)}_${month}.pdf`);
 
   const handleDownloadMyLocationsExcel = () =>
-    exportReportToExcel(`KCM_Driver_Attendance_My_Locations_${month}`, myLocationGroups.map(g => attendanceGridSection(month, g.drivers, attendance, g.location)));
+    exportReportToExcel(`KCM_Driver_Attendance_My_Locations_${month}`, [...myLocationGroups.map(g => attendanceGridSection(month, g.drivers, attendance, g.location)), attendanceSummarySection(month, myLocationGroups, attendance)]);
   const handleDownloadMyLocationsPdf = () =>
-    buildLocationAttendancePdf('Driver Attendance', 'My Locations', myLocationGroups, attendance, month)
+    buildDriverAttendanceSummaryPdf(`My Locations - ${monthLabel}`, driverAttendanceSummaryRows(month, myLocationGroups, attendance))
       .save(`KCM_Driver_Attendance_My_Locations_${month}.pdf`);
 
   // "Download tab" (item 4) - every driver, every location. Excel keeps its
