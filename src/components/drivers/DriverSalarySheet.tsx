@@ -1,73 +1,15 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import * as XLSX from 'xlsx';
 import { motion } from 'motion/react';
-import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Download, Lock, ChevronDown, ChevronUp, User as UserIcon, Paperclip, Receipt } from 'lucide-react';
+import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Lock, ChevronDown, ChevronUp, User as UserIcon, Paperclip, Receipt } from 'lucide-react';
 import { DriverEmployee, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES, VehicleDocument, DriverSalarySlipRecord, Vehicle } from '../../types';
 import DriverFormModal from './DriverFormModal';
 import DriverSalarySlipModal from './DriverSalarySlipModal';
 import DocumentAttachment from '../DocumentAttachment';
 import { authFetch } from '../../authFetch';
 import { compareTrailingNumber } from '../../utils/sort';
-import { exportReportToExcel, exportReportToPdf, ReportTableSection } from '../../utils/reportExport';
+import { payableAmount, vehiclesLabel, salarySections, exportDriverSalary } from '../../utils/driverSalaryExport';
 import DownloadMenu from './DownloadMenu';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
-
-// Payable Amount = Gross Salary + Other Additions - (Petty Cash/Advance +
-// Loan Deduction + Recovery Amount + Driver Welfare + BATA) - LOP Amount -
-// mirrors DriverFormModal's Salary Breakup formula exactly, computed from
-// the same stored snapshot fields so it's always in sync with the last save.
-const payableAmount = (driver: DriverEmployee): number =>
-  (driver.grossSalary || 0) + (driver.otherAdditions || 0)
-  - (driver.pettyCashAdvance || 0) - (driver.loanDeduction || 0) - (driver.recoveryAmount || 0) - (driver.driverWelfare || 0) - (driver.bata || 0)
-  - (driver.lopAmount || 0);
-
-// A driver can cover more than one vehicle (DriverEmployee.vehicleNos) -
-// falls back to the legacy single vehicleNo for a driver saved before that
-// field existed. Used everywhere this sheet shows/exports "the" vehicle.
-const vehiclesLabel = (driver: DriverEmployee): string =>
-  (driver.vehicleNos && driver.vehicleNos.length > 0 ? driver.vehicleNos : (driver.vehicleNo ? [driver.vehicleNo] : [])).join(' / ');
-
-const toDriverRow = (driver: DriverEmployee, i: number) => ({
-  'Sl.No': i + 1,
-  'Driver Name': driver.name,
-  'Driver ID': driver.id,
-  'Driver No': driver.driverNo,
-  'Vehicle No': vehiclesLabel(driver),
-  'A/C No': driver.accountNumber || '',
-  'IFSC Code': driver.ifscCode || '',
-  'Reporting': driver.reporting || '',
-  'Remark': driver.remark || '',
-  'LOP Amount': driver.lopAmount || '',
-  'Petty Cash/Advance': driver.pettyCashAdvance || '',
-  'Month': driver.month || '',
-  'Loan Deduction': driver.loanDeduction || '',
-  'Recovery Amount': driver.recoveryAmount || '',
-  'Driver Welfare': driver.driverWelfare || '',
-  'BATA': driver.bata || '',
-  'Other Additions': driver.otherAdditions || '',
-  'Gross Salary': driver.grossSalary || '',
-  'Payable Amount': payableAmount(driver),
-  'Location': driver.location
-});
-
-// Same column order as toDriverRow above - kept as an explicit array (rather
-// than derived from it) since ReportTableSection needs columns/rows as
-// parallel arrays, not row objects.
-const SALARY_COLUMNS = [
-  'Sl.No', 'Driver Name', 'Driver ID', 'Driver No', 'Vehicle No', 'A/C No', 'IFSC Code', 'Reporting',
-  'Remark', 'LOP Amount', 'Petty Cash/Advance', 'Month', 'Loan Deduction', 'Recovery Amount',
-  'Driver Welfare', 'BATA', 'Other Additions', 'Gross Salary', 'Payable Amount', 'Location'
-];
-
-const driverSalaryRows = (list: DriverEmployee[]): (string | number)[][] =>
-  list.map((driver, i) => Object.values(toDriverRow(driver, i)));
-
-// One section per location group - Excel gets one sheet per section, PDF
-// gets one table per section, so "Download All" and the per-location
-// download share the exact same section builder (a single group -> a
-// single-section export).
-const salarySections = (groups: { location: string; drivers: DriverEmployee[] }[]): ReportTableSection[] =>
-  groups.map(g => ({ heading: g.location, columns: SALARY_COLUMNS, rows: driverSalaryRows(g.drivers) }));
 
 const safeFileToken = (s: string): string => s.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
 
@@ -164,29 +106,30 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
     setSaveConfirmation({ identifier: `${driver.name} (${driver.id})`, key: Date.now() });
   };
 
-  const handleDownloadOne = (driver: DriverEmployee) => {
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([toDriverRow(driver, 0)]), 'Driver');
-    XLSX.writeFile(workbook, `KCM_Driver_${driver.id}.xlsx`);
-  };
+  // Single-driver download - same shared section builder + export function
+  // as "Download All" and per-location below (a one-driver, one-group
+  // section), so this row-level button offers the same Excel/PDF choice with
+  // guaranteed content parity instead of its own Excel-only shortcut.
+  const handleDownloadOne = (driver: DriverEmployee, format: 'excel' | 'pdf') =>
+    exportDriverSalary(`KCM_Driver_${driver.id}`, salarySections([{ location: driver.location, drivers: [driver] }]), format, driver.location);
 
   const handleDownloadAllExcel = () => {
     if (flatFiltered.length === 0) { triggerNotif('No driver records to download.', 'error'); return; }
-    exportReportToExcel('KCM_All_Drivers', salarySections(groupedDrivers));
+    exportDriverSalary('KCM_All_Drivers', salarySections(groupedDrivers), 'excel', 'All Locations');
   };
 
   const handleDownloadAllPdf = () => {
     if (flatFiltered.length === 0) { triggerNotif('No driver records to download.', 'error'); return; }
-    exportReportToPdf('KCM_All_Drivers', 'Driver Salary', 'All Locations', salarySections(groupedDrivers));
+    exportDriverSalary('KCM_All_Drivers', salarySections(groupedDrivers), 'pdf', 'All Locations');
   };
 
   // One location's drivers only - the Download control on that group's
   // header row.
   const handleDownloadLocationExcel = (location: string, list: DriverEmployee[]) =>
-    exportReportToExcel(`KCM_Driver_Salary_${safeFileToken(location)}`, salarySections([{ location, drivers: list }]));
+    exportDriverSalary(`KCM_Driver_Salary_${safeFileToken(location)}`, salarySections([{ location, drivers: list }]), 'excel', location);
 
   const handleDownloadLocationPdf = (location: string, list: DriverEmployee[]) =>
-    exportReportToPdf(`KCM_Driver_Salary_${safeFileToken(location)}`, 'Driver Salary', location, salarySections([{ location, drivers: list }]));
+    exportDriverSalary(`KCM_Driver_Salary_${safeFileToken(location)}`, salarySections([{ location, drivers: list }]), 'pdf', location);
 
   // Inline document upload from the expand panel - persists immediately
   // (same "no separate Save button" convention DocumentAttachment's callers
@@ -310,7 +253,10 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                           <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">Rs. {payableAmount(driver).toLocaleString('en-IN')}</td>
                           <td className="px-3 py-2.5 text-right whitespace-nowrap">
                             <button onClick={() => setSlipModalDriver(driver)} title="Generate Salary Slip" className="p-1 text-slate-400 hover:text-purple-700 hover:bg-slate-100 rounded cursor-pointer"><Receipt className="w-3.5 h-3.5" /></button>
-                            <button onClick={() => handleDownloadOne(driver)} title="Download this driver" className="p-1 text-slate-400 hover:text-teal-600 hover:bg-slate-100 rounded cursor-pointer"><Download className="w-3.5 h-3.5" /></button>
+                            <DownloadMenu label="" className="align-middle" options={[
+                              { key: 'excel', label: 'Excel (.xlsx)', icon: 'excel', onClick: () => handleDownloadOne(driver, 'excel') },
+                              { key: 'pdf', label: 'PDF', icon: 'pdf', onClick: () => handleDownloadOne(driver, 'pdf') },
+                            ]} />
                             {canWrite(driver) ? (
                               <>
                                 <button onClick={() => setModalDriver(driver)} className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>

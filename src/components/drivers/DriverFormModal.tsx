@@ -3,6 +3,8 @@ import { X, User, Upload, Wallet } from 'lucide-react';
 import { DriverEmployee, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES, VehicleDocument, Vehicle } from '../../types';
 import DocumentAttachment from '../DocumentAttachment';
 import { authFetch } from '../../authFetch';
+import { salarySections, exportDriverSalary } from '../../utils/driverSalaryExport';
+import DownloadMenu from './DownloadMenu';
 
 interface DriverFormModalProps {
   driver: DriverEmployee | null; // null = creating a new driver
@@ -98,6 +100,24 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
   // Loan Deduction + Recovery Amount + Driver Welfare + BATA) - LOP Amount.
   const totalDeductions = num(salaryForm.pettyCashAdvance) + num(salaryForm.loanDeduction) + num(salaryForm.recoveryAmount) + num(salaryForm.driverWelfare) + num(salaryForm.bata);
   const payableAmount = num(salaryForm.grossSalary) + num(salaryForm.otherAdditions) - totalDeductions - lopAmount;
+
+  // Same Excel/PDF choice, same shared section builder + export function as
+  // Driver Salary's own Download All/per-location/per-driver buttons (see
+  // utils/driverSalaryExport.ts) - built from this tab's live, currently
+  // displayed values rather than only the last-saved snapshot, so what gets
+  // downloaded always matches what's on screen right now.
+  const liveDriverSnapshot: DriverEmployee = {
+    ...(driver as DriverEmployee),
+    id: basic.id, name: basic.name, driverNo: basic.driverNo, accountNumber: basic.accountNumber, ifscCode: basic.ifscCode,
+    reporting: basic.reporting, remark: basic.remark, location: basic.location, vehicleNos, vehicleNo: vehicleNos[0],
+    month: salaryMonth,
+    grossSalary: num(salaryForm.grossSalary), otherAdditions: num(salaryForm.otherAdditions),
+    pettyCashAdvance: num(salaryForm.pettyCashAdvance), loanDeduction: num(salaryForm.loanDeduction),
+    recoveryAmount: num(salaryForm.recoveryAmount), driverWelfare: num(salaryForm.driverWelfare), bata: num(salaryForm.bata),
+    lopAmount: parseFloat(lopAmount.toFixed(2))
+  };
+  const handleDownloadSalaryBreakup = (format: 'excel' | 'pdf') =>
+    exportDriverSalary(`KCM_Driver_${basic.id}_Salary_Breakup`, salarySections([{ location: basic.location, drivers: [liveDriverSnapshot] }]), format, basic.location);
 
   const handleSubmit = async () => {
     if (!basic.id.trim() || !basic.name.trim()) {
@@ -254,7 +274,15 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
 
           {tab === 'salary' && (
             <div className="space-y-3">
-              <input type="month" value={salaryMonth} onChange={e => setSalaryMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
+              <div className="flex items-center justify-between gap-2">
+                <input type="month" value={salaryMonth} onChange={e => setSalaryMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                {isEditing && (
+                  <DownloadMenu label="Download" options={[
+                    { key: 'excel', label: 'Excel (.xlsx)', icon: 'excel', onClick: () => handleDownloadSalaryBreakup('excel') },
+                    { key: 'pdf', label: 'PDF', icon: 'pdf', onClick: () => handleDownloadSalaryBreakup('pdf') },
+                  ]} />
+                )}
+              </div>
 
               <div className="grid grid-cols-4 gap-2">
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-center">
