@@ -132,6 +132,9 @@ export default function DriverSalarySlipModal({ driver, existingSlips, performed
                 <div className="bg-emerald-600 text-white px-3 py-1.5 font-bold">Gross Salary &amp; Earnings</div>
                 <div className="divide-y divide-slate-100">
                   <div className="flex items-center justify-between px-3 py-1"><span className="text-slate-600">Gross Salary</span><span className="font-mono font-semibold">{rupee(slip.grossSalary)}</span></div>
+                  {(slip.grossEarned ?? slip.grossSalary ?? 0) !== (slip.grossSalary || 0) && (
+                    <div className="flex items-center justify-between px-3 py-1"><span className="text-slate-600">Pro-rated for Working Days ({slip.presentDays}/{slip.totalDays})</span><span className="font-mono font-semibold">{rupee((slip.grossEarned ?? slip.grossSalary ?? 0) - (slip.grossSalary || 0))}</span></div>
+                  )}
                   <div className="flex items-center justify-between px-3 py-1"><span className="text-slate-600">Other Additions</span><span className="font-mono font-semibold">{rupee(slip.otherAdditions)}</span></div>
                   <div className="flex items-center justify-between px-3 py-1.5 bg-emerald-50 font-bold text-emerald-800"><span>Total Earnings</span><span className="font-mono">{rupee(slip.totalEarnings)}</span></div>
                 </div>

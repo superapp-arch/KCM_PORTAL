@@ -351,6 +351,10 @@ export default function PettyCash({
   // Form State
   const [date, setDate] = useState('2026-07-09');
   const [entryNo, setEntryNo] = useState('');
+  // Vinod/Saneel's manually-typed sequence for the month's first entry (see
+  // canManualFirstEntryNo) - just the trailing digits, the ENT-<year>-<MM>
+  // prefix is fixed/shown separately and never part of what they type.
+  const [manualEntryNoSeq, setManualEntryNoSeq] = useState('');
   const [categoryInput, setCategoryInput] = useState('');
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
   const [location, setLocation] = useState('');
@@ -517,28 +521,57 @@ export default function PettyCash({
     return `TRIP-${String(maxNum + 1).padStart(6, '0')}`;
   };
 
-  // Ledger Entry No is likewise auto-generated and never user-editable - this
-  // is only a display preview of what the server will assign (the actual
-  // save always regenerates it server-side, see server.ts's own
-  // nextPettyCashEntryNo, which this mirrors exactly so the preview shown
-  // before saving matches what actually gets saved).
+  // Ledger Entry No is likewise auto-generated and never user-editable (for
+  // everyone except Vinod/Saneel's very first entry of a month - see
+  // MANUAL_FIRST_ENTRY_USERNAMES below) - this is only a display preview of
+  // what the server will assign (the actual save always regenerates it
+  // server-side, see server.ts's own nextPettyCashEntryNo, which this
+  // mirrors exactly so the preview shown before saving matches what
+  // actually gets saved).
   //
   // Numbering scheme (per direct instruction, effective 2026-08-13):
   // - Aug 2026 and earlier: flat ENT-<year>-<4-digit-seq>, continuing from
   //   2673 for the rest of Aug 2026 specifically, skipping past the
-  //   duplicate/out-of-order zone that had built up.
+  //   duplicate/out-of-order zone that had built up. One shared sequence
+  //   across all 3 handlers, unaffected by the per-holder change below.
   // - Sep 2026 onward: ENT-<year>-<2-digit-month><2-digit-seq>, e.g.
   //   ENT-2026-0901, 0902... - seq resets to 01 each new month, based on
-  //   the real calendar month (not the voucher's own Date field).
-  const nextPettyCashEntryNo = () => {
+  //   the real calendar month (not the voucher's own Date field). Now
+  //   per-HOLDER (see holderVouchersFor below) - each of the 3 logins has
+  //   their own independent monthly count, so the same-looking Entry No can
+  //   legitimately belong to two different handlers.
+  const holderVouchersFor = (username: string) => vouchers.filter(v => (v.enteredBy || user.username) === username);
+  const pettyCashMonthlyPrefix = () => {
     const now = new Date();
     const year = now.getFullYear();
     const month = now.getMonth() + 1; // 1-12
-    const useMonthlyFormat = year > 2026 || (year === 2026 && month >= 9);
+    return { year, month, prefix: `ENT-${year}-${String(month).padStart(2, '0')}`, useMonthlyFormat: year > 2026 || (year === 2026 && month >= 9) };
+  };
+  // Vinod and Saneel each manually type that month's very first Entry No
+  // (continuing their own physical cash-book numbering into the app) -
+  // every entry after that within the same real calendar month is
+  // auto-sequential and locked again, same as every other handler always
+  // was. Ramesh is unaffected (he'd already been entering vouchers under
+  // the old scheme when this shipped). Only meaningful once the monthly
+  // format is active - the flat pre-Sep-2026 format has no per-month reset
+  // for "first entry of the month" to mean anything.
+  const MANUAL_FIRST_ENTRY_USERNAMES = ['vinoda', 'saneel'];
+  const canManualFirstEntryNo = (() => {
+    if (editingId || isSuperAdmin) return false; // never applies to an edit, or to a Super Admin who isn't one of the 3 handlers
+    const { prefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
+    if (!useMonthlyFormat || !MANUAL_FIRST_ENTRY_USERNAMES.includes(user.username)) return false;
+    return !holderVouchersFor(user.username).some(v => {
+      const upper = (v.entryNo || '').toUpperCase();
+      return upper.startsWith(prefix) && upper.length === prefix.length + 2;
+    });
+  })();
+
+  const nextPettyCashEntryNo = () => {
+    const { year, month, prefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
 
     if (useMonthlyFormat) {
-      const prefix = `ENT-${year}-${String(month).padStart(2, '0')}`;
-      const maxNum = vouchers.reduce((max, v) => {
+      const holderVouchers = holderVouchersFor(user.username);
+      const maxNum = holderVouchers.reduce((max, v) => {
         const upper = (v.entryNo || '').toUpperCase();
         if (!upper.startsWith(prefix) || upper.length !== prefix.length + 2) return max;
         const n = parseInt(upper.slice(prefix.length), 10);
@@ -547,14 +580,17 @@ export default function PettyCash({
       return `${prefix}${String(maxNum + 1).padStart(2, '0')}`;
     }
 
-    const prefix = `ENT-${year}-`;
+    // Flat pre-Sep-2026 format - one shared sequence across all 3 handlers,
+    // untouched by the per-holder change above (see this function's own
+    // doc comment).
+    const flatPrefix = `ENT-${year}-`;
     const maxNum = vouchers.reduce((max, v) => {
-      if (!(v.entryNo || '').toUpperCase().startsWith(prefix)) return max;
+      if (!(v.entryNo || '').toUpperCase().startsWith(flatPrefix)) return max;
       const match = (v.entryNo || '').match(/(\d+)$/);
       const n = match ? parseInt(match[1], 10) : 0;
       return n > max ? n : max;
     }, year === 2026 && month === 8 ? 2672 : 0);
-    return `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
+    return `${flatPrefix}${String(maxNum + 1).padStart(4, '0')}`;
   };
 
   const resetMarketPodForm = () => {
@@ -807,6 +843,7 @@ export default function PettyCash({
   const resetVoucherForm = () => {
     setEditingId(null);
     setEntryNo('');
+    setManualEntryNoSeq('');
     setCategoryInput('');
     setLocation('');
     setVehicleNumber('');
@@ -837,13 +874,30 @@ export default function PettyCash({
       triggerNotif('Please fill in Date, Category, and Receiver.', 'error');
       return;
     }
+    if (canManualFirstEntryNo && !manualEntryNoSeq.trim()) {
+      triggerNotif('Enter this month\'s first Entry No sequence.', 'error');
+      return;
+    }
 
     setIsSubmitting(true);
     try {
       const finalClient = clientName === 'Other' ? customClientName || 'Other' : clientName;
+      // A manually-typed first-of-month Entry No previews as what it'll
+      // actually become (prefix + the typed sequence) rather than the
+      // auto-generated preview, which the server would otherwise ignore.
+      const localEntryNo = editingId
+        ? entryNo
+        : canManualFirstEntryNo && manualEntryNoSeq.trim()
+        ? `${pettyCashMonthlyPrefix().prefix}${manualEntryNoSeq.trim().padStart(2, '0')}`
+        : nextPettyCashEntryNo();
       const voucherData = {
         date,
-        entryNo: editingId ? entryNo : nextPettyCashEntryNo(),
+        entryNo: localEntryNo,
+        // Only ever read server-side when this exact login is genuinely
+        // eligible for this month's first entry (see server.ts's own
+        // canManualFirstEntry check) - harmless to include otherwise, the
+        // server ignores it.
+        manualEntryNoSeq: canManualFirstEntryNo ? manualEntryNoSeq.trim() : undefined,
         category: categoryInput.trim(),
         location: location.trim(),
         clientName: finalClient,
@@ -1148,8 +1202,19 @@ export default function PettyCash({
     })),
     ...filteredAmountReceivedRows.map((a): LedgerRow => ({ key: `AR:${a.id}`, source: 'amount-received', date: a.date, entryNo: '', vehicleNumberSort: '', advance: a, balanceNet: balanceNetAtAdvance(a) }))
   ];
+  // A row's Type is fully determined by its Source (every Petty Cash row is
+  // a Debit, every Market Trip/Amount Received row is a Credit) - see
+  // LedgerRow above.
+  const typeRank = (row: LedgerRow): number => row.source === 'petty-cash' ? 1 : 0; // 0 = Credit, 1 = Debit
   const mergedLedgerRows = sort
     ? [...mergedLedgerRowsUnsorted].sort((a, b) => {
+        // Type isn't alphabetic or numeric - "Credit First"/"Debit First"
+        // groups by that value instead of an Ascending/Descending order,
+        // with newest-first-by-date as the tie-break within each group.
+        if (sort.key === 'type') {
+          const cmp = typeRank(a) - typeRank(b) || (a.date === b.date ? 0 : a.date < b.date ? 1 : -1);
+          return sort.direction === 'asc' ? cmp : -cmp;
+        }
         const cmp = sort.key === 'entryNo'
           ? extractTrailingNumber(a.entryNo) - extractTrailingNumber(b.entryNo)
           : sort.key === 'date'
@@ -1960,7 +2025,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <th className="px-3 py-2.5">Vendor Vehicle #</th>
                     <th className="px-3 py-2.5">Receiver</th>
                     <th className="px-3 py-2.5">Vendor ID</th>
-                    <th className="px-3 py-2.5">Type</th>
+                    <th className="px-3 py-2.5"><SortHeader label="Type" sortKey="type" sort={sort} onSort={handleSort} labels={{ asc: 'Credit First', desc: 'Debit First' }} /></th>
                     <th className="px-3 py-2.5">Source</th>
                     <th className="px-3 py-2.5 text-right">Amt Rec</th>
                     <th className="px-3 py-2.5 text-right">Cash Paid</th>
@@ -2020,9 +2085,14 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           </span>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-slate-400">Petty cash</td>
-                        <td className="px-3 py-2 text-right font-mono text-slate-600" title="This holder's current Total Received Float (from the Dashboard's Amount Received ledger), not a per-entry figure">
-                          ₹{receivedFor(v.enteredBy || user.username).toLocaleString('en-IN')}
-                        </td>
+                        {/* Amt Rec is a per-row figure now, not the holder's
+                            repeated running total - a real Petty Cash entry
+                            never itself receives money, so this stays blank
+                            here; only the actual Credit row (Amount Received
+                            or Market Trip) that a given rupee arrived on
+                            shows a value in this column. Adding a new credit
+                            must never change what any earlier row displays. */}
+                        <td className="px-3 py-2 text-right font-mono text-slate-300">&mdash;</td>
                         <td className="px-3 py-2 text-right font-mono font-bold text-red-700 bg-red-50/20">₹{(v.cashPaid || 0).toLocaleString('en-IN')}</td>
                         {(() => {
                           const net = balanceNetAt(v);
@@ -2968,17 +3038,40 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   </div>
 
                   {/* Entry Number - auto-generated, not editable (same
-                      convention as Market POD's Entry No) */}
+                      convention as Market POD's Entry No) - except Vinod/
+                      Saneel's very first entry of a new month, which they
+                      type themselves to continue their own physical
+                      cash-book numbering (see canManualFirstEntryNo). */}
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Entry Number</label>
-                    <input
-                      type="text"
-                      readOnly
-                      disabled
-                      value={editingId ? entryNo : nextPettyCashEntryNo()}
-                      className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono font-bold tracking-wider text-slate-500 uppercase cursor-not-allowed"
-                    />
-                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-generated, not editable</p>
+                    {canManualFirstEntryNo ? (
+                      <>
+                        <div className="flex items-center gap-1.5">
+                          <span className="px-2 py-2 bg-slate-100 border border-slate-200 rounded-lg font-mono font-bold text-slate-500 uppercase shrink-0">{pettyCashMonthlyPrefix().prefix}</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={manualEntryNoSeq}
+                            onChange={(e) => setManualEntryNoSeq(e.target.value.replace(/\D/g, '').slice(0, 2))}
+                            placeholder="01"
+                            required
+                            className="w-full bg-amber-50 border border-amber-300 rounded-lg p-2 font-mono font-bold tracking-wider text-amber-800 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                          />
+                        </div>
+                        <p className="text-[9px] text-amber-700 font-mono mt-0.5">This month's first entry - type its sequence number (e.g. 01). Every entry after this one auto-continues and locks again.</p>
+                      </>
+                    ) : (
+                      <>
+                        <input
+                          type="text"
+                          readOnly
+                          disabled
+                          value={editingId ? entryNo : nextPettyCashEntryNo()}
+                          className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono font-bold tracking-wider text-slate-500 uppercase cursor-not-allowed"
+                        />
+                        <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-generated, not editable</p>
+                      </>
+                    )}
                   </div>
 
                   {/* Searchable Expense Category Dropdown */}

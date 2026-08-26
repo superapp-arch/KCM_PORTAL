@@ -8,6 +8,7 @@
 import { authFetch } from '../authFetch';
 import { DriverEmployee, DriverSalarySlipRecord, DriverSalarySlipAuditRecord } from '../types';
 import { buildDriverSalarySlipFile } from './driverSalarySlipPdf';
+import { computeDriverEarnings } from './driverSalaryExport';
 
 export interface DriverMonthlyAttendanceSummary {
   totalDays: number;
@@ -66,14 +67,30 @@ export async function resolveOrGenerateDriverSlip(params: {
 
   const attendance = await fetchDriverMonthlyAttendance(driver.id, month);
   const grossSalary = driver.grossSalary || 0;
-  const wagesPerDay = attendance.totalDays > 0 ? grossSalary / attendance.totalDays : 0;
-  const lopAmount = wagesPerDay * attendance.lopDays;
   const otherAdditions = driver.otherAdditions || 0;
+  // Same shared formula Salary Breakup and Driver Salary/Attendance's
+  // downloads use (see utils/driverSalaryExport.ts's computeDriverEarnings)
+  // - the slip's netSalary can never disagree with Salary Breakup's Payable
+  // Amount for the same driver/month.
+  const earnings = computeDriverEarnings({
+    grossSalary, otherAdditions,
+    pettyCashAdvance: driver.pettyCashAdvance || 0, loanDeduction: driver.loanDeduction || 0,
+    recoveryAmount: driver.recoveryAmount || 0, driverWelfare: driver.driverWelfare || 0, bata: driver.bata || 0,
+    totalDays: attendance.totalDays, workingDays: attendance.salaryWorkingDays, lopDays: attendance.lopDays
+  });
+  const wagesPerDay = earnings.perDaySalary;
+  const grossEarned = earnings.grossEarned;
+  const lopAmount = earnings.lopDeduction;
+  // totalDeductions here stays deduction-only (no LOP) to match this
+  // record's own long-standing field meaning - DriverSalarySlipModal/PDF
+  // already add lopAmount back in at display time for the shown "Total
+  // Deductions" line (see driverSalarySlipPdf.ts).
   const totalDeductions = (driver.pettyCashAdvance || 0) + (driver.loanDeduction || 0) + (driver.recoveryAmount || 0) + (driver.driverWelfare || 0) + (driver.bata || 0);
-  const totalEarnings = grossSalary + otherAdditions;
-  // Matches DriverFormModal's Salary Breakup "Payable Amount" formula
-  // exactly: Gross Salary + Other Additions - deductions - LOP Amount.
-  const netSalary = totalEarnings - totalDeductions - lopAmount;
+  // Pro-rated (Gross Earned, not the full Gross Salary) + Other Additions,
+  // so Total Earnings - Total Deductions(incl. LOP, shown) reconciles
+  // exactly to Net Salary on the printed slip.
+  const totalEarnings = grossEarned + otherAdditions;
+  const netSalary = earnings.payableAmount;
 
   const slipNumber = nextSlipNumber(month, existingSlips);
   const slip: DriverSalarySlipRecord = {
@@ -92,6 +109,7 @@ export async function resolveOrGenerateDriverSlip(params: {
     exemptionLeaveDays: attendance.exemptionLeaveDays,
     grossSalary: driver.grossSalary,
     wagesPerDay: parseFloat(wagesPerDay.toFixed(2)),
+    grossEarned: parseFloat(grossEarned.toFixed(2)),
     lopAmount: parseFloat(lopAmount.toFixed(2)),
     otherAdditions: driver.otherAdditions,
     pettyCashAdvance: driver.pettyCashAdvance,

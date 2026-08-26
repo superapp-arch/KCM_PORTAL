@@ -616,6 +616,59 @@ function nextPettyCashEntryNo(vouchers: PettyCashVoucher[]): string {
   return candidate;
 }
 
+// Petty Cash change request (2026-08-26): Vinod and Saneel each manually
+// type that month's very first Entry No (continuing their own physical
+// cash-book numbering into the app), then every entry after that within the
+// same real calendar month is auto-sequential and locked again - same as
+// every other handler always was. Ramesh is unaffected (he'd already been
+// entering vouchers under the old scheme when this shipped) - he keeps the
+// fully-automatic behavior nextPettyCashEntryNo always had.
+//
+// Numbering is now per-HOLDER, not one global sequence shared by all three
+// logins (per direct instruction) - callers must pass nextPettyCashEntryNo
+// only that one holder's own vouchers, not every voucher in the ledger.
+// Two different holders legitimately having the same-looking Entry No (e.g.
+// both holders' own "ENT-2026-0901") is expected now - Entry No is scoped to
+// "this handler's book", it's no longer a ledger-wide unique reference (the
+// voucher's own `id` still is).
+//
+// Only meaningful once the monthly format is active (Sep 2026 onward) - the
+// flat pre-Sep-2026 format has no per-month reset for "first entry of the
+// month" to mean anything, so it (and its existing global 2672 floor) is
+// left exactly as-is for the rest of August.
+const MANUAL_FIRST_ENTRY_USERNAMES = ['vinoda', 'saneel'];
+
+function pettyCashMonthlyPrefix(): { prefix: string; useMonthlyFormat: boolean } {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  const useMonthlyFormat = year > 2026 || (year === 2026 && month >= 9);
+  return { prefix: `ENT-${year}-${String(month).padStart(2, '0')}`, useMonthlyFormat };
+}
+
+// True when `holderVouchers` (already filtered to one holder) has no entry
+// yet under this real calendar month's prefix - i.e. their next save would
+// be that month's first entry, and (for Vinod/Saneel) manually settable.
+function isHolderFirstEntryThisMonth(holderVouchers: PettyCashVoucher[], prefix: string): boolean {
+  return !holderVouchers.some(v => {
+    const upper = (v.entryNo || '').toUpperCase();
+    return upper.startsWith(prefix) && upper.length === prefix.length + 2;
+  });
+}
+
+// Normalizes a manually-typed trailing sequence into the full Entry No -
+// only the 1-2 digit number itself is ever user-supplied, the ENT-<year>-
+// <MM> prefix is fixed/known and never part of what they type. Returns null
+// for anything that isn't a plain 1-99 number so the route can reject it
+// with a clear error instead of silently coercing garbage input.
+function buildManualPettyCashEntryNo(prefix: string, rawSeq: unknown): string | null {
+  const digits = String(rawSeq ?? '').trim().replace(/\D/g, '');
+  if (!digits) return null;
+  const n = parseInt(digits, 10);
+  if (isNaN(n) || n < 1 || n > 99) return null;
+  return `${prefix}${String(n).padStart(2, '0')}`;
+}
+
 // Which Entry No numbering "bucket" a voucher belongs to for renumbering
 // purposes (see renumberPettyCashSequence below) - currently only recognizes
 // the flat-2026 format (ENT-2026-<4-digit-seq>), and only from the
@@ -2530,13 +2583,32 @@ async function startServer() {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const allVouchers = await getPettyCashVouchers();
-      const entryNo = nextPettyCashEntryNo(allVouchers);
-      if (findDuplicateEntryNo(allVouchers, entryNo)) {
-        return res.status(409).json({ error: `Entry No. ${entryNo} already exists.` });
+      const enteredBy = sessionUser?.username || '';
+      const { prefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
+      // Per-holder numbering (and the manual-first-entry option below) only
+      // applies once the monthly format is active - the flat pre-Sep-2026
+      // format keeps its one shared, already-calibrated sequence (see
+      // nextPettyCashEntryNo's own comment) untouched for its remaining few
+      // days, rather than suddenly renumbering it mid-scheme.
+      const scopedVouchers = useMonthlyFormat ? allVouchers.filter(v => v.enteredBy === enteredBy) : allVouchers;
+      const canManualFirstEntry = useMonthlyFormat && MANUAL_FIRST_ENTRY_USERNAMES.includes(enteredBy) && isHolderFirstEntryThisMonth(scopedVouchers, prefix);
+      const rawManualSeq = req.body?.manualEntryNoSeq;
+
+      let entryNo: string;
+      if (canManualFirstEntry && rawManualSeq != null && String(rawManualSeq).trim() !== '') {
+        const manual = buildManualPettyCashEntryNo(prefix, rawManualSeq);
+        if (!manual) return res.status(400).json({ error: 'Enter a valid Entry No sequence (1-99) for this month\'s first entry.' });
+        if (findDuplicateEntryNo(scopedVouchers, manual)) return res.status(409).json({ error: `Entry No. ${manual} already exists in your own entries.` });
+        entryNo = manual;
+      } else {
+        entryNo = nextPettyCashEntryNo(scopedVouchers);
+        if (findDuplicateEntryNo(scopedVouchers, entryNo)) {
+          return res.status(409).json({ error: `Entry No. ${entryNo} already exists.` });
+        }
       }
       if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Petty cash entry date cannot be in the future.' });
       const newId = req.body?.id || String(Date.now());
-      const result = await savePettyCashVoucher({ ...req.body, id: newId, entryNo, enteredBy: sessionUser?.username });
+      const result = await savePettyCashVoucher({ ...req.body, id: newId, entryNo, enteredBy });
       await createAuditLog({
         user: sessionUser, action: 'CREATE', module: 'Petty Cash', entityType: 'Petty Cash Entry', entityId: newId,
         description: `Created petty cash entry ${entryNo}`, newData: { ...req.body, id: newId, entryNo },
@@ -2551,7 +2623,11 @@ async function startServer() {
       const allVouchers = await getPettyCashVouchers();
       const existing = allVouchers.find(v => v.id === req.params.id);
       if (!canModifyPettyCashRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
-      if (req.body.entryNo && findDuplicateEntryNo(allVouchers, req.body.entryNo, req.params.id)) {
+      // Scoped to this same holder's own vouchers - Entry No is per-holder
+      // now (see nextPettyCashEntryNo's own comment), so a different
+      // handler legitimately using the same-looking Entry No isn't a
+      // conflict.
+      if (req.body.entryNo && findDuplicateEntryNo(allVouchers.filter(v => v.enteredBy === existing?.enteredBy), req.body.entryNo, req.params.id)) {
         return res.status(409).json({ error: `Entry No. ${req.body.entryNo} already exists.` });
       }
       if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Petty cash entry date cannot be in the future.' });

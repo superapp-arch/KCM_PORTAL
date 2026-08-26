@@ -1032,8 +1032,18 @@ export interface DriverEmployee {
   recoveryAmount?: number;
   driverWelfare?: number;
   bata?: number;
-  otherAdditions?: number; // added to Gross Salary (see Payable Amount formula)
+  otherAdditions?: number; // added to Gross Earned (see Payable Amount formula in utils/driverSalaryExport.ts)
   grossSalary?: number;
+  // Snapshot of Working Days (Present + Paid Leave) for `month`, taken the
+  // moment Salary Breakup was last saved - needed because Payable Amount now
+  // pro-rates Gross Salary by Working Days (Gross Earned = Gross Salary /
+  // No. of Days x Working Days) rather than paying the full month regardless
+  // of attendance, and a static driver record has no other way to know that
+  // month's attendance once it's no longer the current month. Absent on any
+  // driver saved before this field existed - see driverSalaryExport.ts's
+  // payableAmount() for the fallback (treats the whole month as worked,
+  // reproducing that record's pre-fix Payable Amount exactly).
+  workingDays?: number;
   location: DriverLocationCategory;
   aadharDocuments?: VehicleDocument[]; // optional
   drivingLicenseDocuments?: VehicleDocument[]; // optional
@@ -1084,18 +1094,19 @@ export interface DriverSalarySlipRecord {
   presentDays: number; // Present + Paid Leave (salaryWorkingDays) for the month
   lopDays: number;
   exemptionLeaveDays: number;
-  grossSalary?: number; // snapshot from Salary Breakup
+  grossSalary?: number; // snapshot from Salary Breakup - the full, un-prorated monthly figure (kept for reference; wagesPerDay/grossEarned below are what actually feed netSalary)
   wagesPerDay: number; // grossSalary / totalDays
-  lopAmount: number; // lopDays x wagesPerDay
+  grossEarned: number; // wagesPerDay x presentDays - the pro-rated amount actually earned for days worked
+  lopAmount: number; // wagesPerDay x lopDays
   otherAdditions?: number;
   pettyCashAdvance?: number;
   loanDeduction?: number;
   recoveryAmount?: number;
   driverWelfare?: number;
   bata?: number;
-  totalEarnings: number; // grossSalary + otherAdditions
+  totalEarnings: number; // grossEarned + otherAdditions
   totalDeductions: number; // pettyCashAdvance + loanDeduction + recoveryAmount + driverWelfare + bata
-  netSalary: number; // totalEarnings - totalDeductions - lopAmount, matching Salary Breakup's Payable Amount formula exactly
+  netSalary: number; // totalEarnings - totalDeductions - lopAmount, matching Salary Breakup's Payable Amount formula exactly (see utils/driverSalaryExport.ts's computeDriverEarnings)
   generatedDate: string; // YYYY-MM-DD
   pdfUrl?: string; // /uploads/driver-salary-slips/... - same generic upload endpoint every other module's documents already use
   isDownloaded?: boolean;

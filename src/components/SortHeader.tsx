@@ -9,15 +9,23 @@ interface SortHeaderProps {
   onSort: (key: string, direction: SortDirection) => void;
   // 'text' -> "Sort A to Z / Sort Z to A", 'numeric' -> "Sort Ascending / Sort
   // Descending" (used for true numbers and for alphanumeric reg/vehicle
-  // numbers sorted by their leading digit run).
+  // numbers sorted by their leading digit run). Ignored when `labels` is
+  // given.
   type?: 'text' | 'numeric';
   align?: 'left' | 'right';
+  // Overrides the two dropdown option labels entirely - for a categorical
+  // column where "Ascending/Descending" or "A to Z/Z to A" wouldn't make
+  // sense (e.g. Type: Credit/Debit isn't an alphabetic or numeric order, so
+  // the two choices are named after the actual values instead).
+  // labels.asc names the 'asc' direction's option, labels.desc the 'desc'
+  // direction's - onSort still only ever receives 'asc' | 'desc'.
+  labels?: { asc: string; desc: string };
 }
 
 // Click-to-open sort dropdown placed beside a column header. Never sorts on
 // the icon click itself - only picking an option in the dropdown applies a
 // sort, and clicking anywhere outside closes it without changing anything.
-export default function SortHeader({ label, sortKey, sort, onSort, type = 'text', align = 'left' }: SortHeaderProps) {
+export default function SortHeader({ label, sortKey, sort, onSort, type = 'text', align = 'left', labels }: SortHeaderProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
@@ -33,7 +41,9 @@ export default function SortHeader({ label, sortKey, sort, onSort, type = 'text'
   const isActive = sort?.key === sortKey;
   const direction = isActive ? sort!.direction : null;
 
-  const options: { direction: SortDirection; label: string }[] = type === 'numeric'
+  const options: { direction: SortDirection; label: string }[] = labels
+    ? [{ direction: 'asc', label: labels.asc }, { direction: 'desc', label: labels.desc }]
+    : type === 'numeric'
     ? [{ direction: 'asc', label: 'Sort Ascending' }, { direction: 'desc', label: 'Sort Descending' }]
     : [{ direction: 'asc', label: 'Sort A to Z' }, { direction: 'desc', label: 'Sort Z to A' }];
 

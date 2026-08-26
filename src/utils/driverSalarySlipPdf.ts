@@ -58,9 +58,14 @@ export function buildDriverSalarySlipDoc(slip: DriverSalarySlipRecord): jsPDF {
   });
   cursorY = (doc as any).lastAutoTable.finalY + 6;
 
-  // Gross Salary / Earnings
+  // Gross Salary / Earnings - the pro-rated adjustment line makes the two
+  // body rows above Other Additions sum exactly to Total Earnings (Gross
+  // Earned + Other Additions) even though Gross Salary itself shown for
+  // reference is the full, un-prorated monthly figure.
+  const proratedAdjustment = (slip.grossEarned ?? slip.grossSalary ?? 0) - (slip.grossSalary || 0);
   const earningsRows: [string, string][] = [
     ['Gross Salary', rupee(slip.grossSalary)],
+    ...(proratedAdjustment !== 0 ? [['Pro-rated for Working Days', rupee(proratedAdjustment)] as [string, string]] : []),
     ['Other Additions', rupee(slip.otherAdditions)]
   ];
   autoTable(doc, {

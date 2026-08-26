@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { X, User, Upload, Wallet } from 'lucide-react';
+import { X, User, Upload, Wallet, AlertTriangle } from 'lucide-react';
 import { DriverEmployee, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES, VehicleDocument, Vehicle } from '../../types';
 import DocumentAttachment from '../DocumentAttachment';
 import { authFetch } from '../../authFetch';
-import { salarySections, exportDriverSalary } from '../../utils/driverSalaryExport';
-import DownloadMenu from './DownloadMenu';
+import { computeDriverEarnings } from '../../utils/driverSalaryExport';
 
 interface DriverFormModalProps {
   driver: DriverEmployee | null; // null = creating a new driver
@@ -94,30 +93,23 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
   }, [driver, salaryMonth]);
 
   const num = (v: string) => Number(v) || 0;
-  const wagesPerDay = attendanceSummary.totalDays > 0 ? num(salaryForm.grossSalary) / attendanceSummary.totalDays : 0;
-  const lopAmount = attendanceSummary.lopDays * wagesPerDay;
-  // Payable Amount = Gross Salary + Other Additions - (Petty Cash/Advance +
-  // Loan Deduction + Recovery Amount + Driver Welfare + BATA) - LOP Amount.
-  const totalDeductions = num(salaryForm.pettyCashAdvance) + num(salaryForm.loanDeduction) + num(salaryForm.recoveryAmount) + num(salaryForm.driverWelfare) + num(salaryForm.bata);
-  const payableAmount = num(salaryForm.grossSalary) + num(salaryForm.otherAdditions) - totalDeductions - lopAmount;
-
-  // Same Excel/PDF choice, same shared section builder + export function as
-  // Driver Salary's own Download All/per-location/per-driver buttons (see
-  // utils/driverSalaryExport.ts) - built from this tab's live, currently
-  // displayed values rather than only the last-saved snapshot, so what gets
-  // downloaded always matches what's on screen right now.
-  const liveDriverSnapshot: DriverEmployee = {
-    ...(driver as DriverEmployee),
-    id: basic.id, name: basic.name, driverNo: basic.driverNo, accountNumber: basic.accountNumber, ifscCode: basic.ifscCode,
-    reporting: basic.reporting, remark: basic.remark, location: basic.location, vehicleNos, vehicleNo: vehicleNos[0],
-    month: salaryMonth,
+  // Per Day Salary -> Gross Earned -> LOP Deduction -> Total Deductions ->
+  // Payable Amount, all computed through the one shared formula (see
+  // utils/driverSalaryExport.ts's computeDriverEarnings) so this tab, Driver
+  // Salary/Attendance's downloads and the Salary Slip can never disagree.
+  const earnings = computeDriverEarnings({
     grossSalary: num(salaryForm.grossSalary), otherAdditions: num(salaryForm.otherAdditions),
     pettyCashAdvance: num(salaryForm.pettyCashAdvance), loanDeduction: num(salaryForm.loanDeduction),
     recoveryAmount: num(salaryForm.recoveryAmount), driverWelfare: num(salaryForm.driverWelfare), bata: num(salaryForm.bata),
-    lopAmount: parseFloat(lopAmount.toFixed(2))
-  };
-  const handleDownloadSalaryBreakup = (format: 'excel' | 'pdf') =>
-    exportDriverSalary(`KCM_Driver_${basic.id}_Salary_Breakup`, salarySections([{ location: basic.location, drivers: [liveDriverSnapshot] }]), format, basic.location);
+    totalDays: attendanceSummary.totalDays, workingDays: attendanceSummary.presentDays, lopDays: attendanceSummary.lopDays
+  });
+  const { perDaySalary, grossEarned, lopDeduction: lopAmount, totalDeductions, payableAmount } = earnings;
+  // Working Days + LOP can't legitimately exceed the days in the month -
+  // shown as a non-blocking inline warning (the underlying attendance is
+  // edited in Driver Attendance, not here, so this tab can flag it but
+  // shouldn't lock Save over data it doesn't own).
+  const attendanceDaysExceeded = attendanceSummary.totalDays > 0
+    && (attendanceSummary.presentDays + attendanceSummary.lopDays) > attendanceSummary.totalDays;
 
   const handleSubmit = async () => {
     if (!basic.id.trim() || !basic.name.trim()) {
@@ -143,7 +135,8 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
         recoveryAmount: num(salaryForm.recoveryAmount) || undefined,
         driverWelfare: num(salaryForm.driverWelfare) || undefined,
         bata: num(salaryForm.bata) || undefined,
-        lopAmount: parseFloat(lopAmount.toFixed(2)) || undefined
+        lopAmount: lopAmount || undefined,
+        workingDays: isEditing ? attendanceSummary.presentDays : undefined
       };
       if (isEditing) {
         await onUpdateDriver(basic.id, payload);
@@ -274,15 +267,14 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
 
           {tab === 'salary' && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <input type="month" value={salaryMonth} onChange={e => setSalaryMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
-                {isEditing && (
-                  <DownloadMenu label="Download" options={[
-                    { key: 'excel', label: 'Excel (.xlsx)', icon: 'excel', onClick: () => handleDownloadSalaryBreakup('excel') },
-                    { key: 'pdf', label: 'PDF', icon: 'pdf', onClick: () => handleDownloadSalaryBreakup('pdf') },
-                  ]} />
-                )}
-              </div>
+              <input type="month" value={salaryMonth} onChange={e => setSalaryMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
+
+              {attendanceDaysExceeded && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>Working Days ({attendanceSummary.presentDays}) + LOP ({attendanceSummary.lopDays}) exceed No. of Days ({attendanceSummary.totalDays}) for this month - check Driver Attendance for a double-marked or misdated entry.</span>
+                </div>
+              )}
 
               <div className="grid grid-cols-4 gap-2">
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-center">
@@ -337,16 +329,21 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
                 </div>
                 <div className="mt-2 pt-2 border-t border-slate-100">
                   <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2">
-                    <p className="text-emerald-600 uppercase text-[9px] font-bold">Wages Per Day (auto = Gross Salary &divide; No. of Days)</p>
-                    <p className="font-black text-emerald-700">Rs. {wagesPerDay.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
+                    <p className="text-emerald-600 uppercase text-[9px] font-bold">Per Day Salary (auto = Gross Salary &divide; No. of Days)</p>
+                    <p className="font-black text-emerald-700">Rs. {perDaySalary.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
                   </div>
                 </div>
               </div>
 
+              {/* Full breakdown, in the order it's actually derived, so the
+                  final Payable Amount is always verifiable at a glance
+                  rather than a single opaque number. */}
               <div className="border border-purple-200 bg-purple-50 rounded-lg p-3 grid grid-cols-2 gap-y-1.5">
-                <span className="text-purple-500 font-semibold">Total Deductions</span><span className="text-right font-bold">Rs. {totalDeductions.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
-                <span className="text-purple-500 font-semibold">LOP Amount</span><span className="text-right font-bold">Rs. {lopAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
-                <span className="text-purple-700 font-black">Payable Amount</span><span className="text-right font-black text-purple-700">Rs. {payableAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                <span className="text-purple-500 font-semibold">Per Day Salary</span><span className="text-right font-bold">Rs. {perDaySalary.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                <span className="text-purple-500 font-semibold">Gross Earned <span className="font-normal text-[10px]">(&times; {attendanceSummary.presentDays} Working Days)</span></span><span className="text-right font-bold">Rs. {grossEarned.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                <span className="text-purple-500 font-semibold">LOP Deduction <span className="font-normal text-[10px]">(&times; {attendanceSummary.lopDays} LOP days)</span></span><span className="text-right font-bold">Rs. {lopAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                <span className="text-purple-500 font-semibold">Total Deductions <span className="font-normal text-[10px]">(incl. LOP)</span></span><span className="text-right font-bold">Rs. {totalDeductions.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                <span className="text-purple-700 font-black border-t border-purple-200 pt-1.5 mt-0.5">Payable Amount</span><span className="text-right font-black text-purple-700 border-t border-purple-200 pt-1.5 mt-0.5">Rs. {payableAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
               </div>
               {!isEditing && <p className="text-slate-400 italic">Save this driver first to record attendance-linked Salary Breakup details.</p>}
             </div>

@@ -110,9 +110,6 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
   // as "Download All" and per-location below (a one-driver, one-group
   // section), so this row-level button offers the same Excel/PDF choice with
   // guaranteed content parity instead of its own Excel-only shortcut.
-  const handleDownloadOne = (driver: DriverEmployee, format: 'excel' | 'pdf') =>
-    exportDriverSalary(`KCM_Driver_${driver.id}`, salarySections([{ location: driver.location, drivers: [driver] }]), format, driver.location);
-
   const handleDownloadAllExcel = () => {
     if (flatFiltered.length === 0) { triggerNotif('No driver records to download.', 'error'); return; }
     exportDriverSalary('KCM_All_Drivers', salarySections(groupedDrivers), 'excel', 'All Locations');
@@ -253,10 +250,6 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                           <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">Rs. {payableAmount(driver).toLocaleString('en-IN')}</td>
                           <td className="px-3 py-2.5 text-right whitespace-nowrap">
                             <button onClick={() => setSlipModalDriver(driver)} title="Generate Salary Slip" className="p-1 text-slate-400 hover:text-purple-700 hover:bg-slate-100 rounded cursor-pointer"><Receipt className="w-3.5 h-3.5" /></button>
-                            <DownloadMenu label="" className="align-middle" options={[
-                              { key: 'excel', label: 'Excel (.xlsx)', icon: 'excel', onClick: () => handleDownloadOne(driver, 'excel') },
-                              { key: 'pdf', label: 'PDF', icon: 'pdf', onClick: () => handleDownloadOne(driver, 'pdf') },
-                            ]} />
                             {canWrite(driver) ? (
                               <>
                                 <button onClick={() => setModalDriver(driver)} className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>

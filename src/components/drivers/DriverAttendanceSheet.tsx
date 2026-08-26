@@ -8,6 +8,7 @@ import DriverAttendanceSummaryModal from './DriverAttendanceSummaryModal';
 import { exportReportToExcel, ReportTableSection } from '../../utils/reportExport';
 import { buildDriverAttendancePdf, buildDriverAttendanceSummaryPdf, DriverAttendanceSummaryRow } from '../../utils/driverAttendancePdf';
 import DownloadMenu, { DownloadMenuOption } from './DownloadMenu';
+import { computeDriverEarnings } from '../../utils/driverSalaryExport';
 
 interface DriverAttendanceSheetProps {
   drivers: DriverEmployee[];
@@ -86,28 +87,29 @@ function summarizeMonthRows(rows: DriverAttendance[]): { lopDays: number; exempt
   return { lopDays, exemptionLeaveDays, workingDays };
 }
 
-// Payable Amount = Gross Salary + Other Additions - (Petty Cash/Advance +
-// Loan Deduction + Recovery Amount + Driver Welfare + BATA) - LOP Amount -
-// duplicated from DriverSalarySheet.tsx's own `payableAmount` (keep both in
-// sync if that formula ever changes) rather than importing across the
-// drivers/ subtree, same "small pure formula, synced by comment" precedent
-// utils/driverSalarySlipGenerate.ts already follows for this exact formula.
-const payableAmount = (driver: DriverEmployee): number =>
-  (driver.grossSalary || 0) + (driver.otherAdditions || 0)
-  - (driver.pettyCashAdvance || 0) - (driver.loanDeduction || 0) - (driver.recoveryAmount || 0) - (driver.driverWelfare || 0) - (driver.bata || 0)
-  - (driver.lopAmount || 0);
-
 // Gross Salary/Payable Amount for the "Download All" export (and every other
-// Excel export below, for consistency) - read straight off the driver record
-// already passed into this sheet (DriverEmployee carries one salary
-// snapshot per driver, tagged with `month` - see types.ts), so no separate
-// fetch/join is needed to line it up by driver ID: same object, same list
-// Driver Salary edits. Blank ('N/A') whenever that snapshot isn't actually
-// for the month being exported, rather than showing a stale figure from
-// whatever month Driver Salary was last saved for.
-function driverSalarySnapshotFor(driver: DriverEmployee, month: string): { grossSalary: number | string; payable: number | string } {
+// Excel export below, for consistency) - Gross Salary/Other Additions/
+// deductions are read straight off the driver record already passed into
+// this sheet (DriverEmployee carries one salary snapshot per driver, tagged
+// with `month` - see types.ts), but Working Days/LOP are taken from THIS
+// month's own live attendance (already computed by the caller via
+// summarizeMonthRows) rather than a persisted snapshot, so Payable Amount is
+// always correct for whichever month is actually being viewed/exported.
+// Formula: utils/driverSalaryExport.ts's computeDriverEarnings - the exact
+// same one Salary Breakup and the Salary Slip use, so none of them can drift
+// apart. Blank ('N/A') whenever the driver record's own `month` doesn't
+// match the month being exported, rather than showing a stale figure from
+// whatever month Driver Salary was last saved for (Gross Salary/deductions
+// are still only trustworthy for that one recorded month).
+function driverSalarySnapshotFor(driver: DriverEmployee, month: string, workingDays: number, lopDays: number): { grossSalary: number | string; payable: number | string } {
   if (driver.month !== month) return { grossSalary: 'N/A', payable: 'N/A' };
-  return { grossSalary: driver.grossSalary || 0, payable: payableAmount(driver) };
+  const { payableAmount } = computeDriverEarnings({
+    grossSalary: driver.grossSalary || 0, otherAdditions: driver.otherAdditions || 0,
+    pettyCashAdvance: driver.pettyCashAdvance || 0, loanDeduction: driver.loanDeduction || 0,
+    recoveryAmount: driver.recoveryAmount || 0, driverWelfare: driver.driverWelfare || 0, bata: driver.bata || 0,
+    totalDays: daysInMonth(month), workingDays, lopDays
+  });
+  return { grossSalary: driver.grossSalary || 0, payable: payableAmount };
 }
 
 // The on-screen day-grid (Driver | day-by-day status | Working Days / LOP /
@@ -128,7 +130,7 @@ function attendanceGridSection(month: string, list: DriverEmployee[], attendance
       return record ? STATUS_ABBR[record.status] : '-';
     });
     const { lopDays, exemptionLeaveDays, workingDays } = summarizeMonthRows(driverRows);
-    const { grossSalary, payable } = driverSalarySnapshotFor(driver, month);
+    const { grossSalary, payable } = driverSalarySnapshotFor(driver, month, workingDays, lopDays);
     return [driver.id, driver.name, ...dayCells, total, workingDays, lopDays, exemptionLeaveDays, grossSalary, payable];
   });
   return { heading, columns, rows };
@@ -144,7 +146,7 @@ function driverAttendanceSummaryRows(month: string, groups: { location: string; 
   return groups.flatMap(g => g.drivers.map(driver => {
     const driverRows = attendance.filter(a => a.driverId === driver.id && a.date.startsWith(month));
     const { lopDays, exemptionLeaveDays, workingDays } = summarizeMonthRows(driverRows);
-    const { grossSalary, payable } = driverSalarySnapshotFor(driver, month);
+    const { grossSalary, payable } = driverSalarySnapshotFor(driver, month, workingDays, lopDays);
     return {
       driverId: driver.id, driverName: driver.name, location: g.location,
       noOfDays: total, workingDays, lop: lopDays, exemptionLeave: exemptionLeaveDays,
