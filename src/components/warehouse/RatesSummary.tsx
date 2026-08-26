@@ -5,8 +5,8 @@ import {
   lookupExtraRates
 } from '../../utils/warehouseRateMatrix';
 import {
-  BLR_24HR_DEDICATED, REEFER_WALKES_TABLE, ADHOC_ROUTES, ADHOC_VEHICLE_COLUMNS,
-  BLR_ADHOC_DAILY_RATES
+  DEDICATED_24HR_TABLES, REEFER_WALKES_TABLE, ADHOC_ROUTES, ADHOC_VEHICLE_COLUMNS,
+  ADHOC_DAILY_TABLES
 } from '../../utils/warehouseRateMatrix24hr';
 import { formatINR } from '../../utils/warehouseRates';
 
@@ -57,7 +57,8 @@ export default function RatesSummary() {
         <BadgeInfo className="w-4 h-4 shrink-0 mt-0.5" />
         <span>
           Read-only view of every rate currently used to auto-fill Log Warehouse Deployment.
-          BLR is fully loaded; HYD and other locations' Extra Km/Extra Hr rates and Daily/Local Ad-hoc rates are still pending.
+          BLR, Vizag and HYD IM4 24Hr Dedicated are loaded, plus BLR and HYD IM4's Daily/Local Ad-hoc rates;
+          the 12Hr table's Extra Km/Extra Hr rates and ECOM HYD (IM1-3)'s 24Hr/Ad-hoc rates are still pending.
         </span>
       </div>
 
@@ -112,37 +113,47 @@ export default function RatesSummary() {
         </div>
       </section>
 
-      {/* 2. 24Hr Dedicated (BLR) */}
+      {/* 2. 24Hr Dedicated - one card per configured warehouse group */}
       <section>
         <SectionHeading title="24Hr Dedicated Vehicle Cost" subtitle="Fixed/Variable by Vehicle Type - effective 1st Feb" />
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 px-3 py-2">
-            <span className="text-purple-100 font-extrabold uppercase tracking-wide text-[11px]">BLR Dedicated</span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-500 uppercase text-[9.5px] tracking-wide">
-                <tr>
-                  <th className="px-3 py-2">Vehicle Type</th>
-                  <th className="px-3 py-2 text-right">Fixed</th>
-                  <th className="px-3 py-2 text-right">Variable (₹/km)</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {RATE_MATRIX_VEHICLE_TYPES.filter(vt => BLR_24HR_DEDICATED[vt]).map(vt => {
-                  const row = BLR_24HR_DEDICATED[vt]!;
-                  return (
-                    <tr key={vt} className="hover:bg-slate-50">
-                      <td className="px-3 py-2 font-semibold text-slate-700 whitespace-nowrap">{vt}</td>
-                      <td className="px-3 py-2 text-right font-mono text-slate-700">{formatINR(row.fixed)}</td>
-                      <td className="px-3 py-2 text-right font-mono text-slate-700">{formatINR(row.variable)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <div className="px-3 pb-2"><PendingNote text="Only BLR configured so far - HYD and other locations pending." /></div>
+        <div className="space-y-5">
+          {Object.entries(DEDICATED_24HR_TABLES).map(([groupLabel, table]) => {
+            const rows = RATE_MATRIX_VEHICLE_TYPES.filter(vt => table[vt]);
+            if (rows.length === 0) return null;
+            return (
+              <div key={groupLabel} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 px-3 py-2">
+                  <span className="text-purple-100 font-extrabold uppercase tracking-wide text-[11px]">{groupLabel} Dedicated</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-500 uppercase text-[9.5px] tracking-wide">
+                      <tr>
+                        <th className="px-3 py-2">Vehicle Type</th>
+                        <th className="px-3 py-2 text-right">Fixed</th>
+                        <th className="px-3 py-2 text-right">Variable (₹/km)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {rows.map(vt => {
+                        const row = table[vt]!;
+                        return (
+                          <tr key={vt} className="hover:bg-slate-50">
+                            <td className="px-3 py-2 font-semibold text-slate-700 whitespace-nowrap">{vt}</td>
+                            <td className="px-3 py-2 text-right font-mono text-slate-700">{formatINR(row.fixed)}</td>
+                            <td className="px-3 py-2 text-right font-mono text-slate-700">{formatINR(row.variable)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {rows.length < RATE_MATRIX_VEHICLE_TYPES.length && (
+                  <div className="px-3 pb-2"><PendingNote text={`Only ${rows.join(', ')} configured for ${groupLabel} so far - other vehicle types pending.`} /></div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </section>
 
@@ -209,43 +220,51 @@ export default function RatesSummary() {
         </div>
       </section>
 
-      {/* 5. Ad-hoc - Daily/Local rate table (BLR only) */}
+      {/* 5. Ad-hoc - Daily/Local rate table - one card per configured group */}
       <section>
         <SectionHeading title="24Hr Ad-hoc - Daily/Local Rates" subtitle="Per-vehicle-type day rate (Kms/Hrs included) + Extra Km/Hr overage - a separate Ad-hoc pricing model from the Route table above, for local use with no fixed route. Effective 1st Feb." />
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 px-3 py-2">
-            <span className="text-purple-100 font-extrabold uppercase tracking-wide text-[11px]">BLR</span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-500 uppercase text-[9.5px] tracking-wide">
-                <tr>
-                  <th className="px-3 py-2">Vehicle Type</th>
-                  <th className="px-3 py-2 text-right">Daily Kms</th>
-                  <th className="px-3 py-2 text-right">Hrs</th>
-                  <th className="px-3 py-2 text-right">Ad Hoc Rate</th>
-                  <th className="px-3 py-2 text-right">Extra Km</th>
-                  <th className="px-3 py-2 text-right">Extra Hr</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {RATE_MATRIX_VEHICLE_TYPES.filter(vt => BLR_ADHOC_DAILY_RATES[vt]).map(vt => {
-                  const row = BLR_ADHOC_DAILY_RATES[vt]!;
-                  return (
-                    <tr key={vt} className="hover:bg-slate-50">
-                      <td className="px-3 py-2 font-semibold text-slate-700 whitespace-nowrap">{vt}</td>
-                      <td className="px-3 py-2 text-right font-mono text-slate-700">{row.dailyKms}</td>
-                      <td className="px-3 py-2 text-right font-mono text-slate-700">{row.hrs}</td>
-                      <td className="px-3 py-2 text-right font-mono text-slate-700">{formatINR(row.rate)}</td>
-                      <td className="px-3 py-2 text-right font-mono text-slate-700">{formatINR(row.extraKm)}</td>
-                      <td className="px-3 py-2 text-right font-mono text-slate-700">{formatINR(row.extraHr)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <div className="px-3 pb-2"><PendingNote text="Not yet wired into the Add/Edit Entry form - Ad-hoc there still only offers the Route table above." /></div>
+        <div className="space-y-5">
+          {Object.entries(ADHOC_DAILY_TABLES).map(([groupLabel, table]) => {
+            const rows = RATE_MATRIX_VEHICLE_TYPES.filter(vt => table[vt]);
+            if (rows.length === 0) return null;
+            return (
+              <div key={groupLabel} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 px-3 py-2">
+                  <span className="text-purple-100 font-extrabold uppercase tracking-wide text-[11px]">{groupLabel}</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-500 uppercase text-[9.5px] tracking-wide">
+                      <tr>
+                        <th className="px-3 py-2">Vehicle Type</th>
+                        <th className="px-3 py-2 text-right">Daily Kms</th>
+                        <th className="px-3 py-2 text-right">Hrs</th>
+                        <th className="px-3 py-2 text-right">Ad Hoc Rate</th>
+                        <th className="px-3 py-2 text-right">Extra Km</th>
+                        <th className="px-3 py-2 text-right">Extra Hr</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {rows.map(vt => {
+                        const row = table[vt]!;
+                        return (
+                          <tr key={vt} className="hover:bg-slate-50">
+                            <td className="px-3 py-2 font-semibold text-slate-700 whitespace-nowrap">{vt}</td>
+                            <td className="px-3 py-2 text-right font-mono text-slate-700">{row.dailyKms}</td>
+                            <td className="px-3 py-2 text-right font-mono text-slate-700">{row.hrs}</td>
+                            <td className="px-3 py-2 text-right font-mono text-slate-700">{formatINR(row.rate)}</td>
+                            <td className="px-3 py-2 text-right font-mono text-slate-700">{formatINR(row.extraKm)}</td>
+                            <td className="px-3 py-2 text-right font-mono text-slate-700">{formatINR(row.extraHr)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
+          <PendingNote text="Not yet wired into the Add/Edit Entry form - Ad-hoc there still only offers the Route table above." />
         </div>
       </section>
     </div>

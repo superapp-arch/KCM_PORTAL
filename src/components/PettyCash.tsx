@@ -1034,30 +1034,61 @@ export default function PettyCash({
     });
   };
 
-  const balanceNetMapFor = (owner: string): Map<string, number> => {
-    const map = new Map<string, number>();
+  // Each row carries both the running Balance Net (a true cumulative total -
+  // never resets when a new credit lands, just keeps adding to whatever was
+  // left) AND "Amt Rec" - which credit is currently the active one to spend
+  // against. Amt Rec is NOT the running total - it's whichever credit
+  // (Amount Received or Market Trip) most recently landed at or before this
+  // row, carried forward unchanged across every Debit row that follows it,
+  // right up until the next credit event. A brand-new credit only ever
+  // changes Amt Rec on ITS OWN row and every row after it - rows before it
+  // keep showing whatever credit was active back then, so adding a new
+  // credit today can never retroactively change what an earlier row
+  // displayed (point 4/5's core ask still holds for both columns).
+  const balanceNetMapFor = (owner: string): Map<string, { balance: number; amtRec: number }> => {
+    const map = new Map<string, { balance: number; amtRec: number }>();
     let bal = 0;
+    let amtRec = 0;
     for (const row of mergedOwnerRows(owner)) {
-      if (row.kind === 'voucher') bal -= row.voucher.cashPaid || 0;
-      else if (row.kind === 'trip-advance') bal += marketTripAdvanceAmount(row.trip);
-      else if (row.kind === 'trip-balance') bal += row.receipt.amount || 0;
-      else bal += row.advance.amount || 0;
-      map.set(row.key, bal);
+      if (row.kind === 'voucher') {
+        bal -= row.voucher.cashPaid || 0;
+        // Debit rows don't touch Amt Rec - they just spend against whatever
+        // credit is currently active.
+      } else if (row.kind === 'trip-advance') {
+        const amount = marketTripAdvanceAmount(row.trip);
+        bal += amount;
+        amtRec = amount;
+      } else if (row.kind === 'trip-balance') {
+        const amount = row.receipt.amount || 0;
+        bal += amount;
+        amtRec = amount;
+      } else {
+        const amount = row.advance.amount || 0;
+        bal += amount;
+        amtRec = amount;
+      }
+      map.set(row.key, { balance: bal, amtRec });
     }
     return map;
   };
 
   const balanceNetAt = (voucher: PettyCashVoucher): number =>
-    balanceNetMapFor(voucher.enteredBy || user.username).get(`PC:${voucher.id}`) ?? 0;
+    balanceNetMapFor(voucher.enteredBy || user.username).get(`PC:${voucher.id}`)?.balance ?? 0;
+
+  // The credit currently "active" as of this voucher's own position in the
+  // chronological ledger - see balanceNetMapFor above. 0 when this holder
+  // hasn't received anything yet as of this row (nothing to reference).
+  const amtRecAt = (voucher: PettyCashVoucher): number =>
+    balanceNetMapFor(voucher.enteredBy || user.username).get(`PC:${voucher.id}`)?.amtRec ?? 0;
 
   const balanceNetAtTripAdvance = (trip: MarketPodEntry): number =>
-    balanceNetMapFor(trip.enteredBy || user.username).get(`MT:${trip.id}:adv`) ?? 0;
+    balanceNetMapFor(trip.enteredBy || user.username).get(`MT:${trip.id}:adv`)?.balance ?? 0;
 
   const balanceNetAtTripBalance = (trip: MarketPodEntry, receipt: MarketPodBalanceReceipt): number =>
-    balanceNetMapFor(trip.enteredBy || user.username).get(`MT:${trip.id}:bal:${receipt.id}`) ?? 0;
+    balanceNetMapFor(trip.enteredBy || user.username).get(`MT:${trip.id}:bal:${receipt.id}`)?.balance ?? 0;
 
   const balanceNetAtAdvance = (advance: PettyCashAdvance): number =>
-    balanceNetMapFor(advance.username).get(`AR:${advance.id}`) ?? 0;
+    balanceNetMapFor(advance.username).get(`AR:${advance.id}`)?.balance ?? 0;
 
   const handleAddAdvance = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1299,7 +1330,7 @@ export default function PettyCash({
       'Vendor ID': v.vendorId,
       'Transaction Type': 'Debit', // every Petty Cash-sourced row is a Debit
       'Source': 'Petty cash',
-      'Amount Received': '',
+      'Amount Received': amtRecAt(v) > 0 ? amtRecAt(v) : '',
       'Cash Paid': v.cashPaid,
       'Balance Net': balanceNetAt(v),
       'Trip Sheet': v.tripSheet,
@@ -2085,14 +2116,18 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           </span>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-slate-400">Petty cash</td>
-                        {/* Amt Rec is a per-row figure now, not the holder's
-                            repeated running total - a real Petty Cash entry
-                            never itself receives money, so this stays blank
-                            here; only the actual Credit row (Amount Received
-                            or Market Trip) that a given rupee arrived on
-                            shows a value in this column. Adding a new credit
-                            must never change what any earlier row displays. */}
-                        <td className="px-3 py-2 text-right font-mono text-slate-300">&mdash;</td>
+                        {/* Amt Rec shows whichever credit is currently
+                            "active" as of this row (see amtRecAt/
+                            balanceNetMapFor) - it carries forward unchanged
+                            across every Debit row until the next credit
+                            event, so it's never blank once this holder has
+                            received anything, but a brand-new credit today
+                            still can't retroactively change what an earlier
+                            row already displayed (only rows from its own
+                            date onward pick it up). */}
+                        <td className="px-3 py-2 text-right font-mono text-slate-600" title="The credit (Amount Received or Market Trip) currently active as of this entry - carries forward unchanged until the next credit lands">
+                          {amtRecAt(v) > 0 ? `₹${amtRecAt(v).toLocaleString('en-IN')}` : <span className="text-slate-300">&mdash;</span>}
+                        </td>
                         <td className="px-3 py-2 text-right font-mono font-bold text-red-700 bg-red-50/20">₹{(v.cashPaid || 0).toLocaleString('en-IN')}</td>
                         {(() => {
                           const net = balanceNetAt(v);

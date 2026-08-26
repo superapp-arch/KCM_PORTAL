@@ -37,15 +37,43 @@ export const BLR_24HR_DEDICATED: Partial<Record<RateMatrixVehicleType, { fixed: 
   '20 FT': { fixed: 55005, variable: 20.27 },
 };
 
-// Only BLR has a Dedicated 24Hr table so far - any other warehouse group (or
-// a group with no configured entry for this vehicle type, e.g. Tata Ace)
-// returns null, same as an unmatched 12Hr combination.
+// Vizag (ECOM) Dedicated 24Hr - effective 1st Feb, same rate card refresh as
+// BLR's table above. Only 14 FT/20 FT provided so far - any other vehicle
+// type on this group simply has no configured entry yet (null), same as an
+// unmatched combination anywhere else in this file.
+export const ECOM_VIZAG_24HR_DEDICATED: Partial<Record<RateMatrixVehicleType, { fixed: number; variable: number }>> = {
+  '14 FT': { fixed: 65000, variable: 17 },
+  '20 FT': { fixed: 75000, variable: 18 },
+};
+
+// HYD IM4 (ECOM) Dedicated 24Hr - effective 1st Feb, same rate card refresh.
+// Only 14 FT/20 FT provided so far.
+export const HYD_IM4_24HR_DEDICATED: Partial<Record<RateMatrixVehicleType, { fixed: number; variable: number }>> = {
+  '14 FT': { fixed: 69528, variable: 14.86 },
+  '20 FT': { fixed: 75000, variable: 18 },
+};
+
+// One table per configured warehouse group (see rateGroupForWarehouseName in
+// warehouseRateMatrix.ts) - exported so the read-only Rates tab
+// (RatesSummary.tsx) can render one card per group instead of only ever
+// showing BLR. A group with no entry here (anything besides these three)
+// simply has no Dedicated 24Hr rate yet, same as before.
+export const DEDICATED_24HR_TABLES: Record<string, Partial<Record<RateMatrixVehicleType, { fixed: number; variable: number }>>> = {
+  'BLR': BLR_24HR_DEDICATED,
+  'Vizag': ECOM_VIZAG_24HR_DEDICATED,
+  'HYD IM4': HYD_IM4_24HR_DEDICATED,
+};
+
 export function lookup24hrDedicatedRate(warehouseName: string, vehicleType: string): { fixed: number; variable: number } | null {
   const group = rateGroupForWarehouseName(warehouseName);
-  if (!group || !group.startsWith('BLR')) return null;
+  // Every BLR entity (ECOM/IM1-4/DHL) shares the one "BLR" Dedicated table -
+  // any other group (Vizag, HYD IM4) is looked up by its own exact group
+  // name instead of a startsWith match.
+  const tableKey = group && group.startsWith('BLR') ? 'BLR' : group;
+  if (!tableKey || !DEDICATED_24HR_TABLES[tableKey]) return null;
   const normType = normalizeRateMatrixVehicleType(vehicleType);
   if (!normType) return null;
-  return BLR_24HR_DEDICATED[normType] ?? null;
+  return DEDICATED_24HR_TABLES[tableKey][normType] ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -182,10 +210,31 @@ export const BLR_ADHOC_DAILY_RATES: Partial<Record<RateMatrixVehicleType, AdHocD
   '20 FT': { dailyKms: 100, hrs: 12, rate: 4150, extraKm: 16.4, extraHr: 174 },
 };
 
+// HYD IM4 Local Ad-hoc, effective 1st Feb - 80 Kms/12 Hrs included (tolls
+// included in the flat rate, unlike BLR's table above which is 100 Kms).
+// Fully provided across all 6 vehicle types.
+export const HYD_IM4_ADHOC_DAILY_RATES: Partial<Record<RateMatrixVehicleType, AdHocDailyRateRow>> = {
+  'Tata Ace': { dailyKms: 80, hrs: 12, rate: 1930, extraKm: 3, extraHr: 87 },
+  '207': { dailyKms: 80, hrs: 12, rate: 2413, extraKm: 10, extraHr: 87 }, // "Bolero" in the rate card
+  '407': { dailyKms: 80, hrs: 12, rate: 3088, extraKm: 13, extraHr: 125 },
+  '14 FT': { dailyKms: 80, hrs: 12, rate: 3378, extraKm: 14, extraHr: 145 },
+  '17 FT': { dailyKms: 80, hrs: 12, rate: 4348, extraKm: 16, extraHr: 183 },
+  '20 FT': { dailyKms: 80, hrs: 12, rate: 4825, extraKm: 21, extraHr: 212 },
+};
+
+// One table per configured warehouse group - exported so the read-only
+// Rates tab (RatesSummary.tsx) can render one card per group instead of
+// only ever showing BLR.
+export const ADHOC_DAILY_TABLES: Record<string, Partial<Record<RateMatrixVehicleType, AdHocDailyRateRow>>> = {
+  'BLR': BLR_ADHOC_DAILY_RATES,
+  'HYD IM4': HYD_IM4_ADHOC_DAILY_RATES,
+};
+
 export function lookupAdHocDailyRate(warehouseName: string, vehicleType: string): AdHocDailyRateRow | null {
   const group = rateGroupForWarehouseName(warehouseName);
-  if (!group || !group.startsWith('BLR')) return null;
+  const tableKey = group && group.startsWith('BLR') ? 'BLR' : group;
+  if (!tableKey || !ADHOC_DAILY_TABLES[tableKey]) return null;
   const normType = normalizeRateMatrixVehicleType(vehicleType);
   if (!normType) return null;
-  return BLR_ADHOC_DAILY_RATES[normType] ?? null;
+  return ADHOC_DAILY_TABLES[tableKey][normType] ?? null;
 }
