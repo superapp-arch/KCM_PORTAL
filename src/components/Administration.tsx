@@ -79,7 +79,7 @@ const PETTY_CASH_ACCESS_EMAILS = ['vinod@kcmlogistics.in', 'ramesh@kcmlogistics.
 
 // Fuel Management + Mileage Report gate - mirrors server.ts's
 // FUEL_ENTRY_USER_EMAILS exactly.
-const FUEL_ACCESS_EMAILS = ['chandanreddy@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'ramesh@kcmlogistics.in'];
+const FUEL_ACCESS_EMAILS = ['chandanreddy@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'ramesh@kcmlogistics.in', 'vinod@kcmlogistics.in'];
 
 // Divya gets Fuel Management too (RQ-ID-only, see server.ts's
 // FUEL_RQ_ID_ONLY_EMAILS), but not Mileage Report - kept separate from
@@ -91,6 +91,18 @@ const FUEL_RQ_ID_ONLY_EMAILS = ['divya@kcmlogistics.in'];
 // other "Super Admin / Principal only" gate here - department 'super_admin'
 // covers both, hasAccess()'s top-of-function check already grants it).
 const PAYMENTS_ACCESS_EMAILS = ['praveenkumar@kcmlogistics.in'];
+
+// Vinod gets Fleet Maintenance on top of his own department ('petty_cash') -
+// mirrors server.ts's own equivalent grant (Fleet Maintenance's API routes
+// aren't department-gated server-side today, so this is a client-side-only
+// tab gate, same as every other tab visibility check in this function).
+const FLEET_MAINTENANCE_EXTRA_EMAILS = ['vinod@kcmlogistics.in'];
+
+// HR & Payroll, but Staff Attendance visibility only (no Staff Salary/Salary
+// Slip, and the attendance grid itself is read-only for him) - mirrors
+// server.ts's own HR_ATTENDANCE_VIEW_ONLY_EMAILS. See HR.tsx for the actual
+// restricted rendering.
+const HR_ATTENDANCE_VIEW_ONLY_EMAILS = ['vinod@kcmlogistics.in'];
 
 // Displays the live header clock in Indian Standard Time regardless of the
 // device/browser's own timezone, so the portal reads consistently for an
@@ -433,11 +445,11 @@ export default function Administration({
   // Safe tab filter based on department constraint
   const hasAccess = (tabName: string): boolean => {
     if (user.department === 'super_admin') return true;
-    if (tabName === 'warehouse' && user.email === 'bhagya@kcmlogistics.in') return true;
+    if (tabName === 'warehouse' && (user.email === 'bhagya@kcmlogistics.in' || user.email === 'vinod@kcmlogistics.in')) return true;
     if ((tabName === 'fuel' || tabName === 'mileage') && FUEL_ACCESS_EMAILS.includes(user.email || '')) return true;
     if (tabName === 'fuel' && FUEL_RQ_ID_ONLY_EMAILS.includes(user.email || '')) return true;
     if (tabName === 'payments' && PAYMENTS_ACCESS_EMAILS.includes(user.email || '')) return true;
-    if (tabName === 'fleet' && (user.department === 'vehicle_manager' || user.email === 'bhagya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in')) return true;
+    if (tabName === 'fleet' && (user.department === 'vehicle_manager' || user.email === 'bhagya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in' || user.email === 'vinod@kcmlogistics.in')) return true;
     if (tabName === 'billing' && (user.department === 'billing' || user.email === 'bhagya@kcmlogistics.in')) return true;
     // Rakshina (finance@kcmlogistics.in) gets full Petty Cash access - not
     // one of the 3 handler logins above, an Accounts & Finance oversight
@@ -445,10 +457,16 @@ export default function Administration({
     // treats her the same as Super Admin for full cross-handler visibility
     // + manage rights, and server.ts's PETTY_CASH_FULL_VIEW_EMAILS).
     if (tabName === 'pettycash' && (user.department === 'petty_cash' || PETTY_CASH_ACCESS_EMAILS.includes(user.email || '') || user.email === 'finance@kcmlogistics.in')) return true;
-    if (tabName === 'maintenance' && user.department === 'maintenance') return true;
+    // Vinod also gets Fleet Maintenance on top of his own department
+    // ('petty_cash') - see FLEET_MAINTENANCE_EXTRA_EMAILS.
+    if (tabName === 'maintenance' && (user.department === 'maintenance' || FLEET_MAINTENANCE_EXTRA_EMAILS.includes(user.email || ''))) return true;
     if (tabName === 'accounts' && user.department === 'accounts_finance') return true;
-    if (tabName === 'hr' && user.email === 'bhagya@kcmlogistics.in') return true;
-    if (tabName === 'vendors' && (user.email === 'divya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in')) return true;
+    // Vinod gets HR & Payroll too, but view-only Staff Attendance only - see
+    // HR_ATTENDANCE_VIEW_ONLY_EMAILS and HR.tsx's own restricted rendering
+    // for him, and server.ts's requireHrAccess/HR_ATTENDANCE_VIEW_ONLY_EMAILS
+    // for the matching server-side restriction.
+    if (tabName === 'hr' && (user.email === 'bhagya@kcmlogistics.in' || HR_ATTENDANCE_VIEW_ONLY_EMAILS.includes(user.email || ''))) return true;
+    if (tabName === 'vendors' && (user.email === 'divya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in' || user.email === 'vinod@kcmlogistics.in')) return true;
     // Driver Details is location-scoped (see server.ts: DRIVER_LOCATION_SCOPES)
     // - this just gates the tab/module itself; which drivers each of these
     // people actually sees is filtered server-side.

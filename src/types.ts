@@ -259,7 +259,10 @@ export type MarketPodStatus = 'Pending' | 'Closed';
 // calculation. "Cash" (displayed as "Company Account" - see
 // PAYMENT_MODE_LABELS in PettyCash.tsx) does not touch the float at all.
 // Defaults to "Petty Cash" for entries saved before this field existed.
-export type MarketPodPaymentMode = 'Cash' | 'Petty Cash';
+// "Vinod Account" is a third settlement option, same "doesn't touch the
+// Petty Cash float" treatment as "Cash" - selectable only by Vinod and
+// Super Admins (see PettyCash.tsx's own payment mode dropdown).
+export type MarketPodPaymentMode = 'Cash' | 'Petty Cash' | 'Vinod Account';
 
 // One partial (or full) receipt against a trip's Balance (see
 // MarketPodEntry.balanceReceipts) - supports settling in more than one

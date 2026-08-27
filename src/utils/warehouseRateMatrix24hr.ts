@@ -135,6 +135,11 @@ export interface AdHocRouteRow {
   from: string;
   to: string;
   rates: Record<AdHocVehicleColumn, number>;
+  // Mirrors the source rate card's own "Remarks" column - "Round Trip" (the
+  // default, every pre-existing row below) or "One Way Trip" (the Vizag
+  // single-leg local rates, 20 FT only, added alongside the Hyderabad/Vizag
+  // route rows).
+  remarks?: 'Round Trip' | 'One Way Trip';
 }
 
 export const ADHOC_ROUTES: AdHocRouteRow[] = [
@@ -153,6 +158,70 @@ export const ADHOC_ROUTES: AdHocRouteRow[] = [
   { from: 'Goa', to: 'Hubli', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 14958, 'Hybrid Vehicle': 16500 } },
   { from: 'Goa', to: 'Hubli + Belgaum', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 17370, 'Hybrid Vehicle': 19500 } },
   { from: 'Goa', to: 'Kholapur', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 22678, 'Hybrid Vehicle': 25200 } },
+
+  // Hyderabad routes - Round Trip.
+  { from: 'Hyderabad', to: 'VIZAG', rates: { 'Bolero(207)': 17370, '407': 22195, '14 FT': 24125, '17 FT': 27985, '20 FT': 32328, 'Hybrid Vehicle': 37167 } },
+  { from: 'Hyderabad', to: 'VIJAYAWADA', rates: { 'Bolero(207)': 10615, '407': 11580, '14 FT': 13510, '17 FT': 15440, '20 FT': 17853, 'Hybrid Vehicle': 20045 } },
+  { from: 'Hyderabad', to: 'Warangal', rates: { 'Bolero(207)': 8203, '407': 10133, '14 FT': 11098, '17 FT': 12063, '20 FT': 13510, 'Hybrid Vehicle': 14773 } },
+  { from: 'Hyderabad', to: 'Kurnool', rates: { 'Bolero(207)': 9650, '407': 10615, '14 FT': 12545, '17 FT': 14475, '20 FT': 16405, 'Hybrid Vehicle': 18492 } },
+  { from: 'Hyderabad', to: 'Raipur', rates: { 'Bolero(207)': 27020, '407': 27985, '14 FT': 29433, '17 FT': 33775, '20 FT': 37635, 'Hybrid Vehicle': 42356 } },
+  { from: 'Hyderabad', to: 'Khammam', rates: { 'Bolero(207)': 9650, '407': 12063, '14 FT': 13028, '17 FT': 14958, '20 FT': 15923, 'Hybrid Vehicle': 17735 } },
+  { from: 'Hyderabad', to: 'Karimnagar', rates: { 'Bolero(207)': 7720, '407': 8685, '14 FT': 9650, '17 FT': 10615, '20 FT': 12063, 'Hybrid Vehicle': 13386 } },
+  { from: 'Hyderabad', to: 'Kakinada', rates: { 'Bolero(207)': 18335, '407': 20265, '14 FT': 22195, '17 FT': 26055, '20 FT': 30398, 'Hybrid Vehicle': 33912 } },
+  { from: 'Hyderabad', to: 'Vizianagaram', rates: { 'Bolero(207)': 21230, '407': 26055, '14 FT': 27985, '17 FT': 31845, '20 FT': 36670, 'Hybrid Vehicle': 41592 } },
+  { from: 'Hyderabad', to: 'Rajahmundry', rates: { 'Bolero(207)': 15440, '407': 19300, '14 FT': 21230, '17 FT': 25090, '20 FT': 29433, 'Hybrid Vehicle': 32867 } },
+  { from: 'Hyderabad', to: 'Vijayanagaram', rates: { 'Bolero(207)': 21230, '407': 26055, '14 FT': 27985, '17 FT': 31845, '20 FT': 36670, 'Hybrid Vehicle': 41592 } },
+  { from: 'Hyderabad', to: 'Guntur', rates: { 'Bolero(207)': 11580, '407': 13510, '14 FT': 15440, '17 FT': 17370, '20 FT': 18818, 'Hybrid Vehicle': 21178 } },
+  { from: 'Hyderabad', to: 'ELURU', rates: { 'Bolero(207)': 14475, '407': 15440, '14 FT': 17370, '17 FT': 19300, '20 FT': 21713, 'Hybrid Vehicle': 0 } },
+  { from: 'Hyderabad', to: 'Tenali', rates: { 'Bolero(207)': 13510, '407': 15440, '14 FT': 17370, '17 FT': 19300, '20 FT': 20748, 'Hybrid Vehicle': 0 } },
+  { from: 'Hyderabad', to: 'Tenali + Eluru', rates: { 'Bolero(207)': 17370, '407': 19300, '14 FT': 21230, '17 FT': 23160, '20 FT': 27020, 'Hybrid Vehicle': 0 } },
+  { from: 'Hyderabad', to: 'Raipur / Bilai + Raipur', rates: { 'Bolero(207)': 31363, '407': 32810, '14 FT': 34258, '17 FT': 37153, '20 FT': 37635, 'Hybrid Vehicle': 42356 } },
+  { from: 'Hyderabad', to: 'Bilai + Bilaspur', rates: { 'Bolero(207)': 39565, '407': 41013, '14 FT': 42460, '17 FT': 44390, '20 FT': 45838, 'Hybrid Vehicle': 51352 } },
+  { from: 'Hyderabad', to: 'Raipur + Bilaspur', rates: { 'Bolero(207)': 39565, '407': 41013, '14 FT': 42460, '17 FT': 44390, '20 FT': 45838, 'Hybrid Vehicle': 51352 } },
+  { from: 'Hyderabad', to: 'Bilai + Raipur + Bilaspur', rates: { 'Bolero(207)': 39565, '407': 41013, '14 FT': 42460, '17 FT': 44390, '20 FT': 45838, 'Hybrid Vehicle': 51352 } },
+  { from: 'Hyderabad', to: 'Ongole', rates: { 'Bolero(207)': 15923, '407': 18721, '14 FT': 19590, '17 FT': 22002, '20 FT': 23353, 'Hybrid Vehicle': 25921 } },
+  { from: 'Hyderabad', to: 'Tenali+ ongole', rates: { 'Bolero(207)': 19783, '407': 21037, '14 FT': 22485, '17 FT': 24897, '20 FT': 27792, 'Hybrid Vehicle': 0 } },
+  { from: 'Hyderabad', to: 'Nizambad', rates: { 'Bolero(207)': 7238, '407': 7720, '14 FT': 8203, '17 FT': 9650, '20 FT': 11580, 'Hybrid Vehicle': 12780 } },
+  // Only the 20 FT column had a rate on the source sheet for this route
+  // (20510) - every other vehicle type is unconfigured, same "0 means no
+  // rate" convention as every other route.
+  { from: 'Hyderabad', to: 'WARANGAL+Khammam', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 20510, 'Hybrid Vehicle': 0 } },
+
+  // Vizag routes - Round Trip.
+  { from: 'Vizag', to: 'Kakinada', rates: { 'Bolero(207)': 8114, '407': 9947, '14 FT': 11781, '17 FT': 13614, '20 FT': 15440, 'Hybrid Vehicle': 17836 } },
+  { from: 'Vizag', to: 'Rajahmundry', rates: { 'Bolero(207)': 9626, '407': 11459, '14 FT': 13293, '17 FT': 15126, '20 FT': 16888, 'Hybrid Vehicle': 19661 } },
+  { from: 'Vizag', to: 'Kakinada + Rajahmundry', rates: { 'Bolero(207)': 11918, '407': 13751, '14 FT': 15585, '17 FT': 17418, '20 FT': 19252, 'Hybrid Vehicle': 22424 } },
+  { from: 'Vizag', to: 'Eluru', rates: { 'Bolero(207)': 13568, '407': 15401, '14 FT': 17235, '17 FT': 19068, '20 FT': 20844, 'Hybrid Vehicle': 24334 } },
+  { from: 'Vizag', to: 'Vijayawada', rates: { 'Bolero(207)': 15448, '407': 17281, '14 FT': 19115, '17 FT': 20948, '20 FT': 22774, 'Hybrid Vehicle': 26603 } },
+  { from: 'Vizag', to: 'Guntur', rates: { 'Bolero(207)': 17235, '407': 19068, '14 FT': 20902, '17 FT': 22735, '20 FT': 24569, 'Hybrid Vehicle': 28729 } },
+  { from: 'Vizag', to: 'Tenali', rates: { 'Bolero(207)': 18152, '407': 19985, '14 FT': 21819, '17 FT': 23652, '20 FT': 25476, 'Hybrid Vehicle': 29773 } },
+  { from: 'Vizag', to: 'Guntur +Tenali', rates: { 'Bolero(207)': 19252, '407': 21085, '14 FT': 22919, '17 FT': 24752, '20 FT': 26586, 'Hybrid Vehicle': 31104 } },
+  { from: 'Vizag', to: 'Brahmapur', rates: { 'Bolero(207)': 11580, '407': 12545, '14 FT': 13993, '17 FT': 16405, '20 FT': 17853, 'Hybrid Vehicle': 19655 } },
+  { from: 'Vizag', to: 'Kakinada +Rajahmundry Bhimavaram', rates: { 'Bolero(207)': 18673, '407': 20506, '14 FT': 22340, '17 FT': 24173, '20 FT': 25042, 'Hybrid Vehicle': 28818 } },
+  { from: 'Vizag', to: 'Bhimavaram', rates: { 'Bolero(207)': 13568, '407': 15401, '14 FT': 17235, '17 FT': 19068, '20 FT': 20844, 'Hybrid Vehicle': 0 } },
+  { from: 'Vizag', to: 'Bhimavaram + ELURU + Guntur', rates: { 'Bolero(207)': 17428, '407': 19261, '14 FT': 21095, '17 FT': 22928, '20 FT': 24704, 'Hybrid Vehicle': 0 } },
+  { from: 'Vizag', to: 'BHIMAVARAM+ ELURU', rates: { 'Bolero(207)': 18393, '407': 20226, '14 FT': 22060, '17 FT': 23893, '20 FT': 25669, 'Hybrid Vehicle': 28847 } },
+  { from: 'Vizag', to: 'Rajahmundry+Bhimavaram', rates: { 'Bolero(207)': 14451, '407': 16284, '14 FT': 18118, '17 FT': 19951, '20 FT': 21713, 'Hybrid Vehicle': 0 } },
+  { from: 'Vizag', to: 'Vijayawada + Guntur', rates: { 'Bolero(207)': 17235, '407': 19068, '14 FT': 20902, '17 FT': 22735, '20 FT': 24569, 'Hybrid Vehicle': 28729 } },
+  { from: 'Vizag', to: 'Vijayawada + Eluru', rates: { 'Bolero(207)': 15448, '407': 17281, '14 FT': 19115, '17 FT': 20948, '20 FT': 22774, 'Hybrid Vehicle': 26536 } },
+  { from: 'Vizag', to: 'Guntur+Tadepalli', rates: { 'Bolero(207)': 17235, '407': 19068, '14 FT': 20902, '17 FT': 22735, '20 FT': 24569, 'Hybrid Vehicle': 28655 } },
+  { from: 'Vizag', to: 'Tadepalli+Vijayawada', rates: { 'Bolero(207)': 17448, '407': 19281, '14 FT': 21115, '17 FT': 22948, '20 FT': 24774, 'Hybrid Vehicle': 29608 } },
+  { from: 'Vizag', to: 'Bhimavaram+Vijayawada', rates: { 'Bolero(207)': 22448, '407': 24281, '14 FT': 26115, '17 FT': 27948, '20 FT': 29774, 'Hybrid Vehicle': 0 } },
+  { from: 'Vizag', to: 'Tadepalli+Tenali', rates: { 'Bolero(207)': 21152, '407': 22985, '14 FT': 24819, '17 FT': 26652, '20 FT': 28476, 'Hybrid Vehicle': 33354 } },
+
+  // Vizag - One Way Trip (20 FT only, per the source sheet).
+  { from: 'Vizag', to: 'VIJAYAWADA', remarks: 'One Way Trip', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 15300, 'Hybrid Vehicle': 0 } },
+  { from: 'Vizag', to: 'Guntur', remarks: 'One Way Trip', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 16500, 'Hybrid Vehicle': 0 } },
+  { from: 'Vizag', to: 'ELURU', remarks: 'One Way Trip', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 14500, 'Hybrid Vehicle': 0 } },
+  { from: 'Vizag', to: 'Tenali', remarks: 'One Way Trip', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 17000, 'Hybrid Vehicle': 0 } },
+  { from: 'Vizag', to: 'Kakinada & Rajahmundry', remarks: 'One Way Trip', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 14500, 'Hybrid Vehicle': 0 } },
+  { from: 'Vizag', to: 'Guntur & Tenali', remarks: 'One Way Trip', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 17500, 'Hybrid Vehicle': 0 } },
+  { from: 'Vizag', to: 'Kakinada', remarks: 'One Way Trip', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 11500, 'Hybrid Vehicle': 0 } },
+  { from: 'Vizag', to: 'Rajahmundry', remarks: 'One Way Trip', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 13000, 'Hybrid Vehicle': 0 } },
+  // Two conflicting values for this route were on the source sheet (17300 and
+  // 16300) - confirmed 16300 is the correct one to use.
+  { from: 'Vizag', to: 'Tadepalli+Vijayawada', remarks: 'One Way Trip', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 16300, 'Hybrid Vehicle': 0 } },
+  { from: 'Vizag', to: 'Vijayawada + Eluru', remarks: 'One Way Trip', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 16300, 'Hybrid Vehicle': 0 } },
 ];
 
 export const adHocFromCities = (): string[] => Array.from(new Set(ADHOC_ROUTES.map(r => r.from)));

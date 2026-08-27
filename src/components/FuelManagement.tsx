@@ -201,6 +201,15 @@ export default function FuelManagement({
   // edit anything except RQ ID on an existing one - mirrors server.ts's
   // FUEL_RQ_ID_ONLY_EMAILS exactly.
   const isRqIdOnlyUser = user.email === 'divya@kcmlogistics.in';
+  // Chandan's one-way exception: Praveen's own entries are visible to him
+  // (server.ts's filterFuelLogsForViewer) so he can fill in the Mileage
+  // section on ones Praveen left blank - but nothing else on that row is his
+  // to touch, and it's never his to delete. The server strips enteredBy from
+  // every row a viewer entered themselves, so a row that still HAS an
+  // enteredBy (for a viewer who isn't a super admin or the RQ-ID-only
+  // viewer, who both always get it on every row) is exactly this "not mine"
+  // signal - see server.ts's own comment on filterFuelLogsForViewer.
+  const isForeignEntry = (log: FuelLog): boolean => !isSuperAdmin && !isRqIdOnlyUser && !!log.enteredBy;
 
   const [searchTerm, setSearchTerm] = useState('');
   // Bunk Name filter - shared between the on-screen ledger, the Download
@@ -380,6 +389,12 @@ export default function FuelManagement({
     if (client === 'KCM') setRqId('KCM');
   }, [client]);
   const rqIdLocked = !isRqIdOnlyUser && user.department !== 'super_admin';
+
+  // Whether the entry currently open in the sidebar is a foreign one
+  // (Chandan viewing one of Praveen's) - drives the Details fieldset lock
+  // below and the Delete button's visibility in the ledger table.
+  const editingLog = editingId ? logs.find(l => l.id === editingId) : undefined;
+  const editingIsForeign = !!editingLog && isForeignEntry(editingLog);
 
   // Client = "One Time Vendor" auto-sets Type to "Vendor" - the user
   // shouldn't have to also manually flip Type after picking this Client.
@@ -820,7 +835,10 @@ export default function FuelManagement({
       setMPettyCashHolder('');
     }
 
-    setEntrySection('details');
+    // A foreign entry (Chandan opening one of Praveen's) opens straight on
+    // the Mileage tab, since Details is locked read-only for him there - no
+    // reason to land him on a tab he can't do anything with.
+    setEntrySection(isForeignEntry(log) ? 'mileage' : 'details');
     setShowSidebar(true);
   };
 
@@ -997,6 +1015,10 @@ export default function FuelManagement({
   };
 
   const handleDeleteLog = async (log: FuelLog) => {
+    // A foreign entry (Chandan's view of one of Praveen's) is never
+    // deletable by anyone but its own entrant or a super admin - the server
+    // already rejects this too, this just avoids the round trip.
+    if (isForeignEntry(log)) return;
     if (!confirm('Are you sure you want to delete this fuel entry? This also removes its linked mileage report entry. This action is irreversible.')) return;
     try {
       await onDeleteLog(log.id);
@@ -1533,21 +1555,28 @@ export default function FuelManagement({
                         {isRqIdOnlyUser ? (
                           <span className="text-slate-300 text-[10px] uppercase font-bold">View only</span>
                         ) : (
-                          <div className="flex items-center justify-end space-x-1">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {isForeignEntry(log) && (
+                              <span className="text-[9px] uppercase font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5" title={`Logged by ${log.enteredBy} - Mileage only`}>
+                                Mileage only
+                              </span>
+                            )}
                             <button
                               onClick={() => startEdit(log)}
                               className="p-1 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer"
-                              title="Edit entry"
+                              title={isForeignEntry(log) ? 'Fill in Mileage section' : 'Edit entry'}
                             >
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
-                            <button
-                              onClick={() => handleDeleteLog(log)}
-                              className="p-1 text-slate-400 hover:text-pink-600 hover:bg-slate-100 rounded cursor-pointer"
-                              title="Delete entry"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {!isForeignEntry(log) && (
+                              <button
+                                onClick={() => handleDeleteLog(log)}
+                                className="p-1 text-slate-400 hover:text-pink-600 hover:bg-slate-100 rounded cursor-pointer"
+                                title="Delete entry"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         )}
                       </td>
@@ -1920,7 +1949,12 @@ export default function FuelManagement({
                   {/* Fuel Entry Details tab - everything except the Mileage
                       sub-module above. */}
                   {entrySection === 'details' && (
-                  <div className="space-y-3.5">
+                  <fieldset disabled={editingIsForeign} className="space-y-3.5 border-0 p-0 m-0 disabled:opacity-60">
+                  {editingIsForeign && (
+                    <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 font-semibold">
+                      This entry was logged by {editingLog?.enteredBy} - you can only fill in the Mileage section below, not Details.
+                    </p>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1">Period (Month) *</label>
@@ -2243,7 +2277,7 @@ export default function FuelManagement({
                   </div>
 
                   <DocumentAttachment documents={entryDocs} onChange={setEntryDocs} label="Attach Fuel Receipt / Invoice" />
-                  </div>
+                  </fieldset>
                   )}
                 </form>
               </div>

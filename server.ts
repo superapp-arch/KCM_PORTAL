@@ -382,13 +382,36 @@ async function computeDriverRangeAttendanceSummary(driverId: string, from: strin
 // actual enforcement: without it, anyone with a valid session token could
 // call /api/staff/* directly (e.g. via devtools) and read or edit employee/
 // salary data regardless of what the UI shows them.
+// Vinod gets into HR & Payroll too, but for Staff Attendance visibility only
+// (no Staff Salary/Salary Slip, no marking/editing attendance at all) - see
+// requireHrFullAccess below for the narrower gate applied to every other
+// /api/staff/* route, and Administration.tsx/HR.tsx for the matching
+// client-side restriction.
+const HR_ATTENDANCE_VIEW_ONLY_EMAILS = ['vinod@kcmlogistics.in'];
+
 async function requireHrAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
-  if (sessionUser.department !== 'super_admin' && sessionUser.email !== 'bhagya@kcmlogistics.in') {
+  if (sessionUser.department !== 'super_admin' && sessionUser.email !== 'bhagya@kcmlogistics.in' && !HR_ATTENDANCE_VIEW_ONLY_EMAILS.includes(sessionUser.email || '')) {
     return res.status(403).json({ error: 'You do not have access to HR & Payroll.' });
+  }
+  next();
+}
+
+// Narrower gate for every /api/staff/* route except the attendance-viewing
+// ones (GET attendance/holidays/employees, both listed and per-employee) -
+// blocks HR_ATTENDANCE_VIEW_ONLY_EMAILS from salary data, salary slips, and
+// every attendance WRITE endpoint (mark/bulk/delete/holidays write), while
+// still letting bhagya@kcmlogistics.in and super admins through as before.
+async function requireHrFullAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (HR_ATTENDANCE_VIEW_ONLY_EMAILS.includes(sessionUser.email || '') && sessionUser.department !== 'super_admin') {
+    return res.status(403).json({ error: 'You only have view access to Staff Attendance.' });
   }
   next();
 }
@@ -757,17 +780,26 @@ function findDuplicateEntryNo<T extends { id?: string; entryNo?: string }>(rows:
 // bunkOrCard field existed is treated as 'Bunk' - the same default the Add
 // Entry form itself has always used - so it's never silently miscounted
 // into the Card sequence or dropped from Bunk's.
+//
+// Both sequences are further scoped per enteredBy - each fuel-access login
+// (Chandan, Praveen, Ramesh) gets their own independent Bunk sequence (still
+// per calendar month) and their own independent Card sequence (still always
+// starts at 00001), so two different people's Indent Nos are never mixed up
+// or compared against each other, told apart only by who entered them. A
+// legacy row with no enteredBy at all (pre-dates this feature) is bucketed
+// under '' - isolated from every real login's own sequence, never blended
+// into one of them by accident.
 
 // Bunk: plain numeric string (e.g. "6412"), continuing within the entry's
 // own Date's calendar month - matches the existing/original behavior. The
 // first entry of a new month has nothing to continue from (returns null),
 // so the office types a fresh starting number by hand; every entry after
 // that, that same month, auto-continues from the highest one already saved.
-function nextBunkFuelIndentNumber(logs: FuelLog[], refDate: string): string | null {
+function nextBunkFuelIndentNumber(logs: FuelLog[], refDate: string, enteredBy: string | undefined): string | null {
   const monthKey = (refDate || '').slice(0, 7);
   if (!monthKey) return null;
   const monthNumbers = logs
-    .filter(l => (l.bunkOrCard || 'Bunk') === 'Bunk' && (l.date || '').slice(0, 7) === monthKey)
+    .filter(l => (l.bunkOrCard || 'Bunk') === 'Bunk' && (l.date || '').slice(0, 7) === monthKey && (l.enteredBy || '') === (enteredBy || ''))
     .map(l => extractLeadingNumber(l.indentNumber))
     .filter(n => n > 0);
   if (monthNumbers.length === 0) return null;
@@ -782,9 +814,9 @@ function nextBunkFuelIndentNumber(logs: FuelLog[], refDate: string): string | nu
 // arbitrary/Bunk-style number) is invisible to this function, so the fresh
 // start can never be skewed by old data, the same "floor" idea
 // renumberPettyCashSequence's own legacy-zone exclusion uses.
-function nextCardFuelIndentNumber(logs: FuelLog[]): string {
+function nextCardFuelIndentNumber(logs: FuelLog[], enteredBy: string | undefined): string {
   const cardNumbers = logs
-    .filter(l => l.bunkOrCard === 'Card' && /^\d{5}$/.test((l.indentNumber || '').trim()))
+    .filter(l => l.bunkOrCard === 'Card' && /^\d{5}$/.test((l.indentNumber || '').trim()) && (l.enteredBy || '') === (enteredBy || ''))
     .map(l => parseInt(l.indentNumber.trim(), 10))
     .filter(n => !isNaN(n) && n > 0);
   const next = cardNumbers.length > 0 ? Math.max(...cardNumbers) + 1 : 1;
@@ -792,14 +824,16 @@ function nextCardFuelIndentNumber(logs: FuelLog[]): string {
 }
 
 // Duplicate guard for both sequences - scoped to match how each is
-// generated: Bunk within the same (Bunk, calendar month) bucket (the same
-// number can legitimately recur across different months, since Bunk
-// restarts by hand each month), Card across its whole single sequence
-// (never resets, so no two Card entries should ever share a number). Only
+// generated: Bunk within the same (Bunk, calendar month, enteredBy) bucket
+// (the same number can legitimately recur across different months or
+// different people, since Bunk restarts by hand each month and each person
+// has their own sequence), Card across its whole per-person sequence (never
+// resets, so no two Card entries by the SAME person should ever share a
+// number - two different people's Card sequences may coincide freely). Only
 // ever rejects a genuinely new-to-this-id value - resubmitting a record's
 // own unchanged Indent No (a normal edit that didn't touch it) always
 // passes.
-function findDuplicateFuelIndentNumber(logs: FuelLog[], indentNumber: string | undefined, candidate: { bunkOrCard?: string; date?: string }, excludeId?: string): boolean {
+function findDuplicateFuelIndentNumber(logs: FuelLog[], indentNumber: string | undefined, candidate: { bunkOrCard?: string; date?: string; enteredBy?: string }, excludeId?: string): boolean {
   const target = (indentNumber || '').trim().toUpperCase();
   if (!target) return false;
   const isCard = candidate.bunkOrCard === 'Card';
@@ -807,23 +841,26 @@ function findDuplicateFuelIndentNumber(logs: FuelLog[], indentNumber: string | u
   return logs.some(l => {
     if (l.id === excludeId) return false;
     if ((l.indentNumber || '').trim().toUpperCase() !== target) return false;
+    if ((l.enteredBy || '') !== (candidate.enteredBy || '')) return false; // separate sequence per person
     const lIsCard = l.bunkOrCard === 'Card';
     if (isCard !== lIsCard) return false;
-    if (isCard) return true; // Card: one global sequence, no month scoping
+    if (isCard) return true; // Card: one sequence per person, no month scoping
     return (l.date || '').slice(0, 7) === monthKey;
   });
 }
 
 // Closes any gap left in the Indent No sequence after a delete - same idea
 // as renumberPettyCashSequence above, applied to both Fuel sequences
-// independently:
-// - Bunk: bucketed per calendar month (matches nextBunkFuelIndentNumber's
-//   own monthly-reset scoping) - within each month, the surviving entries
-//   are renumbered to run consecutively starting from that month's own
-//   lowest existing number (whatever the office originally typed by hand
-//   for that month's first entry), preserving relative order.
-// - Card: one single sequence, renumbered to run consecutively from 00001 -
-//   matches nextCardFuelIndentNumber's own always-starts-at-1 rule.
+// independently, and now further bucketed per enteredBy (see the block
+// comment above):
+// - Bunk: bucketed per (calendar month, enteredBy) (matches
+//   nextBunkFuelIndentNumber's own scoping) - within each bucket, the
+//   surviving entries are renumbered to run consecutively starting from that
+//   bucket's own lowest existing number (whatever the office originally
+//   typed by hand for that month's first entry), preserving relative order.
+// - Card: one sequence per enteredBy, each renumbered to run consecutively
+//   from 00001 - matches nextCardFuelIndentNumber's own always-starts-at-1
+//   rule.
 // Only ever touches entries whose current Indent No is already in the
 // numeric shape each sequence recognizes (extractLeadingNumber()>0 for Bunk,
 // the exact 5-digit shape for Card) - anything else (blank, non-numeric,
@@ -834,7 +871,7 @@ async function renumberFuelIndentSequence(): Promise<void> {
   try {
     const logs = await getFuelLogs();
 
-    // Bunk - one bucket per calendar month.
+    // Bunk - one bucket per (calendar month, enteredBy).
     const bunkBuckets = new Map<string, { log: FuelLog; seq: number }[]>();
     logs.forEach(l => {
       if ((l.bunkOrCard || 'Bunk') !== 'Bunk') return;
@@ -842,8 +879,9 @@ async function renumberFuelIndentSequence(): Promise<void> {
       if (seq <= 0) return;
       const monthKey = (l.date || '').slice(0, 7);
       if (!monthKey) return;
-      if (!bunkBuckets.has(monthKey)) bunkBuckets.set(monthKey, []);
-      bunkBuckets.get(monthKey)!.push({ log: l, seq });
+      const bucketKey = `${monthKey}::${l.enteredBy || ''}`;
+      if (!bunkBuckets.has(bucketKey)) bunkBuckets.set(bucketKey, []);
+      bunkBuckets.get(bucketKey)!.push({ log: l, seq });
     });
     for (const entries of bunkBuckets.values()) {
       entries.sort((a, b) => a.seq - b.seq);
@@ -856,16 +894,23 @@ async function renumberFuelIndentSequence(): Promise<void> {
       }
     }
 
-    // Card - one single continuous sequence, always starting at 00001.
-    const cardEntries = logs
-      .filter(l => l.bunkOrCard === 'Card' && /^\d{5}$/.test((l.indentNumber || '').trim()))
-      .map(l => ({ log: l, seq: parseInt(l.indentNumber.trim(), 10) }))
-      .filter(e => !isNaN(e.seq) && e.seq > 0)
-      .sort((a, b) => a.seq - b.seq);
-    for (let i = 0; i < cardEntries.length; i++) {
-      const targetIndentNumber = String(i + 1).padStart(5, '0');
-      if ((cardEntries[i].log.indentNumber || '').trim() !== targetIndentNumber) {
-        await saveFuelLog({ ...cardEntries[i].log, id: cardEntries[i].log.id, indentNumber: targetIndentNumber });
+    // Card - one continuous sequence per enteredBy, always starting at 00001.
+    const cardBuckets = new Map<string, { log: FuelLog; seq: number }[]>();
+    logs.forEach(l => {
+      if (l.bunkOrCard !== 'Card' || !/^\d{5}$/.test((l.indentNumber || '').trim())) return;
+      const seq = parseInt(l.indentNumber.trim(), 10);
+      if (isNaN(seq) || seq <= 0) return;
+      const bucketKey = l.enteredBy || '';
+      if (!cardBuckets.has(bucketKey)) cardBuckets.set(bucketKey, []);
+      cardBuckets.get(bucketKey)!.push({ log: l, seq });
+    });
+    for (const entries of cardBuckets.values()) {
+      entries.sort((a, b) => a.seq - b.seq);
+      for (let i = 0; i < entries.length; i++) {
+        const targetIndentNumber = String(i + 1).padStart(5, '0');
+        if ((entries[i].log.indentNumber || '').trim() !== targetIndentNumber) {
+          await saveFuelLog({ ...entries[i].log, id: entries[i].log.id, indentNumber: targetIndentNumber });
+        }
       }
     }
   } catch (error) {
@@ -1057,6 +1102,51 @@ function canModifyEntryRow(row: { enteredBy?: string } | undefined, sessionUser?
   if (!sessionUser) return false;
   if (sessionUser.department === 'super_admin') return true;
   return !!row && row.enteredBy === sessionUser.username;
+}
+
+// One-way exception on top of Fuel Management's usual "only see your own
+// entries" rule: Chandan can also see Praveen's fuel entries (never the
+// reverse - Praveen still only ever sees his own), so he can fill in the
+// Mileage section on an entry Praveen left it blank on. Keyed by username
+// (matches enteredBy), not email.
+const FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS: Record<string, string[]> = {
+  chandanreddy: ['praveenkumar'],
+};
+
+// Fuel-specific version of filterEntryRowsForViewer: same rules (super admin
+// sees everything with enteredBy intact; Divya/RQ-ID-only sees everything
+// too), plus the one-way exception above. Unlike the viewer's own rows
+// (enteredBy always stripped, even from themselves), a foreign row visible
+// only via the exception keeps its enteredBy - that's the signal the client
+// uses to know a row isn't theirs and lock its Details section, exposing
+// only the Mileage section as editable (see FuelManagement.tsx).
+function filterFuelLogsForViewer(rows: FuelLog[], sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): FuelLog[] {
+  if (!sessionUser) return [];
+  if (sessionUser.department === 'super_admin' || FUEL_RQ_ID_ONLY_EMAILS.includes(sessionUser.email || '')) return rows;
+  const extraUsernames = FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS[sessionUser.username] || [];
+  return rows
+    .filter(r => r.enteredBy === sessionUser.username || extraUsernames.includes(r.enteredBy || ''))
+    .map(r => r.enteredBy === sessionUser.username ? (({ enteredBy, ...rest }) => rest as FuelLog)(r) : r);
+}
+
+// Resolves what a PUT /api/fuel/:id request is actually allowed to write:
+// the requester's own row (or any row, for a super admin) saves the request
+// body as-is; a foreign row reachable only via the mileage-only exception
+// above has every field forced back to the existing row's own value except
+// mileageReportId, regardless of what the request body contains - so Chandan
+// can never alter Praveen's Details section (indentNumber, ltrs, rate, etc.)
+// even via a raw API call, only ever attach/replace the linked Mileage
+// Report. Anyone else gets rejected outright.
+function buildFuelLogUpdateForViewer(existing: FuelLog, body: any, sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): { data: any } | { error: string } {
+  if (!sessionUser) return { error: 'Authentication required.' };
+  if (sessionUser.department === 'super_admin' || existing.enteredBy === sessionUser.username) {
+    return { data: { ...body, id: existing.id, enteredBy: existing.enteredBy } };
+  }
+  const extraUsernames = FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS[sessionUser.username] || [];
+  if (extraUsernames.includes(existing.enteredBy || '')) {
+    return { data: { ...existing, mileageReportId: body?.mileageReportId } };
+  }
+  return { error: 'You cannot modify this entry.' };
 }
 
 // Same two rules as above, but for PettyCashAdvance rows, which are keyed by
@@ -2403,7 +2493,7 @@ async function startServer() {
   app.get('/api/fuel', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
-      res.json(filterEntryRowsForViewer(await getFuelLogs(), sessionUser, FUEL_RQ_ID_ONLY_EMAILS));
+      res.json(filterFuelLogsForViewer(await getFuelLogs(), sessionUser));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   // Database-backed Indent No preview for the Add Entry form - computed
@@ -2415,12 +2505,17 @@ async function startServer() {
   // the office types a starting number by hand in that case. Still just a
   // preview/prefill - the actual save is still validated by the duplicate
   // check in POST/PUT below, and the field stays fully editable either way.
+  // Scoped to the requesting session's own username - each fuel-access login
+  // has their own independent sequence (see the block comment above
+  // nextBunkFuelIndentNumber), derived from the session rather than a
+  // client-suppliable query param so it can't be spoofed.
   app.get('/api/fuel/next-indent-number', async (req, res) => {
     try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const bunkOrCard = req.query.bunkOrCard === 'Card' ? 'Card' : 'Bunk';
       const date = typeof req.query.date === 'string' ? req.query.date : '';
       const logs = await getFuelLogs();
-      const indentNumber = bunkOrCard === 'Card' ? nextCardFuelIndentNumber(logs) : nextBunkFuelIndentNumber(logs, date);
+      const indentNumber = bunkOrCard === 'Card' ? nextCardFuelIndentNumber(logs, sessionUser?.username) : nextBunkFuelIndentNumber(logs, date, sessionUser?.username);
       res.json({ indentNumber });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
@@ -2434,8 +2529,8 @@ async function startServer() {
       }
       if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Fuel entry date cannot be in the future.' });
       const allLogs = await getFuelLogs();
-      if (findDuplicateFuelIndentNumber(allLogs, req.body?.indentNumber, req.body || {})) {
-        return res.status(409).json({ error: `Indent No. ${req.body.indentNumber} already exists in the ${req.body?.bunkOrCard === 'Card' ? 'Card' : 'Bunk'} sequence.` });
+      if (findDuplicateFuelIndentNumber(allLogs, req.body?.indentNumber, { ...req.body, enteredBy: sessionUser?.username })) {
+        return res.status(409).json({ error: `Indent No. ${req.body.indentNumber} already exists in your ${req.body?.bunkOrCard === 'Card' ? 'Card' : 'Bunk'} sequence.` });
       }
       // Pre-generated here (same fallback saveFuelLog itself would apply) just
       // so the id is known for the audit record below - no behavior change.
@@ -2452,33 +2547,40 @@ async function startServer() {
         ipAddress: req.ip || '127.0.0.1',
         userAgent: req.headers['user-agent']
       });
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
+      res.json({ success: true, data: filterFuelLogsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/fuel/:id', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getFuelLogs()).find(l => l.id === req.params.id);
-      if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
-      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Fuel entry date cannot be in the future.' });
+      if (!existing) return res.status(404).json({ error: 'Fuel entry not found.' });
+      // Chandan can reach this on one of Praveen's entries (the mileage-only
+      // exception - see buildFuelLogUpdateForViewer) to attach a Mileage
+      // Report; every other field on that row is forced back to its existing
+      // value regardless of what the request body says, so only
+      // mileageReportId can actually change on a foreign row.
+      const resolved = buildFuelLogUpdateForViewer(existing, req.body, sessionUser);
+      if ('error' in resolved) return res.status(403).json({ error: resolved.error });
+      if (isFutureDate(resolved.data?.date)) return res.status(400).json({ error: 'Fuel entry date cannot be in the future.' });
       const allLogs = await getFuelLogs();
-      if (findDuplicateFuelIndentNumber(allLogs, req.body?.indentNumber, req.body || {}, req.params.id)) {
-        return res.status(409).json({ error: `Indent No. ${req.body.indentNumber} already exists in the ${req.body?.bunkOrCard === 'Card' ? 'Card' : 'Bunk'} sequence.` });
+      if (findDuplicateFuelIndentNumber(allLogs, resolved.data?.indentNumber, resolved.data || {}, req.params.id)) {
+        return res.status(409).json({ error: `Indent No. ${resolved.data.indentNumber} already exists in the ${resolved.data?.bunkOrCard === 'Card' ? 'Card' : 'Bunk'} sequence.` });
       }
-      const result = await saveFuelLog({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
+      const result = await saveFuelLog(resolved.data);
       await createAuditLog({
         user: sessionUser,
         action: 'UPDATE',
         module: 'Fuel Management',
         entityType: 'Fuel Entry',
         entityId: req.params.id,
-        description: `Updated fuel entry ${req.body?.indentNumber || existing?.indentNumber || req.params.id}`,
+        description: `Updated fuel entry ${resolved.data?.indentNumber || existing?.indentNumber || req.params.id}`,
         oldData: existing,
-        newData: { ...req.body, id: req.params.id },
+        newData: { ...resolved.data, id: req.params.id },
         ipAddress: req.ip || '127.0.0.1',
         userAgent: req.headers['user-agent']
       });
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
+      res.json({ success: true, data: filterFuelLogsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   // Divya's restricted update path - only ever touches rqId on an existing
@@ -2492,13 +2594,16 @@ async function startServer() {
       const existing = (await getFuelLogs()).find(l => l.id === req.params.id);
       if (!existing) return res.status(404).json({ error: 'Fuel entry not found.' });
       const result = await saveFuelLog({ ...existing, rqId: String(req.body.rqId || '').trim() });
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
+      res.json({ success: true, data: filterFuelLogsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/fuel/:id', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getFuelLogs()).find(l => l.id === req.params.id);
+      // Never deletable by anyone but the entry's own entrant (or a super
+      // admin) - the mileage-only exception above only ever grants a limited
+      // write on mileageReportId, never delete.
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
       await deleteFuelLog(req.params.id);
       // Deleting an entry leaves a gap in its Indent No sequence - close it
@@ -2517,7 +2622,7 @@ async function startServer() {
         userAgent: req.headers['user-agent']
       });
       const result = await getFuelLogs();
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_RQ_ID_ONLY_EMAILS) });
+      res.json({ success: true, data: filterFuelLogsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
@@ -2607,6 +2712,9 @@ async function startServer() {
         }
       }
       if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Petty cash entry date cannot be in the future.' });
+      // Cash Paid = 0 isn't a real disbursement - same rule the client
+      // already enforces, repeated here as a safety net for a raw API call.
+      if (!(Number(req.body?.cashPaid) > 0)) return res.status(400).json({ error: 'Cash Paid must be greater than 0 to save this entry.' });
       const newId = req.body?.id || String(Date.now());
       const result = await savePettyCashVoucher({ ...req.body, id: newId, entryNo, enteredBy });
       await createAuditLog({
@@ -2631,6 +2739,7 @@ async function startServer() {
         return res.status(409).json({ error: `Entry No. ${req.body.entryNo} already exists.` });
       }
       if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Petty cash entry date cannot be in the future.' });
+      if (!(Number(req.body?.cashPaid) > 0)) return res.status(400).json({ error: 'Cash Paid must be greater than 0 to save this entry.' });
       const result = await savePettyCashVoucher({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
       await createAuditLog({
         user: sessionUser, action: 'UPDATE', module: 'Petty Cash', entityType: 'Petty Cash Entry', entityId: req.params.id,
@@ -3041,6 +3150,24 @@ async function startServer() {
   // Every /api/staff/* route below is HR & Payroll data - gate the whole
   // prefix once here rather than per-route.
   app.use('/api/staff', requireHrAccess);
+  // Narrower second gate: HR_ATTENDANCE_VIEW_ONLY_EMAILS (Vinod) may only
+  // ever GET the attendance-viewing routes (the grid itself, per-employee/
+  // monthly summaries, the "download all" report, the employee list for
+  // names, and holidays for the auto-fill-derived display) - every other
+  // /api/staff/* route, including every attendance WRITE endpoint, requires
+  // requireHrFullAccess instead. Matched on the full request path (not
+  // req.path, which Express strips to be relative to this mount point) so
+  // this reads correctly regardless of mounting semantics.
+  app.use('/api/staff', async (req, res, next) => {
+    const path = req.originalUrl.split('?')[0];
+    const isAttendanceViewGet = req.method === 'GET' && (
+      path === '/api/staff/employees' ||
+      path === '/api/staff/holidays' ||
+      path.startsWith('/api/staff/attendance')
+    );
+    if (isAttendanceViewGet) return next();
+    return requireHrFullAccess(req, res, next);
+  });
 
   // ===== STAFF EMPLOYEES =====
   app.get('/api/staff/employees', async (req, res) => {

@@ -2,7 +2,7 @@ import React from 'react';
 import { BadgeInfo } from 'lucide-react';
 import {
   RATE_TABLES, RATE_MATRIX_KM_SLABS, RATE_MATRIX_VEHICLE_TYPES, RateTableKey,
-  lookupExtraRates
+  lookupExtraRates, hasExtraRatesConfigured
 } from '../../utils/warehouseRateMatrix';
 import {
   DEDICATED_24HR_TABLES, REEFER_WALKES_TABLE, ADHOC_ROUTES, ADHOC_VEHICLE_COLUMNS,
@@ -57,8 +57,8 @@ export default function RatesSummary() {
         <BadgeInfo className="w-4 h-4 shrink-0 mt-0.5" />
         <span>
           Read-only view of every rate currently used to auto-fill Log Warehouse Deployment.
-          BLR, Vizag and HYD IM4 24Hr Dedicated are loaded, plus BLR and HYD IM4's Daily/Local Ad-hoc rates;
-          the 12Hr table's Extra Km/Extra Hr rates and ECOM HYD (IM1-3)'s 24Hr/Ad-hoc rates are still pending.
+          BLR, Vizag and HYD IM4 24Hr Dedicated are loaded, plus BLR and HYD IM4's Local Adhoc rates;
+          ECOM HYD (IM1-3)'s own 24Hr/Ad-hoc rates are still pending.
         </span>
       </div>
 
@@ -70,7 +70,7 @@ export default function RatesSummary() {
             const table = RATE_TABLES[groupKey];
             const rows = RATE_MATRIX_VEHICLE_TYPES.filter(vt => table[vt]);
             if (rows.length === 0) return null;
-            const hasExtraRates = groupKey === 'blr';
+            const hasExtraRates = hasExtraRatesConfigured(groupKey);
             return (
               <div key={groupKey} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                 <div className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 px-3 py-2">
@@ -199,11 +199,12 @@ export default function RatesSummary() {
                   <th className="px-3 py-2">From</th>
                   <th className="px-3 py-2">To</th>
                   {ADHOC_VEHICLE_COLUMNS.map(col => <th key={col} className="px-3 py-2 text-right whitespace-nowrap">{col}</th>)}
+                  <th className="px-3 py-2 whitespace-nowrap">Remarks</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {ADHOC_ROUTES.map(route => (
-                  <tr key={`${route.from}-${route.to}`} className="hover:bg-slate-50">
+                  <tr key={`${route.from}-${route.to}-${route.remarks || 'Round Trip'}`} className="hover:bg-slate-50">
                     <td className="px-3 py-2 font-semibold text-slate-700 whitespace-nowrap">{route.from}</td>
                     <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{route.to}</td>
                     {ADHOC_VEHICLE_COLUMNS.map(col => (
@@ -211,6 +212,7 @@ export default function RatesSummary() {
                         {route.rates[col] > 0 ? formatINR(route.rates[col]) : <span className="text-slate-300">—</span>}
                       </td>
                     ))}
+                    <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{route.remarks || 'Round Trip'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -222,7 +224,7 @@ export default function RatesSummary() {
 
       {/* 5. Ad-hoc - Daily/Local rate table - one card per configured group */}
       <section>
-        <SectionHeading title="24Hr Ad-hoc - Daily/Local Rates" subtitle="Per-vehicle-type day rate (Kms/Hrs included) + Extra Km/Hr overage - a separate Ad-hoc pricing model from the Route table above, for local use with no fixed route. Effective 1st Feb." />
+        <SectionHeading title="Local Adhoc" subtitle="Per-vehicle-type day rate (Kms/Hrs included) + Extra Km/Hr overage - a separate Ad-hoc pricing model from the Route table above, for local use with no fixed route. Effective 1st Feb." />
         <div className="space-y-5">
           {Object.entries(ADHOC_DAILY_TABLES).map(([groupLabel, table]) => {
             const rows = RATE_MATRIX_VEHICLE_TYPES.filter(vt => table[vt]);

@@ -23,7 +23,6 @@ import {
   Phone,
   Truck,
   Lock,
-  Unlock,
   Wallet,
   AlertTriangle,
   Trash2,
@@ -76,7 +75,8 @@ const MARKET_POD_STATUSES: MarketPodStatus[] = ['Pending', 'Closed'];
 // shown to the user changed, from "Cash" to "Company Account".
 const PAYMENT_MODE_LABELS: Record<MarketPodPaymentMode, string> = {
   'Cash': 'Company Account',
-  'Petty Cash': 'Petty Cash'
+  'Petty Cash': 'Petty Cash',
+  'Vinod Account': 'Vinod Account'
 };
 
 // The 3 Petty Cash logins - mirrors PETTY_CASH_ACCESS_EMAILS in
@@ -96,7 +96,6 @@ const EXPENSE_CATEGORIES = [
   "DRIVER ROOM RENT",
   "DRIVER SALARY",
   "DRIVER SALARY ADV",
-  "DRIVER SALARY PAYABLE",
   "ELECTRICITY CHARGES",
   "FOOD EXPENSES",
   "LOADING AND UNLOADING EXPENSE",
@@ -115,13 +114,29 @@ const EXPENSE_CATEGORIES = [
   "TRAVELLING EXPENSES",
   "VEHICLE HIRE EXPENSES-ADHOC",
   "VEHICLE REGISTERATION EXPS",
-  "VENDOR ADVANCE",
-  "Grand Total",
-  "PAID FROM",
-  "RATIO"
+  "VENDOR ADVANCE"
 ];
 
 const CLIENT_NAMES = ["Swiggy", "Reliance F&V", "Market Load", "KCM", "Other"];
+
+// Expense categories where Vendor ID / Driver ID must be filled in before an
+// entry can be saved (for Supervisor Salary Adv this is really the staff ID,
+// but it's the same "Vendor ID / Driver ID" field/column - no separate
+// field). Every other category leaves it optional, same as before.
+const VENDOR_ID_MANDATORY_CATEGORIES = new Set([
+  "ACCIDENT AND SETTELMENT",
+  "BATTA EXPENSES",
+  "CNG GAS EXPENSES",
+  "DEF OIL",
+  "DIESEL EXPENSES",
+  "DRIVER SALARY",
+  "DRIVER SALARY ADV",
+  "LOADING AND UNLOADING EXPENSE",
+  "PARKING EXPENSES",
+  "SUPERVISOR SALARY ADV",
+  "TOLL CHARGES",
+  "VENDOR ADVANCE",
+]);
 
 // Locations selectable (dropdown/type-to-search) for Ramesh's Petty Cash
 // login only - every other login keeps the free-text Location field.
@@ -287,6 +302,10 @@ export default function PettyCash({
   // admin rights, so broadening this one flag is enough - mirrors
   // server.ts's PETTY_CASH_FULL_VIEW_EMAILS exactly.
   const isSuperAdmin = user.department === 'super_admin' || user.email === 'finance@kcmlogistics.in';
+  // "Vinod Account" payment mode (Market Trip) is selectable only by Vinod
+  // himself and Super Admins/Principal - everyone else never sees it as an
+  // option, same visibility convention as every other role-gated field here.
+  const isVinod = user.username === 'vinoda' || user.email === 'vinod@kcmlogistics.in';
   const [activeTab, setActiveTab] = useState<'ledger' | 'summary' | 'marketpod'>('ledger');
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
   // Big, centered save/delete confirmation (see ConfirmationModal.tsx),
@@ -400,10 +419,6 @@ export default function PettyCash({
   const [mpCoordinator, setMpCoordinator] = useState('');
   const [mpStatus, setMpStatus] = useState<MarketPodStatus>('Pending');
   const [mpRemarks, setMpRemarks] = useState('');
-  const [mpDriverId, setMpDriverId] = useState('');
-  // Read-only by default (auto-fetched from Driver Details); only a super
-  // admin can flip this to manually override it.
-  const [mpDriverOverride, setMpDriverOverride] = useState(false);
   const [mpIsSubmitting, setMpIsSubmitting] = useState(false);
   // Balance Settlement mini-form (Petty Cash change request part 2, point 2)
   // - records one receipt at a time against the currently-edited trip's
@@ -482,33 +497,6 @@ export default function PettyCash({
 
   const vehicleByRegNo = (regNo: string): Vehicle | undefined =>
     vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === regNo.trim().toUpperCase());
-
-  // Auto-fetch Driver ID: matches Market POD's Vehicle Number against the
-  // company-wide driverVehicleLookup - unrestricted by the current handler's
-  // own Driver Details location scope, so this still finds the right driver
-  // even for a vehicle/location they don't personally have Driver Details
-  // access to. Read-only unless a super admin flips the override toggle.
-  // A vehicle can now match more than one driver (two drivers sharing a
-  // vehicle, e.g. shift-based) - only auto-fill when the match is
-  // unambiguous; otherwise leave it for the picker below to resolve rather
-  // than silently guessing which driver it was.
-  const matchingDrivers = mpVehicleNumber.trim()
-    ? driverVehicleLookup.filter(d => (d.vehicleNo || '').trim().toUpperCase() === mpVehicleNumber.trim().toUpperCase())
-    : [];
-  const matchedDriver = matchingDrivers.length === 1 ? matchingDrivers[0] : undefined;
-
-  useEffect(() => {
-    if (mpDriverOverride) return;
-    if (matchingDrivers.length === 1) { setMpDriverId(matchingDrivers[0].id); return; }
-    if (matchingDrivers.length === 0) { setMpDriverId(''); return; }
-    // Ambiguous (2+) - the picker below resolves it. Keep whatever's
-    // currently set as long as it's still one of the valid candidates (e.g.
-    // already chosen from the picker) rather than clearing on every
-    // incidental re-render; only actually reset once it stops being a valid
-    // match (typically because the vehicle number itself changed).
-    setMpDriverId(prev => matchingDrivers.some(d => d.id === prev) ? prev : '');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mpVehicleNumber, mpDriverOverride, driverVehicleLookup]);
 
   // Entry No is auto-generated and never user-editable, e.g. "TRIP-000001" -
   // same live-max-plus-one convention as Fuel Entry's own auto-numbering.
@@ -608,8 +596,6 @@ export default function PettyCash({
     setMpCoordinator('');
     setMpStatus('Pending');
     setMpRemarks('');
-    setMpDriverId('');
-    setMpDriverOverride(false);
     setMpBalanceReceiptAmount('');
     setMpBalanceReceiptDate(new Date().toISOString().slice(0, 10));
     setShowMarketPodSidebar(false);
@@ -630,14 +616,6 @@ export default function PettyCash({
     setMpCoordinator(entry.coordinator);
     setMpStatus(entry.status);
     setMpRemarks(entry.remarks);
-    setMpDriverId(entry.driverId || '');
-    // If the saved driverId isn't one of the vehicle's current valid matches
-    // (there can be more than one now - two drivers sharing a vehicle),
-    // treat it as a standing override so re-opening this entry doesn't
-    // silently discard it. Still not an override if it's simply which of
-    // several valid drivers was picked at save time.
-    const autoMatches = driverVehicleLookup.filter(d => (d.vehicleNo || '').trim().toUpperCase() === entry.vehicleNumber.trim().toUpperCase());
-    setMpDriverOverride(!!entry.driverId && !autoMatches.some(d => d.id === entry.driverId));
     setShowMarketPodSidebar(true);
   };
 
@@ -672,8 +650,7 @@ export default function PettyCash({
         extraTripAmount: parseFloat(mpExtraTripAmount) || 0,
         coordinator: mpCoordinator.trim(),
         status: mpStatus,
-        remarks: mpRemarks.trim(),
-        driverId: mpDriverId.trim() || undefined
+        remarks: mpRemarks.trim()
       };
       if (mpEditingId) {
         await onUpdateMarketPodEntry(mpEditingId, payload);
@@ -876,6 +853,16 @@ export default function PettyCash({
     }
     if (canManualFirstEntryNo && !manualEntryNoSeq.trim()) {
       triggerNotif('Enter this month\'s first Entry No sequence.', 'error');
+      return;
+    }
+    // Cash Paid = 0 isn't a real disbursement - don't let it create an entry
+    // at all.
+    if (!((parseFloat(cashPaid) || 0) > 0)) {
+      triggerNotif('Cash Paid must be greater than 0 to save this entry.', 'error');
+      return;
+    }
+    if (VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase()) && !vendorId.trim()) {
+      triggerNotif(`Vendor ID / Driver ID is mandatory for ${categoryInput.trim()}.`, 'error');
       return;
     }
 
@@ -2548,7 +2535,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   <th className="px-3 py-2.5">Co-Ordinator</th>
                   <th className="px-3 py-2.5">Status</th>
                   <th className="px-3 py-2.5">Remarks</th>
-                  <th className="px-3 py-2.5">Driver</th>
                   {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
                   <th className="px-3 py-2.5 text-center">Actions</th>
                 </tr>
@@ -2556,7 +2542,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
                 {filteredMarketPod.length === 0 ? (
                   <tr>
-                    <td colSpan={18 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
+                    <td colSpan={17 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
                       NO MARKET TRIP ENTRIES MATCH THE SELECTION.
                       <div className="text-[10px] text-slate-400 font-sans mt-1">Use "Add Trip Entry" above to log a new freight trip.</div>
                     </td>
@@ -2593,7 +2579,9 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       </td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border ${
-                          (entry.paymentMode || 'Petty Cash') === 'Cash' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-600 border-slate-300'
+                          (entry.paymentMode || 'Petty Cash') === 'Cash' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : (entry.paymentMode || 'Petty Cash') === 'Vinod Account' ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                          : 'bg-slate-100 text-slate-600 border-slate-300'
                         }`}>
                           {PAYMENT_MODE_LABELS[entry.paymentMode || 'Petty Cash']}
                         </span>
@@ -2610,19 +2598,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         </span>
                       </td>
                       <td className="px-3 py-2 text-slate-500 max-w-[120px] truncate" title={entry.remarks}>{entry.remarks || '-'}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        {entry.driverId ? (
-                          <span className="font-mono font-bold text-slate-700">
-                            {entry.driverId}
-                            {(() => {
-                              const d = driverVehicleLookup.find(dr => dr.id === entry.driverId);
-                              return d ? <span className="text-slate-400 font-sans font-normal"> ({d.name})</span> : null;
-                            })()}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 italic">No driver mapped</span>
-                        )}
-                      </td>
                       {isSuperAdmin && (
                         <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">
                           {entry.enteredBy || '-'}
@@ -3198,14 +3173,19 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     </div>
                   </div>
 
-                  {/* Location - a fixed dropdown/type-to-search of
-                      Nelamangala / Nidagatta / DHL Attibele / Chennai for
-                      Ramesh's login only; every other login keeps the
-                      free-text field. May be auto-filled by Vehicle Number
-                      above. */}
+                  {/* Location - free text for everyone, but Ramesh (and now
+                      Vinod) additionally get a type-to-search suggestion list
+                      of Nelamangala / Nidagatta / DHL Attibele / Chennai (his
+                      4 fixed locations) - purely autocomplete, never
+                      restrictive. For Vinod specifically these 4 are only
+                      low-priority suggestions (he covers far more locations
+                      than Ramesh and mostly types his own in free text) - kept
+                      last/lowest priority in the list rather than offered as
+                      his primary options. May be auto-filled by Vehicle
+                      Number above. */}
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Location *</label>
-                    {user.username === 'ramesh' ? (
+                    {(user.username === 'ramesh' || isVinod) ? (
                       <>
                         <input
                           type="text"
@@ -3300,15 +3280,22 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   {/* Vendor ID / Driver ID & Trip Sheet */}
                   <div className="grid grid-cols-2 gap-2.5">
                     <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Vendor ID / Driver ID</label>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Vendor ID / Driver ID {VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase()) && <span className="text-rose-500">*</span>}
+                      </label>
                       <input
                         type="text"
+                        required={VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase())}
                         placeholder="Vendor Identification"
                         value={vendorId}
                         onChange={(e) => setVendorId(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                       />
-                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-fetched from Vendor Management or Driver Details by Vehicle Number - editable if neither matches.</p>
+                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                        {VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase())
+                          ? 'Mandatory for this expense category.'
+                          : 'Auto-fetched from Vendor Management or Driver Details by Vehicle Number - editable if neither matches.'}
+                      </p>
                     </div>
                     <div>
                       <label className="block font-semibold text-slate-700 mb-1">Trip Sheet #</label>
@@ -3453,56 +3440,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     {mpVehicleNumber.trim() && !vehicleByRegNo(mpVehicleNumber) && (
                       <p className="text-[9px] text-amber-600 font-semibold mt-1">Not in Fleet &amp; Vehicles yet - this entry will save, but add it there directly to have it show up as a registered vehicle elsewhere.</p>
                     )}
-                  </div>
-
-                  {/* Vendor / Driver ID - auto-fetched from Driver Details by
-                      matching Vehicle Number, read-only to prevent mismatches;
-                      only a super admin can override it. */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1 flex items-center justify-between">
-                      <span>Vendor / Driver ID (auto)</span>
-                      {isSuperAdmin && (
-                        <button
-                          type="button"
-                          onClick={() => setMpDriverOverride(o => !o)}
-                          className="text-[9px] font-bold text-teal-600 hover:text-teal-800 cursor-pointer flex items-center gap-1"
-                          title={mpDriverOverride ? 'Lock back to auto-fetched value' : 'Override auto-fetched value'}
-                        >
-                          {mpDriverOverride ? <Unlock className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
-                          {mpDriverOverride ? 'Overriding' : 'Override'}
-                        </button>
-                      )}
-                    </label>
-                    {!mpDriverOverride && matchingDrivers.length > 1 ? (
-                      // This vehicle is assigned to more than one driver
-                      // (e.g. shift-based) - pick which one, rather than
-                      // silently guessing.
-                      <select
-                        value={mpDriverId}
-                        onChange={(e) => setMpDriverId(e.target.value)}
-                        className="w-full border border-amber-300 bg-amber-50 rounded-lg p-2 font-mono font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                      >
-                        <option value="">Select driver...</option>
-                        {matchingDrivers.map(d => <option key={d.id} value={d.id}>{d.id} - {d.name}</option>)}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        readOnly={!mpDriverOverride}
-                        disabled={!mpDriverOverride}
-                        value={mpDriverId}
-                        onChange={(e) => setMpDriverId(e.target.value)}
-                        placeholder={matchedDriver ? undefined : 'No driver mapped'}
-                        className={`w-full border rounded-lg p-2 font-mono font-bold focus:outline-none focus:ring-1 focus:ring-teal-500 ${
-                          mpDriverOverride ? 'bg-white border-teal-300 text-slate-800' : 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed'
-                        }`}
-                      />
-                    )}
-                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                      {matchingDrivers.length > 1
-                        ? `${matchingDrivers.length} drivers are assigned to this vehicle - pick which one.`
-                        : matchedDriver ? `Matched: ${matchedDriver.name}` : 'No driver mapped to this vehicle in Driver Details.'}
-                    </p>
                   </div>
 
                   {/* Date */}
@@ -3677,7 +3614,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
 
                       {mpPaymentMode !== 'Petty Cash' && (
                         <p className="text-[9px] text-slate-400 font-mono">
-                          Payment Mode is Company Account - settlement is tracked here but won't affect the Petty Cash float.
+                          Payment Mode is {PAYMENT_MODE_LABELS[mpPaymentMode]} - settlement is tracked here but won't affect the Petty Cash float.
                         </p>
                       )}
                     </div>
@@ -3691,7 +3628,10 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       that tab no longer exists, so the field was removed from
                       this form; its stored value on existing entries is left
                       untouched (still round-trips on edit, just not shown or
-                      editable here anymore). */}
+                      editable here anymore). "Vinod Account" is a 3rd option,
+                      visible only to Vinod and Super Admins/Principal - anyone
+                      else never sees it in the dropdown, same as it never
+                      existed for them. */}
                   <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
                     <label className="block font-semibold text-slate-700 mb-1">Payment Mode</label>
                     <select
@@ -3701,6 +3641,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     >
                       <option value="Petty Cash">{PAYMENT_MODE_LABELS['Petty Cash']}</option>
                       <option value="Cash">{PAYMENT_MODE_LABELS['Cash']}</option>
+                      {(isVinod || isSuperAdmin) && <option value="Vinod Account">{PAYMENT_MODE_LABELS['Vinod Account']}</option>}
                     </select>
                   </div>
 

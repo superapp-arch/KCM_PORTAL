@@ -120,6 +120,7 @@ export const DEFAULT_USERS = [
   { username: 'rakshina', name: 'Rakshina', department: 'accounts_finance', departmentLabel: 'Accounts & Finance', email: 'finance@kcmlogistics.in', pass: 'KCM@finance337' },
   { username: 'nagaraju', name: 'Nagaraju Linga', department: 'maintenance', departmentLabel: 'Driver Coordination', email: 'nagaraju.linga@kcmlogistics.in', pass: 'KCM@nagaraju471' },
   { username: 'hemanth', name: 'Hemanth', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'hemanth@kcmlogistics.in', pass: 'KCM@hemanth729' },
+  { username: 'ibrahim', name: 'Ibrahim', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'ibrahim@kcmlogistics.in', pass: 'KCM@ibrahim591' },
   { username: 'super2', name: 'Super Admin Principal', department: 'super_admin', departmentLabel: 'Super Administration', email: 'superapp@kcmlogistics.in', pass: 'super123' },
 ];
 

@@ -8,6 +8,13 @@ import AttendanceReportDownload from './AttendanceReportDownload';
 
 interface StaffAttendanceSheetProps {
   employees: StaffEmployee[];
+  // View-only for Vinod (see HR.tsx's ATTENDANCE_VIEW_ONLY_EMAILS) - the grid
+  // itself still renders in full, just with every marking control (quick
+  // click, the "..." popover, and Auto-fill) disabled/hidden. The server
+  // independently rejects any write anyway (see server.ts's
+  // HR_ATTENDANCE_VIEW_ONLY_EMAILS), this is just so the UI doesn't dangle
+  // controls that would fail.
+  readOnly?: boolean;
 }
 
 const QUICK_CODES: { status: AttendanceStatusCode; label: string }[] = [
@@ -96,7 +103,7 @@ function isEmployeeVisibleForMonth(emp: StaffEmployee, month: string): boolean {
   return !leavingMonth || month <= leavingMonth;
 }
 
-export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheetProps) {
+export default function StaffAttendanceSheet({ employees, readOnly = false }: StaffAttendanceSheetProps) {
   const [month, setMonth] = useState(currentMonthKey());
   // Active/Inactive/All tab - same convention/default as Staff Salary's own
   // status tab. Narrows within whatever the month cutoff below already
@@ -170,7 +177,7 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
   };
 
   const handleQuickClick = (empId: string, day: number) => {
-    if (isFutureDay(day)) return;
+    if (readOnly || isFutureDay(day)) return;
     const current = cellRecord(empId, day);
     const idx = current ? QUICK_CODES.findIndex(c => c.status === current.status) : -1;
     const next = QUICK_CODES[(idx + 1) % QUICK_CODES.length];
@@ -179,7 +186,7 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
 
   const openPopover = (e: React.MouseEvent, empId: string, day: number) => {
     e.stopPropagation();
-    if (isFutureDay(day)) return;
+    if (readOnly || isFutureDay(day)) return;
     const current = cellRecord(empId, day);
     setPopoverStatus(current?.status || 'Present');
     setPopoverRemarks(current?.remarks || '');
@@ -221,7 +228,9 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
             <CalendarDays className="text-blue-600 w-5 h-5" />
             Staff Attendance
           </h1>
-          <p className="text-xs text-slate-500 font-mono mt-1">Click a day to mark P/A/PL, or use the ⋯ menu for the full status set</p>
+          <p className="text-xs text-slate-500 font-mono mt-1">
+            {readOnly ? 'View only - visibility, not edit access.' : 'Click a day to mark P/A/PL, or use the ⋯ menu for the full status set'}
+          </p>
         </div>
       </div>
 
@@ -243,9 +252,11 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
               </button>
             ))}
           </div>
-          <button onClick={autoFillSundaysAndHolidays} className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-lg font-semibold cursor-pointer">
-            Auto-fill Sundays (Week Off) &amp; Holidays
-          </button>
+          {!readOnly && (
+            <button onClick={autoFillSundaysAndHolidays} className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-lg font-semibold cursor-pointer">
+              Auto-fill Sundays (Week Off) &amp; Holidays
+            </button>
+          )}
           <div className="ml-auto">
             {/* Full employee list, not visibleEmployees - its per-employee
                 dropdown and Last 6 Months range are independent of the grid's
@@ -297,12 +308,12 @@ export default function StaffAttendanceSheet({ employees }: StaffAttendanceSheet
                       return (
                         <td key={day} className="p-0.5 relative group">
                           <button onClick={() => !future && handleQuickClick(emp.id, day)}
-                            disabled={future}
+                            disabled={future || readOnly}
                             title={future ? 'Future date - attendance cannot be marked ahead of today' : cellTitle(record)}
-                            className={`w-9 h-6 rounded text-[9px] font-bold border ${future ? 'bg-slate-100 border-slate-100 text-slate-300 cursor-not-allowed' : `cursor-pointer ${record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}`}>
+                            className={`w-9 h-6 rounded text-[9px] font-bold border ${future ? 'bg-slate-100 border-slate-100 text-slate-300 cursor-not-allowed' : `${readOnly ? 'cursor-default' : 'cursor-pointer'} ${record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}`}>
                             {record ? STATUS_ABBR[record.status] : '-'}
                           </button>
-                          {!future && <button
+                          {!future && !readOnly && <button
                             onClick={e => openPopover(e, emp.id, day)}
                             className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-slate-700 text-white text-[8px] opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer"
                             title="More statuses & remarks"

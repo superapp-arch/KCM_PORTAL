@@ -115,9 +115,50 @@ const BLR_EXTRA_RATES: ExtraRateTable = {
   '20 FT': { extraKm: 16.41, extraHr: 174 },
 };
 
+// ECOM HYD (IM1-3), Vizag, and HYD IM4 all share the exact same Extra Km/Extra
+// Hr rates per Vehicle Type (from their own rate cards) - kept as 3 separate
+// exported tables rather than one shared constant so each stays independently
+// editable if any of the three is ever revised on its own.
+const ECOM_HYD_EXTRA_RATES: ExtraRateTable = {
+  'Tata Ace': { extraKm: 8.7, extraHr: 87 },
+  '207': { extraKm: 9.7, extraHr: 97 },
+  '407': { extraKm: 10.6, extraHr: 125 },
+  '14 FT': { extraKm: 13.5, extraHr: 145 },
+  '17 FT': { extraKm: 15.4, extraHr: 183 },
+  '20 FT': { extraKm: 17.4, extraHr: 212 },
+};
+
+const VIZAG_EXTRA_RATES: ExtraRateTable = {
+  'Tata Ace': { extraKm: 8.7, extraHr: 87 },
+  '207': { extraKm: 9.7, extraHr: 97 },
+  '407': { extraKm: 10.6, extraHr: 125 },
+  '14 FT': { extraKm: 13.5, extraHr: 145 },
+  '17 FT': { extraKm: 15.4, extraHr: 183 },
+  '20 FT': { extraKm: 17.4, extraHr: 212 },
+};
+
+const HYD_IM4_EXTRA_RATES: ExtraRateTable = {
+  'Tata Ace': { extraKm: 8.7, extraHr: 87 },
+  '207': { extraKm: 9.7, extraHr: 97 },
+  '407': { extraKm: 10.6, extraHr: 125 },
+  '14 FT': { extraKm: 13.5, extraHr: 145 },
+  '17 FT': { extraKm: 15.4, extraHr: 183 },
+  '20 FT': { extraKm: 17.4, extraHr: 212 },
+};
+
 const EXTRA_RATE_TABLES: Partial<Record<RateTableKey, ExtraRateTable>> = {
   blr: BLR_EXTRA_RATES,
+  ecomHyd: ECOM_HYD_EXTRA_RATES,
+  vizag: VIZAG_EXTRA_RATES,
+  hydIm4: HYD_IM4_EXTRA_RATES,
 };
+
+// Every 12Hr group now has Extra Km/Extra Hr rates configured - lets the
+// read-only Rates tab (RatesSummary.tsx) stop hardcoding "only BLR has this"
+// and instead ask this table directly.
+export function hasExtraRatesConfigured(rateTableKey: RateTableKey): boolean {
+  return !!EXTRA_RATE_TABLES[rateTableKey];
+}
 
 export function lookupExtraRates(rateTableKey: RateTableKey, vehicleType: RateMatrixVehicleType): ExtraRateRow | null {
   return EXTRA_RATE_TABLES[rateTableKey]?.[vehicleType] ?? null;
