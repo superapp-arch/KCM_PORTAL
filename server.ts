@@ -63,6 +63,8 @@ import {
   TireRecord,
   BatteryRecord,
   ToolsChecklistRecord,
+  ServiceStationSparePart,
+  ServiceStationInspection,
   AuditAction,
   BunkPaymentPeriod,
   BunkPayment
@@ -119,6 +121,12 @@ import {
   getToolsChecklistRecords,
   saveToolsChecklistRecord,
   deleteToolsChecklistRecord,
+  getServiceStationSpareParts,
+  saveServiceStationSparePart,
+  deleteServiceStationSparePart,
+  getServiceStationInspections,
+  saveServiceStationInspection,
+  deleteServiceStationInspection,
   getBunkPaymentPeriods,
   saveBunkPaymentPeriod,
   deleteBunkPaymentPeriod,
@@ -3132,6 +3140,47 @@ async function startServer() {
   });
   app.delete('/api/tools-checklist-records/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteToolsChecklistRecord(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Fleet Maintenance > Service Station > Spare Parts - same shape/access as
+  // every other maintenance sub-log above (Tire/Battery/Tools Checklist).
+  app.get('/api/service-station-spare-parts', async (req, res) => {
+    try { res.json(await getServiceStationSpareParts()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/service-station-spare-parts', async (req, res) => {
+    try {
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Date cannot be in the future.' });
+      res.json({ success: true, data: await saveServiceStationSparePart(req.body as ServiceStationSparePart) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/service-station-spare-parts/:id', async (req, res) => {
+    try {
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Date cannot be in the future.' });
+      res.json({ success: true, data: await saveServiceStationSparePart({ ...req.body, id: req.params.id } as ServiceStationSparePart) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/service-station-spare-parts/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteServiceStationSparePart(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Fleet Maintenance > Service Station > Inspection.
+  app.get('/api/service-station-inspections', async (req, res) => {
+    try { res.json(await getServiceStationInspections()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/service-station-inspections', async (req, res) => {
+    try {
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Date cannot be in the future.' });
+      res.json({ success: true, data: await saveServiceStationInspection(req.body as ServiceStationInspection) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/service-station-inspections/:id', async (req, res) => {
+    try {
+      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Date cannot be in the future.' });
+      res.json({ success: true, data: await saveServiceStationInspection({ ...req.body, id: req.params.id } as ServiceStationInspection) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/service-station-inspections/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteServiceStationInspection(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.get('/api/accounts', async (req, res) => {

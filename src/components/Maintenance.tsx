@@ -10,12 +10,15 @@ import {
   TireBrand,
   TireRecord,
   BatteryRecord,
-  ToolsChecklistRecord
+  ToolsChecklistRecord,
+  ServiceStationSparePart,
+  ServiceStationInspection
 } from '../types';
-import { Settings, Truck, AlertTriangle, CalendarClock, Wrench, CircleDot, Battery } from 'lucide-react';
+import { Settings, Truck, AlertTriangle, CalendarClock, Wrench, CircleDot, Battery, Package } from 'lucide-react';
 import { latestOdometerFor, computeKmStatus, computeAlignmentStatus } from '../utils/maintenanceDates';
 import ServiceLedgerTab from './maintenance/ServiceLedgerTab';
 import ServiceScheduleTab from './maintenance/ServiceScheduleTab';
+import ServiceStationTab from './maintenance/ServiceStationTab';
 import TireAlignmentTab from './maintenance/TireAlignmentTab';
 import BatteryTab from './maintenance/BatteryTab';
 import ToolsChecklistTab from './maintenance/ToolsChecklistTab';
@@ -51,9 +54,15 @@ interface MaintenanceProps {
   toolsChecklistRecords: ToolsChecklistRecord[];
   onSaveToolsChecklistRecord: (record: Omit<ToolsChecklistRecord, 'id'>) => Promise<void>;
   onDeleteToolsChecklistRecord: (id: string) => Promise<void>;
+  serviceStationSpareParts: ServiceStationSparePart[];
+  onSaveServiceStationSparePart: (record: Omit<ServiceStationSparePart, 'id'>) => Promise<void>;
+  onDeleteServiceStationSparePart: (id: string) => Promise<void>;
+  serviceStationInspections: ServiceStationInspection[];
+  onSaveServiceStationInspection: (record: Omit<ServiceStationInspection, 'id'>) => Promise<void>;
+  onDeleteServiceStationInspection: (id: string) => Promise<void>;
 }
 
-type ModuleTab = 'ledger' | 'schedule' | 'tires' | 'battery' | 'tools' | 'breakdowns';
+type ModuleTab = 'ledger' | 'schedule' | 'servicestation' | 'tires' | 'battery' | 'tools' | 'breakdowns';
 
 export default function Maintenance(props: MaintenanceProps) {
   const {
@@ -101,6 +110,7 @@ export default function Maintenance(props: MaintenanceProps) {
   const TABS: [ModuleTab, string, React.ComponentType<{ className?: string }>][] = [
     ['ledger', 'Service History', Settings],
     ['schedule', 'Service Schedule', CalendarClock],
+    ['servicestation', 'Service Station', Package],
     ['tires', 'Tire & Alignment', CircleDot],
     ['battery', 'Battery', Battery],
     ['tools', 'Tools Checklist', Wrench],
@@ -116,7 +126,7 @@ export default function Maintenance(props: MaintenanceProps) {
             KCM Fleet Maintenance & Garage Center
           </h1>
           <p className="text-xs text-slate-500 font-mono mt-1">
-            Service schedule, tire &amp; alignment, battery, tools checklist, and breakdown/workshop/electrical tracking
+            Service schedule, service station, tire &amp; alignment, battery, tools checklist, and breakdown/workshop/electrical tracking
           </p>
         </div>
       </div>
@@ -258,6 +268,17 @@ export default function Maintenance(props: MaintenanceProps) {
           vehicleServiceSchedules={props.vehicleServiceSchedules}
           onSaveVehicleServiceSchedule={props.onSaveVehicleServiceSchedule}
           isSuperAdmin={props.isSuperAdmin}
+        />
+      )}
+      {moduleTab === 'servicestation' && (
+        <ServiceStationTab
+          vehicles={props.vehicles}
+          spareParts={props.serviceStationSpareParts}
+          onSaveSparePart={props.onSaveServiceStationSparePart}
+          onDeleteSparePart={props.onDeleteServiceStationSparePart}
+          inspections={props.serviceStationInspections}
+          onSaveInspection={props.onSaveServiceStationInspection}
+          onDeleteInspection={props.onDeleteServiceStationInspection}
         />
       )}
       {moduleTab === 'tires' && (

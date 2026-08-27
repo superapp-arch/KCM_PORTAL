@@ -402,7 +402,7 @@ export default function ServiceScheduleTab({
                 </th>
               </tr>
               <tr>
-                <th className="px-3 py-2 border-l border-slate-700">Last Service</th>
+                <th className="px-3 py-2 border-l border-slate-700">Current Odometer (km)</th>
                 <th className="px-3 py-2">Warranty</th>
                 <th className="px-3 py-2 text-right">Status</th>
                 <th className="px-3 py-2 border-l border-slate-700">Last Date</th>
@@ -433,8 +433,12 @@ export default function ServiceScheduleTab({
                       ) : <span className="text-slate-300">-</span>}
                     </td>
 
-                    {/* Vehicle Service - no urgency dot (km/manual-based, not a fixed day-cycle). */}
-                    <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap border-l border-slate-100">{row.schedule?.lastServiceDate || '-'}</td>
+                    {/* Vehicle Service - no urgency dot (km/manual-based, not a fixed day-cycle).
+                        Current Odometer is live from Mileage Report's latest Closing KM for
+                        this vehicle (see currentKmFor below) - never manually typed here. */}
+                    <td className="px-3 py-2.5 font-mono text-slate-700 font-bold whitespace-nowrap border-l border-slate-100">
+                      {currentKmFor(row.regNo) != null ? `${currentKmFor(row.regNo)!.toLocaleString('en-IN')} km` : <span className="text-slate-300 font-normal">No reading yet</span>}
+                    </td>
                     <td className="px-3 py-2.5 whitespace-nowrap">
                       {effectiveWarranty ? (
                         <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${effectiveWarranty === 'InWarranty' ? 'bg-sky-50 text-sky-700 border border-sky-200' : 'bg-slate-100 text-slate-500 border border-slate-300'}`}>
@@ -515,7 +519,10 @@ export default function ServiceScheduleTab({
 
                 <div className="rounded-lg border border-slate-100 p-2.5 space-y-1">
                   <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase"><span className="flex items-center gap-1"><ClipboardList className="w-3 h-3" /> Vehicle Service</span> {statusBadge(row.schedule?.serviceStatus)}</div>
-                  <div className="flex items-center justify-between font-mono text-slate-600"><span>Last: {row.schedule?.lastServiceDate || '-'}</span>{effectiveWarranty && <span className={effectiveWarranty === 'InWarranty' ? 'text-sky-600' : 'text-slate-400'}>{effectiveWarranty === 'InWarranty' ? 'In Warranty' : 'Out of Warranty'}</span>}</div>
+                  <div className="flex items-center justify-between font-mono text-slate-600">
+                    <span>Odometer: {currentKmFor(row.regNo) != null ? `${currentKmFor(row.regNo)!.toLocaleString('en-IN')} km` : <span className="text-slate-300">No reading yet</span>}</span>
+                    {effectiveWarranty && <span className={effectiveWarranty === 'InWarranty' ? 'text-sky-600' : 'text-slate-400'}>{effectiveWarranty === 'InWarranty' ? 'In Warranty' : 'Out of Warranty'}</span>}
+                  </div>
                   <div className="flex items-center gap-2 pt-1">
                     <button onClick={() => markDone(row.regNo, 'schedule')} className="flex-1 flex items-center justify-center gap-1 py-1 rounded-lg border border-emerald-200 text-emerald-700 bg-emerald-50 font-bold cursor-pointer"><CheckCircle2 className="w-3.5 h-3.5" /> Mark Done</button>
                     <button onClick={() => openEdit(row.regNo, 'schedule')} className="flex-1 flex items-center justify-center gap-1 py-1 rounded-lg border border-blue-200 text-blue-700 bg-blue-50 font-bold cursor-pointer"><Edit2 className="w-3.5 h-3.5" /> Edit</button>

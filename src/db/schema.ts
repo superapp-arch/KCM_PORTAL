@@ -330,6 +330,22 @@ export const toolsChecklistRecords = pgTable('tools_checklist_records', {
   data: text('data').notNull(), // JSON string representing the full ToolsChecklistRecord object
 });
 
+// Fleet Maintenance > Service Station > Spare Parts - one row per part
+// consumed against a vehicle (see ServiceStationSparePart).
+export const serviceStationSpareParts = pgTable('service_station_spare_parts', {
+  id: text('id').primaryKey(),
+  regNo: text('reg_no'),
+  data: text('data').notNull(), // JSON string representing the full ServiceStationSparePart object
+});
+
+// Fleet Maintenance > Service Station > Inspection - one row per inspection
+// performed (see ServiceStationInspection).
+export const serviceStationInspections = pgTable('service_station_inspections', {
+  id: text('id').primaryKey(),
+  regNo: text('reg_no'),
+  data: text('data').notNull(), // JSON string representing the full ServiceStationInspection object
+});
+
 // Audit Trail - security/business event log (see AuditLog in types.ts).
 // Deliberately NOT the id+data-JSON-blob shape every other table above uses:
 // audit logs need real server-side filtering/sorting/pagination (date range,

@@ -46,6 +46,8 @@ import {
   tireRecords,
   batteryRecords,
   toolsChecklistRecords,
+  serviceStationSpareParts,
+  serviceStationInspections,
   auditLogs
 } from './schema.ts';
 import { eq, ne, and, or, ilike, gte, lte, asc, desc, sql } from 'drizzle-orm';
@@ -99,6 +101,8 @@ import {
   TireRecord,
   BatteryRecord,
   ToolsChecklistRecord,
+  ServiceStationSparePart,
+  ServiceStationInspection,
   AuditLog,
   AuditAction
 } from '../types.ts';
@@ -1154,6 +1158,86 @@ export async function deleteToolsChecklistRecord(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteToolsChecklistRecord:", error);
     throw new Error("Failed to delete tools checklist record.", { cause: error });
+  }
+}
+
+// --- SERVICE STATION: SPARE PARTS OPERATIONS ---
+export async function getServiceStationSpareParts(): Promise<ServiceStationSparePart[]> {
+  try {
+    const rows = await db.select().from(serviceStationSpareParts);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getServiceStationSpareParts:", error);
+    throw new Error("Failed to retrieve service station spare parts.", { cause: error });
+  }
+}
+
+export async function saveServiceStationSparePart(record: ServiceStationSparePart) {
+  try {
+    const id = record.id || String(Date.now());
+    const complete = { ...record, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(serviceStationSpareParts).where(eq(serviceStationSpareParts.id, id));
+    if (existing.length > 0) {
+      await db.update(serviceStationSpareParts).set({ data: dataString, regNo: complete.regNo }).where(eq(serviceStationSpareParts.id, id));
+    } else {
+      await db.insert(serviceStationSpareParts).values({ id, regNo: complete.regNo, data: dataString });
+    }
+    return await getServiceStationSpareParts();
+  } catch (error) {
+    console.error("Database action failed in saveServiceStationSparePart:", error);
+    throw new Error("Failed to save service station spare part.", { cause: error });
+  }
+}
+
+export async function deleteServiceStationSparePart(id: string) {
+  try {
+    await db.delete(serviceStationSpareParts).where(eq(serviceStationSpareParts.id, id));
+    return await getServiceStationSpareParts();
+  } catch (error) {
+    console.error("Database action failed in deleteServiceStationSparePart:", error);
+    throw new Error("Failed to delete service station spare part.", { cause: error });
+  }
+}
+
+// --- SERVICE STATION: INSPECTION OPERATIONS ---
+export async function getServiceStationInspections(): Promise<ServiceStationInspection[]> {
+  try {
+    const rows = await db.select().from(serviceStationInspections);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getServiceStationInspections:", error);
+    throw new Error("Failed to retrieve service station inspections.", { cause: error });
+  }
+}
+
+export async function saveServiceStationInspection(record: ServiceStationInspection) {
+  try {
+    const id = record.id || String(Date.now());
+    const complete = { ...record, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(serviceStationInspections).where(eq(serviceStationInspections.id, id));
+    if (existing.length > 0) {
+      await db.update(serviceStationInspections).set({ data: dataString, regNo: complete.regNo }).where(eq(serviceStationInspections.id, id));
+    } else {
+      await db.insert(serviceStationInspections).values({ id, regNo: complete.regNo, data: dataString });
+    }
+    return await getServiceStationInspections();
+  } catch (error) {
+    console.error("Database action failed in saveServiceStationInspection:", error);
+    throw new Error("Failed to save service station inspection.", { cause: error });
+  }
+}
+
+export async function deleteServiceStationInspection(id: string) {
+  try {
+    await db.delete(serviceStationInspections).where(eq(serviceStationInspections.id, id));
+    return await getServiceStationInspections();
+  } catch (error) {
+    console.error("Database action failed in deleteServiceStationInspection:", error);
+    throw new Error("Failed to delete service station inspection.", { cause: error });
   }
 }
 

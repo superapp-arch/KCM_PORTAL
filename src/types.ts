@@ -556,6 +556,33 @@ export interface ToolsChecklistRecord {
   remarks?: string;
 }
 
+// Fleet Maintenance > Service Station > Spare Parts tab - one row per part
+// consumed against a vehicle. `regNo` (not a separate vehicle_id) matches
+// this codebase's own convention for a vehicle reference on a maintenance
+// log row (see TireRecord/BatteryRecord/ToolsChecklistRecord above) - it's
+// always populated from a Vehicle dropdown (Fleet & Vehicles' live list),
+// never free-typed, so it always resolves back to a real vehicle.
+export interface ServiceStationSparePart {
+  id: string;
+  date: string;
+  regNo: string;
+  partName: string;
+  partNumber: string;
+  qty: number;
+}
+
+// Fleet Maintenance > Service Station > Inspection tab - one row per
+// inspection performed. Same regNo convention as ServiceStationSparePart
+// above.
+export interface ServiceStationInspection {
+  id: string;
+  date: string;
+  regNo: string;
+  details: string;
+  status: 'Completed' | 'Pending';
+  inspectedBy?: string;
+}
+
 // A vehicle breaking down (Type: EnRouteBreakdown), a scheduled/unscheduled
 // WorkshopVisit, or an ElectricalProblem - reported before (or without) a
 // repair having happened yet. Once a Workshop Visit (MaintenanceRecord with

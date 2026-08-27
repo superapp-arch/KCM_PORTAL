@@ -31,6 +31,8 @@ import {
   TireRecord,
   BatteryRecord,
   ToolsChecklistRecord,
+  ServiceStationSparePart,
+  ServiceStationInspection,
   BunkPaymentPeriod,
   BunkPayment
 } from './types';
@@ -62,6 +64,8 @@ export default function App() {
   const [tireRecords, setTireRecords] = useState<TireRecord[]>([]);
   const [batteryRecords, setBatteryRecords] = useState<BatteryRecord[]>([]);
   const [toolsChecklistRecords, setToolsChecklistRecords] = useState<ToolsChecklistRecord[]>([]);
+  const [serviceStationSpareParts, setServiceStationSpareParts] = useState<ServiceStationSparePart[]>([]);
+  const [serviceStationInspections, setServiceStationInspections] = useState<ServiceStationInspection[]>([]);
   const [entries, setEntries] = useState<AccountsEntry[]>([]);
   const [employees, setEmployees] = useState<StaffEmployee[]>([]);
   const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
@@ -130,6 +134,8 @@ export default function App() {
         tireRecordsRes,
         batteryRecordsRes,
         toolsChecklistRecordsRes,
+        serviceStationSparePartsRes,
+        serviceStationInspectionsRes,
         acctRes,
         hrRes,
         notifRes,
@@ -159,6 +165,8 @@ export default function App() {
         fetch('/api/tire-records'),
         fetch('/api/battery-records'),
         fetch('/api/tools-checklist-records'),
+        fetch('/api/service-station-spare-parts'),
+        fetch('/api/service-station-inspections'),
         fetch('/api/accounts'),
         authFetch('/api/staff/employees'),
         fetch('/api/notifications'),
@@ -189,6 +197,8 @@ export default function App() {
       if (tireRecordsRes.ok) setTireRecords(await tireRecordsRes.json());
       if (batteryRecordsRes.ok) setBatteryRecords(await batteryRecordsRes.json());
       if (toolsChecklistRecordsRes.ok) setToolsChecklistRecords(await toolsChecklistRecordsRes.json());
+      if (serviceStationSparePartsRes.ok) setServiceStationSpareParts(await serviceStationSparePartsRes.json());
+      if (serviceStationInspectionsRes.ok) setServiceStationInspections(await serviceStationInspectionsRes.json());
       if (acctRes.ok) setEntries(await acctRes.json());
       if (hrRes.ok) setEmployees(await hrRes.json());
       if (notifRes.ok) setNotifications(await notifRes.json());
@@ -490,6 +500,54 @@ export default function App() {
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to delete tools checklist record.');
+    }
+  };
+
+  const handleSaveServiceStationSparePart = async (record: Omit<ServiceStationSparePart, 'id'>) => {
+    const res = await fetch('/api/service-station-spare-parts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save spare part entry.');
+    }
+  };
+
+  const handleDeleteServiceStationSparePart = async (id: string) => {
+    const res = await fetch(`/api/service-station-spare-parts/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete spare part entry.');
+    }
+  };
+
+  const handleSaveServiceStationInspection = async (record: Omit<ServiceStationInspection, 'id'>) => {
+    const res = await fetch('/api/service-station-inspections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save inspection entry.');
+    }
+  };
+
+  const handleDeleteServiceStationInspection = async (id: string) => {
+    const res = await fetch(`/api/service-station-inspections/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete inspection entry.');
     }
   };
 
@@ -1242,6 +1300,12 @@ export default function App() {
         toolsChecklistRecords={toolsChecklistRecords}
         onSaveToolsChecklistRecord={handleSaveToolsChecklistRecord}
         onDeleteToolsChecklistRecord={handleDeleteToolsChecklistRecord}
+        serviceStationSpareParts={serviceStationSpareParts}
+        onSaveServiceStationSparePart={handleSaveServiceStationSparePart}
+        onDeleteServiceStationSparePart={handleDeleteServiceStationSparePart}
+        serviceStationInspections={serviceStationInspections}
+        onSaveServiceStationInspection={handleSaveServiceStationInspection}
+        onDeleteServiceStationInspection={handleDeleteServiceStationInspection}
         maintenanceServiceStations={maintenanceServiceStations}
         onAddMaintenanceServiceStation={handleAddMaintenanceServiceStation}
         onDeleteMaintenanceServiceStation={handleDeleteMaintenanceServiceStation}

@@ -28,6 +28,8 @@ import {
   TireRecord,
   BatteryRecord,
   ToolsChecklistRecord,
+  ServiceStationSparePart,
+  ServiceStationInspection,
   BunkPaymentPeriod,
   BunkPayment
 } from '../types';
@@ -170,6 +172,12 @@ interface AdministrationProps {
   toolsChecklistRecords: ToolsChecklistRecord[];
   onSaveToolsChecklistRecord: (record: Omit<ToolsChecklistRecord, 'id'>) => Promise<void>;
   onDeleteToolsChecklistRecord: (id: string) => Promise<void>;
+  serviceStationSpareParts: ServiceStationSparePart[];
+  onSaveServiceStationSparePart: (record: Omit<ServiceStationSparePart, 'id'>) => Promise<void>;
+  onDeleteServiceStationSparePart: (id: string) => Promise<void>;
+  serviceStationInspections: ServiceStationInspection[];
+  onSaveServiceStationInspection: (record: Omit<ServiceStationInspection, 'id'>) => Promise<void>;
+  onDeleteServiceStationInspection: (id: string) => Promise<void>;
   onAddAccountsEntry: (entry: Omit<AccountsEntry, 'id'>) => Promise<void>;
   onUpdateAccountsEntry: (id: string, entry: Partial<AccountsEntry>) => Promise<void>;
   onDeleteAccountsEntry: (id: string) => Promise<void>;
@@ -267,6 +275,12 @@ export default function Administration({
   toolsChecklistRecords,
   onSaveToolsChecklistRecord,
   onDeleteToolsChecklistRecord,
+  serviceStationSpareParts,
+  onSaveServiceStationSparePart,
+  onDeleteServiceStationSparePart,
+  serviceStationInspections,
+  onSaveServiceStationInspection,
+  onDeleteServiceStationInspection,
   maintenanceServiceStations,
   onAddMaintenanceServiceStation,
   onDeleteMaintenanceServiceStation,
@@ -1021,6 +1035,12 @@ export default function Administration({
               toolsChecklistRecords={toolsChecklistRecords}
               onSaveToolsChecklistRecord={onSaveToolsChecklistRecord}
               onDeleteToolsChecklistRecord={onDeleteToolsChecklistRecord}
+              serviceStationSpareParts={serviceStationSpareParts}
+              onSaveServiceStationSparePart={onSaveServiceStationSparePart}
+              onDeleteServiceStationSparePart={onDeleteServiceStationSparePart}
+              serviceStationInspections={serviceStationInspections}
+              onSaveServiceStationInspection={onSaveServiceStationInspection}
+              onDeleteServiceStationInspection={onDeleteServiceStationInspection}
             />
           )}
 
