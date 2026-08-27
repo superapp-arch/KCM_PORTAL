@@ -1,13 +1,13 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Lock, ChevronDown, ChevronUp, User as UserIcon, Paperclip, Receipt } from 'lucide-react';
-import { DriverEmployee, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES, VehicleDocument, DriverSalarySlipRecord, Vehicle } from '../../types';
+import { DriverEmployee, DriverAttendance, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES, VehicleDocument, DriverSalarySlipRecord, Vehicle } from '../../types';
 import DriverFormModal from './DriverFormModal';
 import DriverSalarySlipModal from './DriverSalarySlipModal';
 import DocumentAttachment from '../DocumentAttachment';
 import { authFetch } from '../../authFetch';
 import { compareTrailingNumber } from '../../utils/sort';
-import { payableAmount, vehiclesLabel, salarySections, exportDriverSalary } from '../../utils/driverSalaryExport';
+import { payableAmountLive, vehiclesLabel, salarySections, exportDriverSalary } from '../../utils/driverSalaryExport';
 import DownloadMenu from './DownloadMenu';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
 
@@ -54,6 +54,17 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
         console.error('Failed to load driver salary slips:', err);
       }
     })();
+  }, []);
+
+  // Fetched once so Payable Amount here can be computed LIVE from actual
+  // attendance for each driver's own `month` (see payableAmountLive) -
+  // otherwise this list would only ever reflect whatever workingDays/
+  // lopAmount snapshot happened to be persisted at a driver's last Salary
+  // Breakup save, which can lag behind what the Salary Breakup tab itself
+  // is showing live for the exact same driver/month right now.
+  const [attendance, setAttendance] = useState<DriverAttendance[]>([]);
+  useEffect(() => {
+    authFetch('/api/drivers/attendance').then(r => r.json()).then(setAttendance).catch(() => {});
   }, []);
 
   const triggerNotif = (message: string, type: 'success' | 'error') => {
@@ -112,21 +123,21 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
   // guaranteed content parity instead of its own Excel-only shortcut.
   const handleDownloadAllExcel = () => {
     if (flatFiltered.length === 0) { triggerNotif('No driver records to download.', 'error'); return; }
-    exportDriverSalary('KCM_All_Drivers', salarySections(groupedDrivers), 'excel', 'All Locations');
+    exportDriverSalary('KCM_All_Drivers', salarySections(groupedDrivers, attendance), 'excel', 'All Locations');
   };
 
   const handleDownloadAllPdf = () => {
     if (flatFiltered.length === 0) { triggerNotif('No driver records to download.', 'error'); return; }
-    exportDriverSalary('KCM_All_Drivers', salarySections(groupedDrivers), 'pdf', 'All Locations');
+    exportDriverSalary('KCM_All_Drivers', salarySections(groupedDrivers, attendance), 'pdf', 'All Locations');
   };
 
   // One location's drivers only - the Download control on that group's
   // header row.
   const handleDownloadLocationExcel = (location: string, list: DriverEmployee[]) =>
-    exportDriverSalary(`KCM_Driver_Salary_${safeFileToken(location)}`, salarySections([{ location, drivers: list }]), 'excel', location);
+    exportDriverSalary(`KCM_Driver_Salary_${safeFileToken(location)}`, salarySections([{ location, drivers: list }], attendance), 'excel', location);
 
   const handleDownloadLocationPdf = (location: string, list: DriverEmployee[]) =>
-    exportDriverSalary(`KCM_Driver_Salary_${safeFileToken(location)}`, salarySections([{ location, drivers: list }]), 'pdf', location);
+    exportDriverSalary(`KCM_Driver_Salary_${safeFileToken(location)}`, salarySections([{ location, drivers: list }], attendance), 'pdf', location);
 
   // Inline document upload from the expand panel - persists immediately
   // (same "no separate Save button" convention DocumentAttachment's callers
@@ -247,7 +258,7 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                             <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded text-[9.5px] font-bold">{driver.location}</span>
                           </td>
                           <td className="px-3 py-2.5 text-right font-mono text-slate-700">{driver.grossSalary ? `Rs. ${driver.grossSalary.toLocaleString('en-IN')}` : '-'}</td>
-                          <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">Rs. {payableAmount(driver).toLocaleString('en-IN')}</td>
+                          <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">Rs. {payableAmountLive(driver, attendance).toLocaleString('en-IN')}</td>
                           <td className="px-3 py-2.5 text-right whitespace-nowrap">
                             <button onClick={() => setSlipModalDriver(driver)} title="Generate Salary Slip" className="p-1 text-slate-400 hover:text-purple-700 hover:bg-slate-100 rounded cursor-pointer"><Receipt className="w-3.5 h-3.5" /></button>
                             {canWrite(driver) ? (

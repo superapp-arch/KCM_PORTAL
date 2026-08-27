@@ -4,7 +4,7 @@
 // (DriverFormModal.tsx) all build their export data through this one module,
 // so Excel and PDF are guaranteed to show the same figures everywhere
 // instead of each download button keeping its own copy in sync by hand.
-import { DriverEmployee } from '../types';
+import { DriverEmployee, DriverAttendance } from '../types';
 import { exportReportToExcel, exportReportToPdf, ReportTableSection } from './reportExport';
 
 const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -80,13 +80,55 @@ export const payableAmount = (driver: DriverEmployee): number => {
   return round2(grossEarned + (driver.otherAdditions || 0) - totalDeductions);
 };
 
+// Present + Paid Leave = Working Days, AbsentLOP = LOP days - the exact same
+// rule the server's own computeDriverMonthlyAttendanceSummary and Driver
+// Attendance's own summarizeMonthRows use, so this always agrees with what
+// Driver Attendance itself shows for that month.
+function liveMonthAttendance(driverId: string, month: string, attendance: DriverAttendance[]): { totalDays: number; workingDays: number; lopDays: number } {
+  const rows = attendance.filter(a => a.driverId === driverId && a.date.startsWith(month));
+  return {
+    totalDays: daysInSalaryMonth(month),
+    workingDays: rows.filter(r => r.status === 'Present' || r.status === 'PaidLeave').length,
+    lopDays: rows.filter(r => r.status === 'AbsentLOP').length
+  };
+}
+
+// Live version of payableAmount() above - computes Working Days/LOP fresh
+// from actual attendance records for driver.month, the same way the Salary
+// Breakup tab's own live preview does, instead of trusting whatever
+// workingDays/lopAmount snapshot happened to be persisted on the driver
+// record at its last save.
+//
+// This matters because payableAmount()'s snapshot fields only exist on a
+// driver once their Salary Breakup has been saved AFTER they were added -
+// until then (or for any driver saved before workingDays existed at all),
+// it silently falls back to "treat the whole month as worked", which can
+// disagree with what the Salary Breakup tab is showing live for the exact
+// same driver/month. Call this instead wherever the caller already has (or
+// can cheaply fetch) the full attendance list - the Driver Salary list/
+// exports - so what's displayed there can never lag behind a fresh Save.
+export function payableAmountLive(driver: DriverEmployee, attendance: DriverAttendance[]): number {
+  if (!driver.month) return payableAmount(driver); // nothing to compute live against - fall back to the snapshot version
+  const { totalDays, workingDays, lopDays } = liveMonthAttendance(driver.id, driver.month, attendance);
+  const { payableAmount: amount } = computeDriverEarnings({
+    grossSalary: driver.grossSalary || 0, otherAdditions: driver.otherAdditions || 0,
+    pettyCashAdvance: driver.pettyCashAdvance || 0, loanDeduction: driver.loanDeduction || 0,
+    recoveryAmount: driver.recoveryAmount || 0, driverWelfare: driver.driverWelfare || 0, bata: driver.bata || 0,
+    totalDays, workingDays, lopDays
+  });
+  return amount;
+}
+
 // A driver can cover more than one vehicle (DriverEmployee.vehicleNos) -
 // falls back to the legacy single vehicleNo for a driver saved before that
 // field existed.
 export const vehiclesLabel = (driver: DriverEmployee): string =>
   (driver.vehicleNos && driver.vehicleNos.length > 0 ? driver.vehicleNos : (driver.vehicleNo ? [driver.vehicleNo] : [])).join(' / ');
 
-export const toDriverSalaryRow = (driver: DriverEmployee, i: number) => ({
+// `attendance`, when passed, makes Payable Amount here match the Salary
+// Breakup tab's live figure exactly (see payableAmountLive above) instead
+// of whatever workingDays/lopAmount snapshot was last persisted.
+export const toDriverSalaryRow = (driver: DriverEmployee, i: number, attendance?: DriverAttendance[]) => ({
   'Sl.No': i + 1,
   'Driver Name': driver.name,
   'Driver ID': driver.id,
@@ -105,7 +147,7 @@ export const toDriverSalaryRow = (driver: DriverEmployee, i: number) => ({
   'BATA': driver.bata || '',
   'Other Additions': driver.otherAdditions || '',
   'Gross Salary': driver.grossSalary || '',
-  'Payable Amount': payableAmount(driver),
+  'Payable Amount': attendance ? payableAmountLive(driver, attendance) : payableAmount(driver),
   'Location': driver.location
 });
 
@@ -118,15 +160,15 @@ export const SALARY_COLUMNS = [
   'Driver Welfare', 'BATA', 'Other Additions', 'Gross Salary', 'Payable Amount', 'Location'
 ];
 
-export const driverSalaryRows = (list: DriverEmployee[]): (string | number)[][] =>
-  list.map((driver, i) => Object.values(toDriverSalaryRow(driver, i)));
+export const driverSalaryRows = (list: DriverEmployee[], attendance?: DriverAttendance[]): (string | number)[][] =>
+  list.map((driver, i) => Object.values(toDriverSalaryRow(driver, i, attendance)));
 
 // One section per location group - Excel gets one sheet per section, PDF
 // gets one table per section, so "Download All", the per-location download
 // and the per-driver/Salary Breakup download (a single-driver, single-group
 // section) all share this exact same section builder.
-export const salarySections = (groups: { location: string; drivers: DriverEmployee[] }[]): ReportTableSection[] =>
-  groups.map(g => ({ heading: g.location, columns: SALARY_COLUMNS, rows: driverSalaryRows(g.drivers) }));
+export const salarySections = (groups: { location: string; drivers: DriverEmployee[] }[], attendance?: DriverAttendance[]): ReportTableSection[] =>
+  groups.map(g => ({ heading: g.location, columns: SALARY_COLUMNS, rows: driverSalaryRows(g.drivers, attendance) }));
 
 // The one shared export function every Driver Salary download entry point
 // calls - Excel and PDF both render from the exact same `sections` data, so

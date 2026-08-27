@@ -1003,10 +1003,10 @@ export default function PettyCash({
     advancesFor(username).filter(a => !a.source);
 
   type MergedOwnerRow =
-    | { key: string; date: string; id: string; kind: 'voucher'; voucher: PettyCashVoucher }
-    | { key: string; date: string; id: string; kind: 'trip-advance'; trip: MarketPodEntry }
-    | { key: string; date: string; id: string; kind: 'trip-balance'; trip: MarketPodEntry; receipt: MarketPodBalanceReceipt }
-    | { key: string; date: string; id: string; kind: 'amount-received'; advance: PettyCashAdvance };
+    | { key: string; date: string; id: string; entryNo: string; kind: 'voucher'; voucher: PettyCashVoucher }
+    | { key: string; date: string; id: string; entryNo: string; kind: 'trip-advance'; trip: MarketPodEntry }
+    | { key: string; date: string; id: string; entryNo: string; kind: 'trip-balance'; trip: MarketPodEntry; receipt: MarketPodBalanceReceipt }
+    | { key: string; date: string; id: string; entryNo: string; kind: 'amount-received'; advance: PettyCashAdvance };
 
   // Balance Net (single source of truth for running balance - see the
   // removed "Balance" column) is a genuine chronological walk, starting at 0
@@ -1014,22 +1014,34 @@ export default function PettyCash({
   // that treated every credit as already banked from day one. Now a credit
   // only raises the balance from the date it's actually logged onward, so
   // adding a new Amount Received/Market Trip credit today can never change
-  // what an earlier row already displayed (point 4's core ask). Ties (same
-  // date) break on the numeric id - every row type here falls back to a
-  // Date.now()-based id when none is supplied, so this is a genuine
-  // chronological tiebreak across all four row kinds, not a per-source
-  // sequence number (Entry No formats differ and were never meant to
-  // interleave).
+  // what an earlier row already displayed (point 4's core ask).
+  //
+  // Ties (same date) break on Entry No's own trailing number - the exact
+  // same tiebreak the Ledger table itself sorts by (see mergedLedgerRows'
+  // own sort below) - NOT the row's raw id/creation timestamp. The two must
+  // always agree: if the walk processed same-day rows in a different order
+  // than they're actually displayed, a row shown "after" a credit could
+  // still get computed with the OLD Amt Rec/Balance Net from before it (the
+  // exact bug this fixes - a debit entered on the same day as a credit,
+  // sharing that credit's date, was walked using its creation-time id
+  // instead of its Entry No's real sequence, so it could land on either
+  // side of the credit in the walk while displaying on the other side of it
+  // in the table). Amount Received rows have no Entry No, so they tie-break
+  // as 0 - lowest for that day - meaning any credit logged today is treated
+  // as this holder's very first event of the day; any real Petty Cash entry
+  // dated the same day (always Entry No >= 1) is walked after it.
   const mergedOwnerRows = (owner: string): MergedOwnerRow[] => {
     const rows: MergedOwnerRow[] = [];
-    vouchersFor(owner).forEach(v => rows.push({ key: `PC:${v.id}`, date: v.date, id: v.id, kind: 'voucher', voucher: v }));
+    vouchersFor(owner).forEach(v => rows.push({ key: `PC:${v.id}`, date: v.date, id: v.id, entryNo: v.entryNo || '', kind: 'voucher', voucher: v }));
     marketTripEntriesFor(owner).forEach(t => {
-      if (marketTripAdvanceAmount(t) > 0) rows.push({ key: `MT:${t.id}:adv`, date: t.date, id: t.id, kind: 'trip-advance', trip: t });
-      (t.balanceReceipts || []).forEach(r => rows.push({ key: `MT:${t.id}:bal:${r.id}`, date: r.date, id: r.id, kind: 'trip-balance', trip: t, receipt: r }));
+      if (marketTripAdvanceAmount(t) > 0) rows.push({ key: `MT:${t.id}:adv`, date: t.date, id: t.id, entryNo: t.entryNo || '', kind: 'trip-advance', trip: t });
+      (t.balanceReceipts || []).forEach(r => rows.push({ key: `MT:${t.id}:bal:${r.id}`, date: r.date, id: r.id, entryNo: t.entryNo || '', kind: 'trip-balance', trip: t, receipt: r }));
     });
-    manualAdvancesFor(owner).forEach(a => rows.push({ key: `AR:${a.id}`, date: a.date, id: a.id, kind: 'amount-received', advance: a }));
+    manualAdvancesFor(owner).forEach(a => rows.push({ key: `AR:${a.id}`, date: a.date, id: a.id, entryNo: '', kind: 'amount-received', advance: a }));
     return rows.sort((a, b) => {
       if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+      const entryCmp = extractTrailingNumber(a.entryNo) - extractTrailingNumber(b.entryNo);
+      if (entryCmp !== 0) return entryCmp;
       return (parseInt(a.id, 10) || 0) - (parseInt(b.id, 10) || 0);
     });
   };
