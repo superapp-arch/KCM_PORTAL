@@ -2741,7 +2741,7 @@ async function startServer() {
       if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Petty cash entry date cannot be in the future.' });
       // Cash Paid = 0 isn't a real disbursement - same rule the client
       // already enforces, repeated here as a safety net for a raw API call.
-      if (!(Number(req.body?.cashPaid) > 0)) return res.status(400).json({ error: 'Cash Paid must be greater than 0 to save this entry.' });
+      if (!(Number(req.body?.cashPaid) > 0)) return res.status(400).json({ error: 'Please enter a valid Cash Paid amount.' });
       const newId = req.body?.id || String(Date.now());
       const result = await savePettyCashVoucher({ ...req.body, id: newId, entryNo, enteredBy });
       await createAuditLog({
@@ -2766,7 +2766,7 @@ async function startServer() {
         return res.status(409).json({ error: `Entry No. ${req.body.entryNo} already exists.` });
       }
       if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Petty cash entry date cannot be in the future.' });
-      if (!(Number(req.body?.cashPaid) > 0)) return res.status(400).json({ error: 'Cash Paid must be greater than 0 to save this entry.' });
+      if (!(Number(req.body?.cashPaid) > 0)) return res.status(400).json({ error: 'Please enter a valid Cash Paid amount.' });
       const result = await savePettyCashVoucher({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
       await createAuditLog({
         user: sessionUser, action: 'UPDATE', module: 'Petty Cash', entityType: 'Petty Cash Entry', entityId: req.params.id,

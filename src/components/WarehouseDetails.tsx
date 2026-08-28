@@ -226,7 +226,7 @@ export default function WarehouseDetails({
   // the 12Hr lookup above, see utils/warehouseRateMatrix24hr.ts. Neither
   // applies to Ad-hoc (flat route lookup instead, see matchedAdHocRate).
   const isRegular24 = fixedHours === 24 && deploymentType === 'regular';
-  const matched24hrDedicatedRate = isRegular24 ? lookup24hrDedicatedRate(warehouseName, vehicleType) : null;
+  const matched24hrDedicatedRate = isRegular24 ? lookup24hrDedicatedRate(warehouseName, vehicleType, vehicleCategory) : null;
   const matchedReeferWalkesRate = (isRegular24 && !matched24hrDedicatedRate) ? lookupReeferWalkesRate(warehouseName, vehicleType, vehicleCategory) : null;
   useEffect(() => {
     if (matchedScheduledRate != null) setScheduledRate(matchedScheduledRate);
@@ -281,7 +281,7 @@ export default function WarehouseDetails({
   const editWarehouseGroup = rateGroupForWarehouseName(editWarehouseName) || '';
   const editMatchedScheduledRate = editFixedHours === 12 ? lookupScheduledRate(editWarehouseGroup, editVehicleType, editKmSlabNumber) : null;
   const editIsRegular24 = editFixedHours === 24 && editDeploymentType === 'regular';
-  const editMatched24hrDedicatedRate = editIsRegular24 ? lookup24hrDedicatedRate(editWarehouseName, editVehicleType) : null;
+  const editMatched24hrDedicatedRate = editIsRegular24 ? lookup24hrDedicatedRate(editWarehouseName, editVehicleType, editVehicleCategory) : null;
   const editMatchedReeferWalkesRate = (editIsRegular24 && !editMatched24hrDedicatedRate) ? lookupReeferWalkesRate(editWarehouseName, editVehicleType, editVehicleCategory) : null;
   useEffect(() => {
     if (editMatchedScheduledRate != null) setEditScheduledRate(editMatchedScheduledRate);

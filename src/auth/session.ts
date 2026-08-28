@@ -20,7 +20,14 @@ import { User } from '../types';
 // a hard cap from login time regardless of activity, so a token still can't
 // stay valid forever under continuous use - standard security hygiene, not
 // something to drop.
-const SESSION_IDLE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours of inactivity
+// 2026-08-28: lowered from 12h to 4h - an employee who leaves the app open
+// and logged in but genuinely idle (no requests at all) for 4 hours should
+// be forced to log back in before entering anything further, rather than
+// typing into what looks like a live session but is actually about to 401
+// on save. Client-side, App.tsx's own idle timer mirrors this exact window
+// so the UI proactively logs them out the moment it elapses too, instead of
+// only reacting after a failed save.
+const SESSION_IDLE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours of inactivity
 const SESSION_ABSOLUTE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days from login, max, regardless of activity
 
 // Only persist a bumped lastActivityAt this often per session, not on every

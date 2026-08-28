@@ -42,3 +42,64 @@ export function authFetch(input: RequestInfo | URL, init: RequestInit = {}): Pro
     return res;
   });
 }
+
+// 2026-08-28: a deploy (git pull + npm run build + server restart) leaves a
+// brief window where the backend is down or mid-restart - any save
+// attempted right then either can't reach the server at all (fetch itself
+// throws) or gets a 502/503/504 from whatever's in front of it, and neither
+// of those is a 401, so the handler above never catches it. Left unhandled,
+// that save just silently fails and the employee has no idea it didn't go
+// through. Patches window.fetch itself (not just authFetch) so this covers
+// every plain fetch() call in the app too - App.tsx's fetchAllData and
+// several save handlers still use plain fetch rather than authFetch, and
+// this is one choke point instead of auditing every call site.
+let backendUnreachableHandler: (() => void) | null = null;
+
+export function registerBackendUnreachableHandler(handler: () => void): void {
+  backendUnreachableHandler = handler;
+}
+
+// Same one-shot-per-outage debouncing as sessionExpiredNotified above - a
+// dead backend fails every in-flight/concurrent request at once, so only
+// the first should trigger the logout+reload flow. Reset after a fresh
+// login so a later, separate outage can trigger it again.
+let backendUnreachableNotified = false;
+
+export function resetBackendUnreachableNotification(): void {
+  backendUnreachableNotified = false;
+}
+
+let backendUnreachableGuardInstalled = false;
+
+// Call once, early (see App.tsx) - idempotent, safe to call more than once.
+export function installBackendUnreachableGuard(): void {
+  if (backendUnreachableGuardInstalled) return;
+  backendUnreachableGuardInstalled = true;
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (async (...args: Parameters<typeof fetch>) => {
+    try {
+      const res = await originalFetch(...args);
+      // 502/503/504 - the classic "reverse proxy in front of a backend
+      // that's down or restarting" signals. A plain 500 is left alone
+      // deliberately: that's more likely a real bug in one specific
+      // request, not the whole backend being unreachable, so it should
+      // still surface as a normal in-context error instead of logging
+      // everyone out.
+      if ((res.status === 502 || res.status === 503 || res.status === 504) && !backendUnreachableNotified) {
+        backendUnreachableNotified = true;
+        backendUnreachableHandler?.();
+      }
+      return res;
+    } catch (err) {
+      // Network-level failure - fetch couldn't reach the server at all
+      // (connection refused, DNS failure, mid-restart) - never produces a
+      // Response, so it'd otherwise only ever surface as an unhandled
+      // rejection in whichever component's own .catch() (or lack of one).
+      if (!backendUnreachableNotified) {
+        backendUnreachableNotified = true;
+        backendUnreachableHandler?.();
+      }
+      throw err;
+    }
+  }) as typeof fetch;
+}

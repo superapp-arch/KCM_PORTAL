@@ -2,7 +2,10 @@ import React, { useState, useEffect } from 'react';
 import SplashScreen from './components/SplashScreen';
 import Login from './components/Login';
 import Administration from './components/Administration';
-import { authFetch, registerSessionExpiredHandler, resetSessionExpiredNotification } from './authFetch';
+import {
+  authFetch, registerSessionExpiredHandler, resetSessionExpiredNotification,
+  registerBackendUnreachableHandler, resetBackendUnreachableNotification, installBackendUnreachableGuard
+} from './authFetch';
 import {
   User,
   Vehicle,
@@ -1198,6 +1201,7 @@ export default function App() {
   const handleLoginSuccess = async (loggedInUser: User, sessionToken?: string) => {
     setSessionExpiredNotice(null);
     resetSessionExpiredNotification(); // a fresh login can trigger the expiry flow again if it happens a second time
+    resetBackendUnreachableNotification(); // likewise for a later, separate outage
     setUser(loggedInUser);
     if (sessionToken) setToken(sessionToken);
     await fetchAllData();
@@ -1221,6 +1225,52 @@ export default function App() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Deploy-gap safety net (2026-08-28): if the backend is unreachable or
+  // returns 502/503/504 (a deploy/restart mid-flight), log the employee out
+  // and force a full reload - see authFetch.ts's installBackendUnreachableGuard.
+  // The reload also picks up the freshly-built frontend bundle, so a stale
+  // tab left open across a deploy never keeps running old JS against a
+  // newly-shaped API. A short delay lets the message actually render before
+  // the reload wipes it.
+  useEffect(() => {
+    installBackendUnreachableGuard();
+    registerBackendUnreachableHandler(() => {
+      setSessionExpiredNotice('The server is temporarily unavailable (a deployment or restart may be in progress). You have been logged out - anything in progress was NOT saved. Reloading...');
+      handleLogout();
+      setTimeout(() => window.location.reload(), 2500);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Proactive idle logout (2026-08-28): mirrors src/auth/session.ts's own
+  // SESSION_IDLE_TTL_MS exactly (4 hours). Tracks real interaction (mouse/
+  // keyboard/touch/scroll), not just API activity, so a tab left open and
+  // genuinely untouched for 4 hours gets logged out client-side the moment
+  // it elapses, instead of only discovering the session died on the next
+  // save attempt (which is what used to make an entry typed after a long
+  // idle stretch silently fail to save).
+  useEffect(() => {
+    if (!user) return;
+    const IDLE_LIMIT_MS = 4 * 60 * 60 * 1000;
+    let lastActivity = Date.now();
+    const markActive = () => { lastActivity = Date.now(); };
+    const activityEvents: (keyof WindowEventMap)[] = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+    activityEvents.forEach(evt => window.addEventListener(evt, markActive, { passive: true }));
+    // Checked once a minute - the idle window is hours wide, a minute of
+    // imprecision here is invisible.
+    const idleCheck = setInterval(() => {
+      if (Date.now() - lastActivity >= IDLE_LIMIT_MS) {
+        setSessionExpiredNotice('You were logged out after 4 hours of inactivity. Please log in again to continue - anything unsaved was NOT saved.');
+        handleLogout();
+      }
+    }, 60 * 1000);
+    return () => {
+      activityEvents.forEach(evt => window.removeEventListener(evt, markActive));
+      clearInterval(idleCheck);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   // 3. Render State Selector
   if (showSplash) {

@@ -64,7 +64,17 @@ export const DEDICATED_24HR_TABLES: Record<string, Partial<Record<RateMatrixVehi
   'HYD IM4': HYD_IM4_24HR_DEDICATED,
 };
 
-export function lookup24hrDedicatedRate(warehouseName: string, vehicleType: string): { fixed: number; variable: number } | null {
+// `vehicleCategory` matters here: this table is Dry-vehicle pricing only -
+// Reefer/Walkes have their own separate rate card below
+// (lookupReeferWalkesRate) even when the Vehicle Type coincides (e.g.
+// "14 FT" exists in both tables, at different rates). Without checking
+// category, a Reefer/Walkes vehicle whose Type happens to match a Dedicated
+// row would silently get the wrong (Dry) rate - matching on Vehicle Type
+// alone isn't enough, both fields have to agree this is really a Dry
+// deployment.
+export function lookup24hrDedicatedRate(warehouseName: string, vehicleType: string, vehicleCategory?: string): { fixed: number; variable: number } | null {
+  const cat = (vehicleCategory || '').trim().toLowerCase();
+  if (cat === 'reefer' || cat === 'walkes' || cat === 'walkee') return null;
   const group = rateGroupForWarehouseName(warehouseName);
   // Every BLR entity (ECOM/IM1-4/DHL) shares the one "BLR" Dedicated table -
   // any other group (Vizag, HYD IM4) is looked up by its own exact group

@@ -201,8 +201,8 @@ function MarketTripCreditRow({ trip, date, amount, balanceNet, isSuperAdmin, onV
       <td className="px-3 py-2 whitespace-nowrap">
         <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-emerald-100 text-emerald-800 border-emerald-300">Market trip</span>
       </td>
-      <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700 bg-emerald-50/40">₹{amount.toLocaleString('en-IN')}</td>
       <td className="px-3 py-2 text-right font-mono text-slate-400">&mdash;</td>
+      <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700 bg-emerald-50/40">₹{amount.toLocaleString('en-IN')}</td>
       <td className={`px-3 py-2 text-right font-mono font-black ${balanceNet < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`} title="This holder's running balance across the merged, date-sorted Petty Cash + Market Trip + Amount Received credit list">
         {balanceNet < 0 && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
         ₹{balanceNet.toLocaleString('en-IN')}
@@ -252,8 +252,8 @@ function AmountReceivedCreditRow({ advance, balanceNet, isSuperAdmin, onDelete }
       <td className="px-3 py-2 whitespace-nowrap">
         <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-amber-100 text-amber-800 border-amber-300">Amount received</span>
       </td>
-      <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700 bg-emerald-50/40">₹{advance.amount.toLocaleString('en-IN')}</td>
       <td className="px-3 py-2 text-right font-mono text-slate-400">&mdash;</td>
+      <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700 bg-emerald-50/40">₹{advance.amount.toLocaleString('en-IN')}</td>
       <td className={`px-3 py-2 text-right font-mono font-black ${balanceNet < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`} title="This holder's running balance across the merged, date-sorted Petty Cash + Market Trip + Amount Received credit list">
         {balanceNet < 0 && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
         ₹{balanceNet.toLocaleString('en-IN')}
@@ -865,7 +865,7 @@ export default function PettyCash({
     // Cash Paid = 0 isn't a real disbursement - don't let it create an entry
     // at all.
     if (!((parseFloat(cashPaid) || 0) > 0)) {
-      triggerNotif('Cash Paid must be greater than 0 to save this entry.', 'error');
+      triggerNotif('Please enter a valid Cash Paid amount.', 'error');
       return;
     }
     if (VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase()) && !vendorId.trim()) {
@@ -1243,8 +1243,33 @@ export default function PettyCash({
   // a Debit, every Market Trip/Amount Received row is a Credit) - see
   // LedgerRow above.
   const typeRank = (row: LedgerRow): number => row.source === 'petty-cash' ? 1 : 0; // 0 = Credit, 1 = Debit
+
+  // Which handler (Vinod/Ramesh/Saneel) a row belongs to - only meaningful
+  // for a Super Admin/Rakshina view, where all 3 handlers' rows arrive
+  // merged together with enteredBy/username intact; everyone else only ever
+  // sees their own rows anyway (enteredBy/username stripped, falls back to
+  // their own username), so this is a constant/no-op for them.
+  const handlerOf = (row: LedgerRow): string =>
+    row.source === 'petty-cash' ? (row.voucher.enteredBy || user.username)
+    : row.source === 'market-trip' ? (row.trip.enteredBy || user.username)
+    : (row.advance.username || user.username);
+  const HANDLER_ORDER = PETTY_CASH_USERS.map(u => u.username);
+  const handlerRank = (row: LedgerRow): number => {
+    const idx = HANDLER_ORDER.indexOf(handlerOf(row));
+    return idx === -1 ? HANDLER_ORDER.length : idx;
+  };
+
   const mergedLedgerRows = sort
     ? [...mergedLedgerRowsUnsorted].sort((a, b) => {
+        // Group by handler first so a Super Admin/Rakshina's merged view
+        // never interleaves Vinod/Ramesh/Saneel's entries purely by date
+        // (which read as "shuffled") - each handler's own block of rows
+        // still sorts by whatever column is picked below, just within their
+        // own group rather than across all three at once.
+        if (isSuperAdmin) {
+          const handlerCmp = handlerRank(a) - handlerRank(b);
+          if (handlerCmp !== 0) return handlerCmp;
+        }
         // Type isn't alphabetic or numeric - "Credit First"/"Debit First"
         // groups by that value instead of an Ascending/Descending order,
         // with newest-first-by-date as the tie-break within each group.
@@ -2064,8 +2089,8 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <th className="px-3 py-2.5">Vendor ID</th>
                     <th className="px-3 py-2.5"><SortHeader label="Type" sortKey="type" sort={sort} onSort={handleSort} labels={{ asc: 'Credit First', desc: 'Debit First' }} /></th>
                     <th className="px-3 py-2.5">Source</th>
-                    <th className="px-3 py-2.5 text-right">Amt Rec</th>
                     <th className="px-3 py-2.5 text-right">Cash Paid</th>
+                    <th className="px-3 py-2.5 text-right">Credit</th>
                     <th className="px-3 py-2.5 text-right">Balance Net</th>
                     <th className="px-3 py-2.5">Trip Sheet</th>
                     <th className="px-3 py-2.5">Remarks</th>
@@ -2131,10 +2156,10 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                             still can't retroactively change what an earlier
                             row already displayed (only rows from its own
                             date onward pick it up). */}
+                        <td className="px-3 py-2 text-right font-mono font-bold text-red-700 bg-red-50/20">₹{(v.cashPaid || 0).toLocaleString('en-IN')}</td>
                         <td className="px-3 py-2 text-right font-mono text-slate-600" title="The credit (Amount Received or Market Trip) currently active as of this entry - carries forward unchanged until the next credit lands">
                           {amtRecAt(v) > 0 ? `₹${amtRecAt(v).toLocaleString('en-IN')}` : <span className="text-slate-300">&mdash;</span>}
                         </td>
-                        <td className="px-3 py-2 text-right font-mono font-bold text-red-700 bg-red-50/20">₹{(v.cashPaid || 0).toLocaleString('en-IN')}</td>
                         {(() => {
                           const net = balanceNetAt(v);
                           return (
