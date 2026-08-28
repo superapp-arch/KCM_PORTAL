@@ -243,7 +243,7 @@ export default function Payments({
         <div>
           <h1 className="text-xl font-bold tracking-tight text-slate-900 font-sans flex items-center gap-2">
             <Landmark className="text-emerald-600 w-5 h-5" />
-            Payments
+            Diesel Payments
           </h1>
           <p className="text-xs text-slate-500 font-mono mt-1">
             Reconciling what's owed to each fuel bunk against however many payments actually settle it - Bunk Name/Location/Total Amount all pulled straight from Fuel Management, never re-typed here.
@@ -313,7 +313,7 @@ export default function Payments({
                       </td>
                       <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700 whitespace-nowrap">₹{amountPaid.toLocaleString('en-IN')}</td>
                       <td className="px-3 py-2.5 text-right font-mono font-black whitespace-nowrap">
-                        {balance > 0 ? <span className="text-rose-600">₹{balance.toLocaleString('en-IN')}</span> : <span className="text-slate-300">-</span>}
+                        {balance > 0 ? <span className="text-rose-600">-₹{balance.toLocaleString('en-IN')}</span> : <span className="text-slate-300">-</span>}
                       </td>
                       <td className="px-3 py-2.5 text-center">
                         {/* "Completed" once Balance reaches 0 (point 5) -
@@ -445,7 +445,7 @@ export default function Payments({
               {periodValid && (
                 <div className="p-2.5 bg-emerald-50 rounded-lg border border-emerald-100 flex items-center justify-between font-mono">
                   <span className="text-[9px] text-emerald-600 uppercase font-bold">{modalAmountPaid > 0 ? 'Balance' : 'Total Amount'}</span>
-                  <span className="text-sm font-black text-emerald-800">₹{(modalAmountPaid > 0 ? modalAmountDue : modalTotalAmount).toLocaleString('en-IN')}</span>
+                  <span className="text-sm font-black text-emerald-800">{modalAmountPaid > 0 ? '-' : ''}₹{(modalAmountPaid > 0 ? modalAmountDue : modalTotalAmount).toLocaleString('en-IN')}</span>
                 </div>
               )}
 

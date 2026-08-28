@@ -545,7 +545,7 @@ export default function Administration({
     { id: 'fleet', label: 'Fleet & Vehicles', icon: FileSpreadsheet, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fleet') },
     { id: 'fuel', label: 'Fuel Management', icon: Fuel, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fuel') },
     { id: 'mileage', label: 'Mileage Report', icon: Gauge, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('mileage') },
-    { id: 'payments', label: 'Payments', icon: CreditCard, iconColor: 'text-emerald-400', active: 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-300 border-l-4 border-emerald-500', visible: hasAccess('payments') },
+    { id: 'payments', label: 'Diesel Payments', icon: CreditCard, iconColor: 'text-emerald-400', active: 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-300 border-l-4 border-emerald-500', visible: hasAccess('payments') },
     { id: 'vendors', label: 'Vendor Management', icon: Building2, iconColor: 'text-indigo-400', active: 'bg-gradient-to-r from-indigo-500/20 to-sky-500/20 text-indigo-300 border-l-4 border-indigo-500', visible: hasAccess('vendors') },
     { id: 'hr', label: 'HR & Payroll', icon: Contact, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('hr') },
     { id: 'drivers', label: 'Driver Details', icon: Truck, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('drivers') },
@@ -585,7 +585,7 @@ export default function Administration({
             >
               <Menu className="w-4 h-4" />
             </button>
-            <span className="capitalize text-purple-800 font-extrabold">{activeTab.replace('-', ' ').replace('pettycash', 'petty cash')}</span>
+            <span className="capitalize text-purple-800 font-extrabold">{activeTab.replace('-', ' ').replace('pettycash', 'petty cash').replace('payments', 'diesel payments')}</span>
             <span className="text-slate-300">/</span>
             <span className="text-slate-900 font-black">KCM Enterprise Dashboard</span>
           </div>

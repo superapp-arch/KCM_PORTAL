@@ -3354,8 +3354,18 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       placeholder="₹ Paid"
                       value={cashPaid}
                       onChange={(e) => setCashPaid(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono font-bold text-teal-800 text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      className={`w-full border rounded-lg p-1.5 font-mono font-bold text-[11px] focus:outline-none focus:ring-1 ${
+                        cashPaid.trim() !== '' && !((parseFloat(cashPaid) || 0) > 0)
+                          ? 'bg-rose-50 border-rose-300 text-rose-800 focus:ring-rose-400'
+                          : 'bg-slate-50 border-slate-200 text-teal-800 focus:ring-teal-500'
+                      }`}
                     />
+                    {/* Live feedback the moment 0 (or anything non-positive) is
+                        typed - not just on submit (see handleSubmit's own
+                        matching check, which still blocks the actual save). */}
+                    {cashPaid.trim() !== '' && !((parseFloat(cashPaid) || 0) > 0) && (
+                      <p className="text-[9px] text-rose-600 font-bold mt-1">Please enter a valid Cash Paid amount.</p>
+                    )}
                   </div>
 
                   {/* Remarks */}
