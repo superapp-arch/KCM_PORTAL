@@ -529,11 +529,18 @@ export default function PettyCash({
   //   their own independent monthly count, so the same-looking Entry No can
   //   legitimately belong to two different handlers.
   const holderVouchersFor = (username: string) => vouchers.filter(v => (v.enteredBy || user.username) === username);
+  // 2026-08-28: Vinod gets the monthly format (and the per-holder numbering
+  // that comes with it) a few days early, ahead of the real Sep 1 cutover -
+  // see server.ts's own EARLY_MONTHLY_FORMAT_USERNAMES, which this mirrors
+  // exactly so this preview never disagrees with what the server actually
+  // assigns.
+  const EARLY_MONTHLY_FORMAT_USERNAMES = ['vinoda'];
   const pettyCashMonthlyPrefix = () => {
     const now = new Date();
     const year = now.getFullYear();
     const month = now.getMonth() + 1; // 1-12
-    return { year, month, prefix: `ENT-${year}-${String(month).padStart(2, '0')}`, useMonthlyFormat: year > 2026 || (year === 2026 && month >= 9) };
+    const useMonthlyFormat = year > 2026 || (year === 2026 && month >= 9) || EARLY_MONTHLY_FORMAT_USERNAMES.includes(user.username);
+    return { year, month, prefix: `ENT-${year}-${String(month).padStart(2, '0')}`, useMonthlyFormat };
   };
   // Vinod and Saneel each manually type that month's very first Entry No
   // (continuing their own physical cash-book numbering into the app) -

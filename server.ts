@@ -603,11 +603,15 @@ async function requireVendorManagementAccess(req: express.Request, res: express.
 //   real calendar month the entry is being saved in, not the voucher's own
 //   (possibly backdated) Date field - same "today's real date" convention
 //   the year prefix already used before this change.
-function nextPettyCashEntryNo(vouchers: PettyCashVoucher[]): string {
+// `forceMonthlyFormat` lets a caller (see EARLY_MONTHLY_FORMAT_USERNAMES
+// below) opt a specific holder into the Sep-2026 monthly format early, ahead
+// of the real calendar date - without it this is exactly the same real-date
+// check as always.
+function nextPettyCashEntryNo(vouchers: PettyCashVoucher[], forceMonthlyFormat = false): string {
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1; // 1-12
-  const useMonthlyFormat = year > 2026 || (year === 2026 && month >= 9);
+  const useMonthlyFormat = forceMonthlyFormat || year > 2026 || (year === 2026 && month >= 9);
   const existing = new Set(vouchers.map(v => (v.entryNo || '').toUpperCase()));
 
   if (useMonthlyFormat) {
@@ -669,11 +673,23 @@ function nextPettyCashEntryNo(vouchers: PettyCashVoucher[]): string {
 // left exactly as-is for the rest of August.
 const MANUAL_FIRST_ENTRY_USERNAMES = ['vinoda', 'saneel'];
 
-function pettyCashMonthlyPrefix(): { prefix: string; useMonthlyFormat: boolean } {
+// 2026-08-28 follow-up: Vinod wants manual-first-entry-then-sequential
+// active immediately, rather than waiting for the Sep 1 cutover 3 days out.
+// Scoped to just Vinod (not Saneel, who wasn't asked for) - switches him
+// onto the monthly format (and per-holder numbering that comes with it) a
+// few days early; everyone else stays on the shared flat format exactly as
+// before until the real date threshold hits. Extremely low collision risk
+// this month specifically (Vinod's own already-saved August vouchers are in
+// the 2600s/2700s flat range, nowhere near an "08"-prefixed monthly-shaped
+// number) - see isHolderFirstEntryThisMonth's own doc comment for the
+// (pre-existing, already-accepted) same ambiguity risk in future months.
+const EARLY_MONTHLY_FORMAT_USERNAMES = ['vinoda'];
+
+function pettyCashMonthlyPrefix(username?: string): { prefix: string; useMonthlyFormat: boolean } {
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1;
-  const useMonthlyFormat = year > 2026 || (year === 2026 && month >= 9);
+  const useMonthlyFormat = year > 2026 || (year === 2026 && month >= 9) || (!!username && EARLY_MONTHLY_FORMAT_USERNAMES.includes(username));
   return { prefix: `ENT-${year}-${String(month).padStart(2, '0')}`, useMonthlyFormat };
 }
 
@@ -2697,7 +2713,10 @@ async function startServer() {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const allVouchers = await getPettyCashVouchers();
       const enteredBy = sessionUser?.username || '';
-      const { prefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
+      // Passing enteredBy lets Vinod (EARLY_MONTHLY_FORMAT_USERNAMES) switch
+      // onto the monthly format a few days early - everyone else's
+      // useMonthlyFormat is still purely date-based, unaffected.
+      const { prefix, useMonthlyFormat } = pettyCashMonthlyPrefix(enteredBy);
       // Per-holder numbering (and the manual-first-entry option below) only
       // applies once the monthly format is active - the flat pre-Sep-2026
       // format keeps its one shared, already-calibrated sequence (see
@@ -2714,7 +2733,7 @@ async function startServer() {
         if (findDuplicateEntryNo(scopedVouchers, manual)) return res.status(409).json({ error: `Entry No. ${manual} already exists in your own entries.` });
         entryNo = manual;
       } else {
-        entryNo = nextPettyCashEntryNo(scopedVouchers);
+        entryNo = nextPettyCashEntryNo(scopedVouchers, useMonthlyFormat);
         if (findDuplicateEntryNo(scopedVouchers, entryNo)) {
           return res.status(409).json({ error: `Entry No. ${entryNo} already exists.` });
         }
