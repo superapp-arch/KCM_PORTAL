@@ -37,6 +37,58 @@ export function countSundaysInMonth(yyyyMm: string): number {
   return count;
 }
 
+// In Time/Closure Time -> total shift duration in hours, for a 12Hr
+// deployment's Add Hour auto-calc (see WarehouseDetails.tsx). Both times are
+// "HH:MM" text paired with their own AM/PM (see WarehouseEntry.inTimePeriod/
+// closureTimePeriod) - converted to minutes-since-midnight, then the
+// duration wraps past midnight when Closure lands earlier in the clock than
+// In (e.g. 08:00 PM in -> 08:00 AM out = a 12h overnight shift, not -12h).
+// Returns null when either time is missing/unparsable, so the caller can
+// leave Add Hour alone rather than zeroing it out on an incomplete form.
+function timeToMinutes(raw: string, period: 'AM' | 'PM' | undefined): number | null {
+  const m = (raw || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  if (h < 1 || h > 12 || min < 0 || min > 59) return null;
+  if (period === 'PM' && h !== 12) h += 12;
+  if (period === 'AM' && h === 12) h = 0;
+  return h * 60 + min;
+}
+
+// Converts a legacy 24-hour "HH:MM" (the only format inTime/closureTime
+// ever stored before inTimePeriod/closureTimePeriod existed) into the new
+// 12-hour text + AM/PM pair - fully unambiguous, not a guess: 24-hour format
+// already pins down AM/PM exactly (00 = 12 AM, 01-11 = AM, 12 = 12 PM,
+// 13-23 = PM). Used only when loading an entry that predates this field, so
+// its time still displays/computes correctly instead of showing a raw
+// value like "20:00" next to an AM/PM toggle that doesn't match it. Returns
+// null for anything that isn't a plain HH:MM (already-12-hour values from a
+// newer entry never reach this, since those always carry their own period).
+export function legacyTimeTo12Hour(raw: string): { time: string; period: 'AM' | 'PM' } | null {
+  const m = (raw || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = parseInt(m[1], 10);
+  const min = m[2];
+  if (h < 0 || h > 23) return null;
+  if (h === 0) return { time: `12:${min}`, period: 'AM' };
+  if (h === 12) return { time: `12:${min}`, period: 'PM' };
+  if (h > 12) return { time: `${String(h - 12).padStart(2, '0')}:${min}`, period: 'PM' };
+  return { time: `${String(h).padStart(2, '0')}:${min}`, period: 'AM' };
+}
+
+export function computeShiftDurationHours(
+  inTimeStr: string, inPeriod: 'AM' | 'PM' | undefined,
+  closureTimeStr: string, closurePeriod: 'AM' | 'PM' | undefined
+): number | null {
+  const start = timeToMinutes(inTimeStr, inPeriod);
+  const end = timeToMinutes(closureTimeStr, closurePeriod);
+  if (start == null || end == null) return null;
+  let diff = end - start;
+  if (diff <= 0) diff += 24 * 60; // crossed midnight
+  return round2(diff / 60);
+}
+
 // Working Days auto-fill from the calendar - total days in the month, minus
 // Sundays (if the office wants that deducted) and any manually-counted
 // holidays. Floored at 1 so a Base Rate divide-by-zero can never happen, per

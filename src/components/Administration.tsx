@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
+import { DriverSalaryAdvanceVoucherSlim } from '../utils/driverPettyCashAdvance';
 import {
   User as UserType,
   Vehicle,
@@ -11,6 +12,7 @@ import {
   StaffEmployee,
   DashboardNotification,
   WarehouseEntry,
+  WarehouseRateOverride,
   MileageReport,
   FuelVendor,
   VehicleMileage,
@@ -24,6 +26,7 @@ import {
   MaintenanceServiceStation,
   BreakdownReport,
   VehicleServiceSchedule,
+  VehicleMaintenanceReference,
   TireBrand,
   TireRecord,
   BatteryRecord,
@@ -137,6 +140,9 @@ interface AdministrationProps {
   employees: StaffEmployee[];
   notifications: DashboardNotification[];
   warehouseEntries: WarehouseEntry[];
+  warehouseRateOverrides: WarehouseRateOverride[];
+  onSaveWarehouseRateOverride: (override: WarehouseRateOverride) => Promise<void>;
+  onDeleteWarehouseRateOverride: (id: string) => Promise<void>;
   onUpdateVehicle: (vehicle: Vehicle) => Promise<void>;
   onDeleteVehicle: (id: string) => Promise<void>;
   onAddFuelLog: (log: Omit<FuelLog, 'id'>) => Promise<void>;
@@ -161,6 +167,8 @@ interface AdministrationProps {
   onDeleteBreakdownReport: (id: string) => Promise<void>;
   vehicleServiceSchedules: VehicleServiceSchedule[];
   onSaveVehicleServiceSchedule: (schedule: VehicleServiceSchedule) => Promise<void>;
+  vehicleMaintenanceReferences: VehicleMaintenanceReference[];
+  onSaveVehicleMaintenanceReference: (record: VehicleMaintenanceReference) => Promise<void>;
   tireBrands: TireBrand[];
   onAddTireBrand: (name: string) => Promise<void>;
   tireRecords: TireRecord[];
@@ -225,6 +233,7 @@ interface AdministrationProps {
   onAddDriver: (driver: Omit<DriverEmployee, 'id'> & { id: string }) => Promise<void>;
   onUpdateDriver: (id: string, driver: Partial<DriverEmployee>) => Promise<void>;
   onDeleteDriver: (id: string) => Promise<void>;
+  driverPettyCashAdvanceVouchers: DriverSalaryAdvanceVoucherSlim[];
   vehicleLoans: VehicleLoan[];
   onAddVehicleLoan: (loan: Omit<VehicleLoan, 'id'> & { id: string }) => Promise<void>;
   onUpdateVehicleLoan: (id: string, loan: Partial<VehicleLoan>) => Promise<void>;
@@ -264,6 +273,8 @@ export default function Administration({
   onDeleteMaintenanceRecord,
   vehicleServiceSchedules,
   onSaveVehicleServiceSchedule,
+  vehicleMaintenanceReferences,
+  onSaveVehicleMaintenanceReference,
   tireBrands,
   onAddTireBrand,
   tireRecords,
@@ -297,6 +308,9 @@ export default function Administration({
   onResolveNotification,
   onSendComplianceDigestNow,
   warehouseEntries,
+  warehouseRateOverrides,
+  onSaveWarehouseRateOverride,
+  onDeleteWarehouseRateOverride,
   onAddWarehouseEntry,
   onUpdateWarehouseEntry,
   onDeleteWarehouseEntry,
@@ -334,6 +348,7 @@ export default function Administration({
   onAddDriver,
   onUpdateDriver,
   onDeleteDriver,
+  driverPettyCashAdvanceVouchers,
   vehicleLoans,
   onAddVehicleLoan,
   onUpdateVehicleLoan,
@@ -1024,6 +1039,8 @@ export default function Administration({
               onDeleteBreakdownReport={onDeleteBreakdownReport}
               vehicleServiceSchedules={vehicleServiceSchedules}
               onSaveVehicleServiceSchedule={onSaveVehicleServiceSchedule}
+              vehicleMaintenanceReferences={vehicleMaintenanceReferences}
+              onSaveVehicleMaintenanceReference={onSaveVehicleMaintenanceReference}
               tireBrands={tireBrands}
               onAddTireBrand={onAddTireBrand}
               tireRecords={tireRecords}
@@ -1097,6 +1114,7 @@ export default function Administration({
               onAddDriver={onAddDriver}
               onUpdateDriver={onUpdateDriver}
               onDeleteDriver={onDeleteDriver}
+              driverPettyCashAdvanceVouchers={driverPettyCashAdvanceVouchers}
             />
           )}
 
@@ -1132,6 +1150,9 @@ export default function Administration({
               onAddEntry={onAddWarehouseEntry}
               onUpdateEntry={onUpdateWarehouseEntry}
               onDeleteEntry={onDeleteWarehouseEntry}
+              warehouseRateOverrides={warehouseRateOverrides}
+              onSaveWarehouseRateOverride={onSaveWarehouseRateOverride}
+              onDeleteWarehouseRateOverride={onDeleteWarehouseRateOverride}
             />
           )}
 

@@ -6,6 +6,7 @@ import {
   authFetch, registerSessionExpiredHandler, resetSessionExpiredNotification,
   registerBackendUnreachableHandler, resetBackendUnreachableNotification, installBackendUnreachableGuard
 } from './authFetch';
+import { DriverSalaryAdvanceVoucherSlim } from './utils/driverPettyCashAdvance';
 import {
   User,
   Vehicle,
@@ -30,6 +31,8 @@ import {
   MaintenanceServiceStation,
   BreakdownReport,
   VehicleServiceSchedule,
+  VehicleMaintenanceReference,
+  WarehouseRateOverride,
   TireBrand,
   TireRecord,
   BatteryRecord,
@@ -63,6 +66,9 @@ export default function App() {
   const [maintenanceServiceStations, setMaintenanceServiceStations] = useState<MaintenanceServiceStation[]>([]);
   const [breakdownReports, setBreakdownReports] = useState<BreakdownReport[]>([]);
   const [vehicleServiceSchedules, setVehicleServiceSchedules] = useState<VehicleServiceSchedule[]>([]);
+  const [vehicleMaintenanceReferences, setVehicleMaintenanceReferences] = useState<VehicleMaintenanceReference[]>([]);
+  const [driverPettyCashAdvanceVouchers, setDriverPettyCashAdvanceVouchers] = useState<DriverSalaryAdvanceVoucherSlim[]>([]);
+  const [warehouseRateOverrides, setWarehouseRateOverrides] = useState<WarehouseRateOverride[]>([]);
   const [tireBrands, setTireBrands] = useState<TireBrand[]>([]);
   const [tireRecords, setTireRecords] = useState<TireRecord[]>([]);
   const [batteryRecords, setBatteryRecords] = useState<BatteryRecord[]>([]);
@@ -133,6 +139,9 @@ export default function App() {
         maintenanceServiceStationsRes,
         breakdownReportsRes,
         vehicleServiceSchedulesRes,
+        vehicleMaintenanceReferencesRes,
+        driverPettyCashAdvanceVouchersRes,
+        warehouseRateOverridesRes,
         tireBrandsRes,
         tireRecordsRes,
         batteryRecordsRes,
@@ -164,6 +173,9 @@ export default function App() {
         fetch('/api/maintenance-service-stations'),
         fetch('/api/breakdown-reports'),
         fetch('/api/vehicle-service-schedules'),
+        fetch('/api/vehicle-maintenance-reference'),
+        authFetch('/api/drivers/petty-cash-advances'),
+        authFetch('/api/warehouse-rate-overrides'),
         fetch('/api/tire-brands'),
         fetch('/api/tire-records'),
         fetch('/api/battery-records'),
@@ -196,6 +208,9 @@ export default function App() {
       if (maintenanceServiceStationsRes.ok) setMaintenanceServiceStations(await maintenanceServiceStationsRes.json());
       if (breakdownReportsRes.ok) setBreakdownReports(await breakdownReportsRes.json());
       if (vehicleServiceSchedulesRes.ok) setVehicleServiceSchedules(await vehicleServiceSchedulesRes.json());
+      if (vehicleMaintenanceReferencesRes.ok) setVehicleMaintenanceReferences(await vehicleMaintenanceReferencesRes.json());
+      if (driverPettyCashAdvanceVouchersRes.ok) setDriverPettyCashAdvanceVouchers(await driverPettyCashAdvanceVouchersRes.json());
+      if (warehouseRateOverridesRes.ok) setWarehouseRateOverrides(await warehouseRateOverridesRes.json());
       if (tireBrandsRes.ok) setTireBrands(await tireBrandsRes.json());
       if (tireRecordsRes.ok) setTireRecords(await tireRecordsRes.json());
       if (batteryRecordsRes.ok) setBatteryRecords(await batteryRecordsRes.json());
@@ -417,6 +432,46 @@ export default function App() {
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to save vehicle service schedule.');
+    }
+  };
+
+  const handleSaveVehicleMaintenanceReference = async (record: VehicleMaintenanceReference) => {
+    const res = await fetch('/api/vehicle-maintenance-reference', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save vehicle maintenance reference data.');
+    }
+  };
+
+  const handleSaveWarehouseRateOverride = async (override: WarehouseRateOverride) => {
+    const res = await authFetch('/api/warehouse-rate-overrides', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(override)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save warehouse rate override.');
+    }
+  };
+
+  const handleDeleteWarehouseRateOverride = async (id: string) => {
+    const res = await authFetch(`/api/warehouse-rate-overrides/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to reset warehouse rate override.');
     }
   };
 
@@ -1307,6 +1362,9 @@ export default function App() {
         employees={employees}
         notifications={notifications}
         warehouseEntries={warehouseEntries}
+        warehouseRateOverrides={warehouseRateOverrides}
+        onSaveWarehouseRateOverride={handleSaveWarehouseRateOverride}
+        onDeleteWarehouseRateOverride={handleDeleteWarehouseRateOverride}
         mileageReports={mileageReports}
         dieselBunkAccounts={dieselBunkAccounts}
         onSaveDieselBunkAccount={handleSaveDieselBunkAccount}
@@ -1339,6 +1397,8 @@ export default function App() {
         onDeleteMaintenanceRecord={handleDeleteMaintenanceRecord}
         vehicleServiceSchedules={vehicleServiceSchedules}
         onSaveVehicleServiceSchedule={handleSaveVehicleServiceSchedule}
+        vehicleMaintenanceReferences={vehicleMaintenanceReferences}
+        onSaveVehicleMaintenanceReference={handleSaveVehicleMaintenanceReference}
         tireBrands={tireBrands}
         onAddTireBrand={handleAddTireBrand}
         tireRecords={tireRecords}
@@ -1393,6 +1453,7 @@ export default function App() {
         onAddDriver={handleAddDriver}
         onUpdateDriver={handleUpdateDriver}
         onDeleteDriver={handleDeleteDriver}
+        driverPettyCashAdvanceVouchers={driverPettyCashAdvanceVouchers}
         vehicleLoans={vehicleLoans}
         onAddVehicleLoan={handleAddVehicleLoan}
         onUpdateVehicleLoan={handleUpdateVehicleLoan}

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
-import { WarehouseEntry, VehicleDocument, Vehicle, User, Vendor } from '../types';
+import { WarehouseEntry, VehicleDocument, Vehicle, User, Vendor, WarehouseRateOverride } from '../types';
 import { VEHICLE_CATEGORIES } from '../utils/vehicleCycleDefaults';
 import { 
   Warehouse, 
@@ -25,7 +25,7 @@ import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
 import {
   FUEL_COST_PERCENT, KM_SLAB_SUGGESTIONS, formatINR, round2, daysInMonth, countSundaysInMonth,
-  computeAutoWorkingDays, resolveWorkingDays, computeWarehouseRates
+  computeAutoWorkingDays, resolveWorkingDays, computeWarehouseRates, computeShiftDurationHours, legacyTimeTo12Hour
 } from '../utils/warehouseRates';
 import { lookupScheduledRate, rateGroupForWarehouseName } from '../utils/warehouseRateMatrix';
 import {
@@ -67,6 +67,13 @@ interface WarehouseDetailsProps {
   onAddEntry: (entry: Omit<WarehouseEntry, 'id'>) => Promise<void>;
   onUpdateEntry: (id: string, entry: Partial<WarehouseEntry>) => Promise<void>;
   onDeleteEntry: (id: string) => Promise<void>;
+  // Rates tab edit/add (2026-08-29, Super Admin only - see RatesSummary.tsx)
+  // - purely additive on top of the fixed in-code rate tables, threaded
+  // into every lookup* call below so an override actually takes effect in
+  // the live deployment form's auto-fill, not just the read-only Rates view.
+  warehouseRateOverrides: WarehouseRateOverride[];
+  onSaveWarehouseRateOverride: (override: WarehouseRateOverride) => Promise<void>;
+  onDeleteWarehouseRateOverride: (id: string) => Promise<void>;
 }
 
 export default function WarehouseDetails({
@@ -76,7 +83,10 @@ export default function WarehouseDetails({
   vendors,
   onAddEntry,
   onUpdateEntry,
-  onDeleteEntry
+  onDeleteEntry,
+  warehouseRateOverrides,
+  onSaveWarehouseRateOverride,
+  onDeleteWarehouseRateOverride
 }: WarehouseDetailsProps) {
   
   // Search & Filters State
@@ -121,7 +131,9 @@ export default function WarehouseDetails({
   const [openingKm, setOpeningKm] = useState<number>(0);
   const [closingKm, setClosingKm] = useState<number>(0);
   const [inTime, setInTime] = useState('08:00');
-  const [closureTime, setClosureTime] = useState('20:00');
+  const [inTimePeriod, setInTimePeriod] = useState<'AM' | 'PM'>('AM');
+  const [closureTime, setClosureTime] = useState('08:00');
+  const [closureTimePeriod, setClosureTimePeriod] = useState<'AM' | 'PM'>('PM');
   const [hoursDaysAsPerContract, setHoursDaysAsPerContract] = useState<number>(1);
   // Retired - overtime is now captured via addHour below instead of a
   // separate Yes/No field (see WarehouseEntry.overtimeVehicle).
@@ -168,7 +180,9 @@ export default function WarehouseDetails({
   const [editOpeningKm, setEditOpeningKm] = useState<number>(0);
   const [editClosingKm, setEditClosingKm] = useState<number>(0);
   const [editInTime, setEditInTime] = useState('');
+  const [editInTimePeriod, setEditInTimePeriod] = useState<'AM' | 'PM'>('AM');
   const [editClosureTime, setEditClosureTime] = useState('');
+  const [editClosureTimePeriod, setEditClosureTimePeriod] = useState<'AM' | 'PM'>('PM');
   const [editHoursDaysAsPerContract, setEditHoursDaysAsPerContract] = useState<number>(1);
   // Retired - see overtimeVehicle above.
   const [editOvertimeVehicle] = useState('');
@@ -220,14 +234,14 @@ export default function WarehouseDetails({
   // match changes, so switching Warehouse Name/Vehicle Type/KM Slab always
   // reflects the right rate.
   const warehouseGroup = rateGroupForWarehouseName(warehouseName) || '';
-  const matchedScheduledRate = fixedHours === 12 ? lookupScheduledRate(warehouseGroup, vehicleType, kmSlabNumber) : null;
+  const matchedScheduledRate = fixedHours === 12 ? lookupScheduledRate(warehouseGroup, vehicleType, kmSlabNumber, warehouseRateOverrides) : null;
   // 24Hr Dedicated (Regular, Dry vehicles, BLR only for now) and 24Hr Reefer
   // & Walkes (Regular, by Location + Vehicle) - same auto-fill pattern as
   // the 12Hr lookup above, see utils/warehouseRateMatrix24hr.ts. Neither
   // applies to Ad-hoc (flat route lookup instead, see matchedAdHocRate).
   const isRegular24 = fixedHours === 24 && deploymentType === 'regular';
-  const matched24hrDedicatedRate = isRegular24 ? lookup24hrDedicatedRate(warehouseName, vehicleType, vehicleCategory) : null;
-  const matchedReeferWalkesRate = (isRegular24 && !matched24hrDedicatedRate) ? lookupReeferWalkesRate(warehouseName, vehicleType, vehicleCategory) : null;
+  const matched24hrDedicatedRate = isRegular24 ? lookup24hrDedicatedRate(warehouseName, vehicleType, vehicleCategory, warehouseRateOverrides) : null;
+  const matchedReeferWalkesRate = (isRegular24 && !matched24hrDedicatedRate) ? lookupReeferWalkesRate(warehouseName, vehicleType, vehicleCategory, warehouseRateOverrides) : null;
   useEffect(() => {
     if (matchedScheduledRate != null) setScheduledRate(matchedScheduledRate);
   }, [matchedScheduledRate]);
@@ -263,6 +277,23 @@ export default function WarehouseDetails({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fixedHours, kmUtilised, kmSlabNumber, workingDays]);
 
+  // 12Hr Add Hour auto-calc from In Time/Closure Time - a 12Hr trip is
+  // booked for exactly 12 hours, so if the actual In->Closure shift runs
+  // longer than that (crossing midnight counts as one continuous shift, see
+  // computeShiftDurationHours), the excess auto-fills Add Hour, which then
+  // flows into Extra Hour Amount = Add Hour x Rate/Extra Hour exactly like
+  // it already did for a manually-typed Add Hour. Still a plain editable
+  // field afterward - same "auto-fills, still overridable" pattern Add KM
+  // above uses, just live off the times instead of the KM figures. Never
+  // applies to a 24Hr deployment (no shift start/end at all there).
+  useEffect(() => {
+    if (fixedHours !== 12) return;
+    const duration = computeShiftDurationHours(inTime, inTimePeriod, closureTime, closureTimePeriod);
+    if (duration == null) return;
+    setAddHour(Math.max(0, round2(duration - 12)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fixedHours, inTime, inTimePeriod, closureTime, closureTimePeriod]);
+
   // Auto-calculated fields for edit modal
   const editKmUtilised = roundToWhole(Math.max(0, editClosingKm - editOpeningKm));
   const editWorkingDaysAuto = computeAutoWorkingDays(editWorkingMonth, editDeductSundays, editHolidaysCount);
@@ -279,10 +310,10 @@ export default function WarehouseDetails({
   });
   const { baseRate: editBaseRate, fuelCost: editFuelCost, extraKmAmount: editAdditionalKmCost, extraHourAmount: editAdditionalHourCost, grandTotal: editGrandTotal } = editRates;
   const editWarehouseGroup = rateGroupForWarehouseName(editWarehouseName) || '';
-  const editMatchedScheduledRate = editFixedHours === 12 ? lookupScheduledRate(editWarehouseGroup, editVehicleType, editKmSlabNumber) : null;
+  const editMatchedScheduledRate = editFixedHours === 12 ? lookupScheduledRate(editWarehouseGroup, editVehicleType, editKmSlabNumber, warehouseRateOverrides) : null;
   const editIsRegular24 = editFixedHours === 24 && editDeploymentType === 'regular';
-  const editMatched24hrDedicatedRate = editIsRegular24 ? lookup24hrDedicatedRate(editWarehouseName, editVehicleType, editVehicleCategory) : null;
-  const editMatchedReeferWalkesRate = (editIsRegular24 && !editMatched24hrDedicatedRate) ? lookupReeferWalkesRate(editWarehouseName, editVehicleType, editVehicleCategory) : null;
+  const editMatched24hrDedicatedRate = editIsRegular24 ? lookup24hrDedicatedRate(editWarehouseName, editVehicleType, editVehicleCategory, warehouseRateOverrides) : null;
+  const editMatchedReeferWalkesRate = (editIsRegular24 && !editMatched24hrDedicatedRate) ? lookupReeferWalkesRate(editWarehouseName, editVehicleType, editVehicleCategory, warehouseRateOverrides) : null;
   useEffect(() => {
     if (editMatchedScheduledRate != null) setEditScheduledRate(editMatchedScheduledRate);
   }, [editMatchedScheduledRate]);
@@ -431,7 +462,9 @@ export default function WarehouseDetails({
         openingKm,
         closingKm,
         inTime,
+        inTimePeriod: fixedHours === 24 ? undefined : inTimePeriod,
         closureTime,
+        closureTimePeriod: fixedHours === 24 ? undefined : closureTimePeriod,
         kmUtilised,
         hoursDaysAsPerContract,
         overtimeVehicle: overtimeVehicle.trim(),
@@ -545,8 +578,26 @@ export default function WarehouseDetails({
     setEditKmSlab(entry.kmSlab || '');
     setEditOpeningKm(entry.openingKm);
     setEditClosingKm(entry.closingKm);
-    setEditInTime(entry.inTime);
-    setEditClosureTime(entry.closureTime);
+    // inTimePeriod/closureTimePeriod are absent on any entry saved before
+    // they existed - convert the legacy plain 24-hour value once on load
+    // (fully unambiguous, see legacyTimeTo12Hour) rather than showing a raw
+    // value like "20:00" next to an AM/PM toggle that wouldn't match it.
+    if (entry.inTimePeriod) {
+      setEditInTime(entry.inTime);
+      setEditInTimePeriod(entry.inTimePeriod);
+    } else {
+      const converted = legacyTimeTo12Hour(entry.inTime);
+      setEditInTime(converted ? converted.time : entry.inTime);
+      setEditInTimePeriod(converted ? converted.period : 'AM');
+    }
+    if (entry.closureTimePeriod) {
+      setEditClosureTime(entry.closureTime);
+      setEditClosureTimePeriod(entry.closureTimePeriod);
+    } else {
+      const converted = legacyTimeTo12Hour(entry.closureTime);
+      setEditClosureTime(converted ? converted.time : entry.closureTime);
+      setEditClosureTimePeriod(converted ? converted.period : 'PM');
+    }
     setEditHoursDaysAsPerContract(entry.hoursDaysAsPerContract);
     setEditExtraKm(entry.extraKm || 0);
     setEditAddHour(entry.addHour || 0);
@@ -593,7 +644,9 @@ export default function WarehouseDetails({
         openingKm: Number(editOpeningKm),
         closingKm: Number(editClosingKm),
         inTime: editInTime,
+        inTimePeriod: editFixedHours === 24 ? undefined : editInTimePeriod,
         closureTime: editClosureTime,
+        closureTimePeriod: editFixedHours === 24 ? undefined : editClosureTimePeriod,
         kmUtilised: editKmUtilised,
         hoursDaysAsPerContract: Number(editHoursDaysAsPerContract),
         overtimeVehicle: editOvertimeVehicle.trim(),
@@ -732,8 +785,8 @@ export default function WarehouseDetails({
       'Opening KM': e.openingKm,
       'Closing KM': e.closingKm,
       'KM Utilised': e.kmUtilised,
-      'In Time': e.inTime,
-      'Closure Time': e.closureTime,
+      'In Time': e.inTime ? `${e.inTime}${e.inTimePeriod ? ` ${e.inTimePeriod}` : ''}` : e.inTime,
+      'Closure Time': e.closureTime ? `${e.closureTime}${e.closureTimePeriod ? ` ${e.closureTimePeriod}` : ''}` : e.closureTime,
       'Contract Period (Days/Hrs)': e.hoursDaysAsPerContract,
       'Overtime Vehicle': e.overtimeVehicle,
       'Extra KM': e.extraKm,
@@ -950,8 +1003,10 @@ export default function WarehouseDetails({
   // Rates tab is a completely separate, much smaller return - safer than
   // threading a conditional through the large Deployments JSX below (every
   // hook above has already run unconditionally by this point, so an early
-  // return here doesn't violate the Rules of Hooks). See
-  // components/warehouse/RatesSummary.tsx for why this is read-only for now.
+  // return here doesn't violate the Rules of Hooks). Super Admins can edit or
+  // add rates here (see components/warehouse/RatesSummary.tsx) - the 12Hr
+  // Scheduled/Extra, 24Hr Dedicated and 24Hr Reefer & Walkes tables are
+  // editable; Ad-hoc Route and Local Adhoc remain read-only for now.
   if (moduleTab === 'rates') {
     return (
       <div className="space-y-6" id="warehouse-details-root">
@@ -969,7 +1024,12 @@ export default function WarehouseDetails({
           </div>
           {moduleTabBar}
         </div>
-        <RatesSummary />
+        <RatesSummary
+          overrides={warehouseRateOverrides}
+          isSuperAdmin={user.department === 'super_admin'}
+          onSaveOverride={onSaveWarehouseRateOverride}
+          onDeleteOverride={onDeleteWarehouseRateOverride}
+        />
       </div>
     );
   }
@@ -1303,27 +1363,45 @@ export default function WarehouseDetails({
             <div className="grid grid-cols-4 gap-1.5">
               <div className="col-span-1">
                 <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">In Time{fixedHours === 24 ? ' (N/A)' : ''}</label>
-                <input
-                  type="text"
-                  placeholder="08:00"
-                  value={inTime}
-                  readOnly={fixedHours === 24}
-                  onChange={(e) => setInTime(e.target.value)}
-                  title={fixedHours === 24 ? "24Hr dedicated vehicles don't have a shift start time" : undefined}
-                  className={`w-full border border-purple-100 rounded-lg p-1 text-center font-mono focus:outline-none text-xs ${fixedHours === 24 ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`}
-                />
+                <div className="flex gap-0.5">
+                  <input
+                    type="text"
+                    placeholder="08:00"
+                    value={inTime}
+                    readOnly={fixedHours === 24}
+                    onChange={(e) => setInTime(e.target.value)}
+                    title={fixedHours === 24 ? "24Hr dedicated vehicles don't have a shift start time" : undefined}
+                    className={`w-full border border-purple-100 rounded-lg p-1 text-center font-mono focus:outline-none text-xs ${fixedHours === 24 ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`}
+                  />
+                  {fixedHours !== 24 && (
+                    <button type="button" onClick={() => setInTimePeriod(p => p === 'AM' ? 'PM' : 'AM')}
+                      title="Toggle AM/PM"
+                      className="shrink-0 px-1.5 rounded-lg border border-purple-100 bg-white text-[9px] font-black text-purple-700 hover:bg-purple-50 cursor-pointer">
+                      {inTimePeriod}
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="col-span-1">
                 <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Closure{fixedHours === 24 ? ' (N/A)' : ''}</label>
-                <input
-                  type="text"
-                  placeholder="20:00"
-                  value={closureTime}
-                  readOnly={fixedHours === 24}
-                  onChange={(e) => setClosureTime(e.target.value)}
-                  title={fixedHours === 24 ? "24Hr dedicated vehicles don't have a shift end time" : undefined}
-                  className={`w-full border border-purple-100 rounded-lg p-1 text-center font-mono focus:outline-none text-xs ${fixedHours === 24 ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`}
-                />
+                <div className="flex gap-0.5">
+                  <input
+                    type="text"
+                    placeholder="08:00"
+                    value={closureTime}
+                    readOnly={fixedHours === 24}
+                    onChange={(e) => setClosureTime(e.target.value)}
+                    title={fixedHours === 24 ? "24Hr dedicated vehicles don't have a shift end time" : undefined}
+                    className={`w-full border border-purple-100 rounded-lg p-1 text-center font-mono focus:outline-none text-xs ${fixedHours === 24 ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`}
+                  />
+                  {fixedHours !== 24 && (
+                    <button type="button" onClick={() => setClosureTimePeriod(p => p === 'AM' ? 'PM' : 'AM')}
+                      title="Toggle AM/PM"
+                      className="shrink-0 px-1.5 rounded-lg border border-purple-100 bg-white text-[9px] font-black text-purple-700 hover:bg-purple-50 cursor-pointer">
+                      {closureTimePeriod}
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="col-span-1">
                 <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide" title={fixedHours === 12 ? 'Auto = this entry\'s KM Utilised - (Km Slab / Working Days) - can go negative on a lighter day. Still editable by hand.' : 'km run beyond the KM Slab'}>Add KM</label>
@@ -1471,18 +1549,8 @@ export default function WarehouseDetails({
                         onChange={(e) => setWorkingDaysOverride(e.target.value ? Number(e.target.value) : null)}
                         className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
                     </div>
-                    <div className="flex items-center gap-3">
-                      <label className="flex items-center gap-1 text-[9px] font-semibold text-slate-600 cursor-pointer">
-                        <input type="checkbox" checked={deductSundays} onChange={(e) => setDeductSundays(e.target.checked)} /> Deduct Sundays
-                      </label>
-                      <div className="flex items-center gap-1">
-                        <span className="text-[9px] font-semibold text-slate-600">Holidays</span>
-                        <input type="number" min={0} value={holidaysCount || ''} onChange={(e) => setHolidaysCount(Number(e.target.value) || 0)}
-                          className="w-14 bg-slate-50 border border-purple-100 rounded p-1 text-[10px] font-bold text-slate-800" />
-                      </div>
-                    </div>
                     <p className="text-[9px] text-slate-400 font-mono">
-                      Auto: {workingDaysAuto} days ({daysInMonth(workingMonth)} in month{deductSundays ? ` - ${countSundaysInMonth(workingMonth)} Sundays` : ''}{holidaysCount ? ` - ${holidaysCount} holidays` : ''})
+                      Auto: {workingDaysAuto} days ({daysInMonth(workingMonth)} in month)
                     </p>
                   </div>
 
@@ -1777,6 +1845,7 @@ export default function WarehouseDetails({
                       <th className="py-3 px-3">Warehouse / City</th>
                       <th className="py-3 px-3">Vehicle Details</th>
                       <th className="py-3 px-3">Deployment</th>
+                      <th className="py-3 px-3 text-center">Fixed Hrs</th>
                       <th className="py-3 px-3">KM Stats</th>
                       <th className="py-3 px-3">In/Out Times</th>
                       <th className="py-3 px-3">POD Info</th>
@@ -1813,13 +1882,20 @@ export default function WarehouseDetails({
                           </span>
                           <div className="text-[10px] font-mono text-slate-400 font-semibold mt-1">Slab: {e.kmSlab || 'N/A'}</div>
                         </td>
+                        <td className="py-3.5 px-3 text-center">
+                          <span className={`inline-block px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                            e.fixedHours === 24 ? 'bg-indigo-100 text-indigo-700' : 'bg-cyan-100 text-cyan-700'
+                          }`}>
+                            {e.fixedHours || 12} Hrs
+                          </span>
+                        </td>
                         <td className="py-3.5 px-3 font-mono">
                           <div className="text-slate-500 text-[10px]">C: {e.closingKm} • O: {e.openingKm}</div>
                           <div className="text-emerald-700 font-black text-xs">Utilised: {e.kmUtilised} KM</div>
                         </td>
                         <td className="py-3.5 px-3 font-mono text-slate-700">
-                          <div>In: {e.inTime || '-'}</div>
-                          <div>Out: {e.closureTime || '-'}</div>
+                          <div>In: {e.inTime ? `${e.inTime}${e.inTimePeriod ? ` ${e.inTimePeriod}` : ''}` : '-'}</div>
+                          <div>Out: {e.closureTime ? `${e.closureTime}${e.closureTimePeriod ? ` ${e.closureTimePeriod}` : ''}` : '-'}</div>
                         </td>
                         <td className="py-3.5 px-3">
                           {e.pod ? (
@@ -2102,25 +2178,43 @@ export default function WarehouseDetails({
                 <div className="grid grid-cols-2 gap-1 font-sans">
                   <div>
                     <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wide mb-1">In Time{editFixedHours === 24 ? ' (N/A)' : ''}</label>
-                    <input
-                      type="text"
-                      value={editInTime}
-                      readOnly={editFixedHours === 24}
-                      onChange={(e) => setEditInTime(e.target.value)}
-                      title={editFixedHours === 24 ? "24Hr dedicated vehicles don't have a shift start time" : undefined}
-                      className={`w-full border border-purple-100 rounded-lg p-1.5 font-mono ${editFixedHours === 24 ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`}
-                    />
+                    <div className="flex gap-0.5">
+                      <input
+                        type="text"
+                        value={editInTime}
+                        readOnly={editFixedHours === 24}
+                        onChange={(e) => setEditInTime(e.target.value)}
+                        title={editFixedHours === 24 ? "24Hr dedicated vehicles don't have a shift start time" : undefined}
+                        className={`w-full border border-purple-100 rounded-lg p-1.5 font-mono ${editFixedHours === 24 ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`}
+                      />
+                      {editFixedHours !== 24 && (
+                        <button type="button" onClick={() => setEditInTimePeriod(p => p === 'AM' ? 'PM' : 'AM')}
+                          title="Toggle AM/PM"
+                          className="shrink-0 px-1.5 rounded-lg border border-purple-100 bg-white text-[9px] font-black text-purple-700 hover:bg-purple-50 cursor-pointer">
+                          {editInTimePeriod}
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div>
                     <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wide mb-1">Closure{editFixedHours === 24 ? ' (N/A)' : ''}</label>
-                    <input
-                      type="text"
-                      value={editClosureTime}
-                      readOnly={editFixedHours === 24}
-                      onChange={(e) => setEditClosureTime(e.target.value)}
-                      title={editFixedHours === 24 ? "24Hr dedicated vehicles don't have a shift end time" : undefined}
-                      className={`w-full border border-purple-100 rounded-lg p-1.5 font-mono ${editFixedHours === 24 ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`}
-                    />
+                    <div className="flex gap-0.5">
+                      <input
+                        type="text"
+                        value={editClosureTime}
+                        readOnly={editFixedHours === 24}
+                        onChange={(e) => setEditClosureTime(e.target.value)}
+                        title={editFixedHours === 24 ? "24Hr dedicated vehicles don't have a shift end time" : undefined}
+                        className={`w-full border border-purple-100 rounded-lg p-1.5 font-mono ${editFixedHours === 24 ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`}
+                      />
+                      {editFixedHours !== 24 && (
+                        <button type="button" onClick={() => setEditClosureTimePeriod(p => p === 'AM' ? 'PM' : 'AM')}
+                          title="Toggle AM/PM"
+                          className="shrink-0 px-1.5 rounded-lg border border-purple-100 bg-white text-[9px] font-black text-purple-700 hover:bg-purple-50 cursor-pointer">
+                          {editClosureTimePeriod}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2266,16 +2360,6 @@ export default function WarehouseDetails({
                         <input type="number" min={1} value={editWorkingDaysOverride ?? editWorkingDaysAuto}
                           onChange={(e) => setEditWorkingDaysOverride(e.target.value ? Number(e.target.value) : null)}
                           className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <label className="flex items-center gap-1 text-[9px] font-semibold text-slate-600 cursor-pointer">
-                          <input type="checkbox" checked={editDeductSundays} onChange={(e) => setEditDeductSundays(e.target.checked)} /> Deduct Sundays
-                        </label>
-                        <div className="flex items-center gap-1">
-                          <span className="text-[9px] font-semibold text-slate-600">Holidays</span>
-                          <input type="number" min={0} value={editHolidaysCount || ''} onChange={(e) => setEditHolidaysCount(Number(e.target.value) || 0)}
-                            className="w-14 bg-slate-50 border border-purple-100 rounded p-1 text-[10px] font-bold text-slate-800" />
-                        </div>
                       </div>
                       <p className="text-[9px] text-slate-400 font-mono">Auto: {editWorkingDaysAuto} days</p>
                     </div>

@@ -12,6 +12,35 @@
 //   coincide on Tata Ace/207/407 - 14/17/20 FT genuinely diverge between
 //   them, so they're kept as separate lookup keys, never merged.
 
+// Deliberately declared here (imported by types.ts's own definition
+// mirrored below) rather than re-exporting from types.ts, to keep this
+// file's own exports self-contained the way every other symbol here already is.
+import { WarehouseRateOverride, WarehouseRateOverrideKind } from '../types';
+
+// Finds an override matching `kind` + every key/value in `dims` exactly -
+// shared by every lookup* function across this file and
+// warehouseRateMatrix24hr.ts that now checks overrides before falling back
+// to its own hardcoded table. Returns undefined (not a default) when
+// nothing matches, so the caller's own fallback logic runs unchanged.
+export function findRateOverride(
+  overrides: WarehouseRateOverride[] | undefined, kind: WarehouseRateOverrideKind, dims: Record<string, string>
+): WarehouseRateOverride | undefined {
+  if (!overrides || overrides.length === 0) return undefined;
+  return overrides.find(o =>
+    o.kind === kind && Object.keys(dims).every(k => (o.dims[k] || '') === dims[k])
+  );
+}
+
+// Deterministic composite key, e.g. "scheduled12hr:blr:207:2000" - doubles as
+// the upsert key for WarehouseRateOverride.id. Dims are joined in the exact
+// order the caller passes them, so every call site below must pass dims in a
+// consistent order (matches the {group, vehicleType[, kmSlab]} / {group,
+// vehicleType} / {location, vehicleKey} shapes used throughout this file and
+// warehouseRateMatrix24hr.ts).
+export function buildRateOverrideId(kind: WarehouseRateOverrideKind, dims: Record<string, string>): string {
+  return [kind, ...Object.values(dims)].join(':');
+}
+
 export type RateTableKey = 'blr' | 'ecomHyd' | 'vizag' | 'hydIm4';
 
 export interface WarehouseGroupOption {
@@ -160,7 +189,9 @@ export function hasExtraRatesConfigured(rateTableKey: RateTableKey): boolean {
   return !!EXTRA_RATE_TABLES[rateTableKey];
 }
 
-export function lookupExtraRates(rateTableKey: RateTableKey, vehicleType: RateMatrixVehicleType): ExtraRateRow | null {
+export function lookupExtraRates(rateTableKey: RateTableKey, vehicleType: RateMatrixVehicleType, overrides?: WarehouseRateOverride[]): ExtraRateRow | null {
+  const override = findRateOverride(overrides, 'extra12hr', { group: rateTableKey, vehicleType });
+  if (override) return { extraKm: override.value.extraKm ?? 0, extraHr: override.value.extraHr ?? 0 };
   return EXTRA_RATE_TABLES[rateTableKey]?.[vehicleType] ?? null;
 }
 
@@ -215,12 +246,14 @@ export function rateGroupForWarehouseName(warehouseName: string | undefined | nu
 // Slab) combination - null when any part doesn't match a configured
 // combination (unrecognized group, unrecognized/unsupported vehicle type, or
 // a KM Slab this group's table doesn't have a rate for).
-export function lookupScheduledRate(warehouseGroupValue: string | undefined | null, vehicleType: string | undefined | null, kmSlab: number | undefined | null): number | null {
+export function lookupScheduledRate(warehouseGroupValue: string | undefined | null, vehicleType: string | undefined | null, kmSlab: number | undefined | null, overrides?: WarehouseRateOverride[]): number | null {
   if (!warehouseGroupValue || !kmSlab) return null;
   const group = WAREHOUSE_GROUP_OPTIONS.find(g => g.value === warehouseGroupValue);
   if (!group) return null;
   const normType = normalizeRateMatrixVehicleType(vehicleType);
   if (!normType) return null;
+  const override = findRateOverride(overrides, 'scheduled12hr', { group: group.rateTableKey, vehicleType: normType, kmSlab: String(kmSlab) });
+  if (override) return override.value.rate ?? null;
   const row = RATE_TABLES[group.rateTableKey][normType];
   if (!row) return null;
   return row[kmSlab as RateMatrixKmSlab] ?? null;

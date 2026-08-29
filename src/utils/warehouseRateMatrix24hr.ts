@@ -20,8 +20,9 @@
 // a combination with no configured rate simply returns null, leaving
 // Scheduled Rate/Variable Cost/Base Rate as plain manual fields exactly like
 // today.
-import { normalizeRateMatrixVehicleType, rateGroupForWarehouseName, RateMatrixVehicleType } from './warehouseRateMatrix';
+import { normalizeRateMatrixVehicleType, rateGroupForWarehouseName, RateMatrixVehicleType, findRateOverride } from './warehouseRateMatrix';
 import { cityForWarehouseName } from './warehouseLocations';
+import { WarehouseRateOverride } from '../types';
 
 // ---------------------------------------------------------------------------
 // 1. BLR Dedicated (24Hr) - effective 1st Feb.
@@ -72,7 +73,7 @@ export const DEDICATED_24HR_TABLES: Record<string, Partial<Record<RateMatrixVehi
 // row would silently get the wrong (Dry) rate - matching on Vehicle Type
 // alone isn't enough, both fields have to agree this is really a Dry
 // deployment.
-export function lookup24hrDedicatedRate(warehouseName: string, vehicleType: string, vehicleCategory?: string): { fixed: number; variable: number } | null {
+export function lookup24hrDedicatedRate(warehouseName: string, vehicleType: string, vehicleCategory?: string, overrides?: WarehouseRateOverride[]): { fixed: number; variable: number } | null {
   const cat = (vehicleCategory || '').trim().toLowerCase();
   if (cat === 'reefer' || cat === 'walkes' || cat === 'walkee') return null;
   const group = rateGroupForWarehouseName(warehouseName);
@@ -83,6 +84,8 @@ export function lookup24hrDedicatedRate(warehouseName: string, vehicleType: stri
   if (!tableKey || !DEDICATED_24HR_TABLES[tableKey]) return null;
   const normType = normalizeRateMatrixVehicleType(vehicleType);
   if (!normType) return null;
+  const override = findRateOverride(overrides, 'dedicated24hr', { group: tableKey, vehicleType: normType });
+  if (override) return { fixed: override.value.fixed ?? 0, variable: override.value.variable ?? 0 };
   return DEDICATED_24HR_TABLES[tableKey][normType] ?? null;
 }
 
@@ -93,6 +96,8 @@ export function lookup24hrDedicatedRate(warehouseName: string, vehicleType: stri
 
 export type ReeferWalkesKey = '14 FT Reefer' | '14 FT Walkes' | '207/V70 Walkes';
 export type ReeferWalkesLocation = 'BLR' | 'Chennai' | 'HYD' | 'Vizag' | 'Goa';
+export const REEFER_WALKES_KEYS: ReeferWalkesKey[] = ['14 FT Reefer', '14 FT Walkes', '207/V70 Walkes'];
+export const REEFER_WALKES_LOCATIONS: ReeferWalkesLocation[] = ['BLR', 'Chennai', 'HYD', 'Vizag', 'Goa'];
 
 export const REEFER_WALKES_TABLE: Record<ReeferWalkesLocation, Partial<Record<ReeferWalkesKey, { fc: number; vc: number }>>> = {
   BLR: { '14 FT Reefer': { fc: 76000, vc: 21 }, '14 FT Walkes': { fc: 70000, vc: 18 }, '207/V70 Walkes': { fc: 60000, vc: 13 } },
@@ -122,12 +127,14 @@ function reeferWalkesKey(vehicleType: string, vehicleCategory: string): ReeferWa
   return null;
 }
 
-export function lookupReeferWalkesRate(warehouseName: string, vehicleType: string, vehicleCategory: string): { fc: number; vc: number } | null {
+export function lookupReeferWalkesRate(warehouseName: string, vehicleType: string, vehicleCategory: string, overrides?: WarehouseRateOverride[]): { fc: number; vc: number } | null {
   const city = cityForWarehouseName(warehouseName);
   const location = city ? CITY_TO_REEFER_WALKES_LOCATION[city] : undefined;
   if (!location) return null;
   const key = reeferWalkesKey(vehicleType, vehicleCategory);
   if (!key) return null;
+  const override = findRateOverride(overrides, 'reeferWalkes24hr', { location, vehicleKey: key });
+  if (override) return { fc: override.value.fc ?? 0, vc: override.value.vc ?? 0 };
   return REEFER_WALKES_TABLE[location][key] ?? null;
 }
 

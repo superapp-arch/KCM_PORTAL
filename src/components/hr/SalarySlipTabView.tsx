@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { FileText, Users, Loader2, CheckCircle2 } from 'lucide-react';
+import { FileText, Users, Loader2, CheckCircle2, ShieldCheck } from 'lucide-react';
 import { StaffEmployee, StaffBankDetail, SalarySlipRecord } from '../../types';
 import { EnrichedPfRecord, resolveOrGenerateSlip } from '../../utils/salarySlipGenerate';
+import { authFetch } from '../../authFetch';
 import SalarySlipModal from './SalarySlipModal';
 
 interface SalarySlipTabViewProps {
@@ -11,6 +12,11 @@ interface SalarySlipTabViewProps {
   salarySlips: SalarySlipRecord[];
   performedBy: string;
   onSlipSaved: (slip: SalarySlipRecord) => void;
+  // Refetches pfRecords in the parent (StaffSalarySheet) after a bulk
+  // finalize - a full refresh rather than an optimistic local update, since
+  // every active employee's own PF record potentially just changed status
+  // at once, not just one.
+  onPfRecordsRefresh: () => Promise<void>;
 }
 
 function currentMonthKey(): string {
@@ -18,12 +24,14 @@ function currentMonthKey(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-export default function SalarySlipTabView({ employees, pfRecords, bankDetails, salarySlips, performedBy, onSlipSaved }: SalarySlipTabViewProps) {
+export default function SalarySlipTabView({ employees, pfRecords, bankDetails, salarySlips, performedBy, onSlipSaved, onPfRecordsRefresh }: SalarySlipTabViewProps) {
   const [empId, setEmpId] = useState('');
   const [month, setMonth] = useState(currentMonthKey());
   const [viewing, setViewing] = useState<{ employee: StaffEmployee; month: string } | null>(null);
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ generated: number; reused: number; skippedDraft: number; skippedNoRecord: number } | null>(null);
+  const [finalizeRunning, setFinalizeRunning] = useState(false);
+  const [finalizeResult, setFinalizeResult] = useState<{ finalized: number; alreadyFinalized: number; skippedNoRecord: number } | null>(null);
 
   const activeEmployees = employees.filter(e => e.status === 'Active').sort((a, b) => a.name.localeCompare(b.name));
   const selectedEmployee = employees.find(e => e.id === empId) || null;
@@ -64,6 +72,41 @@ export default function SalarySlipTabView({ employees, pfRecords, bankDetails, s
     setBulkRunning(false);
   };
 
+  // Bulk equivalent of Salary Breakup's own per-employee "Mark as Finalized"
+  // (StaffFormModal.tsx's handleFinalizePf) - an employee can't be marked
+  // Finalized one at a time for the whole staff list every month, so this
+  // does it for every active employee's existing Salary Breakup record in
+  // one action, right next to Generate for All Employees. Only re-POSTs
+  // status: 'Finalized' onto whatever's already saved for that employee/
+  // month - it never invents or edits any of the actual figures. Anyone
+  // with no Salary Breakup record yet for this month is skipped (nothing to
+  // finalize) - same as Generate for All Employees' own skippedNoRecord.
+  const handleBulkFinalize = async () => {
+    if (!confirm(`Finalize every active employee's ${month} Salary Breakup? This is what allows their Salary Slip to be generated without a warning.`)) return;
+    setFinalizeRunning(true);
+    setFinalizeResult(null);
+    let finalized = 0, alreadyFinalized = 0, skippedNoRecord = 0;
+
+    for (const emp of activeEmployees) {
+      const pfRecord = pfRecords.find(p => p.empId === emp.id && p.month === month);
+      if (!pfRecord) { skippedNoRecord++; continue; }
+      if (pfRecord.status === 'Finalized') { alreadyFinalized++; continue; }
+      try {
+        await authFetch('/api/staff/provident-fund', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...pfRecord, status: 'Finalized' })
+        });
+        finalized++;
+      } catch {
+        skippedNoRecord++;
+      }
+    }
+
+    await onPfRecordsRefresh();
+    setFinalizeResult({ finalized, alreadyFinalized, skippedNoRecord });
+    setFinalizeRunning(false);
+  };
+
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
@@ -96,15 +139,30 @@ export default function SalarySlipTabView({ employees, pfRecords, bankDetails, s
         <p className="text-slate-500 text-xs mb-3">
           Generates (or reuses an already-issued) slip for every Active employee for <span className="font-bold">{month}</span> - skips anyone whose Salary Breakup for that month isn't Finalized yet, or who has no Salary Breakup record at all. Slips are generated and stored only - nothing is emailed automatically.
         </p>
-        <button onClick={handleBulkGenerate} disabled={bulkRunning}
-          className="bg-purple-800 hover:bg-purple-900 text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] cursor-pointer disabled:opacity-50 transition-all flex items-center gap-1.5">
-          {bulkRunning ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating...</> : `Generate for All Employees (${month})`}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={handleBulkGenerate} disabled={bulkRunning}
+            className="bg-purple-800 hover:bg-purple-900 text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] cursor-pointer disabled:opacity-50 transition-all flex items-center gap-1.5">
+            {bulkRunning ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating...</> : `Generate for All Employees (${month})`}
+          </button>
+          <button onClick={handleBulkFinalize} disabled={finalizeRunning}
+            title="Marks every active employee's existing Salary Breakup record for this month Finalized, without opening each one individually"
+            className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] cursor-pointer disabled:opacity-50 transition-all flex items-center gap-1.5">
+            {finalizeRunning ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Finalizing...</> : <><ShieldCheck className="w-3.5 h-3.5" /> Mark as Finalized for All Employees</>}
+          </button>
+        </div>
         {bulkResult && (
           <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs flex items-start gap-2">
             <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
             <span>
               {bulkResult.generated} newly generated, {bulkResult.reused} already existed (reused), {bulkResult.skippedDraft} skipped (Salary Breakup not Finalized), {bulkResult.skippedNoRecord} skipped (no Salary Breakup record for this month).
+            </span>
+          </div>
+        )}
+        {finalizeResult && (
+          <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs flex items-start gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              {finalizeResult.finalized} newly finalized, {finalizeResult.alreadyFinalized} already were, {finalizeResult.skippedNoRecord} skipped (no Salary Breakup record for this month).
             </span>
           </div>
         )}

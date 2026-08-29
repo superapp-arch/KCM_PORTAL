@@ -3,6 +3,7 @@ import { DriverEmployee, DriverLocationCategory, User as UserType, Vehicle } fro
 import { Coins, CalendarDays } from 'lucide-react';
 import DriverSalarySheet from './drivers/DriverSalarySheet';
 import DriverAttendanceSheet from './drivers/DriverAttendanceSheet';
+import { DriverSalaryAdvanceVoucherSlim } from '../utils/driverPettyCashAdvance';
 
 interface DriverDetailsProps {
   user: UserType;
@@ -11,6 +12,7 @@ interface DriverDetailsProps {
   onAddDriver: (driver: Omit<DriverEmployee, 'id'> & { id: string }) => Promise<void>;
   onUpdateDriver: (id: string, driver: Partial<DriverEmployee>) => Promise<void>;
   onDeleteDriver: (id: string) => Promise<void>;
+  driverPettyCashAdvanceVouchers: DriverSalaryAdvanceVoucherSlim[];
 }
 
 type ModuleTab = 'salary' | 'attendance';
@@ -35,7 +37,7 @@ const DRIVER_WRITE_LOCATION_SCOPES: Record<string, DriverLocationCategory[]> = {
 // already sends him every driver) but only write within his scope above.
 const DRIVER_ALL_LOCATIONS_EMAILS = ['bhagya@kcmlogistics.in', 'divya@kcmlogistics.in', 'ln.chandana@kcmlogistics.in'];
 
-export default function DriverDetails({ user, drivers, vehicles, onAddDriver, onUpdateDriver, onDeleteDriver }: DriverDetailsProps) {
+export default function DriverDetails({ user, drivers, vehicles, onAddDriver, onUpdateDriver, onDeleteDriver, driverPettyCashAdvanceVouchers }: DriverDetailsProps) {
   const [moduleTab, setModuleTab] = useState<ModuleTab>('salary');
 
   const writableLocations: DriverLocationCategory[] | 'ALL' =
@@ -60,7 +62,7 @@ export default function DriverDetails({ user, drivers, vehicles, onAddDriver, on
       </div>
 
       {moduleTab === 'salary' && (
-        <DriverSalarySheet performedBy={user.username} drivers={drivers} vehicles={vehicles} writableLocations={writableLocations} onAddDriver={onAddDriver} onUpdateDriver={onUpdateDriver} onDeleteDriver={onDeleteDriver} />
+        <DriverSalarySheet performedBy={user.username} drivers={drivers} vehicles={vehicles} writableLocations={writableLocations} onAddDriver={onAddDriver} onUpdateDriver={onUpdateDriver} onDeleteDriver={onDeleteDriver} driverPettyCashAdvanceVouchers={driverPettyCashAdvanceVouchers} />
       )}
       {moduleTab === 'attendance' && <DriverAttendanceSheet drivers={drivers} writableLocations={writableLocations} />}
     </div>

@@ -7,6 +7,7 @@ import {
   MaintenanceServiceStation,
   BreakdownReport,
   VehicleServiceSchedule,
+  VehicleMaintenanceReference,
   TireBrand,
   TireRecord,
   BatteryRecord,
@@ -43,6 +44,8 @@ interface MaintenanceProps {
   onDeleteBreakdownReport: (id: string) => Promise<void>;
   vehicleServiceSchedules: VehicleServiceSchedule[];
   onSaveVehicleServiceSchedule: (schedule: VehicleServiceSchedule) => Promise<void>;
+  vehicleMaintenanceReferences: VehicleMaintenanceReference[];
+  onSaveVehicleMaintenanceReference: (record: VehicleMaintenanceReference) => Promise<void>;
   tireBrands: TireBrand[];
   onAddTireBrand: (name: string) => Promise<void>;
   tireRecords: TireRecord[];
@@ -267,6 +270,8 @@ export default function Maintenance(props: MaintenanceProps) {
           mileageReports={props.mileageReports}
           vehicleServiceSchedules={props.vehicleServiceSchedules}
           onSaveVehicleServiceSchedule={props.onSaveVehicleServiceSchedule}
+          vehicleMaintenanceReferences={props.vehicleMaintenanceReferences}
+          onSaveVehicleMaintenanceReference={props.onSaveVehicleMaintenanceReference}
           isSuperAdmin={props.isSuperAdmin}
         />
       )}

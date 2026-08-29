@@ -9,6 +9,8 @@ import {
   bunkPayments,
   dieselBunkAccounts,
   dieselBunkPayments,
+  vehicleMaintenanceReference,
+  warehouseRateOverrides,
   maintenanceRecords,
   accountsEntries,
   staffEmployees,
@@ -66,6 +68,8 @@ import {
   BunkPayment,
   DieselBunkAccount,
   DieselBunkPayment,
+  VehicleMaintenanceReference,
+  WarehouseRateOverride,
   MaintenanceRecord,
   AccountsEntry,
   StaffEmployee,
@@ -801,6 +805,81 @@ export async function deleteDieselBunkPayment(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteDieselBunkPayment:", error);
     throw new Error("Failed to delete diesel bunk payment.", { cause: error });
+  }
+}
+
+// --- FLEET MAINTENANCE > SERVICE SCHEDULE: VEHICLE MAINTENANCE REFERENCE ---
+// Real typed columns (not the id+data-JSON-blob shape most tables above
+// use) keyed on vehicleNo itself - see VehicleMaintenanceReference in
+// types.ts and the vehicle_maintenance_reference table in schema.ts.
+export async function getVehicleMaintenanceReferences(): Promise<VehicleMaintenanceReference[]> {
+  try {
+    return await db.select().from(vehicleMaintenanceReference);
+  } catch (error) {
+    console.error("Database query failed in getVehicleMaintenanceReferences:", error);
+    throw new Error("Failed to retrieve vehicle maintenance reference data.", { cause: error });
+  }
+}
+
+// Upsert by vehicleNo (the primary key) - used both by the one-time CSV
+// seed script (scripts/seedVehicleMaintenanceReference.mjs, idempotent -
+// re-running it just updates the same rows again) and by Service Schedule's
+// own edit form saving Responsible/Last Service Done KM/Warranty Period/
+// Service Period back after a manual change.
+export async function upsertVehicleMaintenanceReference(record: VehicleMaintenanceReference): Promise<VehicleMaintenanceReference[]> {
+  try {
+    const complete = { ...record, updatedAt: new Date().toISOString() };
+    const existing = await db.select().from(vehicleMaintenanceReference).where(eq(vehicleMaintenanceReference.vehicleNo, complete.vehicleNo));
+    if (existing.length > 0) {
+      await db.update(vehicleMaintenanceReference).set(complete).where(eq(vehicleMaintenanceReference.vehicleNo, complete.vehicleNo));
+    } else {
+      await db.insert(vehicleMaintenanceReference).values(complete);
+    }
+    return await getVehicleMaintenanceReferences();
+  } catch (error) {
+    console.error("Database action failed in upsertVehicleMaintenanceReference:", error);
+    throw new Error("Failed to save vehicle maintenance reference data.", { cause: error });
+  }
+}
+
+// --- WAREHOUSE DETAILS: RATE OVERRIDES ---
+export async function getWarehouseRateOverrides(): Promise<WarehouseRateOverride[]> {
+  try {
+    const rows = await db.select().from(warehouseRateOverrides);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getWarehouseRateOverrides:", error);
+    throw new Error("Failed to retrieve warehouse rate overrides.", { cause: error });
+  }
+}
+
+// Upsert by id (the deterministic composite key - see WarehouseRateOverride
+// in types.ts), so editing an existing override just replaces it in place
+// rather than accumulating duplicates for the same cell.
+export async function saveWarehouseRateOverride(override: WarehouseRateOverride): Promise<WarehouseRateOverride[]> {
+  try {
+    const complete = { ...override, updatedAt: new Date().toISOString() };
+    const dataString = JSON.stringify(complete);
+    const existing = await db.select().from(warehouseRateOverrides).where(eq(warehouseRateOverrides.id, complete.id));
+    if (existing.length > 0) {
+      await db.update(warehouseRateOverrides).set({ data: dataString }).where(eq(warehouseRateOverrides.id, complete.id));
+    } else {
+      await db.insert(warehouseRateOverrides).values({ id: complete.id, data: dataString });
+    }
+    return await getWarehouseRateOverrides();
+  } catch (error) {
+    console.error("Database action failed in saveWarehouseRateOverride:", error);
+    throw new Error("Failed to save warehouse rate override.", { cause: error });
+  }
+}
+
+export async function deleteWarehouseRateOverride(id: string): Promise<WarehouseRateOverride[]> {
+  try {
+    await db.delete(warehouseRateOverrides).where(eq(warehouseRateOverrides.id, id));
+    return await getWarehouseRateOverrides();
+  } catch (error) {
+    console.error("Database action failed in deleteWarehouseRateOverride:", error);
+    throw new Error("Failed to delete warehouse rate override.", { cause: error });
   }
 }
 

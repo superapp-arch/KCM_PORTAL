@@ -124,17 +124,26 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
         setPfStatus(mine.status || 'Draft');
       } else {
         setPfStatus('Draft');
-        // No entry yet for this month - carry forward the recurring, rarely-changing
-        // figures (Basic/HRA/Conveyance/Medical/LTA/CCA and Professional Tax/EPF/ESI)
-        // from the most recent earlier month so HR doesn't retype them every month.
-        // Everything else (Fuel, Other Allowances, Extra Days, F&F, Other Deductions,
-        // Advances, Income Tax) varies month to month and stays blank for manual entry.
+        // No entry yet for this month - carry forward every Allowance and
+        // Deduction (2026-08-29: expanded from just Basic/HRA/Conveyance/
+        // Medical/LTA/CCA/Professional Tax/EPF/ESI to also include Fuel
+        // Allowance/Other Allowances/Other Deductions/Income Tax) from the
+        // most recent earlier month, so HR only has to enter these once and
+        // they keep showing correctly on Net Salary every month after,
+        // until the staff's own figures actually change. Extra Days,
+        // Advances, and Full & Final are deliberately NOT carried forward -
+        // those are inherently one-off/month-specific (days worked that
+        // month, an advance taken that month, a final settlement), not
+        // standing allowances/deductions, so they stay blank for fresh
+        // entry each month.
         const previous = myRecords.filter(r => r.month < pfMonth).sort((a, b) => b.month.localeCompare(a.month))[0];
         setPfForm({
           ...emptyPfForm,
           basic: String(previous?.basic ?? ''), hra: String(previous?.hra ?? ''), conveyance: String(previous?.conveyance ?? ''),
           medicalAllowance: String(previous?.medicalAllowance ?? ''), lta: String(previous?.lta ?? ''), cca: String(previous?.cca ?? ''),
-          professionalTax: String(previous?.professionalTax ?? ''), epf: String(previous?.epf ?? ''), esi: String(previous?.esi ?? '')
+          fuelAllowance: String(previous?.fuelAllowance ?? ''), otherAllowances: String(previous?.otherAllowances ?? ''),
+          professionalTax: String(previous?.professionalTax ?? ''), epf: String(previous?.epf ?? ''), esi: String(previous?.esi ?? ''),
+          otherDeductions: String(previous?.otherDeductions ?? ''), incomeTax: String(previous?.incomeTax ?? '')
         });
       }
     }).catch(() => {});

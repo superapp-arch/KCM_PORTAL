@@ -4,6 +4,7 @@ import { DriverEmployee, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES, Veh
 import DocumentAttachment from '../DocumentAttachment';
 import { authFetch } from '../../authFetch';
 import { computeDriverEarnings } from '../../utils/driverSalaryExport';
+import { DriverSalaryAdvanceVoucherSlim, computeDriverPettyCashAdvance, driverPettyCashAdvanceTooltip } from '../../utils/driverPettyCashAdvance';
 
 interface DriverFormModalProps {
   driver: DriverEmployee | null; // null = creating a new driver
@@ -13,6 +14,7 @@ interface DriverFormModalProps {
   onUpdateDriver: (id: string, driver: Partial<DriverEmployee>) => Promise<void>;
   onClose: () => void;
   onSaved: (driver: { id: string; name: string }) => void;
+  driverPettyCashAdvanceVouchers: DriverSalaryAdvanceVoucherSlim[];
 }
 
 type FormTab = 'basic' | 'documents' | 'salary';
@@ -22,7 +24,7 @@ function currentMonthKey(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-export default function DriverFormModal({ driver, vehicles, writableLocations, onAddDriver, onUpdateDriver, onClose, onSaved }: DriverFormModalProps) {
+export default function DriverFormModal({ driver, vehicles, writableLocations, onAddDriver, onUpdateDriver, onClose, onSaved, driverPettyCashAdvanceVouchers }: DriverFormModalProps) {
   const isEditing = !!driver;
   const [tab, setTab] = useState<FormTab>('basic');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -78,6 +80,23 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
     driverWelfare: driver?.driverWelfare != null ? String(driver.driverWelfare) : '',
     bata: driver?.bata != null ? String(driver.bata) : ''
   });
+
+  // Petty Cash/Advance (2026-08-29) - auto-fetched from Petty Cash's own
+  // "DRIVER SALARY ADV" category entries against this Driver ID, scoped to
+  // salaryMonth, instead of being typed by hand - see
+  // utils/driverPettyCashAdvance.ts. No longer user-editable (see the
+  // Salary tab's own input below); recomputes live if salaryMonth changes
+  // or a new Petty Cash entry lands. Falls back to whatever was last saved
+  // when creating a brand-new driver (driver is null, so there's no Driver
+  // ID yet to match against).
+  const pettyCashAdvanceResult = driver
+    ? computeDriverPettyCashAdvance(driverPettyCashAdvanceVouchers, driver.id, salaryMonth)
+    : { total: 0, entries: [] };
+  useEffect(() => {
+    if (!driver) return;
+    setSalaryForm(f => ({ ...f, pettyCashAdvance: pettyCashAdvanceResult.total ? String(pettyCashAdvanceResult.total) : '' }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driver, salaryMonth, driverPettyCashAdvanceVouchers]);
 
   // Attendance-derived stat cards, pulled live so they update as attendance is
   // marked - the same "attendance feeds salary" link as HR & Payroll.
@@ -308,7 +327,12 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
                   </div>
                   <div>
                     <label className="block text-slate-400 mb-0.5">Petty Cash/Advance <span className="text-rose-500 font-normal">(-)</span></label>
-                    <input type="number" value={salaryForm.pettyCashAdvance} onChange={e => setSalaryForm({ ...salaryForm, pettyCashAdvance: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
+                    <input
+                      type="number" readOnly disabled value={salaryForm.pettyCashAdvance}
+                      title={driver ? driverPettyCashAdvanceTooltip(pettyCashAdvanceResult) : undefined}
+                      className="w-full border border-slate-200 bg-slate-100 text-slate-600 rounded-lg px-2 py-1.5 cursor-not-allowed"
+                    />
+                    <p className="text-[9.5px] text-slate-400 mt-0.5">Auto-fetched from Petty Cash's "DRIVER SALARY ADV" entries for {salaryMonth} - hover to see the breakdown.</p>
                   </div>
                   <div>
                     <label className="block text-slate-400 mb-0.5">Loan Deduction <span className="text-rose-500 font-normal">(-)</span></label>

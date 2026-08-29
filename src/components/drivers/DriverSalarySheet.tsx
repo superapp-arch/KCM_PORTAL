@@ -10,6 +10,7 @@ import { compareTrailingNumber } from '../../utils/sort';
 import { payableAmountLive, vehiclesLabel, salarySections, exportDriverSalary } from '../../utils/driverSalaryExport';
 import DownloadMenu from './DownloadMenu';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
+import { DriverSalaryAdvanceVoucherSlim, computeDriverPettyCashAdvance, driverPettyCashAdvanceTooltip } from '../../utils/driverPettyCashAdvance';
 
 const safeFileToken = (s: string): string => s.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
 
@@ -21,9 +22,10 @@ interface DriverSalarySheetProps {
   onAddDriver: (driver: Omit<DriverEmployee, 'id'> & { id: string }) => Promise<void>;
   onUpdateDriver: (id: string, driver: Partial<DriverEmployee>) => Promise<void>;
   onDeleteDriver: (id: string) => Promise<void>;
+  driverPettyCashAdvanceVouchers: DriverSalaryAdvanceVoucherSlim[];
 }
 
-export default function DriverSalarySheet({ performedBy, drivers, vehicles, writableLocations, onAddDriver, onUpdateDriver, onDeleteDriver }: DriverSalarySheetProps) {
+export default function DriverSalarySheet({ performedBy, drivers, vehicles, writableLocations, onAddDriver, onUpdateDriver, onDeleteDriver, driverPettyCashAdvanceVouchers }: DriverSalarySheetProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [modalDriver, setModalDriver] = useState<DriverEmployee | null | undefined>(undefined); // undefined = closed
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -253,7 +255,24 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                           <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{driver.accountNumber || '-'}</td>
                           <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{driver.ifscCode || '-'}</td>
                           <td className="px-3 py-2.5 text-slate-500">{driver.reporting || '-'}</td>
-                          <td className="px-3 py-2.5 font-mono text-slate-600">{driver.pettyCashAdvance ? `Rs. ${driver.pettyCashAdvance.toLocaleString('en-IN')}` : '-'}</td>
+                          <td className="px-3 py-2.5 font-mono text-slate-600">
+                            {(() => {
+                              // Auto-fetched live from Petty Cash's own
+                              // "DRIVER SALARY ADV" category (see
+                              // utils/driverPettyCashAdvance.ts) rather than
+                              // the possibly-stale driver.pettyCashAdvance
+                              // snapshot - hover shows the breakdown + who
+                              // entered each one in Petty Cash.
+                              const advance = driver.month
+                                ? computeDriverPettyCashAdvance(driverPettyCashAdvanceVouchers, driver.id, driver.month)
+                                : { total: driver.pettyCashAdvance || 0, entries: [] };
+                              return (
+                                <span title={driver.month ? driverPettyCashAdvanceTooltip(advance) : undefined}>
+                                  {advance.total ? `Rs. ${advance.total.toLocaleString('en-IN')}` : '-'}
+                                </span>
+                              );
+                            })()}
+                          </td>
                           <td className="px-3 py-2.5 whitespace-nowrap">
                             <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded text-[9.5px] font-bold">{driver.location}</span>
                           </td>
@@ -344,6 +363,7 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
           onUpdateDriver={onUpdateDriver}
           onClose={() => setModalDriver(undefined)}
           onSaved={handleSaved}
+          driverPettyCashAdvanceVouchers={driverPettyCashAdvanceVouchers}
         />
       )}
 

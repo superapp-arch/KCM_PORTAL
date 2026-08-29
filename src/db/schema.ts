@@ -1,4 +1,4 @@
-import { pgTable, serial, text, bigint, index } from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, bigint, integer, index } from 'drizzle-orm/pg-core';
 
 // Users table for application authentication and authorization
 export const users = pgTable('users', {
@@ -349,6 +349,32 @@ export const toolsChecklistRecords = pgTable('tools_checklist_records', {
   id: text('id').primaryKey(),
   regNo: text('reg_no'),
   data: text('data').notNull(), // JSON string representing the full ToolsChecklistRecord object
+});
+
+// Warehouse Details > Rates - editable overrides on top of the fixed
+// in-code rate tables (see WarehouseRateOverride in types.ts). One generic
+// id+data-JSON-blob table covers every rate "kind" (12Hr Scheduled/Extra,
+// 24Hr Dedicated, Reefer & Walkes) rather than a separate table per kind.
+export const warehouseRateOverrides = pgTable('warehouse_rate_overrides', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full WarehouseRateOverride object
+});
+
+// Fleet Maintenance > Service Schedule's Vehicle Maintenance Reference
+// lookup (see VehicleMaintenanceReference in types.ts) - real typed columns
+// (not the id+data-JSON-blob shape most tables above use) since this is a
+// straightforward reference/lookup table keyed on vehicle_no, bulk-loaded
+// from an external CSV (see data/vehicle_responsible_only.csv and
+// scripts/seedVehicleMaintenanceReference.mjs) and queried by exact vehicle
+// number - Reg Date/Vehicle Type/Model are deliberately NOT columns here,
+// those stay sourced live from the vehicles table only.
+export const vehicleMaintenanceReference = pgTable('vehicle_maintenance_reference', {
+  vehicleNo: text('vehicle_no').primaryKey(),
+  responsible: text('responsible'),
+  lastServiceDoneKm: integer('last_service_done_km'),
+  warrantyPeriod: text('warranty_period'),
+  servicePeriod: integer('service_period'),
+  updatedAt: text('updated_at'),
 });
 
 // Fleet Maintenance > Service Station > Spare Parts - one row per part

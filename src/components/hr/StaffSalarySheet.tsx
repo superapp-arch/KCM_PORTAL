@@ -171,6 +171,7 @@ export default function StaffSalarySheet({ user, employees, onAddEmployee, onUpd
           salarySlips={salarySlips}
           performedBy={user.username}
           onSlipSaved={handleSlipSaved}
+          onPfRecordsRefresh={loadSalaryData}
         />
       ) : (
       <>

@@ -436,6 +436,24 @@ export interface VehicleServiceSchedule {
   acServiceHistory?: { date: string }[];
 }
 
+// Fleet Maintenance > Service Schedule's Vehicle Maintenance Reference
+// lookup (2026-08-29) - a separate, independent reference dataset from
+// VehicleServiceSchedule above (imported from an existing external tracking
+// sheet, own field conventions and all - e.g. Warranty Period is a single
+// free-text value like "300000/3 YEAR", not the structured warrantyExpiryKm/
+// warrantyExpiryDate pair above). Vehicle No is the primary key; Reg Date/
+// Vehicle Type/Model are NOT duplicated here - those stay sourced live from
+// Fleet & Vehicles (see FleetSheet.tsx's own Vehicle records) and are locked/
+// read-only wherever this reference is shown, exactly as before.
+export interface VehicleMaintenanceReference {
+  vehicleNo: string; // primary key - matches Fleet & Vehicles' own Reg. No.
+  responsible?: string;
+  lastServiceDoneKm?: number;
+  warrantyPeriod?: string; // free text, e.g. "300000/3 YEAR" - not a structured km/date pair
+  servicePeriod?: number; // km interval, e.g. 40000
+  updatedAt?: string; // ISO timestamp, stamped server-side on every upsert
+}
+
 // Retired - Service Schedule's Service Due/Washing Due cycle lengths and
 // reminder-day thresholds used to be a single global row edited from an
 // Alert Settings panel, then briefly a fixed-per-category default with a
@@ -835,7 +853,15 @@ export interface WarehouseEntry {
   openingKm: number;
   closingKm: number;
   inTime: string;
+  // AM/PM for inTime/closureTime (2026-08-29) - only meaningful for a 12Hr
+  // deployment (a 24Hr one has no shift start/end at all, see fixedHours);
+  // absent on entries saved before this existed. Together with inTime/
+  // closureTime, this is what lets the shift duration be told apart from a
+  // trip that crosses midnight (e.g. 08:00 PM in to 08:00 AM out = 12h
+  // overnight, not a 0h/negative one).
+  inTimePeriod?: 'AM' | 'PM';
   closureTime: string;
+  closureTimePeriod?: 'AM' | 'PM';
   kmUtilised: number;
   hoursDaysAsPerContract: number;
   // Retired - overtime is now captured via addHour/additionalHourCost below
@@ -897,6 +923,33 @@ export interface WarehouseEntry {
   // for every other Deployment Type/Fixed Hrs combination.
   adHocFromCity?: string;
   adHocToCity?: string;
+}
+
+// Warehouse Details > Rates - editable overrides on top of the fixed
+// in-code rate tables (utils/warehouseRateMatrix.ts/warehouseRateMatrix24hr.ts)
+// (2026-08-29). One generic shape covers every rate "kind" rather than a
+// separate table per kind, since they're all really the same thing: some
+// dimensions (Warehouse Group/Vehicle Type/KM Slab/Location) identifying
+// which cell, and a value. Super Admin only (see RatesSummary.tsx) - a
+// lookup function checks these first and only falls back to the hardcoded
+// default when no override exists for that exact combination, so this is
+// purely additive: nothing here changes anything until someone actually
+// edits or adds a rate through the Rates tab.
+export type WarehouseRateOverrideKind = 'scheduled12hr' | 'extra12hr' | 'dedicated24hr' | 'reeferWalkes24hr';
+
+export interface WarehouseRateOverride {
+  id: string; // deterministic composite key, e.g. "scheduled12hr:ecomHyd:207:2000" - doubles as the upsert key
+  kind: WarehouseRateOverrideKind;
+  // Dimension values identifying the cell, kind-specific:
+  // scheduled12hr: { group, vehicleType, kmSlab }; extra12hr: { group, vehicleType };
+  // dedicated24hr: { group, vehicleType }; reeferWalkes24hr: { location, vehicleKey }
+  dims: Record<string, string>;
+  // The actual rate figure(s), kind-specific:
+  // scheduled12hr: { rate }; extra12hr: { extraKm, extraHr };
+  // dedicated24hr: { fixed, variable }; reeferWalkes24hr: { fc, vc }
+  value: Record<string, number>;
+  updatedAt?: string; // stamped server-side on every upsert
+  enteredBy?: string; // username, stamped server-side; visible only to super admins
 }
 
 export interface MileageReport {

@@ -1,8 +1,8 @@
-import React, { useMemo, useState } from 'react';
-import { Vehicle, VehicleServiceSchedule, MileageReport } from '../../types';
+import React, { useMemo, useState, useEffect } from 'react';
+import { Vehicle, VehicleServiceSchedule, VehicleMaintenanceReference, MileageReport } from '../../types';
 import {
   CalendarClock, Search, Edit2, X, ShieldCheck, CheckCircle2, AlertCircle, Bell, Droplets,
-  Snowflake, History, ClipboardList, Send, Loader2, Filter
+  Snowflake, History, ClipboardList, Send, Loader2, Filter, UserSearch, Lock
 } from 'lucide-react';
 import DateInput from '../DateInput';
 import { latestOdometerFor, computeWarrantyStatus } from '../../utils/maintenanceDates';
@@ -20,11 +20,15 @@ interface ServiceScheduleTabProps {
   mileageReports: MileageReport[];
   vehicleServiceSchedules: VehicleServiceSchedule[];
   onSaveVehicleServiceSchedule: (schedule: VehicleServiceSchedule) => Promise<void>;
+  vehicleMaintenanceReferences: VehicleMaintenanceReference[];
+  onSaveVehicleMaintenanceReference: (record: VehicleMaintenanceReference) => Promise<void>;
   isSuperAdmin: boolean; // gates the bulk "Send Reminder Now" action below
 }
 
 const regDateOf = (v: Vehicle) => v.regDate || v['Reg Date'] || '';
 const categoryOf = (v: Vehicle | undefined) => String(v?.Category || v?.category || '').trim().toLowerCase();
+const vehicleTypeOf = (v: Vehicle | undefined) => String(v?.type || v?.['Type'] || '').trim();
+const modelOf = (v: Vehicle | undefined) => String(v?.model || v?.['Model'] || '').trim();
 
 const CATEGORY_BADGE_CLASS: Record<string, string> = {
   dry: 'bg-amber-50 text-amber-800 border-amber-300',
@@ -142,7 +146,8 @@ interface MergedRow {
 
 // ---------------------------------------------------------------------------
 export default function ServiceScheduleTab({
-  vehicles, mileageReports, vehicleServiceSchedules, onSaveVehicleServiceSchedule, isSuperAdmin
+  vehicles, mileageReports, vehicleServiceSchedules, onSaveVehicleServiceSchedule,
+  vehicleMaintenanceReferences, onSaveVehicleMaintenanceReference, isSuperAdmin
 }: ServiceScheduleTabProps) {
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
@@ -169,6 +174,61 @@ export default function ServiceScheduleTab({
 
   const vehicleFor = (regNo: string) => vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === regNo);
   const scheduleFor = (regNo: string) => vehicleServiceSchedules.find(s => s.regNo === regNo);
+
+  // --- Vehicle Maintenance Reference lookup (2026-08-29) - a separate,
+  // independent reference dataset from the merged Vehicle Service table
+  // below (see VehicleMaintenanceReference in types.ts). Typing/selecting a
+  // Vehicle No here auto-fills Reg Date/Vehicle Type/Model straight from
+  // Fleet & Vehicles (locked, same source of truth as everywhere else in
+  // this app) and Responsible/Last Service Done KM/Warranty Period/Service
+  // Period from vehicle_maintenance_reference (editable, saved back on
+  // submit) - a vehicle with no reference row yet just leaves those 4
+  // blank for first-time entry rather than erroring.
+  const [refVehicleNo, setRefVehicleNo] = useState('');
+  const [refForm, setRefForm] = useState({ responsible: '', lastServiceDoneKm: '', warrantyPeriod: '', servicePeriod: '' });
+  const [refSubmitting, setRefSubmitting] = useState(false);
+
+  const refVehicleNoTrimmed = refVehicleNo.trim().toUpperCase();
+  const refVehicle = refVehicleNoTrimmed ? vehicleFor(refVehicleNoTrimmed) : undefined;
+  const refRecord = refVehicleNoTrimmed ? vehicleMaintenanceReferences.find(r => r.vehicleNo === refVehicleNoTrimmed) : undefined;
+
+  // Re-syncs the editable fields only when the selected Vehicle No (or the
+  // underlying reference data) changes - never while the office is actively
+  // typing into Responsible/Last Service Done KM/Warranty Period/Service
+  // Period themselves, same "auto-fills, still overridable" pattern the
+  // rest of this tab already uses (see Last Service's own Date/Odometer).
+  useEffect(() => {
+    setRefForm({
+      responsible: refRecord?.responsible || '',
+      lastServiceDoneKm: refRecord?.lastServiceDoneKm != null ? String(refRecord.lastServiceDoneKm) : '',
+      warrantyPeriod: refRecord?.warrantyPeriod || '',
+      servicePeriod: refRecord?.servicePeriod != null ? String(refRecord.servicePeriod) : ''
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refVehicleNoTrimmed, refRecord]);
+
+  const refStatus: 'not-found' | 'incomplete' | 'found' | null =
+    !refVehicleNoTrimmed ? null : !refVehicle ? 'not-found' : refRecord ? 'found' : 'incomplete';
+
+  const handleSaveReference = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!refVehicleNoTrimmed || !refVehicle) return;
+    setRefSubmitting(true);
+    try {
+      await onSaveVehicleMaintenanceReference({
+        vehicleNo: refVehicleNoTrimmed,
+        responsible: refForm.responsible.trim() || undefined,
+        lastServiceDoneKm: refForm.lastServiceDoneKm.trim() ? Number(refForm.lastServiceDoneKm) : undefined,
+        warrantyPeriod: refForm.warrantyPeriod.trim() || undefined,
+        servicePeriod: refForm.servicePeriod.trim() ? Number(refForm.servicePeriod) : undefined
+      });
+      handleSaved('Vehicle maintenance reference', refVehicleNoTrimmed);
+    } catch (err) {
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save vehicle maintenance reference data.', 'error');
+    } finally {
+      setRefSubmitting(false);
+    }
+  };
 
   // Every vehicle gets a row (Vehicle Service applies to all of them) -
   // Washing/AC eligibility is decided per-row below, not by excluding a
@@ -311,6 +371,94 @@ export default function ServiceScheduleTab({
           {notif.message}
         </div>
       )}
+
+      {/* Vehicle Maintenance Reference lookup - independent of the merged
+          Vehicle Service table below. Typing/selecting a Vehicle No auto-
+          fills Reg Date/Vehicle Type/Model (locked, from Fleet & Vehicles)
+          and Responsible/Last Service Done KM/Warranty Period/Service
+          Period (editable, from vehicle_maintenance_reference). */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+        <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5 mb-3">
+          <UserSearch className="w-4 h-4 text-slate-600" /> Vehicle Maintenance Reference
+        </h2>
+        <form onSubmit={handleSaveReference} className="space-y-3 text-xs">
+          <div>
+            <label className="block font-semibold text-slate-600 mb-1">Vehicle No</label>
+            <input
+              type="text"
+              list="service-schedule-ref-vehicles-datalist"
+              placeholder="Type or select a Vehicle No"
+              value={refVehicleNo}
+              onChange={(e) => setRefVehicleNo(e.target.value.toUpperCase())}
+              autoComplete="off"
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold uppercase text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            <datalist id="service-schedule-ref-vehicles-datalist">
+              {vehicleList.map(v => <option key={v} value={v} />)}
+            </datalist>
+          </div>
+
+          {refStatus && (
+            <p className={`flex items-center gap-1.5 font-semibold ${
+              refStatus === 'found' ? 'text-emerald-600' : refStatus === 'incomplete' ? 'text-amber-600' : 'text-rose-600'
+            }`}>
+              {refStatus === 'found' ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 shrink-0" />}
+              {refStatus === 'found' ? 'Vehicle & maintenance data found' : refStatus === 'incomplete' ? 'Vehicle found — maintenance data incomplete' : 'Vehicle not found'}
+            </p>
+          )}
+
+          {refVehicle && (
+            <>
+              <div className="grid grid-cols-3 gap-2.5">
+                <div>
+                  <label className="block font-semibold text-slate-500 mb-1 flex items-center gap-1"><Lock className="w-2.5 h-2.5" /> Reg Date</label>
+                  <input type="text" readOnly value={regDateOf(refVehicle) || '-'} className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono text-slate-600 cursor-not-allowed" />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-500 mb-1 flex items-center gap-1"><Lock className="w-2.5 h-2.5" /> Vehicle Type</label>
+                  <input type="text" readOnly value={vehicleTypeOf(refVehicle) || '-'} className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono text-slate-600 cursor-not-allowed" />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-500 mb-1 flex items-center gap-1"><Lock className="w-2.5 h-2.5" /> Model</label>
+                  <input type="text" readOnly value={modelOf(refVehicle) || '-'} className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono text-slate-600 cursor-not-allowed" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-semibold text-slate-600 mb-1">Responsible</label>
+                  <input type="text" placeholder="e.g. Vinod" value={refForm.responsible}
+                    onChange={(e) => setRefForm(f => ({ ...f, responsible: e.target.value }))}
+                    className="w-full bg-white border border-blue-100 rounded-lg p-2 text-slate-800" />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-600 mb-1">Last Service Done KM</label>
+                  <input type="number" placeholder="0" value={refForm.lastServiceDoneKm}
+                    onChange={(e) => setRefForm(f => ({ ...f, lastServiceDoneKm: e.target.value }))}
+                    className="w-full bg-white border border-blue-100 rounded-lg p-2 font-mono text-slate-800" />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-600 mb-1">Warranty Period</label>
+                  <input type="text" placeholder="e.g. 300000/3 YEAR" value={refForm.warrantyPeriod}
+                    onChange={(e) => setRefForm(f => ({ ...f, warrantyPeriod: e.target.value }))}
+                    className="w-full bg-white border border-blue-100 rounded-lg p-2 font-mono text-slate-800" />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-600 mb-1">Service Period (km)</label>
+                  <input type="number" placeholder="e.g. 40000" value={refForm.servicePeriod}
+                    onChange={(e) => setRefForm(f => ({ ...f, servicePeriod: e.target.value }))}
+                    className="w-full bg-white border border-blue-100 rounded-lg p-2 font-mono text-slate-800" />
+                </div>
+              </div>
+
+              <button type="submit" disabled={refSubmitting}
+                className="bg-gradient-to-r from-blue-600 to-slate-800 text-white font-extrabold rounded-xl py-2 px-4 hover:shadow-md transition-all uppercase text-[10px] cursor-pointer disabled:opacity-50">
+                {refSubmitting ? 'Saving...' : 'Save Maintenance Reference'}
+              </button>
+            </>
+          )}
+        </form>
+      </div>
 
       {/* Summary cards - fleet-wide counts, independent of the filters below. */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">

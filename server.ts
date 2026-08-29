@@ -58,6 +58,8 @@ import {
   MaintenanceServiceStation,
   BreakdownReport,
   VehicleServiceSchedule,
+  VehicleMaintenanceReference,
+  WarehouseRateOverride,
   AlertSettings,
   TireBrand,
   TireRecord,
@@ -110,6 +112,11 @@ import {
   getVehicleServiceSchedules,
   saveVehicleServiceSchedule,
   deleteVehicleServiceSchedule,
+  getVehicleMaintenanceReferences,
+  upsertVehicleMaintenanceReference,
+  getWarehouseRateOverrides,
+  saveWarehouseRateOverride,
+  deleteWarehouseRateOverride,
   getAlertSettings,
   saveAlertSettings,
   getTireBrands,
@@ -508,15 +515,18 @@ async function requirePettyCashAccess(req: express.Request, res: express.Respons
   next();
 }
 
-// Warehouse Details is super-admin-only, plus Bhagya explicitly (mirrors
-// Administration.tsx's own hasAccess('warehouse') check - this is the one
-// place to widen it further to other roles later).
+// Warehouse Details is super-admin-only, plus Bhagya and Vinod explicitly
+// (mirrors Administration.tsx's own hasAccess('warehouse') check - this is
+// the one place to widen it further to other roles later). Vinod was added
+// to the client-side gate in an earlier change but missed here - fixed
+// 2026-08-29, since without this he'd see the tab but every actual API call
+// would 403.
 async function requireWarehouseAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
-  if (sessionUser.department !== 'super_admin' && sessionUser.email !== 'bhagya@kcmlogistics.in') {
+  if (sessionUser.department !== 'super_admin' && sessionUser.email !== 'bhagya@kcmlogistics.in' && sessionUser.email !== 'vinod@kcmlogistics.in') {
     return res.status(403).json({ error: 'You do not have access to Warehouse Details.' });
   }
   next();
@@ -3045,6 +3055,22 @@ async function startServer() {
     try { res.json({ success: true, data: await deleteVehicleServiceSchedule(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
+  // Service Schedule's Vehicle Maintenance Reference lookup (see
+  // VehicleMaintenanceReference in src/types.ts) - a separate reference
+  // dataset from vehicle-service-schedules above, keyed on Vehicle No.
+  app.get('/api/vehicle-maintenance-reference', async (req, res) => {
+    try { res.json(await getVehicleMaintenanceReferences()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/vehicle-maintenance-reference', async (req, res) => {
+    try {
+      const body: VehicleMaintenanceReference = req.body;
+      if (!body.vehicleNo || !body.vehicleNo.trim()) {
+        return res.status(400).json({ error: 'Vehicle No is required.' });
+      }
+      res.json({ success: true, data: await upsertVehicleMaintenanceReference({ ...body, vehicleNo: body.vehicleNo.trim().toUpperCase() }) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
   // Retired - Service Schedule's Service Due/Washing Due cycle config is now
   // fixed per-category defaults with per-vehicle overrides (see
   // VehicleServiceSchedule.cycleDays/reminderDays and
@@ -3648,6 +3674,58 @@ async function startServer() {
     }
   });
 
+  // Warehouse Details > Rates - editable overrides (2026-08-29, see
+  // WarehouseRateOverride in src/types.ts). A sibling path to /api/warehouse,
+  // not a sub-path of it, so it needs its own requireWarehouseAccess
+  // registration rather than inheriting the one above. Writes (add/edit/
+  // delete a rate) are further restricted to Super Admin only - this is
+  // core pricing data, not a routine data-entry field.
+  app.use('/api/warehouse-rate-overrides', requireWarehouseAccess);
+  app.get('/api/warehouse-rate-overrides', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      res.json(maskAttributionField(await getWarehouseRateOverrides(), 'enteredBy', sessionUser));
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/warehouse-rate-overrides', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (sessionUser?.department !== 'super_admin') {
+        return res.status(403).json({ error: 'Only Super Admin can edit or add warehouse rates.' });
+      }
+      const body: WarehouseRateOverride = req.body;
+      if (!body.id || !body.kind || !body.dims || !body.value) {
+        return res.status(400).json({ error: 'id, kind, dims, and value are required.' });
+      }
+      const existing = (await getWarehouseRateOverrides()).find(o => o.id === body.id);
+      const result = await saveWarehouseRateOverride({ ...body, enteredBy: sessionUser.username });
+      await createAuditLog({
+        user: sessionUser, action: existing ? 'UPDATE' : 'CREATE', module: 'Warehouse Details', entityType: 'Rate Override', entityId: body.id,
+        description: `${existing ? 'Updated' : 'Added'} warehouse rate override ${body.id}`,
+        oldData: existing, newData: body,
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
+      res.json({ success: true, data: maskAttributionField(result, 'enteredBy', sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/warehouse-rate-overrides/:id', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (sessionUser?.department !== 'super_admin') {
+        return res.status(403).json({ error: 'Only Super Admin can delete a warehouse rate override.' });
+      }
+      const { id } = req.params;
+      const existing = (await getWarehouseRateOverrides()).find(o => o.id === id);
+      const result = await deleteWarehouseRateOverride(id);
+      await createAuditLog({
+        user: sessionUser, action: 'DELETE', module: 'Warehouse Details', entityType: 'Rate Override', entityId: id,
+        description: `Deleted warehouse rate override ${id} - reverts to the default rate`,
+        oldData: existing,
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
+      res.json({ success: true, data: maskAttributionField(result, 'enteredBy', sessionUser) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
 
   // Mileage Reports (Trip Details) endpoints - same restricted-access +
   // row-filtering pattern as /api/fuel above. Note there is no PUT route:
@@ -4111,6 +4189,30 @@ async function startServer() {
       const allowed = getAllowedDriverViewLocations(sessionUser);
       const all = await getDriverEmployees();
       res.json(allowed === 'ALL' ? all : all.filter(d => allowed.includes(d.location)));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.use('/api/drivers/petty-cash-advances', requireDriverAccess);
+  // Driver Salary's "Petty Cash/Advance" auto-fetch (2026-08-29) - a narrow
+  // slice of Petty Cash (only the "DRIVER SALARY ADV" category, and only
+  // vendorId/date/cashPaid/enteredBy, nothing else) rather than the full
+  // Petty Cash ledger, so a Driver Details viewer without any Petty Cash
+  // module access of their own still sees these figures without being
+  // granted broader Petty Cash visibility. enteredBy is masked to Super
+  // Admins only, same convention every other module's enteredBy already
+  // follows - computeDriverPettyCashAdvance client-side (see
+  // src/utils/driverPettyCashAdvance.ts) matches this against Driver ID and
+  // groups by month.
+  app.get('/api/drivers/petty-cash-advances', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const all = await getPettyCashVouchers();
+      const slim = all
+        .filter(v => (v.category || '').trim().toUpperCase() === 'DRIVER SALARY ADV')
+        .map(v => ({ vendorId: v.vendorId, date: v.date, cashPaid: v.cashPaid, enteredBy: v.enteredBy }));
+      res.json(maskAttributionField(slim, 'enteredBy', sessionUser));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

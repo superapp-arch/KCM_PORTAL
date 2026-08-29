@@ -863,9 +863,11 @@ export default function PettyCash({
       return;
     }
     // Cash Paid = 0 isn't a real disbursement - don't let it create an entry
-    // at all.
+    // at all. Deliberately no triggerNotif here (2026-08-29) - the inline
+    // red message right under the Cash Paid field (see its own input below)
+    // already tells the office what's wrong at the exact spot they need to
+    // fix it, so this doesn't also need to show as a page-wide banner.
     if (!((parseFloat(cashPaid) || 0) > 0)) {
-      triggerNotif('Please enter a valid Cash Paid amount.', 'error');
       return;
     }
     if (VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase()) && !vendorId.trim()) {
