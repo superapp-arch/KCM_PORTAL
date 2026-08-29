@@ -1617,20 +1617,23 @@ async function startServer() {
     }
   }
 
-  // Builds and sends the combined Fleet digest email right now - every
-  // vehicle whose insurance/permit/FC/tax expiry, scheduled service, or wheel
-  // alignment falls exactly on its 3/7/15 (compliance) or 3/5/7 (maintenance)
-  // day milestone today, sorted soonest-first - to the Super Admin(s) and the
-  // Vehicle Data Manager (Chandana), same recipients as before this covered
-  // maintenance too. Used both by the automatic daily schedule and the manual
-  // "Send Alerts Now" button; the manual path always sends regardless of
-  // whether today's automatic digest already went out.
+  // Builds and sends the Compliance digest email right now - every vehicle
+  // whose insurance/permit/FC/tax expiry falls exactly on its 3/7/15-day
+  // milestone today, sorted soonest-first - to the Super Admin(s) and the
+  // Vehicle Data Manager (Chandana). Used both by the automatic daily
+  // schedule and the manual "Send Alerts Now" button; the manual path always
+  // sends regardless of whether today's automatic digest already went out.
+  //
+  // 2026-08-29: deliberately compliance-only again - it used to also fold in
+  // Scheduled Service/Wheel Alignment (calculateMaintenanceMilestoneAlerts
+  // below) into one merged email, but that's been pulled back out on direct
+  // instruction: compliance alerts were "perfect as they were" and shouldn't
+  // be touched, while Scheduled Service/Wheel Alignment/Washing get their
+  // own separate treatment (recipients/content) once that's specified -
+  // calculateMaintenanceMilestoneAlerts is left defined below, just unused
+  // here for now, ready to wire into that separate flow later.
   async function buildAndSendComplianceDigest(): Promise<{ sent: boolean; count: number; recipients: string[] }> {
-    const [complianceAlerts, maintenanceAlerts] = await Promise.all([
-      calculateMilestoneAlerts(),
-      calculateMaintenanceMilestoneAlerts()
-    ]);
-    const sortedAlerts = [...complianceAlerts, ...maintenanceAlerts].sort((a, b) => a.diffDays - b.diffDays);
+    const sortedAlerts = await calculateMilestoneAlerts();
     if (sortedAlerts.length === 0) return { sent: false, count: 0, recipients: [] };
 
     const usersList = await getUsersWithFallback();
@@ -1659,11 +1662,11 @@ async function startServer() {
     await resend.emails.send({
       from: process.env.EMAIL_FROM || 'alerts@kcmlogistics.in',
       to: recipients,
-      subject: 'KCM Fleet Compliance & Maintenance Digest',
+      subject: 'KCM Fleet Compliance Digest',
       html: `
         <div style="font-family:Arial,sans-serif;line-height:1.5;">
           <p>Hello,</p>
-          <p>The following documents, scheduled services, and wheel alignments are coming due - please action before the due date.</p>
+          <p>The following documents are coming due - please action before the due date.</p>
           <table style="border-collapse:collapse;font-size:13px;">
             <thead>
               <tr>
@@ -1676,15 +1679,15 @@ async function startServer() {
             </thead>
             <tbody>${rows}</tbody>
           </table>
-          <p style="margin-top:14px;">Please arrange renewals/service at the earliest to avoid compliance violations or breakdowns.</p>
+          <p style="margin-top:14px;">Please arrange renewals at the earliest to avoid compliance violations.</p>
         </div>
       `,
     });
 
     await saveNotification({
       id: `digest-sent-${todayKey}`,
-      title: 'Daily Compliance & Maintenance Digest Sent',
-      message: `Digest emailed to ${recipients.join(', ')} covering ${sortedAlerts.length} item${sortedAlerts.length === 1 ? '' : 's'} (compliance at 3/7/15 days, service/alignment at 3/5/7 days).`,
+      title: 'Daily Compliance Digest Sent',
+      message: `Digest emailed to ${recipients.join(', ')} covering ${sortedAlerts.length} item${sortedAlerts.length === 1 ? '' : 's'} (compliance at 3/7/15 days).`,
       type: 'general',
       timestamp: istTimestamp(),
       read: true
@@ -2450,14 +2453,14 @@ async function startServer() {
         return res.json({
           success: true,
           sent: false,
-          message: 'Nothing is currently at its 3/7/15-day expiry mark (insurance, permits, FC, tax) or its 3/5/7-day mark (scheduled service, wheel alignment) - nothing to send.'
+          message: 'Nothing is currently at its 3/7/15-day expiry mark (insurance, permits, FC, tax) - nothing to send.'
         });
       }
 
       res.json({
         success: true,
         sent: true,
-        message: `Compliance & maintenance digest sent to ${result.recipients.join(', ')} covering ${result.count} item${result.count === 1 ? '' : 's'}.`
+        message: `Compliance digest sent to ${result.recipients.join(', ')} covering ${result.count} item${result.count === 1 ? '' : 's'}.`
       });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
