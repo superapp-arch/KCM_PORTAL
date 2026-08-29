@@ -30,8 +30,8 @@ import {
   ToolsChecklistRecord,
   ServiceStationSparePart,
   ServiceStationInspection,
-  BunkPaymentPeriod,
-  BunkPayment
+  DieselBunkAccount,
+  DieselBunkPayment
 } from '../types';
 import FleetSheet from './FleetSheet';
 import FuelManagement from './FuelManagement';
@@ -195,12 +195,12 @@ interface AdministrationProps {
   onAddMileageReport: (report: Omit<MileageReport, 'id'>) => Promise<string | undefined>;
   onUpdateMileageReport: (id: string, report: Partial<MileageReport>) => Promise<void>;
   onDeleteMileageReport: (id: string) => Promise<void>;
-  bunkPaymentPeriods: BunkPaymentPeriod[];
-  onSaveBunkPaymentPeriod: (period: Omit<BunkPaymentPeriod, 'id'> & { id?: string }) => Promise<string | undefined>;
-  onDeleteBunkPaymentPeriod: (id: string) => Promise<void>;
-  bunkPayments: BunkPayment[];
-  onAddBunkPayment: (payment: Omit<BunkPayment, 'id' | 'enteredBy'>) => Promise<void>;
-  onDeleteBunkPayment: (id: string) => Promise<void>;
+  dieselBunkAccounts: DieselBunkAccount[];
+  onSaveDieselBunkAccount: (account: Omit<DieselBunkAccount, 'id'> & { id?: string }) => Promise<string | undefined>;
+  onDeleteDieselBunkAccount: (id: string) => Promise<void>;
+  dieselBunkPayments: DieselBunkPayment[];
+  onAddDieselBunkPayment: (payment: Omit<DieselBunkPayment, 'id' | 'enteredBy'>) => Promise<void>;
+  onDeleteDieselBunkPayment: (id: string) => Promise<void>;
   marketPodEntries: MarketPodEntry[];
   onAddMarketPodEntry: (entry: Omit<MarketPodEntry, 'id'>) => Promise<void>;
   onUpdateMarketPodEntry: (id: string, entry: Partial<MarketPodEntry>) => Promise<void>;
@@ -304,12 +304,12 @@ export default function Administration({
   onAddMileageReport,
   onUpdateMileageReport,
   onDeleteMileageReport,
-  bunkPaymentPeriods,
-  onSaveBunkPaymentPeriod,
-  onDeleteBunkPaymentPeriod,
-  bunkPayments,
-  onAddBunkPayment,
-  onDeleteBunkPayment,
+  dieselBunkAccounts,
+  onSaveDieselBunkAccount,
+  onDeleteDieselBunkAccount,
+  dieselBunkPayments,
+  onAddDieselBunkPayment,
+  onDeleteDieselBunkPayment,
   marketPodEntries,
   onAddMarketPodEntry,
   onUpdateMarketPodEntry,
@@ -1156,12 +1156,12 @@ export default function Administration({
             <Payments
               user={user}
               fuelLogs={fuelLogs}
-              bunkPaymentPeriods={bunkPaymentPeriods}
-              onSaveBunkPaymentPeriod={onSaveBunkPaymentPeriod}
-              onDeleteBunkPaymentPeriod={onDeleteBunkPaymentPeriod}
-              bunkPayments={bunkPayments}
-              onAddBunkPayment={onAddBunkPayment}
-              onDeleteBunkPayment={onDeleteBunkPayment}
+              dieselBunkAccounts={dieselBunkAccounts}
+              onSaveDieselBunkAccount={onSaveDieselBunkAccount}
+              onDeleteDieselBunkAccount={onDeleteDieselBunkAccount}
+              dieselBunkPayments={dieselBunkPayments}
+              onAddDieselBunkPayment={onAddDieselBunkPayment}
+              onDeleteDieselBunkPayment={onDeleteDieselBunkPayment}
             />
           )}
 

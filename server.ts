@@ -67,7 +67,9 @@ import {
   ServiceStationInspection,
   AuditAction,
   BunkPaymentPeriod,
-  BunkPayment
+  BunkPayment,
+  DieselBunkAccount,
+  DieselBunkPayment
 } from './src/types.ts';
 import {
   seedDatabase,
@@ -133,6 +135,12 @@ import {
   getBunkPayments,
   saveBunkPayment,
   deleteBunkPayment,
+  getDieselBunkAccounts,
+  saveDieselBunkAccount,
+  deleteDieselBunkAccount,
+  getDieselBunkPayments,
+  saveDieselBunkPayment,
+  deleteDieselBunkPayment,
   migrateLegacyMaintenanceProfiles,
   migrateMileageReportTotalLitres,
   getAccountsEntries,
@@ -3811,6 +3819,129 @@ async function startServer() {
       await createAuditLog({
         user: sessionUser, action: 'DELETE', module: 'Payments', entityType: 'Bunk Payment', entityId: id,
         description: `Deleted a ${existing?.mode || ''} payment of ₹${existing?.amount || 0} from payment period ${existing?.bunkPeriodId || id}`,
+        oldData: existing,
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
+      res.json({ success: true, data: maskAttributionField(result, 'enteredBy', sessionUser) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Diesel Payments module (2026-08-29 rework) - a running per-bunk account,
+  // not a period/cycle-based statement (see src/types.ts's DieselBunkAccount/
+  // DieselBunkPayment). Reuses the same requirePaymentsAccess gate as the
+  // deprecated bunk-payment-periods/bunk-payments routes above.
+  app.use('/api/diesel-bunk-accounts', requirePaymentsAccess);
+  app.use('/api/diesel-bunk-payments', requirePaymentsAccess);
+
+  app.get('/api/diesel-bunk-accounts', async (req, res) => {
+    try { res.json(await getDieselBunkAccounts()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/diesel-bunk-accounts', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const body: DieselBunkAccount = req.body;
+      if (!body.bunkName || !body.location) {
+        return res.status(400).json({ error: 'Bunk Name and Location are required.' });
+      }
+      const allAccounts = await getDieselBunkAccounts();
+      const existing = body.id ? allAccounts.find(a => a.id === body.id) : undefined;
+      // One account per (Bunk Name, Location) - the same identity Fuel
+      // Management itself uses to group fuel entries by bunk.
+      const duplicate = allAccounts.find(a => a.id !== body.id && a.bunkName === body.bunkName && a.location === body.location);
+      if (duplicate) {
+        return res.status(409).json({ error: `An account for ${body.bunkName} (${body.location}) already exists.` });
+      }
+      const newId = body.id || String(Date.now());
+      const result = await saveDieselBunkAccount({
+        ...body, id: newId,
+        openingBalance: Number(body.openingBalance) || 0,
+        highExposureThreshold: body.highExposureThreshold != null ? Number(body.highExposureThreshold) : undefined
+      });
+      await createAuditLog({
+        user: sessionUser, action: existing ? 'UPDATE' : 'CREATE', module: 'Diesel Payments', entityType: 'Diesel Bunk Account', entityId: newId,
+        description: `${existing ? 'Updated' : 'Created'} diesel bunk account for ${body.bunkName} (${body.location})`,
+        oldData: existing, newData: { ...body, id: newId },
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
+      res.json({ success: true, id: newId, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/diesel-bunk-accounts/:id', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const { id } = req.params;
+      const existing = (await getDieselBunkAccounts()).find(a => a.id === id);
+      const orphanedPayments = (await getDieselBunkPayments()).filter(p => p.bunkId === id);
+      const result = await deleteDieselBunkAccount(id);
+      await createAuditLog({
+        user: sessionUser, action: 'DELETE', module: 'Diesel Payments', entityType: 'Diesel Bunk Account', entityId: id,
+        description: `Deleted diesel bunk account for ${existing?.bunkName || id} (${existing?.location || ''})${orphanedPayments.length > 0 ? ` and its ${orphanedPayments.length} payment(s)` : ''}`,
+        oldData: existing,
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
+      res.json({ success: true, data: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/diesel-bunk-payments', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      res.json(maskAttributionField(await getDieselBunkPayments(), 'enteredBy', sessionUser));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Add Payment always appends - the UI never sends an existing id, so this
+  // only ever creates a new row, never overwrites a prior payment. No cap
+  // against the outstanding balance - overpayment is allowed, per spec.
+  app.post('/api/diesel-bunk-payments', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const body: DieselBunkPayment = req.body;
+      if (!body.bunkId || !body.amount || body.amount <= 0 || !body.mode || !body.date) {
+        return res.status(400).json({ error: 'Amount, Payment Mode, and Date are required.' });
+      }
+      if (!['cash', 'card', 'netbanking'].includes(body.mode)) {
+        return res.status(400).json({ error: 'Payment Mode must be Cash, Card, or Netbanking.' });
+      }
+      // Reference/Note is mandatory for Card/Netbanking (reconciliation),
+      // optional for Cash - mirrors Payments.tsx's own inline check.
+      if (body.mode !== 'cash' && !(body.reference || '').trim()) {
+        return res.status(400).json({ error: 'Reference/Note is required for Card and Netbanking payments.' });
+      }
+      if (isFutureDate(body.date)) return res.status(400).json({ error: 'Payment date cannot be in the future.' });
+      const newId = String(Date.now());
+      const result = await saveDieselBunkPayment({ ...body, id: newId, reference: (body.reference || '').trim() || undefined, enteredBy: sessionUser?.username });
+      await createAuditLog({
+        user: sessionUser, action: 'CREATE', module: 'Diesel Payments', entityType: 'Diesel Bunk Payment', entityId: newId,
+        description: `Logged a ${body.mode} payment of ₹${body.amount} against diesel bunk account ${body.bunkId}`,
+        newData: { ...body, id: newId },
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
+      res.json({ success: true, data: maskAttributionField(result, 'enteredBy', sessionUser) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/diesel-bunk-payments/:id', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const { id } = req.params;
+      const existing = (await getDieselBunkPayments()).find(p => p.id === id);
+      const result = await deleteDieselBunkPayment(id);
+      await createAuditLog({
+        user: sessionUser, action: 'DELETE', module: 'Diesel Payments', entityType: 'Diesel Bunk Payment', entityId: id,
+        description: `Deleted a ${existing?.mode || ''} payment of ₹${existing?.amount || 0} from diesel bunk account ${existing?.bunkId || id}`,
         oldData: existing,
         ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
       });

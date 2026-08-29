@@ -961,39 +961,68 @@ export interface MileageReport {
   enteredBy?: string; // username, stamped server-side; visible only to super admins
 }
 
-// Payments module - reconciling what's owed to a fuel bunk (Bunk Name +
-// Location, both pulled straight from Fuel Management's own FuelLog.bunkName/
-// location, never re-typed here) against however many payments actually
-// settle it. One row per (bunk, custom date period) - the same (Location,
-// Bunk Name) pair Fuel Management's own Bunk Summary panel already groups
-// by, just with a period the office sets themselves instead of a fixed
-// Till-Date/This-Month toggle. Total Amount is deliberately NOT a field
-// here - it's always derived at read time as SUM of FuelLog.amount for this
-// bunkName+location within periodFrom..periodTo (see Payments.tsx's
-// computeTotalAmount / server.ts's own mirror of it), so it can never drift
-// from what Fuel Management actually shows.
+// Diesel Payments module (2026-08-29 rework) - a running per-bunk account,
+// NOT a period/cycle-based statement. Each bunk (Bunk Name + Location, both
+// pulled straight from Fuel Management's own FuelLog.bunkName/location -
+// the same identity Fuel Management's own Bunk Summary panel already groups
+// by) has ONE continuous ledger: the balance only ever moves on a purchase
+// (increases what's owed) or a payment (reduces it), and carries forward
+// indefinitely - it never resets on a calendar/period boundary. Supersedes
+// BunkPaymentPeriod/BunkPayment below, which the module no longer reads or
+// writes (kept only so any pre-existing rows aren't silently deleted).
+export interface DieselBunkAccount {
+  id: string;
+  bunkName: string;
+  location: string; // same bunk name can exist at more than one location (e.g. HPCL at BLR/Chennai/Goa) - each is its own account
+  openingBalance: number; // signed - negative means KCM owes this bunk money as of when this account was created; 0 for a brand-new bunk with no starting balance to carry in
+  // Per-bunk High/Pending/Clear exposure threshold (₹ currently owed) -
+  // falls back to DEFAULT_HIGH_EXPOSURE_THRESHOLD (see Payments.tsx) when
+  // unset, so every bunk still gets a sensible badge without having to
+  // configure this on day one.
+  highExposureThreshold?: number;
+}
+
+// A manual payment logged against a DieselBunkAccount. Purchases are
+// deliberately NOT stored as rows anywhere - they're computed live from
+// Fuel Management's own FuelLog rows for this bunk's (bunkName, location)
+// (see Payments.tsx's purchasesFor), so editing or deleting a fuel entry
+// there automatically updates this bunk's balance/history here too, with no
+// separate sync step to ever forget or get wrong. Payments themselves are
+// never overwritten - settling across Cash/Card/Netbanking or multiple
+// installments is just more rows against the same bunkId.
+export interface DieselBunkPayment {
+  id: string;
+  bunkId: string; // FK -> DieselBunkAccount.id
+  date: string; // YYYY-MM-DD
+  amount: number; // always positive - overpayment is allowed, no cap against the outstanding balance
+  mode: 'cash' | 'card' | 'netbanking';
+  reference?: string; // transaction ID/note - mandatory for card/netbanking (enforced in the form and server-side), optional for cash
+  // username, stamped server-side - visible only to Super Admins/Principal
+  // (department === 'super_admin'), same maskAttributionField treatment
+  // server.ts already applies to FuelLog.enteredBy.
+  enteredBy?: string;
+}
+
+// [Deprecated 2026-08-29] Period/cycle-based predecessor of the Diesel
+// Payments module above - superseded by DieselBunkAccount/DieselBunkPayment.
+// No longer read or written by Payments.tsx; kept only so any rows already
+// saved under this scheme aren't silently deleted from the database.
 export interface BunkPaymentPeriod {
   id: string;
   bunkName: string;
   location: string;
   periodFrom: string; // YYYY-MM-DD
   periodTo: string; // YYYY-MM-DD
-  enteredBy?: string; // username, stamped server-side; visible only to super admins, same masking every other module's enteredBy already uses
+  enteredBy?: string;
 }
 
-// One individual payment against a BunkPaymentPeriod - never overwritten;
-// settling a period across Cash/Card/Netbanking or multiple installments is
-// just more rows against the same bunkPeriodId, not edits to a single total.
+// [Deprecated 2026-08-29] See BunkPaymentPeriod above.
 export interface BunkPayment {
   id: string;
   bunkPeriodId: string; // FK -> BunkPaymentPeriod.id
   amount: number;
   mode: 'card' | 'cash' | 'netbanking';
   paidDate: string; // YYYY-MM-DD
-  // username, stamped server-side - visible only to Super Admins/Principal
-  // (department === 'super_admin'), NOT Praveen even though he has module
-  // access - same maskAttributionField treatment server.ts already applies
-  // to FuelLog.enteredBy.
   enteredBy?: string;
 }
 

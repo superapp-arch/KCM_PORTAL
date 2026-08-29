@@ -7,6 +7,8 @@ import {
   pettyCashVouchers,
   bunkPaymentPeriods,
   bunkPayments,
+  dieselBunkAccounts,
+  dieselBunkPayments,
   maintenanceRecords,
   accountsEntries,
   staffEmployees,
@@ -62,6 +64,8 @@ import {
   PettyCashVoucher,
   BunkPaymentPeriod,
   BunkPayment,
+  DieselBunkAccount,
+  DieselBunkPayment,
   MaintenanceRecord,
   AccountsEntry,
   StaffEmployee,
@@ -710,6 +714,93 @@ export async function deleteBunkPayment(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteBunkPayment:", error);
     throw new Error("Failed to delete bunk payment.", { cause: error });
+  }
+}
+
+// --- DIESEL PAYMENTS MODULE OPERATIONS (bunk accounts + their payments) ---
+export async function getDieselBunkAccounts(): Promise<DieselBunkAccount[]> {
+  try {
+    const rows = await db.select().from(dieselBunkAccounts);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getDieselBunkAccounts:", error);
+    throw new Error("Failed to retrieve diesel bunk accounts.", { cause: error });
+  }
+}
+
+export async function saveDieselBunkAccount(account: DieselBunkAccount) {
+  try {
+    const id = account.id || String(Date.now());
+    const complete = { ...account, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(dieselBunkAccounts).where(eq(dieselBunkAccounts.id, id));
+    if (existing.length > 0) {
+      await db.update(dieselBunkAccounts).set({ data: dataString, bunkName: complete.bunkName }).where(eq(dieselBunkAccounts.id, id));
+    } else {
+      await db.insert(dieselBunkAccounts).values({ id, bunkName: complete.bunkName, data: dataString });
+    }
+    return await getDieselBunkAccounts();
+  } catch (error) {
+    console.error("Database action failed in saveDieselBunkAccount:", error);
+    throw new Error("Failed to save diesel bunk account.", { cause: error });
+  }
+}
+
+export async function deleteDieselBunkAccount(id: string) {
+  try {
+    await db.delete(dieselBunkAccounts).where(eq(dieselBunkAccounts.id, id));
+    // Deleting an account orphans its own payments - clean those up too
+    // rather than leaving unreachable rows behind (mirrors
+    // handleDeletePeriod's own "delete a period, delete its payments"
+    // cascade from the old scheme).
+    const orphaned = (await getDieselBunkPayments()).filter(p => p.bunkId === id);
+    for (const p of orphaned) await db.delete(dieselBunkPayments).where(eq(dieselBunkPayments.id, p.id));
+    return await getDieselBunkAccounts();
+  } catch (error) {
+    console.error("Database action failed in deleteDieselBunkAccount:", error);
+    throw new Error("Failed to delete diesel bunk account.", { cause: error });
+  }
+}
+
+export async function getDieselBunkPayments(): Promise<DieselBunkPayment[]> {
+  try {
+    const rows = await db.select().from(dieselBunkPayments);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getDieselBunkPayments:", error);
+    throw new Error("Failed to retrieve diesel bunk payments.", { cause: error });
+  }
+}
+
+// Add Payment always appends - a payment is never overwritten (see
+// DieselBunkPayment's own comment), so this only ever inserts in practice.
+export async function saveDieselBunkPayment(payment: DieselBunkPayment) {
+  try {
+    const id = payment.id || String(Date.now());
+    const complete = { ...payment, id };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(dieselBunkPayments).where(eq(dieselBunkPayments.id, id));
+    if (existing.length > 0) {
+      await db.update(dieselBunkPayments).set({ data: dataString, bunkId: complete.bunkId }).where(eq(dieselBunkPayments.id, id));
+    } else {
+      await db.insert(dieselBunkPayments).values({ id, bunkId: complete.bunkId, data: dataString });
+    }
+    return await getDieselBunkPayments();
+  } catch (error) {
+    console.error("Database action failed in saveDieselBunkPayment:", error);
+    throw new Error("Failed to save diesel bunk payment.", { cause: error });
+  }
+}
+
+export async function deleteDieselBunkPayment(id: string) {
+  try {
+    await db.delete(dieselBunkPayments).where(eq(dieselBunkPayments.id, id));
+    return await getDieselBunkPayments();
+  } catch (error) {
+    console.error("Database action failed in deleteDieselBunkPayment:", error);
+    throw new Error("Failed to delete diesel bunk payment.", { cause: error });
   }
 }
 

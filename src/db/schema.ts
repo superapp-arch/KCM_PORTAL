@@ -39,9 +39,10 @@ export const fuelLogs = pgTable('fuel_logs', {
   data: text('data').notNull(), // JSON string representing the full FuelLog object
 });
 
-// Payments module - bunk payment periods (Total Amount is derived from
-// fuelLogs at read time, never stored here - see src/types.ts's
-// BunkPaymentPeriod) and their individual payments (one-to-many).
+// [Deprecated 2026-08-29] Payments module's old period/cycle-based scheme -
+// superseded by diesel_bunk_accounts/diesel_bunk_payments below. No longer
+// read or written by the app; kept only so pre-existing rows aren't
+// silently dropped.
 export const bunkPaymentPeriods = pgTable('bunk_payment_periods', {
   id: text('id').primaryKey(),
   data: text('data').notNull(), // JSON string representing the full BunkPaymentPeriod object
@@ -50,6 +51,26 @@ export const bunkPaymentPeriods = pgTable('bunk_payment_periods', {
 export const bunkPayments = pgTable('bunk_payments', {
   id: text('id').primaryKey(),
   data: text('data').notNull(), // JSON string representing the full BunkPayment object
+});
+
+// Diesel Payments module (2026-08-29 rework) - one continuous account per
+// fuel bunk (see src/types.ts's DieselBunkAccount) - Current Balance is
+// derived at read time (opening_balance - purchases-from-Fuel-Management +
+// payments below), never stored, so it can never drift from what Fuel
+// Management/the payments log actually show.
+export const dieselBunkAccounts = pgTable('diesel_bunk_accounts', {
+  id: text('id').primaryKey(),
+  bunkName: text('bunk_name'),
+  data: text('data').notNull(), // JSON string representing the full DieselBunkAccount object
+});
+
+// One row per manual payment against a DieselBunkAccount (see
+// src/types.ts's DieselBunkPayment) - purchases are never stored as rows
+// here or anywhere else, only computed live from FuelLog.
+export const dieselBunkPayments = pgTable('diesel_bunk_payments', {
+  id: text('id').primaryKey(),
+  bunkId: text('bunk_id'),
+  data: text('data').notNull(), // JSON string representing the full DieselBunkPayment object
 });
 
 // Billing invoices table

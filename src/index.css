@@ -1,13 +1,26 @@
 @import "tailwindcss";
 
-/* Hides native number-input spin buttons - used on HR & Payroll's numeric
-   fields, where scrolling/clicking the spinner was unintentionally changing
-   values (e.g. into negatives). */
+/* Hides native number-input spin buttons app-wide (2026-08-29) - every
+   employee types numbers in by hand, so the up/down spinner on every
+   <input type="number"> across every module (Maintenance, Petty Cash,
+   Warehouse, HR, Billing, Fleet, etc.) is pure clutter, and scrolling/
+   clicking it could unintentionally change a value. Global, not opt-in -
+   there are ~100 number inputs across this app and no shared numeric input
+   component to funnel them through (only DateInput.tsx exists, for dates),
+   so targeting the raw input[type="number"] selector directly is what
+   actually reaches all of them, including any added later, with zero
+   per-field changes needed. `.no-spinner` is kept below as a harmless
+   no-op alias for the handful of places that already reference it in
+   their className.
+*/
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button,
 .no-spinner::-webkit-outer-spin-button,
 .no-spinner::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
+input[type="number"],
 .no-spinner {
   -moz-appearance: textfield;
 }

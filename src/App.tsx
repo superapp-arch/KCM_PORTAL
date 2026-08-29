@@ -36,8 +36,8 @@ import {
   ToolsChecklistRecord,
   ServiceStationSparePart,
   ServiceStationInspection,
-  BunkPaymentPeriod,
-  BunkPayment
+  DieselBunkAccount,
+  DieselBunkPayment
 } from './types';
 
 export default function App() {
@@ -81,8 +81,8 @@ export default function App() {
   const [driverVehicleLookup, setDriverVehicleLookup] = useState<DriverVehicleLookup[]>([]);
   const [vehicleLoans, setVehicleLoans] = useState<VehicleLoan[]>([]);
   const [businessLoans, setBusinessLoans] = useState<BusinessLoan[]>([]);
-  const [bunkPaymentPeriods, setBunkPaymentPeriods] = useState<BunkPaymentPeriod[]>([]);
-  const [bunkPayments, setBunkPayments] = useState<BunkPayment[]>([]);
+  const [dieselBunkAccounts, setDieselBunkAccounts] = useState<DieselBunkAccount[]>([]);
+  const [dieselBunkPayments, setDieselBunkPayments] = useState<DieselBunkPayment[]>([]);
 
   // 1. Initial Session Handshake
   // Restores strictly from THIS browser's own stored token - never from a
@@ -151,8 +151,8 @@ export default function App() {
         driverVehicleLookupRes,
         vehicleLoansRes,
         businessLoansRes,
-        bunkPaymentPeriodsRes,
-        bunkPaymentsRes
+        dieselBunkAccountsRes,
+        dieselBunkPaymentsRes
       ] = await Promise.all([
         fetch('/api/fleet'),
         authFetch('/api/fuel'),
@@ -182,8 +182,8 @@ export default function App() {
         authFetch('/api/drivers/vehicle-lookup'),
         authFetch('/api/vehicle-loans'),
         authFetch('/api/business-loans'),
-        authFetch('/api/bunk-payment-periods'),
-        authFetch('/api/bunk-payments')
+        authFetch('/api/diesel-bunk-accounts'),
+        authFetch('/api/diesel-bunk-payments')
       ]);
 
       if (fleetRes.ok) setVehicles(await fleetRes.json());
@@ -214,8 +214,8 @@ export default function App() {
       if (driverVehicleLookupRes.ok) setDriverVehicleLookup(await driverVehicleLookupRes.json());
       if (vehicleLoansRes.ok) setVehicleLoans(await vehicleLoansRes.json());
       if (businessLoansRes.ok) setBusinessLoans(await businessLoansRes.json());
-      if (bunkPaymentPeriodsRes.ok) setBunkPaymentPeriods(await bunkPaymentPeriodsRes.json());
-      if (bunkPaymentsRes.ok) setBunkPayments(await bunkPaymentsRes.json());
+      if (dieselBunkAccountsRes.ok) setDieselBunkAccounts(await dieselBunkAccountsRes.json());
+      if (dieselBunkPaymentsRes.ok) setDieselBunkPayments(await dieselBunkPaymentsRes.json());
     } catch (err) {
       console.error('Failed to populate core ledgers:', err);
     }
@@ -1037,17 +1037,17 @@ export default function App() {
     }
   };
 
-  // Payments module - one POST route upserts a bunk payment period by id
-  // (create vs. update decided by whether `id` is present), same "no
-  // separate PUT" pattern /api/mileage already uses. Returns the id (server
-  // generates and echoes it back for a create) so the Payments screen can
-  // immediately log a first payment against a brand-new period in the same
-  // flow, same "return the id" pattern handleAddMileageReport already uses.
-  const handleSaveBunkPaymentPeriod = async (period: Omit<BunkPaymentPeriod, 'id'> & { id?: string }): Promise<string | undefined> => {
-    const res = await authFetch('/api/bunk-payment-periods', {
+  // Diesel Payments module (2026-08-29 rework) - one POST route upserts a
+  // bunk account by id (create vs. update decided by whether `id` is
+  // present), same "no separate PUT" pattern /api/mileage already uses.
+  // Returns the id (server generates and echoes it back for a create) so
+  // the Payments screen can immediately log a payment against a
+  // just-created account in the same flow.
+  const handleSaveDieselBunkAccount = async (account: Omit<DieselBunkAccount, 'id'> & { id?: string }): Promise<string | undefined> => {
+    const res = await authFetch('/api/diesel-bunk-accounts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(period)
+      body: JSON.stringify(account)
     });
     if (res.ok) {
       const data = await res.json();
@@ -1055,21 +1055,21 @@ export default function App() {
       return data.id as string | undefined;
     }
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || 'Failed to save payment period.');
+    throw new Error(body.error || 'Failed to save bunk account.');
   };
 
-  const handleDeleteBunkPaymentPeriod = async (id: string) => {
-    const res = await authFetch(`/api/bunk-payment-periods/${id}`, { method: 'DELETE' });
+  const handleDeleteDieselBunkAccount = async (id: string) => {
+    const res = await authFetch(`/api/diesel-bunk-accounts/${id}`, { method: 'DELETE' });
     if (res.ok) {
       await fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || 'Failed to delete payment period.');
+      throw new Error(body.error || 'Failed to delete bunk account.');
     }
   };
 
-  const handleAddBunkPayment = async (payment: Omit<BunkPayment, 'id' | 'enteredBy'>) => {
-    const res = await authFetch('/api/bunk-payments', {
+  const handleAddDieselBunkPayment = async (payment: Omit<DieselBunkPayment, 'id' | 'enteredBy'>) => {
+    const res = await authFetch('/api/diesel-bunk-payments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payment)
@@ -1082,8 +1082,8 @@ export default function App() {
     }
   };
 
-  const handleDeleteBunkPayment = async (id: string) => {
-    const res = await authFetch(`/api/bunk-payments/${id}`, { method: 'DELETE' });
+  const handleDeleteDieselBunkPayment = async (id: string) => {
+    const res = await authFetch(`/api/diesel-bunk-payments/${id}`, { method: 'DELETE' });
     if (res.ok) {
       await fetchAllData();
     } else {
@@ -1308,12 +1308,12 @@ export default function App() {
         notifications={notifications}
         warehouseEntries={warehouseEntries}
         mileageReports={mileageReports}
-        bunkPaymentPeriods={bunkPaymentPeriods}
-        onSaveBunkPaymentPeriod={handleSaveBunkPaymentPeriod}
-        onDeleteBunkPaymentPeriod={handleDeleteBunkPaymentPeriod}
-        bunkPayments={bunkPayments}
-        onAddBunkPayment={handleAddBunkPayment}
-        onDeleteBunkPayment={handleDeleteBunkPayment}
+        dieselBunkAccounts={dieselBunkAccounts}
+        onSaveDieselBunkAccount={handleSaveDieselBunkAccount}
+        onDeleteDieselBunkAccount={handleDeleteDieselBunkAccount}
+        dieselBunkPayments={dieselBunkPayments}
+        onAddDieselBunkPayment={handleAddDieselBunkPayment}
+        onDeleteDieselBunkPayment={handleDeleteDieselBunkPayment}
         onUpdateVehicle={handleUpdateVehicle}
         onDeleteVehicle={handleDeleteVehicle}
         onAddFuelLog={handleAddFuelLog}
