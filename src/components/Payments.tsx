@@ -371,7 +371,8 @@ export default function Payments({
                 {historyRow.bunkName} <span className="text-slate-400 font-normal text-base">({historyRow.location})</span>
               </h1>
               <p className="text-xs text-slate-500 font-mono mt-1">
-                Full passbook - every purchase (from Fuel Management) and payment, oldest first, with a running balance.
+                Diesel Payment history only - Opening Balance, then every payment made against this bunk, oldest first, with the balance left after each one.
+                Fuel purchases still count toward that balance but aren't listed as rows here - see Fuel Management for individual fuel entries.
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -396,37 +397,32 @@ export default function Payments({
                 <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
                   <tr>
                     <th className="px-3 py-2.5">Date</th>
-                    <th className="px-3 py-2.5">Type</th>
                     <th className="px-3 py-2.5">Mode</th>
-                    <th className="px-3 py-2.5 text-right">Purchase Amount</th>
                     <th className="px-3 py-2.5 text-right">Payment Amount</th>
-                    <th className="px-3 py-2.5 text-right">Running Balance</th>
-                    <th className="px-3 py-2.5">Reference / Linked Entry</th>
+                    <th className="px-3 py-2.5 text-right">Balance After Payment</th>
+                    <th className="px-3 py-2.5">Payment Reference</th>
                     {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
                     <th className="px-3 py-2.5 text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-                  {passbookFor(historyRow).map(row => (
+                  {/* Diesel Payment records only - fuel purchases from Fuel
+                      Management still feed into runningBalance (so "Balance
+                      After Payment" is always the true balance at that
+                      point), they just aren't rendered as their own rows
+                      here. See Fuel Management for individual fuel entries. */}
+                  {passbookFor(historyRow).filter(row => row.kind !== 'purchase').map(row => (
                     <tr key={row.key} className={row.kind === 'opening' ? 'bg-slate-50/70' : 'hover:bg-slate-50/60 transition-colors'}>
                       <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{row.date}</td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         {row.kind === 'opening' ? (
                           <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-slate-100 text-slate-600 border-slate-300">Opening Balance</span>
-                        ) : row.kind === 'purchase' ? (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-amber-50 text-amber-700 border-amber-200">Purchase</span>
-                        ) : (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-emerald-50 text-emerald-700 border-emerald-200">Payment</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        {row.mode ? (() => { const Icon = MODE_ICON[row.mode!]; return (
+                        ) : row.mode ? (() => { const Icon = MODE_ICON[row.mode!]; return (
                           <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border inline-flex items-center gap-1 ${MODE_BADGE_CLASS[row.mode!]}`}>
                             <Icon className="w-3 h-3" /> {PAYMENT_MODES.find(m => m.value === row.mode)?.label}
                           </span>
                         ); })() : <span className="text-slate-300">-</span>}
                       </td>
-                      <td className="px-3 py-2 text-right font-mono font-bold text-rose-600 whitespace-nowrap">{row.purchaseAmount != null ? `₹${row.purchaseAmount.toLocaleString('en-IN')}` : <span className="text-slate-300">-</span>}</td>
                       <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700 whitespace-nowrap">{row.paymentAmount != null ? `₹${row.paymentAmount.toLocaleString('en-IN')}` : <span className="text-slate-300">-</span>}</td>
                       <td className={`px-3 py-2 text-right font-mono font-black whitespace-nowrap ${row.runningBalance < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
                         {row.runningBalance < 0 ? '-' : ''}₹{Math.abs(row.runningBalance).toLocaleString('en-IN')}
@@ -434,7 +430,7 @@ export default function Payments({
                       <td className="px-3 py-2 text-slate-500 max-w-[160px] truncate" title={row.reference}>{row.reference || <span className="text-slate-300">-</span>}</td>
                       {isSuperAdmin && (
                         <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">
-                          {row.kind === 'payment' ? (row.raw as DieselBunkPayment).enteredBy || '-' : row.kind === 'purchase' ? ((row.raw as FuelLog).enteredBy || '-') : '-'}
+                          {row.kind === 'payment' ? (row.raw as DieselBunkPayment).enteredBy || '-' : '-'}
                         </td>
                       )}
                       <td className="px-3 py-2 text-center whitespace-nowrap">
@@ -442,9 +438,6 @@ export default function Payments({
                           <button onClick={() => handleDeletePayment(row.raw as DieselBunkPayment)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete this payment">
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
-                        )}
-                        {row.kind === 'purchase' && (
-                          <span className="text-slate-300 text-[10px]" title="Purchases are read-only here - edit or delete the fuel entry in Fuel Management instead.">Fuel Mgmt</span>
                         )}
                       </td>
                     </tr>
@@ -483,8 +476,19 @@ export default function Payments({
               <p className="text-slate-400 mt-0.5">Owed across every tracked bunk</p>
             </div>
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-              <p className="font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5"><Building2 className="w-3.5 h-3.5" /> Bunks Tracked</p>
-              <h3 className="text-xl font-black text-slate-800 mt-1">{bunkRows.length}</h3>
+              <p className="font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5"><Building2 className="w-3.5 h-3.5" /> Bunk Wise Balance</p>
+              <div className="mt-2 space-y-1 max-h-28 overflow-y-auto pr-1">
+                {sortedRows.length === 0 ? (
+                  <p className="text-slate-400 text-center py-2">No bunks tracked yet.</p>
+                ) : sortedRows.map(row => (
+                  <div key={row.key} className="flex items-center justify-between gap-2 text-[11px]">
+                    <span className="text-slate-600 font-semibold truncate">{row.bunkName}</span>
+                    <span className={`font-mono font-bold whitespace-nowrap ${row.balance < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                      {row.balance < 0 ? '-' : ''}₹{Math.abs(row.balance).toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
             <div className="bg-white p-4 rounded-xl border border-amber-200 shadow-xs">
               <p className="font-bold text-amber-600 uppercase tracking-wider flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5" /> Highest Exposure</p>
@@ -516,6 +520,8 @@ export default function Payments({
                   <tr>
                     <th className="px-3 py-2.5">Bunk Name</th>
                     <th className="px-3 py-2.5">Location</th>
+                    <th className="px-3 py-2.5 text-right">Total Fuel Amount</th>
+                    <th className="px-3 py-2.5 text-right">Total Payments Made</th>
                     <th className="px-3 py-2.5 text-right">Current Balance</th>
                     <th className="px-3 py-2.5">Last Payment Date</th>
                     <th className="px-3 py-2.5 text-center">Status</th>
@@ -526,11 +532,13 @@ export default function Payments({
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                   {sortedRows.length === 0 ? (
-                    <tr><td colSpan={8} className="text-center py-12 text-slate-400 font-mono">NO BUNKS TRACKED YET.</td></tr>
+                    <tr><td colSpan={10} className="text-center py-12 text-slate-400 font-mono">NO BUNKS TRACKED YET.</td></tr>
                   ) : sortedRows.map(row => (
                     <tr key={row.key} className="hover:bg-slate-50/60 transition-colors">
                       <td className="px-3 py-2.5 font-bold text-slate-900 whitespace-nowrap">{row.bunkName}</td>
                       <td className="px-3 py-2.5 text-slate-600 whitespace-nowrap">{row.location}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-slate-600 whitespace-nowrap">₹{row.totalPurchases.toLocaleString('en-IN')}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-slate-600 whitespace-nowrap">₹{row.totalPayments.toLocaleString('en-IN')}</td>
                       <td className={`px-3 py-2.5 text-right font-mono font-black whitespace-nowrap ${row.balance < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
                         {row.balance < 0 ? '-' : ''}₹{Math.abs(row.balance).toLocaleString('en-IN')}
                       </td>
