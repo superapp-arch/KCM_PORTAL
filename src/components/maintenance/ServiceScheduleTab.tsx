@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Vehicle, VehicleServiceSchedule, VehicleMaintenanceReference, MileageReport } from '../../types';
 import {
   CalendarClock, Search, Edit2, X, ShieldCheck, CheckCircle2, AlertCircle, Bell, Droplets,
@@ -136,6 +136,7 @@ interface MergedRow {
   regNo: string;
   category: string;
   schedule: VehicleServiceSchedule | undefined;
+  reference: VehicleMaintenanceReference | undefined;
   washingApplicable: boolean;
   acApplicable: boolean;
   washingInfo: CycleInfo | null;
@@ -165,8 +166,10 @@ export default function ServiceScheduleTab({
   const [sortMode, setSortMode] = useState<'regNo' | 'urgency'>('regNo');
 
   // Which modal is open, if any - `kind` picks Vehicle Service's own modal
-  // body (with Warranty) vs the shared Washing/AC Service one.
-  const [editing, setEditing] = useState<{ regNo: string; kind: 'schedule' | 'washing' | 'acservice' } | null>(null);
+  // body (with Warranty) vs the shared Washing/AC Service one vs the
+  // Maintenance Reference one (Responsible/Last Service Done KM/Warranty
+  // Period/Service Period - see below).
+  const [editing, setEditing] = useState<{ regNo: string; kind: 'schedule' | 'washing' | 'acservice' | 'reference' } | null>(null);
   const [form, setForm] = useState<VehicleServiceSchedule | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -175,54 +178,45 @@ export default function ServiceScheduleTab({
   const vehicleFor = (regNo: string) => vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === regNo);
   const scheduleFor = (regNo: string) => vehicleServiceSchedules.find(s => s.regNo === regNo);
 
-  // --- Vehicle Maintenance Reference lookup (2026-08-29) - a separate,
-  // independent reference dataset from the merged Vehicle Service table
-  // below (see VehicleMaintenanceReference in types.ts). Typing/selecting a
-  // Vehicle No here auto-fills Reg Date/Vehicle Type/Model straight from
-  // Fleet & Vehicles (locked, same source of truth as everywhere else in
-  // this app) and Responsible/Last Service Done KM/Warranty Period/Service
-  // Period from vehicle_maintenance_reference (editable, saved back on
-  // submit) - a vehicle with no reference row yet just leaves those 4
-  // blank for first-time entry rather than erroring.
-  const [refVehicleNo, setRefVehicleNo] = useState('');
+  // --- Vehicle Maintenance Reference (2026-08-31) - Responsible/Last
+  // Service Done KM/Warranty Period/Service Period now live as real columns
+  // on the merged Vehicle Service Schedule table below (matched to each row
+  // by Reg No - see MergedRow.reference), not a separate search widget.
+  // Editing one opens this small per-row modal (via the row's own Edit
+  // icon), pre-filled from vehicle_maintenance_reference and saved back to
+  // it directly via onSaveVehicleMaintenanceReference - a vehicle with no
+  // reference row yet just opens blank for first-time entry rather than
+  // erroring. Reg Date/Vehicle Type/Model are shown locked, straight from
+  // Fleet & Vehicles, for context while editing.
   const [refForm, setRefForm] = useState({ responsible: '', lastServiceDoneKm: '', warrantyPeriod: '', servicePeriod: '' });
   const [refSubmitting, setRefSubmitting] = useState(false);
 
-  const refVehicleNoTrimmed = refVehicleNo.trim().toUpperCase();
-  const refVehicle = refVehicleNoTrimmed ? vehicleFor(refVehicleNoTrimmed) : undefined;
-  const refRecord = refVehicleNoTrimmed ? vehicleMaintenanceReferences.find(r => r.vehicleNo === refVehicleNoTrimmed) : undefined;
-
-  // Re-syncs the editable fields only when the selected Vehicle No (or the
-  // underlying reference data) changes - never while the office is actively
-  // typing into Responsible/Last Service Done KM/Warranty Period/Service
-  // Period themselves, same "auto-fills, still overridable" pattern the
-  // rest of this tab already uses (see Last Service's own Date/Odometer).
-  useEffect(() => {
+  const openEditReference = (regNo: string) => {
+    const rec = vehicleMaintenanceReferences.find(r => r.vehicleNo === regNo);
     setRefForm({
-      responsible: refRecord?.responsible || '',
-      lastServiceDoneKm: refRecord?.lastServiceDoneKm != null ? String(refRecord.lastServiceDoneKm) : '',
-      warrantyPeriod: refRecord?.warrantyPeriod || '',
-      servicePeriod: refRecord?.servicePeriod != null ? String(refRecord.servicePeriod) : ''
+      responsible: rec?.responsible || '',
+      lastServiceDoneKm: rec?.lastServiceDoneKm != null ? String(rec.lastServiceDoneKm) : '',
+      warrantyPeriod: rec?.warrantyPeriod || '',
+      servicePeriod: rec?.servicePeriod != null ? String(rec.servicePeriod) : ''
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refVehicleNoTrimmed, refRecord]);
-
-  const refStatus: 'not-found' | 'incomplete' | 'found' | null =
-    !refVehicleNoTrimmed ? null : !refVehicle ? 'not-found' : refRecord ? 'found' : 'incomplete';
+    setEditing({ regNo, kind: 'reference' });
+  };
 
   const handleSaveReference = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!refVehicleNoTrimmed || !refVehicle) return;
+    if (!editing || editing.kind !== 'reference') return;
+    const regNo = editing.regNo;
     setRefSubmitting(true);
     try {
       await onSaveVehicleMaintenanceReference({
-        vehicleNo: refVehicleNoTrimmed,
+        vehicleNo: regNo,
         responsible: refForm.responsible.trim() || undefined,
         lastServiceDoneKm: refForm.lastServiceDoneKm.trim() ? Number(refForm.lastServiceDoneKm) : undefined,
         warrantyPeriod: refForm.warrantyPeriod.trim() || undefined,
         servicePeriod: refForm.servicePeriod.trim() ? Number(refForm.servicePeriod) : undefined
       });
-      handleSaved('Vehicle maintenance reference', refVehicleNoTrimmed);
+      handleSaved('Vehicle maintenance reference', regNo);
+      closeEdit();
     } catch (err) {
       triggerNotif(err instanceof Error ? err.message : 'Failed to save vehicle maintenance reference data.', 'error');
     } finally {
@@ -240,6 +234,7 @@ export default function ServiceScheduleTab({
 
   const mergedRows: MergedRow[] = useMemo(() => vehicleList.map(regNo => {
     const schedule = scheduleFor(regNo);
+    const reference = vehicleMaintenanceReferences.find(r => r.vehicleNo === regNo);
     const category = categoryOf(vehicleFor(regNo));
     const washingApplicable = CYCLE_TAB_CONFIG.washing.isEligible(category);
     const acApplicable = CYCLE_TAB_CONFIG.acservice.isEligible(category);
@@ -248,8 +243,8 @@ export default function ServiceScheduleTab({
     const candidates = [washingInfo?.remainingDays, acInfo?.remainingDays].filter((n): n is number => n != null);
     const urgencyRank = candidates.length > 0 ? Math.min(...candidates) : Infinity;
     const isUrgent = (washingApplicable && isUrgentRemaining(washingInfo!.remainingDays)) || (acApplicable && isUrgentRemaining(acInfo!.remainingDays));
-    return { regNo, category, schedule, washingApplicable, acApplicable, washingInfo, acInfo, urgencyRank, isUrgent };
-  }), [vehicleList, vehicleServiceSchedules, vehicles]);
+    return { regNo, category, schedule, reference, washingApplicable, acApplicable, washingInfo, acInfo, urgencyRank, isUrgent };
+  }), [vehicleList, vehicleServiceSchedules, vehicleMaintenanceReferences, vehicles]);
 
   const filteredUnsorted = mergedRows.filter(row => {
     const matchesSearch = row.regNo.toLowerCase().includes(searchTerm.toLowerCase());
@@ -372,94 +367,6 @@ export default function ServiceScheduleTab({
         </div>
       )}
 
-      {/* Vehicle Maintenance Reference lookup - independent of the merged
-          Vehicle Service table below. Typing/selecting a Vehicle No auto-
-          fills Reg Date/Vehicle Type/Model (locked, from Fleet & Vehicles)
-          and Responsible/Last Service Done KM/Warranty Period/Service
-          Period (editable, from vehicle_maintenance_reference). */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-        <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5 mb-3">
-          <UserSearch className="w-4 h-4 text-slate-600" /> Vehicle Maintenance Reference
-        </h2>
-        <form onSubmit={handleSaveReference} className="space-y-3 text-xs">
-          <div>
-            <label className="block font-semibold text-slate-600 mb-1">Vehicle No</label>
-            <input
-              type="text"
-              list="service-schedule-ref-vehicles-datalist"
-              placeholder="Type or select a Vehicle No"
-              value={refVehicleNo}
-              onChange={(e) => setRefVehicleNo(e.target.value.toUpperCase())}
-              autoComplete="off"
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold uppercase text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-            <datalist id="service-schedule-ref-vehicles-datalist">
-              {vehicleList.map(v => <option key={v} value={v} />)}
-            </datalist>
-          </div>
-
-          {refStatus && (
-            <p className={`flex items-center gap-1.5 font-semibold ${
-              refStatus === 'found' ? 'text-emerald-600' : refStatus === 'incomplete' ? 'text-amber-600' : 'text-rose-600'
-            }`}>
-              {refStatus === 'found' ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 shrink-0" />}
-              {refStatus === 'found' ? 'Vehicle & maintenance data found' : refStatus === 'incomplete' ? 'Vehicle found — maintenance data incomplete' : 'Vehicle not found'}
-            </p>
-          )}
-
-          {refVehicle && (
-            <>
-              <div className="grid grid-cols-3 gap-2.5">
-                <div>
-                  <label className="block font-semibold text-slate-500 mb-1 flex items-center gap-1"><Lock className="w-2.5 h-2.5" /> Reg Date</label>
-                  <input type="text" readOnly value={regDateOf(refVehicle) || '-'} className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono text-slate-600 cursor-not-allowed" />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-500 mb-1 flex items-center gap-1"><Lock className="w-2.5 h-2.5" /> Vehicle Type</label>
-                  <input type="text" readOnly value={vehicleTypeOf(refVehicle) || '-'} className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono text-slate-600 cursor-not-allowed" />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-500 mb-1 flex items-center gap-1"><Lock className="w-2.5 h-2.5" /> Model</label>
-                  <input type="text" readOnly value={modelOf(refVehicle) || '-'} className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono text-slate-600 cursor-not-allowed" />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block font-semibold text-slate-600 mb-1">Responsible</label>
-                  <input type="text" placeholder="e.g. Vinod" value={refForm.responsible}
-                    onChange={(e) => setRefForm(f => ({ ...f, responsible: e.target.value }))}
-                    className="w-full bg-white border border-blue-100 rounded-lg p-2 text-slate-800" />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-600 mb-1">Last Service Done KM</label>
-                  <input type="number" placeholder="0" value={refForm.lastServiceDoneKm}
-                    onChange={(e) => setRefForm(f => ({ ...f, lastServiceDoneKm: e.target.value }))}
-                    className="w-full bg-white border border-blue-100 rounded-lg p-2 font-mono text-slate-800" />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-600 mb-1">Warranty Period</label>
-                  <input type="text" placeholder="e.g. 300000/3 YEAR" value={refForm.warrantyPeriod}
-                    onChange={(e) => setRefForm(f => ({ ...f, warrantyPeriod: e.target.value }))}
-                    className="w-full bg-white border border-blue-100 rounded-lg p-2 font-mono text-slate-800" />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-600 mb-1">Service Period (km)</label>
-                  <input type="number" placeholder="e.g. 40000" value={refForm.servicePeriod}
-                    onChange={(e) => setRefForm(f => ({ ...f, servicePeriod: e.target.value }))}
-                    className="w-full bg-white border border-blue-100 rounded-lg p-2 font-mono text-slate-800" />
-                </div>
-              </div>
-
-              <button type="submit" disabled={refSubmitting}
-                className="bg-gradient-to-r from-blue-600 to-slate-800 text-white font-extrabold rounded-xl py-2 px-4 hover:shadow-md transition-all uppercase text-[10px] cursor-pointer disabled:opacity-50">
-                {refSubmitting ? 'Saving...' : 'Save Maintenance Reference'}
-              </button>
-            </>
-          )}
-        </form>
-      </div>
-
       {/* Summary cards - fleet-wide counts, independent of the filters below. */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
         <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
@@ -539,6 +446,9 @@ export default function ServiceScheduleTab({
               <tr>
                 <th rowSpan={2} className="px-3 py-2.5 align-bottom">Reg. No.</th>
                 <th rowSpan={2} className="px-3 py-2.5 align-bottom">Type</th>
+                <th colSpan={5} className="px-3 py-1.5 text-center border-l border-slate-700">
+                  <span className="flex items-center justify-center gap-1"><UserSearch className="w-3 h-3" /> Maintenance Reference</span>
+                </th>
                 <th colSpan={3} className="px-3 py-1.5 text-center border-l border-slate-700">
                   <span className="flex items-center justify-center gap-1"><ClipboardList className="w-3 h-3" /> Vehicle Service</span>
                 </th>
@@ -550,6 +460,11 @@ export default function ServiceScheduleTab({
                 </th>
               </tr>
               <tr>
+                <th className="px-3 py-2 border-l border-slate-700">Responsible</th>
+                <th className="px-3 py-2">Last Service KM</th>
+                <th className="px-3 py-2">Warranty Period</th>
+                <th className="px-3 py-2">Service Period</th>
+                <th className="px-3 py-2 text-center">Edit</th>
                 <th className="px-3 py-2 border-l border-slate-700">Current Odometer (km)</th>
                 <th className="px-3 py-2">Warranty</th>
                 <th className="px-3 py-2 text-right">Status</th>
@@ -565,7 +480,7 @@ export default function ServiceScheduleTab({
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
               {filteredRows.length === 0 ? (
-                <tr><td colSpan={11} className="text-center py-10 text-slate-400 font-mono">NO VEHICLES FOUND.</td></tr>
+                <tr><td colSpan={16} className="text-center py-10 text-slate-400 font-mono">NO VEHICLES FOUND.</td></tr>
               ) : filteredRows.map(row => {
                 const effectiveWarranty = warrantyFor(row);
                 return (
@@ -579,6 +494,18 @@ export default function ServiceScheduleTab({
                           {matchVehicleCategoryOption(row.category)}
                         </span>
                       ) : <span className="text-slate-300">-</span>}
+                    </td>
+
+                    {/* Maintenance Reference - Responsible/Last Service KM/Warranty
+                        Period/Service Period, matched to this row by Reg No (see
+                        MergedRow.reference). Blank dashes, not an error, when this
+                        vehicle has no reference row yet. */}
+                    <td className="px-3 py-2.5 text-slate-700 whitespace-nowrap border-l border-slate-100">{row.reference?.responsible || <span className="text-slate-300">-</span>}</td>
+                    <td className="px-3 py-2.5 font-mono text-slate-700 whitespace-nowrap">{row.reference?.lastServiceDoneKm != null ? row.reference.lastServiceDoneKm.toLocaleString('en-IN') : <span className="text-slate-300">-</span>}</td>
+                    <td className="px-3 py-2.5 font-mono text-slate-700 whitespace-nowrap">{row.reference?.warrantyPeriod || <span className="text-slate-300">-</span>}</td>
+                    <td className="px-3 py-2.5 font-mono text-slate-700 whitespace-nowrap">{row.reference?.servicePeriod != null ? row.reference.servicePeriod.toLocaleString('en-IN') : <span className="text-slate-300">-</span>}</td>
+                    <td className="px-3 py-2.5 text-center">
+                      <button onClick={() => openEditReference(row.regNo)} title="Edit Maintenance Reference" className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
                     </td>
 
                     {/* Vehicle Service - no urgency dot (km/manual-based, not a fixed day-cycle).
@@ -666,6 +593,19 @@ export default function ServiceScheduleTab({
                 </div>
 
                 <div className="rounded-lg border border-slate-100 p-2.5 space-y-1">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase">
+                    <span className="flex items-center gap-1"><UserSearch className="w-3 h-3" /> Maintenance Reference</span>
+                    <button onClick={() => openEditReference(row.regNo)} title="Edit Maintenance Reference" className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 font-mono text-slate-600">
+                    <span>Responsible: {row.reference?.responsible || <span className="text-slate-300">-</span>}</span>
+                    <span>Last Service: {row.reference?.lastServiceDoneKm != null ? `${row.reference.lastServiceDoneKm.toLocaleString('en-IN')} km` : <span className="text-slate-300">-</span>}</span>
+                    <span>Warranty: {row.reference?.warrantyPeriod || <span className="text-slate-300">-</span>}</span>
+                    <span>Service Period: {row.reference?.servicePeriod != null ? `${row.reference.servicePeriod.toLocaleString('en-IN')} km` : <span className="text-slate-300">-</span>}</span>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-slate-100 p-2.5 space-y-1">
                   <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase"><span className="flex items-center gap-1"><ClipboardList className="w-3 h-3" /> Vehicle Service</span> {statusBadge(row.schedule?.serviceStatus)}</div>
                   <div className="flex items-center justify-between font-mono text-slate-600">
                     <span>Odometer: {currentKmFor(row.regNo) != null ? `${currentKmFor(row.regNo)!.toLocaleString('en-IN')} km` : <span className="text-slate-300">No reading yet</span>}</span>
@@ -713,6 +653,80 @@ export default function ServiceScheduleTab({
           })}
         </div>
       </div>
+
+      {/* Maintenance Reference edit modal - Responsible/Last Service Done
+          KM/Warranty Period/Service Period, editable and saved back to
+          vehicle_maintenance_reference; Reg Date/Vehicle Type/Model shown
+          locked, straight from Fleet & Vehicles, for context only. */}
+      {editing?.kind === 'reference' && (() => {
+        const vehicle = vehicleFor(editing.regNo);
+        const rec = vehicleMaintenanceReferences.find(r => r.vehicleNo === editing.regNo);
+        const status: 'not-found' | 'incomplete' | 'found' = !vehicle ? 'not-found' : rec ? 'found' : 'incomplete';
+        return (
+          <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+              <div className="p-4 bg-gradient-to-r from-slate-900 to-blue-950 text-white flex items-center justify-between sticky top-0 z-10">
+                <h3 className="font-extrabold text-sm flex items-center gap-2"><UserSearch className="w-4 h-4 text-blue-400" /> Maintenance Reference - {editing.regNo}</h3>
+                <button onClick={closeEdit} className="p-1.5 rounded-lg hover:bg-white/10 text-slate-200 hover:text-white cursor-pointer"><X className="w-4 h-4" /></button>
+              </div>
+              <form onSubmit={handleSaveReference} className="p-5 space-y-4 text-xs">
+                <p className={`flex items-center gap-1.5 font-semibold ${
+                  status === 'found' ? 'text-emerald-600' : status === 'incomplete' ? 'text-amber-600' : 'text-rose-600'
+                }`}>
+                  {status === 'found' ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 shrink-0" />}
+                  {status === 'found' ? 'Vehicle & maintenance data found' : status === 'incomplete' ? 'Vehicle found — maintenance data incomplete' : 'Vehicle not found in Fleet & Vehicles'}
+                </p>
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div>
+                    <label className="block font-semibold text-slate-500 mb-1 flex items-center gap-1"><Lock className="w-2.5 h-2.5" /> Reg Date</label>
+                    <input type="text" readOnly value={regDateOf(vehicle || {}) || '-'} className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono text-slate-600 cursor-not-allowed" />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-500 mb-1 flex items-center gap-1"><Lock className="w-2.5 h-2.5" /> Vehicle Type</label>
+                    <input type="text" readOnly value={vehicleTypeOf(vehicle) || '-'} className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono text-slate-600 cursor-not-allowed" />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-500 mb-1 flex items-center gap-1"><Lock className="w-2.5 h-2.5" /> Model</label>
+                    <input type="text" readOnly value={modelOf(vehicle) || '-'} className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono text-slate-600 cursor-not-allowed" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block font-semibold text-slate-600 mb-1">Responsible</label>
+                    <input type="text" placeholder="e.g. Vinod" value={refForm.responsible}
+                      onChange={(e) => setRefForm(f => ({ ...f, responsible: e.target.value }))}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800" />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-600 mb-1">Last Service Done KM</label>
+                    <input type="number" placeholder="0" value={refForm.lastServiceDoneKm}
+                      onChange={(e) => setRefForm(f => ({ ...f, lastServiceDoneKm: e.target.value }))}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-600 mb-1">Warranty Period</label>
+                    <input type="text" placeholder="e.g. 300000/3 YEAR" value={refForm.warrantyPeriod}
+                      onChange={(e) => setRefForm(f => ({ ...f, warrantyPeriod: e.target.value }))}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-600 mb-1">Service Period (km)</label>
+                    <input type="number" placeholder="e.g. 40000" value={refForm.servicePeriod}
+                      onChange={(e) => setRefForm(f => ({ ...f, servicePeriod: e.target.value }))}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800" />
+                  </div>
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <button type="button" onClick={closeEdit} className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 uppercase text-[10px] cursor-pointer">Cancel</button>
+                  <button type="submit" disabled={refSubmitting} className="flex-1 bg-gradient-to-r from-blue-600 to-slate-800 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md uppercase text-[10px] cursor-pointer">
+                    {refSubmitting ? 'Saving...' : 'Save Maintenance Reference'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Vehicle Service edit modal - Warranty, Last Service, Remarks. */}
       {editing?.kind === 'schedule' && form && (

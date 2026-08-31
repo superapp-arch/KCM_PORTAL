@@ -561,7 +561,7 @@ export default function App() {
     }
   };
 
-  const handleSaveServiceStationSparePart = async (record: Omit<ServiceStationSparePart, 'id'>) => {
+  const handleSaveServiceStationSparePart = async (record: ServiceStationSparePart | Omit<ServiceStationSparePart, 'id'>) => {
     const res = await fetch('/api/service-station-spare-parts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -585,7 +585,7 @@ export default function App() {
     }
   };
 
-  const handleSaveServiceStationInspection = async (record: Omit<ServiceStationInspection, 'id'>) => {
+  const handleSaveServiceStationInspection = async (record: ServiceStationInspection | Omit<ServiceStationInspection, 'id'>) => {
     const res = await fetch('/api/service-station-inspections', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

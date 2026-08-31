@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Vehicle, ServiceStationSparePart, ServiceStationInspection } from '../../types';
-import { Boxes, ClipboardCheck, Search, Trash2, Plus, X, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Boxes, ClipboardCheck, Search, Trash2, Plus, X, CheckCircle2, AlertCircle, Edit2, Upload } from 'lucide-react';
 import DateInput from '../DateInput';
 import SortHeader from '../SortHeader';
 import { SortState, compareText } from '../../utils/sort';
@@ -9,11 +9,28 @@ import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationM
 interface ServiceStationTabProps {
   vehicles: Vehicle[];
   spareParts: ServiceStationSparePart[];
-  onSaveSparePart: (record: Omit<ServiceStationSparePart, 'id'>) => Promise<void>;
+  onSaveSparePart: (record: ServiceStationSparePart | Omit<ServiceStationSparePart, 'id'>) => Promise<void>;
   onDeleteSparePart: (id: string) => Promise<void>;
   inspections: ServiceStationInspection[];
-  onSaveInspection: (record: Omit<ServiceStationInspection, 'id'>) => Promise<void>;
+  onSaveInspection: (record: ServiceStationInspection | Omit<ServiceStationInspection, 'id'>) => Promise<void>;
   onDeleteInspection: (id: string) => Promise<void>;
+}
+
+// Tolerant of a stray quoted comma, same small parser FleetSheet's own CSV
+// Import already uses - no external CSV library needed for a simple flat
+// sheet like these two.
+function parseCSVLine(line: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') inQuotes = !inQuotes;
+    else if (char === ',' && !inQuotes) { result.push(current.trim().replace(/^["']|["']$/g, '')); current = ''; }
+    else current += char;
+  }
+  result.push(current.trim().replace(/^["']|["']$/g, ''));
+  return result;
 }
 
 type SubTab = 'spareparts' | 'inspection';
@@ -54,9 +71,12 @@ export default function ServiceStationTab({
   // --- Spare Parts state ---
   const [spSearchTerm, setSpSearchTerm] = useState('');
   const [spShowForm, setSpShowForm] = useState(false);
+  const [spEditingId, setSpEditingId] = useState<string | null>(null);
   const [spForm, setSpForm] = useState(emptySparePartForm());
   const [spSubmitting, setSpSubmitting] = useState(false);
   const [spSort, setSpSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
+  const [spImporting, setSpImporting] = useState(false);
+  const spImportInputRef = useRef<HTMLInputElement>(null);
 
   const spRows = spSort
     ? [...spareParts].sort((a, b) => {
@@ -76,8 +96,13 @@ export default function ServiceStationTab({
     (r.partNumber || '').toLowerCase().includes(spSearchTerm.toLowerCase())
   );
 
-  const spResetForm = () => { setSpForm(emptySparePartForm()); setSpShowForm(false); };
-  const spOpenAdd = () => { setSpForm(emptySparePartForm()); setSpShowForm(true); };
+  const spResetForm = () => { setSpForm(emptySparePartForm()); setSpEditingId(null); setSpShowForm(false); };
+  const spOpenAdd = () => { setSpForm(emptySparePartForm()); setSpEditingId(null); setSpShowForm(true); };
+  const spOpenEdit = (r: ServiceStationSparePart) => {
+    setSpForm({ date: r.date, regNo: r.regNo, partName: r.partName, partNumber: r.partNumber || '', qty: String(r.qty ?? '') });
+    setSpEditingId(r.id);
+    setSpShowForm(true);
+  };
 
   const handleSpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,13 +113,14 @@ export default function ServiceStationTab({
     setSpSubmitting(true);
     try {
       await onSaveSparePart({
+        ...(spEditingId ? { id: spEditingId } : {}),
         date: spForm.date,
         regNo: spForm.regNo.trim().toUpperCase(),
         partName: spForm.partName.trim(),
         partNumber: spForm.partNumber.trim(),
         qty: parseInt(spForm.qty, 10) || 0
       });
-      setSaveConfirmation({ label: 'Spare part entry', identifier: `${spForm.partName.trim()} - ${spForm.regNo.trim().toUpperCase()}`, key: Date.now() });
+      setSaveConfirmation({ label: spEditingId ? 'Spare part entry updated' : 'Spare part entry', identifier: `${spForm.partName.trim()} - ${spForm.regNo.trim().toUpperCase()}`, key: Date.now() });
       spResetForm();
     } catch (err) {
       console.error(err);
@@ -115,12 +141,69 @@ export default function ServiceStationTab({
     }
   };
 
+  // Import CSV - columns: Date, Vehicle Number, Part Name, Part Number, Qty
+  // (header names matched loosely, same convention as Fleet's own CSV
+  // Import). Always creates new entries, same as Fleet's Import - not an
+  // upsert against existing rows.
+  const handleImportSpareParts = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      setSpImporting(true);
+      try {
+        const text = event.target?.result as string;
+        const lines = (text || '').split('\n').filter(l => l.trim());
+        if (lines.length < 2) { triggerNotif('CSV file is empty or formatted incorrectly.', 'error'); return; }
+        const headers = parseCSVLine(lines[0]).map(h => h.trim().toLowerCase());
+        const getVal = (values: string[], fields: string[]) => {
+          for (const f of fields) {
+            const idx = headers.indexOf(f);
+            if (idx !== -1 && values[idx] !== undefined) return values[idx];
+          }
+          return '';
+        };
+        let importCount = 0, failCount = 0;
+        for (let i = 1; i < lines.length; i++) {
+          const values = parseCSVLine(lines[i]);
+          const regNo = getVal(values, ['vehicle number', 'vehicle no', 'regno', 'reg no']).toUpperCase().trim();
+          const partName = getVal(values, ['part name', 'partname']).trim();
+          const qtyRaw = getVal(values, ['qty', 'quantity']);
+          if (!regNo || !partName || !qtyRaw) { failCount++; continue; }
+          try {
+            await onSaveSparePart({
+              date: getVal(values, ['date']) || todayIso(),
+              regNo, partName,
+              partNumber: getVal(values, ['part number', 'partnumber']).trim(),
+              qty: parseInt(qtyRaw, 10) || 0
+            });
+            importCount++;
+          } catch (err) {
+            console.error(err);
+            failCount++;
+          }
+        }
+        triggerNotif(`Imported ${importCount} spare part entr${importCount === 1 ? 'y' : 'ies'}.${failCount > 0 ? ` ${failCount} row(s) failed (missing Vehicle Number/Part Name/Qty).` : ''}`, importCount > 0 ? 'success' : 'error');
+      } catch (err) {
+        console.error(err);
+        triggerNotif('Failed to read the CSV file.', 'error');
+      } finally {
+        setSpImporting(false);
+        if (spImportInputRef.current) spImportInputRef.current.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+
   // --- Inspection state ---
   const [inSearchTerm, setInSearchTerm] = useState('');
   const [inShowForm, setInShowForm] = useState(false);
+  const [inEditingId, setInEditingId] = useState<string | null>(null);
   const [inForm, setInForm] = useState(emptyInspectionForm());
   const [inSubmitting, setInSubmitting] = useState(false);
   const [inSort, setInSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
+  const [inImporting, setInImporting] = useState(false);
+  const inImportInputRef = useRef<HTMLInputElement>(null);
 
   const inRows = inSort
     ? [...inspections].sort((a, b) => {
@@ -140,8 +223,13 @@ export default function ServiceStationTab({
     (r.inspectedBy || '').toLowerCase().includes(inSearchTerm.toLowerCase())
   );
 
-  const inResetForm = () => { setInForm(emptyInspectionForm()); setInShowForm(false); };
-  const inOpenAdd = () => { setInForm(emptyInspectionForm()); setInShowForm(true); };
+  const inResetForm = () => { setInForm(emptyInspectionForm()); setInEditingId(null); setInShowForm(false); };
+  const inOpenAdd = () => { setInForm(emptyInspectionForm()); setInEditingId(null); setInShowForm(true); };
+  const inOpenEdit = (r: ServiceStationInspection) => {
+    setInForm({ date: r.date, regNo: r.regNo, details: r.details, status: r.status, inspectedBy: r.inspectedBy || '' });
+    setInEditingId(r.id);
+    setInShowForm(true);
+  };
 
   const handleInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -152,13 +240,14 @@ export default function ServiceStationTab({
     setInSubmitting(true);
     try {
       await onSaveInspection({
+        ...(inEditingId ? { id: inEditingId } : {}),
         date: inForm.date,
         regNo: inForm.regNo.trim().toUpperCase(),
         details: inForm.details.trim(),
         status: inForm.status,
         inspectedBy: inForm.inspectedBy.trim() || undefined
       });
-      setSaveConfirmation({ label: 'Inspection entry', identifier: `${inForm.regNo.trim().toUpperCase()} (${inForm.date})`, key: Date.now() });
+      setSaveConfirmation({ label: inEditingId ? 'Inspection entry updated' : 'Inspection entry', identifier: `${inForm.regNo.trim().toUpperCase()} (${inForm.date})`, key: Date.now() });
       inResetForm();
     } catch (err) {
       console.error(err);
@@ -177,6 +266,59 @@ export default function ServiceStationTab({
       console.error(err);
       triggerNotif(err instanceof Error ? err.message : 'Failed to delete inspection entry.', 'error');
     }
+  };
+
+  // Import CSV - columns: Date, Vehicle, Inspection Details, Status,
+  // Inspection By. Always creates new entries (same as Spare Parts' own
+  // Import above and Fleet's own CSV Import).
+  const handleImportInspections = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      setInImporting(true);
+      try {
+        const text = event.target?.result as string;
+        const lines = (text || '').split('\n').filter(l => l.trim());
+        if (lines.length < 2) { triggerNotif('CSV file is empty or formatted incorrectly.', 'error'); return; }
+        const headers = parseCSVLine(lines[0]).map(h => h.trim().toLowerCase());
+        const getVal = (values: string[], fields: string[]) => {
+          for (const f of fields) {
+            const idx = headers.indexOf(f);
+            if (idx !== -1 && values[idx] !== undefined) return values[idx];
+          }
+          return '';
+        };
+        let importCount = 0, failCount = 0;
+        for (let i = 1; i < lines.length; i++) {
+          const values = parseCSVLine(lines[i]);
+          const regNo = getVal(values, ['vehicle', 'vehicle number', 'vehicle no', 'regno', 'reg no']).toUpperCase().trim();
+          const details = getVal(values, ['inspection details', 'details']).trim();
+          if (!regNo || !details) { failCount++; continue; }
+          const statusRaw = getVal(values, ['status']).trim().toLowerCase();
+          try {
+            await onSaveInspection({
+              date: getVal(values, ['date']) || todayIso(),
+              regNo, details,
+              status: statusRaw === 'completed' ? 'Completed' : 'Pending',
+              inspectedBy: getVal(values, ['inspection by', 'inspected by', 'inspectedby']).trim() || undefined
+            });
+            importCount++;
+          } catch (err) {
+            console.error(err);
+            failCount++;
+          }
+        }
+        triggerNotif(`Imported ${importCount} inspection entr${importCount === 1 ? 'y' : 'ies'}.${failCount > 0 ? ` ${failCount} row(s) failed (missing Vehicle/Inspection Details).` : ''}`, importCount > 0 ? 'success' : 'error');
+      } catch (err) {
+        console.error(err);
+        triggerNotif('Failed to read the CSV file.', 'error');
+      } finally {
+        setInImporting(false);
+        if (inImportInputRef.current) inImportInputRef.current.value = '';
+      }
+    };
+    reader.readAsText(file);
   };
 
   return (
@@ -224,6 +366,12 @@ export default function ServiceStationTab({
                 <option value="newest">Newest First</option>
                 <option value="oldest">Oldest First</option>
               </select>
+              <input ref={spImportInputRef} type="file" accept=".csv" onChange={handleImportSpareParts} className="hidden" />
+              <button onClick={() => spImportInputRef.current?.click()} disabled={spImporting}
+                title="Import spare part entries from a CSV (columns: Date, Vehicle Number, Part Name, Part Number, Qty)"
+                className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold py-2 px-3 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap disabled:opacity-50">
+                <Upload className="w-4 h-4" /> {spImporting ? 'Importing...' : 'Import CSV'}
+              </button>
               <button onClick={spOpenAdd} className="bg-gradient-to-r from-blue-600 to-slate-800 hover:shadow-md text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap">
                 <Plus className="w-4 h-4" /> Log Spare Part
               </button>
@@ -253,6 +401,7 @@ export default function ServiceStationTab({
                     <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{r.partNumber || '-'}</td>
                     <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{r.qty}</td>
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                      <button onClick={() => spOpenEdit(r)} className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer" title="Edit"><Edit2 className="w-3.5 h-3.5" /></button>
                       <button onClick={() => handleSpDelete(r)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
                     </td>
                   </tr>
@@ -283,6 +432,12 @@ export default function ServiceStationTab({
                 <option value="newest">Newest First</option>
                 <option value="oldest">Oldest First</option>
               </select>
+              <input ref={inImportInputRef} type="file" accept=".csv" onChange={handleImportInspections} className="hidden" />
+              <button onClick={() => inImportInputRef.current?.click()} disabled={inImporting}
+                title="Import inspection entries from a CSV (columns: Date, Vehicle, Inspection Details, Status, Inspection By)"
+                className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold py-2 px-3 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap disabled:opacity-50">
+                <Upload className="w-4 h-4" /> {inImporting ? 'Importing...' : 'Import CSV'}
+              </button>
               <button onClick={inOpenAdd} className="bg-gradient-to-r from-blue-600 to-slate-800 hover:shadow-md text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap">
                 <Plus className="w-4 h-4" /> Log Inspection
               </button>
@@ -312,6 +467,7 @@ export default function ServiceStationTab({
                     <td className="px-3 py-2.5 whitespace-nowrap">{statusBadge(r.status)}</td>
                     <td className="px-3 py-2.5 text-slate-600 whitespace-nowrap">{r.inspectedBy || '-'}</td>
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                      <button onClick={() => inOpenEdit(r)} className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer" title="Edit"><Edit2 className="w-3.5 h-3.5" /></button>
                       <button onClick={() => handleInDelete(r)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
                     </td>
                   </tr>
@@ -327,7 +483,7 @@ export default function ServiceStationTab({
         <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full max-h-[90vh] overflow-y-auto">
             <div className="p-4 bg-gradient-to-r from-slate-900 to-blue-950 text-white flex items-center justify-between">
-              <h3 className="font-extrabold text-sm flex items-center gap-2"><Boxes className="w-4 h-4 text-blue-400" /> Log Spare Part</h3>
+              <h3 className="font-extrabold text-sm flex items-center gap-2"><Boxes className="w-4 h-4 text-blue-400" /> {spEditingId ? 'Edit Spare Part' : 'Log Spare Part'}</h3>
               <button onClick={spResetForm} className="p-1.5 rounded-lg hover:bg-white/10 text-white cursor-pointer"><X className="w-4 h-4" /></button>
             </div>
             <form onSubmit={handleSpSubmit} className="p-5 space-y-3 text-xs">
@@ -365,7 +521,7 @@ export default function ServiceStationTab({
               <div className="flex gap-2 pt-2">
                 <button type="button" onClick={spResetForm} className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 uppercase text-[10px] cursor-pointer">Cancel</button>
                 <button type="submit" disabled={spSubmitting} className="flex-1 bg-gradient-to-r from-blue-600 to-slate-800 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md uppercase text-[10px] cursor-pointer">
-                  {spSubmitting ? 'Saving...' : 'Log Spare Part'}
+                  {spSubmitting ? 'Saving...' : spEditingId ? 'Save Changes' : 'Log Spare Part'}
                 </button>
               </div>
             </form>
@@ -378,7 +534,7 @@ export default function ServiceStationTab({
         <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full max-h-[90vh] overflow-y-auto">
             <div className="p-4 bg-gradient-to-r from-slate-900 to-blue-950 text-white flex items-center justify-between">
-              <h3 className="font-extrabold text-sm flex items-center gap-2"><ClipboardCheck className="w-4 h-4 text-blue-400" /> Log Inspection</h3>
+              <h3 className="font-extrabold text-sm flex items-center gap-2"><ClipboardCheck className="w-4 h-4 text-blue-400" /> {inEditingId ? 'Edit Inspection' : 'Log Inspection'}</h3>
               <button onClick={inResetForm} className="p-1.5 rounded-lg hover:bg-white/10 text-white cursor-pointer"><X className="w-4 h-4" /></button>
             </div>
             <form onSubmit={handleInSubmit} className="p-5 space-y-3 text-xs">
@@ -419,7 +575,7 @@ export default function ServiceStationTab({
               <div className="flex gap-2 pt-2">
                 <button type="button" onClick={inResetForm} className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 uppercase text-[10px] cursor-pointer">Cancel</button>
                 <button type="submit" disabled={inSubmitting} className="flex-1 bg-gradient-to-r from-blue-600 to-slate-800 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md uppercase text-[10px] cursor-pointer">
-                  {inSubmitting ? 'Saving...' : 'Log Inspection'}
+                  {inSubmitting ? 'Saving...' : inEditingId ? 'Save Changes' : 'Log Inspection'}
                 </button>
               </div>
             </form>

@@ -436,6 +436,12 @@ export default function PettyCash({
 
   // --- Petty Cash Balance Net / Amount Received state ---
   const [showAdvanceModal, setShowAdvanceModal] = useState(false);
+  // Drill-down opened by clicking the "Total Received Float" dashboard card -
+  // read-only breakdown of every credit across every holder (date, which
+  // company account it came from, and who received it), unlike
+  // showAdvanceModal above which is the Add form + a single selected user's
+  // own history.
+  const [showReceivedFloatDetail, setShowReceivedFloatDetail] = useState(false);
   const [advanceAmount, setAdvanceAmount] = useState('');
   const [advanceDate, setAdvanceDate] = useState(new Date().toISOString().slice(0, 10));
   // Which company account this top-up actually came from - "this amount
@@ -1732,7 +1738,11 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
         );
         return (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+            <div
+              onClick={() => setShowReceivedFloatDetail(true)}
+              title="Click to see every credit that makes up this total - date, account, and who received it"
+              className="bg-slate-50 p-3 rounded-xl border border-slate-200 cursor-pointer hover:bg-slate-100 hover:border-slate-300 transition-colors"
+            >
               <span className="text-[10px] text-slate-400 font-bold uppercase flex items-center gap-1"><Wallet className="w-3 h-3" /> Total Received Float</span>
               <div className="text-sm font-black text-slate-800 font-mono mt-0.5">₹{totalReceived.toLocaleString('en-IN')}</div>
               {totalReceivedFromMarketTrip > 0 && (
@@ -3050,6 +3060,81 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
           </div>
         </div>
       )}
+
+      {/* Total Received Float drill-down - read-only breakdown across every
+          holder of every credit that makes up the dashboard total: date,
+          which company account it came from (or Market Trip, for the
+          auto-synced ones which have no account of their own), and who
+          received it. */}
+      {showReceivedFloatDetail && (() => {
+        const allCredits = dashboardSummaryUsers.flatMap(u =>
+          advancesFor(u.username).map(a => ({ ...a, holderLabel: u.label }))
+        ).sort((a, b) => (a.date < b.date ? 1 : -1));
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-fade-in font-sans text-xs">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col">
+              <div className="bg-gradient-to-r from-slate-900 to-amber-950 text-white p-4 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold flex items-center gap-2">
+                    <Wallet className="w-4 h-4 text-amber-400" /> Total Received Float - Breakdown
+                  </h3>
+                  <p className="text-[10px] text-slate-300 mt-0.5">Every credit across every holder, newest first</p>
+                </div>
+                <button onClick={() => setShowReceivedFloatDetail(false)} className="text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 p-1.5 rounded-lg transition-colors cursor-pointer">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="overflow-y-auto flex-1">
+                {allCredits.length === 0 ? (
+                  <p className="text-slate-400 text-[11px] py-8 text-center">No Amount Received entries logged yet.</p>
+                ) : (
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-500 uppercase text-[9.5px] tracking-wide sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2">Date</th>
+                        <th className="px-3 py-2">Account</th>
+                        <th className="px-3 py-2">To Whom</th>
+                        <th className="px-3 py-2">Remarks</th>
+                        <th className="px-3 py-2 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {allCredits.map(a => (
+                        <tr key={a.id} className="hover:bg-slate-50">
+                          <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">{a.date}</td>
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            {a.account ? (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-slate-200 text-slate-600 border border-slate-300">{a.account}</span>
+                            ) : a.source ? (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-indigo-100 text-indigo-700 border border-indigo-200">Market Trip</span>
+                            ) : (
+                              <span className="text-slate-300">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 font-semibold text-slate-700 whitespace-nowrap">{a.holderLabel}</td>
+                          <td className="px-3 py-2 text-slate-500 truncate max-w-[200px]">{a.remarks || <span className="text-slate-300">—</span>}</td>
+                          <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">₹{(a.amount || 0).toLocaleString('en-IN')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              <div className="bg-slate-50 border-t border-slate-100 p-3 flex items-center justify-between">
+                <span className="text-[10px] font-bold text-slate-500 uppercase">
+                  Total: <span className="font-mono text-slate-800">₹{allCredits.reduce((s, a) => s + (a.amount || 0), 0).toLocaleString('en-IN')}</span>
+                </span>
+                <button
+                  onClick={() => setShowReceivedFloatDetail(false)}
+                  className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold rounded-lg transition-colors cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Add/Edit Petty Cash Entry slide-out sidebar */}
       <AnimatePresence>

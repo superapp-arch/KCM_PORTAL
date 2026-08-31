@@ -81,14 +81,16 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
     bata: driver?.bata != null ? String(driver.bata) : ''
   });
 
-  // Petty Cash/Advance (2026-08-29) - auto-fetched from Petty Cash's own
-  // "DRIVER SALARY ADV" category entries against this Driver ID, scoped to
-  // salaryMonth, instead of being typed by hand - see
-  // utils/driverPettyCashAdvance.ts. No longer user-editable (see the
-  // Salary tab's own input below); recomputes live if salaryMonth changes
-  // or a new Petty Cash entry lands. Falls back to whatever was last saved
-  // when creating a brand-new driver (driver is null, so there's no Driver
-  // ID yet to match against).
+  // Petty Cash/Advance (2026-08-29, editable 2026-08-31) - auto-fetched from
+  // Petty Cash's own "DRIVER SALARY ADV" category entries against this
+  // Driver ID, scoped to salaryMonth, instead of being typed by hand from
+  // scratch - see utils/driverPettyCashAdvance.ts. Still a normal editable
+  // input (see the Salary tab's own input below) in case the auto-fetched
+  // total needs a manual correction; it just starts out pre-filled, and
+  // re-fills whenever salaryMonth changes or a new Petty Cash entry lands
+  // (same "auto-fills, still overridable" pattern as Warehouse's Add Hour).
+  // Falls back to whatever was last saved when creating a brand-new driver
+  // (driver is null, so there's no Driver ID yet to match against).
   const pettyCashAdvanceResult = driver
     ? computeDriverPettyCashAdvance(driverPettyCashAdvanceVouchers, driver.id, salaryMonth)
     : { total: 0, entries: [] };
@@ -328,11 +330,13 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
                   <div>
                     <label className="block text-slate-400 mb-0.5">Petty Cash/Advance <span className="text-rose-500 font-normal">(-)</span></label>
                     <input
-                      type="number" readOnly disabled value={salaryForm.pettyCashAdvance}
+                      type="number" value={salaryForm.pettyCashAdvance}
+                      onChange={e => setSalaryForm({ ...salaryForm, pettyCashAdvance: e.target.value })}
+                      autoComplete="off"
                       title={driver ? driverPettyCashAdvanceTooltip(pettyCashAdvanceResult) : undefined}
-                      className="w-full border border-slate-200 bg-slate-100 text-slate-600 rounded-lg px-2 py-1.5 cursor-not-allowed"
+                      className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5"
                     />
-                    <p className="text-[9.5px] text-slate-400 mt-0.5">Auto-fetched from Petty Cash's "DRIVER SALARY ADV" entries for {salaryMonth} - hover to see the breakdown.</p>
+                    <p className="text-[9.5px] text-slate-400 mt-0.5">Auto-fetched from Petty Cash's "DRIVER SALARY ADV" entries for {salaryMonth} - hover to see the breakdown, edit if it needs a correction.</p>
                   </div>
                   <div>
                     <label className="block text-slate-400 mb-0.5">Loan Deduction <span className="text-rose-500 font-normal">(-)</span></label>

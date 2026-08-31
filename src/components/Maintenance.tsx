@@ -58,10 +58,10 @@ interface MaintenanceProps {
   onSaveToolsChecklistRecord: (record: Omit<ToolsChecklistRecord, 'id'>) => Promise<void>;
   onDeleteToolsChecklistRecord: (id: string) => Promise<void>;
   serviceStationSpareParts: ServiceStationSparePart[];
-  onSaveServiceStationSparePart: (record: Omit<ServiceStationSparePart, 'id'>) => Promise<void>;
+  onSaveServiceStationSparePart: (record: ServiceStationSparePart | Omit<ServiceStationSparePart, 'id'>) => Promise<void>;
   onDeleteServiceStationSparePart: (id: string) => Promise<void>;
   serviceStationInspections: ServiceStationInspection[];
-  onSaveServiceStationInspection: (record: Omit<ServiceStationInspection, 'id'>) => Promise<void>;
+  onSaveServiceStationInspection: (record: ServiceStationInspection | Omit<ServiceStationInspection, 'id'>) => Promise<void>;
   onDeleteServiceStationInspection: (id: string) => Promise<void>;
 }
 

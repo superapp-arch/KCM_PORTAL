@@ -69,7 +69,6 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
   // Slip generation warns-and-confirms (or bulk-skips) anything not
   // Finalized. Saving other field edits never reverts this back to Draft.
   const [pfStatus, setPfStatus] = useState<'Draft' | 'Finalized'>('Draft');
-  const [pfFinalizing, setPfFinalizing] = useState(false);
 
   const loadAdvanceDeductions = () => {
     if (!employee) return;
@@ -240,33 +239,13 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
     }
   };
 
-  // Explicit Finalize action, separate from the regular Save button - snapshots
-  // whatever is currently in the form (so a pending edit isn't lost) and
-  // immediately persists status: 'Finalized'. This is what Salary Slip
-  // generation checks before proceeding without a warn-and-confirm.
-  const handleFinalizePf = async () => {
-    if (!employee) return;
-    if (!confirm(`Finalize ${pfMonth}'s Salary Breakup for ${employee.name}? This is what allows a Salary Slip to be generated without a warning.`)) return;
-    setPfFinalizing(true);
-    try {
-      const pfPayload = {
-        id: `${basic.id}-${pfMonth}`, empId: basic.id, month: pfMonth,
-        basic: Number(pfForm.basic) || undefined, hra: Number(pfForm.hra) || undefined, conveyance: Number(pfForm.conveyance) || undefined,
-        medicalAllowance: Number(pfForm.medicalAllowance) || undefined, lta: Number(pfForm.lta) || undefined,
-        cca: Number(pfForm.cca) || undefined, fuelAllowance: Number(pfForm.fuelAllowance) || undefined, otherAllowances: Number(pfForm.otherAllowances) || undefined,
-        extraDays: Number(pfForm.extraDays) || undefined, professionalTax: Number(pfForm.professionalTax) || undefined, epf: Number(pfForm.epf) || undefined,
-        esi: Number(pfForm.esi) || undefined, fullAndFinal: Number(pfForm.fullAndFinal) || undefined,
-        otherDeductions: Number(pfForm.otherDeductions) || undefined, advances: Number(pfForm.advances) || undefined, incomeTax: Number(pfForm.incomeTax) || undefined,
-        status: 'Finalized' as const
-      };
-      await authFetch('/api/staff/provident-fund', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pfPayload)
-      });
-      setPfStatus('Finalized');
-    } finally {
-      setPfFinalizing(false);
-    }
-  };
+  // Per-employee Finalize control was removed from this modal (2026-08-31) -
+  // office now finalizes everyone at once via Salary Slip's own "Mark as
+  // Finalized for All Employees" bulk button (see SalarySlipTabView.tsx), so
+  // clicking into every employee's Salary Breakup individually was no longer
+  // needed. pfStatus itself is kept (still loaded from/saved with the
+  // record - see loadAdvanceDeductions and the pf save payload below) since
+  // Salary Slip generation still reads it to decide whether to warn.
 
   const addHike = async () => {
     if (!employee || !hikeForm.effectiveDate || !hikeForm.amount) return;
@@ -557,21 +536,7 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <input type="month" value={pfMonth} onChange={e => setPfMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
-                <div className="flex items-center gap-2">
-                  <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase border ${
-                    pfStatus === 'Finalized' ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-amber-100 text-amber-800 border-amber-300'
-                  }`}>{pfStatus}</span>
-                  {isEditing && pfStatus === 'Draft' && (
-                    <button type="button" onClick={handleFinalizePf} disabled={pfFinalizing}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-lg text-[10px] uppercase cursor-pointer disabled:opacity-50 transition-all">
-                      {pfFinalizing ? 'Finalizing...' : 'Mark as Finalized'}
-                    </button>
-                  )}
-                </div>
               </div>
-              {pfStatus === 'Draft' && (
-                <p className="text-[10px] text-amber-600 font-mono">Salary Slip generation will warn before proceeding on a Draft month.</p>
-              )}
 
               <div className="grid grid-cols-4 gap-2">
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-center">
