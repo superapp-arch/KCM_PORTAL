@@ -4,6 +4,7 @@ import { StaffEmployee, StaffBankDetail, SalarySlipRecord } from '../../types';
 import { EnrichedPfRecord, resolveOrGenerateSlip, markSlipDownloaded } from '../../utils/salarySlipGenerate';
 import { buildSalarySlipFile } from '../../utils/salarySlipPdf';
 import { numberToIndianWords } from '../../utils/numberToWords';
+import kcmLogo from '../../assets/images/logo.png';
 
 interface SalarySlipModalProps {
   employee: StaffEmployee;
@@ -69,7 +70,7 @@ export default function SalarySlipModal({ employee, month, pfRecord, bankDetail,
     if (!slip) return;
     setDownloading(true);
     try {
-      const file = buildSalarySlipFile(slip);
+      const file = await buildSalarySlipFile(slip);
       const url = URL.createObjectURL(file);
       const link = document.createElement('a');
       link.href = url;
@@ -109,7 +110,7 @@ export default function SalarySlipModal({ employee, month, pfRecord, bankDetail,
           ) : slip ? (
             <div className="space-y-3">
               <div className="text-center border-b border-slate-200 pb-3">
-                <p className="font-black text-slate-900 text-base">KCM LOGISTICS</p>
+                <img src={kcmLogo} alt="KCM Logistics" className="h-12 mx-auto mb-1" />
                 <p className="text-slate-500">Salary Slip - {monthLabel(slip.month)}</p>
               </div>
 

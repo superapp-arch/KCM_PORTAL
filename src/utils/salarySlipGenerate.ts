@@ -101,7 +101,7 @@ export async function resolveOrGenerateSlip(params: {
   // has a real, re-fetchable PDFUrl rather than only ever existing as an
   // in-memory download.
   try {
-    const file = buildSalarySlipFile(slip);
+    const file = await buildSalarySlipFile(slip);
     const formData = new FormData();
     formData.append('file', file);
     const uploadRes = await fetch('/api/upload/salary-slips', { method: 'POST', body: formData });

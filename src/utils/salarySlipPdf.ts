@@ -6,6 +6,29 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { SalarySlipRecord } from '../types';
 import { numberToIndianWords } from './numberToWords';
+import logoUrl from '../assets/images/logo.png';
+
+// The logo is a 598x175 PNG (~3.42:1) - bundled by Vite as a plain asset URL,
+// which jsPDF's addImage can't draw from directly (it needs the actual image
+// bytes, as a data URL). Fetched and converted to a data URL once, then
+// cached for every slip generated afterwards in the same session - a slip
+// generated before this resolves (or if the fetch ever fails) just falls
+// back to the old text-only header rather than blocking/erroring.
+const LOGO_ASPECT = 175 / 598;
+let logoDataUrlPromise: Promise<string> | null = null;
+function getLogoDataUrl(): Promise<string> {
+  if (!logoDataUrlPromise) {
+    logoDataUrlPromise = fetch(logoUrl)
+      .then(res => res.blob())
+      .then(blob => new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      }));
+  }
+  return logoDataUrlPromise;
+}
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -16,22 +39,35 @@ function monthLabel(month: string): string {
 
 const rupee = (n: number | undefined) => `Rs. ${Math.round(n || 0).toLocaleString('en-IN')}`;
 
-export function buildSalarySlipDoc(slip: SalarySlipRecord): jsPDF {
+export function buildSalarySlipDoc(slip: SalarySlipRecord, logoDataUrl?: string): jsPDF {
   const doc = new jsPDF();
 
-  // Header
-  doc.setFontSize(16);
-  doc.setTextColor(15, 23, 42);
-  doc.text('KCM LOGISTICS', 105, 16, { align: 'center' });
-  doc.setFontSize(11);
-  doc.setTextColor(100, 116, 139);
-  doc.text(`Salary Slip - ${monthLabel(slip.month)}`, 105, 23, { align: 'center' });
+  // Header - the KCM Logistics logo when it's ready (see getLogoDataUrl
+  // above), falling back to the plain text wordmark it replaces if it isn't.
+  let headerBottomY: number;
+  if (logoDataUrl) {
+    const logoWidth = 56;
+    const logoHeight = logoWidth * LOGO_ASPECT;
+    doc.addImage(logoDataUrl, 'PNG', (210 - logoWidth) / 2, 10, logoWidth, logoHeight);
+    doc.setFontSize(11);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Salary Slip - ${monthLabel(slip.month)}`, 105, 10 + logoHeight + 6, { align: 'center' });
+    headerBottomY = 10 + logoHeight + 10;
+  } else {
+    doc.setFontSize(16);
+    doc.setTextColor(15, 23, 42);
+    doc.text('KCM LOGISTICS', 105, 16, { align: 'center' });
+    doc.setFontSize(11);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Salary Slip - ${monthLabel(slip.month)}`, 105, 23, { align: 'center' });
+    headerBottomY = 28;
+  }
   doc.setDrawColor(203, 213, 225);
-  doc.line(14, 28, 196, 28);
+  doc.line(14, headerBottomY, 196, headerBottomY);
 
   // Employee details block
   autoTable(doc, {
-    startY: 33,
+    startY: headerBottomY + 5,
     body: [
       ['Employee Name', slip.employeeName, 'Employee ID', slip.empId],
       ['Department', slip.department || '-', 'Month', monthLabel(slip.month)],
@@ -131,7 +167,13 @@ export function buildSalarySlipDoc(slip: SalarySlipRecord): jsPDF {
   return doc;
 }
 
-export function buildSalarySlipFile(slip: SalarySlipRecord): File {
-  const blob: Blob = buildSalarySlipDoc(slip).output('blob');
+export async function buildSalarySlipFile(slip: SalarySlipRecord): Promise<File> {
+  let logoDataUrl: string | undefined;
+  try {
+    logoDataUrl = await getLogoDataUrl();
+  } catch (err) {
+    console.error('Failed to load KCM Logistics logo for the salary slip - falling back to the text-only header:', err);
+  }
+  const blob: Blob = buildSalarySlipDoc(slip, logoDataUrl).output('blob');
   return new File([blob], `${slip.slipNumber}.pdf`, { type: 'application/pdf' });
 }
