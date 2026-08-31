@@ -174,15 +174,73 @@ export interface Vendor {
   bankStatementDocuments: VehicleDocument[]; // mandatory, at least one file
 }
 
+export type BillingEntity = 'Regular' | 'Dedicated' | 'Adhoc' | 'Labour Charges' | 'Opex' | 'Toll';
+export type BillingMode = 'Dedicated' | 'Adhoc' | 'Labour Charges';
+export type BillingGstType = 'IGST' | 'CGST_SGST';
+// The fuller status logic (2026-09-02) - Payment Status keeps its dropdown
+// for manual override, but is auto-suggested from Amount Received vs
+// Amount Receivable (see utils/billingInvoiceCalc.ts's suggestPaymentStatus).
+export type BillingPaymentStatus = 'Pending' | 'Cleared' | 'Short Payment' | 'Overdue';
+
+// A credit note raised against this invoice - kept inline on the invoice
+// itself (not a separate cross-referenced module) so it auto-reduces this
+// invoice's Amount Receivable/Shortage-Excess without ever needing the
+// invoice to be re-entered or re-selected elsewhere.
+export interface BillingCreditNote {
+  id: string;
+  date: string; // YYYY-MM-DD
+  amount: number;
+  reason?: string;
+}
+
 export interface BillingInvoice {
   id: string;
   invoiceNo: string;
   date: string;
   customerName: string;
+  // Legacy base amount - for an invoice created before the 2026-09-02
+  // Billing expansion this is the real (only) amount; for one created after,
+  // it's kept mirroring totalAmt below purely so Reports.tsx and this
+  // screen's own older KPI math (which both sum `amount`) keep working
+  // without having to special-case every consumer. Always prefer totalAmt
+  // when present - see effectiveInvoiceAmount() in billingInvoiceCalc.ts.
   amount: number;
+  // Legacy 3-state status - same "kept in sync for old consumers" purpose as
+  // `amount` above. Always prefer paymentStatus when present - see
+  // effectiveInvoiceStatus() in billingInvoiceCalc.ts.
   status: 'Paid' | 'Pending' | 'Overdue';
   description: string;
   documents?: VehicleDocument[];
+
+  // --- Billing details (2026-09-02 Invoice & Receivables expansion) ---
+  entity?: BillingEntity;
+  mode?: BillingMode;
+  location?: string; // Location / State - free text, no fixed list supplied
+  billMonth?: string; // YYYY-MM
+  listPrice?: number; // base amount before GST - replaces the old flat `amount` as the typed figure
+  gstType?: BillingGstType; // IGST and CGST+SGST are mutually exclusive
+  igst?: number;
+  cgst?: number;
+  sgst?: number;
+  tollCharges?: number;
+
+  // --- Auto-calculated (still stored, not just derived at render time, so
+  // a past invoice's own totals stay frozen even if this file's formulas
+  // ever change later) ---
+  totalAmt?: number; // listPrice + igst + cgst + sgst
+  tdsRate?: number; // % - defaults to 2, editable when a client's TDS terms differ
+  tdsAmount?: number; // auto-computed off totalAmt x tdsRate, editable override
+  discountAndDebit?: number; // manual entry
+  creditNotes?: BillingCreditNote[];
+  amountReceivable?: number; // totalAmt - discountAndDebit - tdsAmount - sum(creditNotes)
+  creditPeriodDays?: number; // defaults from this customer's last invoice, editable
+  dueDate?: string; // date + creditPeriodDays, always computed
+
+  // --- Payment status / receipt tracking ---
+  paymentStatus?: BillingPaymentStatus;
+  amountReceived?: number;
+  receivedDate?: string;
+  shortageExcess?: number; // amountReceivable - amountReceived; positive = shortage, negative = excess
 }
 
 export interface PettyCashVoucher {

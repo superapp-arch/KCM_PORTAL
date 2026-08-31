@@ -1,22 +1,26 @@
-import React, { useState, useRef } from 'react';
-import { BillingInvoice, VehicleDocument } from '../types';
-import { 
-  FileText, 
-  Plus, 
-  Search, 
-  CheckCircle2, 
-  AlertCircle, 
-  Clock, 
-  Edit2, 
-  Trash2, 
-  Paperclip, 
-  X, 
-  Upload, 
-  Download, 
-  Printer 
+import React, { useState, useEffect } from 'react';
+import { BillingInvoice, BillingCreditNote, VehicleDocument } from '../types';
+import {
+  FileText,
+  Plus,
+  Search,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  Edit2,
+  Trash2,
+  Paperclip,
+  X,
+  Receipt
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
+import {
+  nextInvoiceNo, lastInvoiceForCustomer, defaultCreditPeriodFor,
+  computeTotalAmt, computeTdsAmount, computeAmountReceivable, computeDueDate,
+  computeShortageExcess, suggestPaymentStatus, sumCreditNotes,
+  effectiveInvoiceAmount, effectiveInvoiceStatus, legacyStatusFor, DEFAULT_TDS_RATE
+} from '../utils/billingInvoiceCalc';
 
 interface BillingProps {
   invoices: BillingInvoice[];
@@ -25,61 +29,385 @@ interface BillingProps {
   onDeleteInvoice: (id: string) => Promise<void>;
 }
 
+const ENTITY_OPTIONS = ['Regular', 'Dedicated', 'Adhoc', 'Labour Charges', 'Opex', 'Toll'] as const;
+const MODE_OPTIONS = ['Dedicated', 'Adhoc', 'Labour Charges'] as const;
+const PAYMENT_STATUS_OPTIONS = ['Pending', 'Cleared', 'Short Payment', 'Overdue'] as const;
+
+const rupee = (n: number) => `₹${(n || 0).toLocaleString('en-IN')}`;
+const todayIso = () => new Date().toISOString().slice(0, 10);
+const thisMonth = () => todayIso().slice(0, 7);
+
+// The full rich field set - one shape shared by both the "Issue New Freight
+// Invoice" create form and the Manage modal's edit form, so the two can
+// never drift on which fields exist or how they're laid out. All numeric
+// fields are kept as strings (like every other form in this app) so an
+// empty input is just '' rather than a stray 0.
+interface InvoiceFormState {
+  invoiceNo: string;
+  customerName: string;
+  entity: string;
+  modeField: string;
+  location: string;
+  billMonth: string;
+  date: string;
+  listPrice: string;
+  gstType: string; // 'IGST' | 'CGST_SGST' | ''
+  igst: string;
+  cgst: string;
+  sgst: string;
+  tollCharges: string;
+  discountAndDebit: string;
+  creditPeriodDays: string;
+  tdsRate: string;
+  tdsAmount: string;
+  paymentStatus: string;
+  amountReceived: string;
+  receivedDate: string;
+  description: string;
+}
+
+function emptyInvoiceForm(invoices: BillingInvoice[]): InvoiceFormState {
+  const date = todayIso();
+  return {
+    invoiceNo: nextInvoiceNo(invoices, date),
+    customerName: '', entity: '', modeField: '', location: '', billMonth: thisMonth(), date,
+    listPrice: '', gstType: '', igst: '', cgst: '', sgst: '', tollCharges: '',
+    discountAndDebit: '', creditPeriodDays: String(30), tdsRate: String(DEFAULT_TDS_RATE), tdsAmount: '',
+    paymentStatus: 'Pending', amountReceived: '', receivedDate: '', description: ''
+  };
+}
+
+function invoiceToForm(inv: BillingInvoice): InvoiceFormState {
+  return {
+    invoiceNo: inv.invoiceNo, customerName: inv.customerName,
+    entity: inv.entity || '', modeField: inv.mode || '', location: inv.location || '',
+    billMonth: inv.billMonth || (inv.date || '').slice(0, 7), date: inv.date,
+    listPrice: inv.listPrice != null ? String(inv.listPrice) : (inv.amount != null ? String(inv.amount) : ''),
+    gstType: inv.gstType || '', igst: inv.igst != null ? String(inv.igst) : '',
+    cgst: inv.cgst != null ? String(inv.cgst) : '', sgst: inv.sgst != null ? String(inv.sgst) : '',
+    tollCharges: inv.tollCharges != null ? String(inv.tollCharges) : '',
+    discountAndDebit: inv.discountAndDebit != null ? String(inv.discountAndDebit) : '',
+    creditPeriodDays: inv.creditPeriodDays != null ? String(inv.creditPeriodDays) : String(30),
+    tdsRate: inv.tdsRate != null ? String(inv.tdsRate) : String(DEFAULT_TDS_RATE),
+    tdsAmount: inv.tdsAmount != null ? String(inv.tdsAmount) : '',
+    paymentStatus: effectiveInvoiceStatus(inv), amountReceived: inv.amountReceived != null ? String(inv.amountReceived) : '',
+    receivedDate: inv.receivedDate || '', description: inv.description || ''
+  };
+}
+
+// Every computed figure a form's current values imply - Total Amt, Amount
+// Receivable and Due Date are NEVER manually typed, only ever shown from
+// here.
+function deriveComputed(form: InvoiceFormState, creditNotes: BillingCreditNote[] | undefined) {
+  const listPrice = Number(form.listPrice) || 0;
+  const igst = form.gstType === 'IGST' ? Number(form.igst) || 0 : 0;
+  const cgst = form.gstType === 'CGST_SGST' ? Number(form.cgst) || 0 : 0;
+  const sgst = form.gstType === 'CGST_SGST' ? Number(form.sgst) || 0 : 0;
+  const totalAmt = computeTotalAmt(listPrice, igst, cgst, sgst);
+  const discountAndDebit = Number(form.discountAndDebit) || 0;
+  const tdsAmount = Number(form.tdsAmount) || 0;
+  const amountReceivable = computeAmountReceivable(totalAmt, discountAndDebit, tdsAmount, creditNotes);
+  const dueDate = computeDueDate(form.date, Number(form.creditPeriodDays) || 0);
+  const amountReceived = Number(form.amountReceived) || 0;
+  const shortageExcess = computeShortageExcess(amountReceivable, amountReceived);
+  const suggestedStatus = suggestPaymentStatus(amountReceived, amountReceivable, dueDate);
+  return { listPrice, igst, cgst, sgst, totalAmt, discountAndDebit, tdsAmount, amountReceivable, dueDate, amountReceived, shortageExcess, suggestedStatus };
+}
+
+function buildInvoicePayload(form: InvoiceFormState, computed: ReturnType<typeof deriveComputed>, creditNotes: BillingCreditNote[] | undefined): Omit<BillingInvoice, 'id'> {
+  const paymentStatus = (form.paymentStatus || 'Pending') as BillingInvoice['paymentStatus'];
+  return {
+    invoiceNo: form.invoiceNo.toUpperCase().trim(),
+    date: form.date,
+    customerName: form.customerName,
+    description: form.description,
+    // Legacy mirrors so Reports.tsx and this screen's own older KPI math
+    // (both of which sum `amount` / group by `status`) keep working.
+    amount: computed.totalAmt,
+    status: legacyStatusFor(paymentStatus!),
+    entity: (form.entity || undefined) as BillingInvoice['entity'],
+    mode: (form.modeField || undefined) as BillingInvoice['mode'],
+    location: form.location || undefined,
+    billMonth: form.billMonth || undefined,
+    listPrice: computed.listPrice,
+    gstType: (form.gstType || undefined) as BillingInvoice['gstType'],
+    igst: computed.igst || undefined,
+    cgst: computed.cgst || undefined,
+    sgst: computed.sgst || undefined,
+    tollCharges: Number(form.tollCharges) || undefined,
+    totalAmt: computed.totalAmt,
+    tdsRate: Number(form.tdsRate) || DEFAULT_TDS_RATE,
+    tdsAmount: computed.tdsAmount,
+    discountAndDebit: computed.discountAndDebit || undefined,
+    creditNotes,
+    amountReceivable: computed.amountReceivable,
+    creditPeriodDays: Number(form.creditPeriodDays) || 0,
+    dueDate: computed.dueDate,
+    paymentStatus,
+    amountReceived: computed.amountReceived || undefined,
+    receivedDate: form.receivedDate || undefined,
+    shortageExcess: computed.shortageExcess
+  };
+}
+
+// Shared field block - every Billing detail / auto-calculated / payment
+// status field, used identically by the create form and the Manage modal's
+// edit form. Documents and Credit Notes are handled outside this component
+// (documents already had their own layout slot; credit notes only make
+// sense once an invoice actually exists).
+function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
+  form: InvoiceFormState;
+  setForm: React.Dispatch<React.SetStateAction<InvoiceFormState>>;
+  invoices: BillingInvoice[];
+  creditNotes: BillingCreditNote[] | undefined;
+}) {
+  const computed = deriveComputed(form, creditNotes);
+
+  // Re-suggests TDS Amount whenever what it's computed from changes - still
+  // a normal editable input afterwards (same "auto-fills, still
+  // overridable" pattern as Warehouse's Add Hour), so a client with
+  // different TDS terms can just retype it.
+  useEffect(() => {
+    setForm(f => ({ ...f, tdsAmount: String(computeTdsAmount(computed.totalAmt, Number(f.tdsRate) || DEFAULT_TDS_RATE)) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [computed.totalAmt, form.tdsRate]);
+
+  // Re-suggests Payment Status whenever Amount Received/Amount
+  // Receivable/Due Date change - the dropdown itself is still a plain
+  // select the office can override at any time; this only ever pre-fills
+  // it, matching the spec's "auto-suggested ... shown as a dropdown for
+  // manual override."
+  useEffect(() => {
+    setForm(f => ({ ...f, paymentStatus: computed.suggestedStatus }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [computed.amountReceived, computed.amountReceivable, computed.dueDate]);
+
+  const set = (patch: Partial<InvoiceFormState>) => setForm(f => ({ ...f, ...patch }));
+
+  // Entity / Mode / GST-type / Credit Period smart-default from this exact
+  // customer's own most recent invoice, applied once the name field loses
+  // focus - still fully editable afterwards, this only saves re-typing for
+  // a repeat customer.
+  const applySmartDefaults = () => {
+    const last = lastInvoiceForCustomer(invoices, form.customerName);
+    setForm(f => ({
+      ...f,
+      entity: f.entity || last?.entity || f.entity,
+      modeField: f.modeField || last?.mode || f.modeField,
+      gstType: f.gstType || last?.gstType || f.gstType,
+      creditPeriodDays: f.creditPeriodDays && f.creditPeriodDays !== '30' ? f.creditPeriodDays : String(defaultCreditPeriodFor(invoices, form.customerName))
+    }));
+  };
+
+  const selectGst = (type: 'IGST' | 'CGST_SGST') => {
+    set(type === 'IGST' ? { gstType: type, cgst: '', sgst: '' } : { gstType: type, igst: '' });
+  };
+
+  const showAmountReceived = form.paymentStatus !== 'Pending' || computed.amountReceived > 0;
+
+  return (
+    <>
+      <div>
+        <label className="block font-semibold text-slate-600 mb-1">Invoice Reference Number *</label>
+        <input
+          type="text" required value={form.invoiceNo}
+          onChange={(e) => set({ invoiceNo: e.target.value })}
+          placeholder="e.g. KCMI/25-26/001"
+          className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold tracking-wider text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-blue-500"
+        />
+        <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-suggested, sequential per financial year - still editable if it needs adjusting.</p>
+      </div>
+
+      <div>
+        <label className="block font-semibold text-slate-600 mb-1">B2B Customer Name *</label>
+        <input
+          type="text" required value={form.customerName}
+          onChange={(e) => set({ customerName: e.target.value })}
+          onBlur={applySmartDefaults}
+          placeholder="e.g. DHL Group Supply Chain"
+          className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800"
+        />
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">Entity</label>
+          <select value={form.entity} onChange={(e) => set({ entity: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-medium">
+            <option value="">Select...</option>
+            {ENTITY_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">Mode</label>
+          <select value={form.modeField} onChange={(e) => set({ modeField: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-medium">
+            <option value="">Select...</option>
+            {MODE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">Location / State</label>
+          <input type="text" value={form.location} onChange={(e) => set({ location: e.target.value })} placeholder="e.g. Hyderabad" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">Bill Month</label>
+          <input type="month" value={form.billMonth} onChange={(e) => set({ billMonth: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-mono" />
+        </div>
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">Invoice Issue Date *</label>
+          <DateInput required value={form.date} onChange={(e) => set({ date: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">List Price (₹) *</label>
+          <input type="number" required value={form.listPrice} onChange={(e) => set({ listPrice: e.target.value })} placeholder="e.g. 75000" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono font-semibold" />
+        </div>
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">Toll Charges (₹)</label>
+          <input type="number" value={form.tollCharges} onChange={(e) => set({ tollCharges: e.target.value })} placeholder="If applicable" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
+        </div>
+      </div>
+
+      <div>
+        <label className="block font-semibold text-slate-600 mb-1">GST Type</label>
+        <div className="flex gap-2 mb-2">
+          <button type="button" onClick={() => selectGst('IGST')}
+            className={`flex-1 py-1.5 rounded-lg border font-bold text-[11px] uppercase cursor-pointer transition-colors ${form.gstType === 'IGST' ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'}`}>
+            IGST
+          </button>
+          <button type="button" onClick={() => selectGst('CGST_SGST')}
+            className={`flex-1 py-1.5 rounded-lg border font-bold text-[11px] uppercase cursor-pointer transition-colors ${form.gstType === 'CGST_SGST' ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'}`}>
+            CGST + SGST
+          </button>
+        </div>
+        {form.gstType === 'IGST' && (
+          <input type="number" value={form.igst} onChange={(e) => set({ igst: e.target.value })} placeholder="IGST Amount (₹)" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
+        )}
+        {form.gstType === 'CGST_SGST' && (
+          <div className="grid grid-cols-2 gap-2">
+            <input type="number" value={form.cgst} onChange={(e) => set({ cgst: e.target.value })} placeholder="CGST Amount (₹)" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
+            <input type="number" value={form.sgst} onChange={(e) => set({ sgst: e.target.value })} placeholder="SGST Amount (₹)" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
+          </div>
+        )}
+        {!form.gstType && <p className="text-[9px] text-amber-600 font-mono">Pick one - IGST and CGST+SGST can't both apply to the same invoice.</p>}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">Discount & Debit (₹)</label>
+          <input type="number" value={form.discountAndDebit} onChange={(e) => set({ discountAndDebit: e.target.value })} placeholder="If applicable" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
+        </div>
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">Credit Period (days)</label>
+          <input type="number" min="0" value={form.creditPeriodDays} onChange={(e) => set({ creditPeriodDays: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
+          <p className="text-[9px] text-slate-400 font-mono mt-0.5">Defaults from this customer's last invoice.</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">TDS Rate (%)</label>
+          <input type="number" step="0.01" value={form.tdsRate} onChange={(e) => set({ tdsRate: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
+        </div>
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">TDS Amount (₹)</label>
+          <input type="number" value={form.tdsAmount} onChange={(e) => set({ tdsAmount: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
+          <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-computed off Total Amt - editable if this client's TDS terms differ.</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 bg-slate-50 border border-slate-200 rounded-lg p-2.5">
+        <div>
+          <p className="text-[9px] text-slate-400 uppercase font-bold">Total Amt</p>
+          <p className="font-mono font-black text-slate-800">{rupee(computed.totalAmt)}</p>
+        </div>
+        <div>
+          <p className="text-[9px] text-slate-400 uppercase font-bold">Amount Receivable</p>
+          <p className="font-mono font-black text-emerald-700">{rupee(computed.amountReceivable)}</p>
+        </div>
+        <div>
+          <p className="text-[9px] text-slate-400 uppercase font-bold">Due Date</p>
+          <p className="font-mono font-black text-slate-800">{computed.dueDate || '-'}</p>
+        </div>
+      </div>
+
+      <div>
+        <label className="block font-semibold text-slate-600 mb-1">Payment Status</label>
+        <select value={form.paymentStatus} onChange={(e) => set({ paymentStatus: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-semibold">
+          {PAYMENT_STATUS_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+        <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-suggested from Amount Received vs Amount Receivable - still a manual override.</p>
+      </div>
+
+      {showAmountReceived && (
+        <div className="grid grid-cols-2 gap-3 border border-emerald-200 bg-emerald-50/30 rounded-lg p-2.5">
+          <div>
+            <label className="block font-semibold text-slate-600 mb-1">Amount Received (₹)</label>
+            <input type="number" value={form.amountReceived} onChange={(e) => set({ amountReceived: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
+          </div>
+          <div>
+            <label className="block font-semibold text-slate-600 mb-1">Received Date</label>
+            <DateInput value={form.receivedDate} onChange={(e) => set({ receivedDate: e.target.value })} max={todayIso()} className="w-full bg-white border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
+          </div>
+          <div className="col-span-2 flex items-center justify-between pt-1 border-t border-emerald-100">
+            <span className="text-[10px] font-bold text-slate-500 uppercase">{computed.shortageExcess > 0 ? 'Shortage' : computed.shortageExcess < 0 ? 'Excess' : 'Shortage/Excess'}</span>
+            <span className={`font-mono font-black ${computed.shortageExcess > 0 ? 'text-rose-600' : computed.shortageExcess < 0 ? 'text-blue-600' : 'text-slate-500'}`}>{rupee(Math.abs(computed.shortageExcess))}</span>
+          </div>
+        </div>
+      )}
+
+      <div>
+        <label className="block font-semibold text-slate-600 mb-1">Consignment Cargo Description</label>
+        <textarea
+          value={form.description}
+          onChange={(e) => set({ description: e.target.value })}
+          placeholder="Consignment weight, routes, and billing breakdown..."
+          className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 h-16 focus:outline-none text-slate-800"
+        />
+      </div>
+    </>
+  );
+}
+
+const PAYMENT_STATUS_BADGE_CLASS: Record<string, string> = {
+  Cleared: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  Pending: 'bg-amber-50 text-amber-700 border-amber-200',
+  'Short Payment': 'bg-orange-50 text-orange-700 border-orange-200',
+  Overdue: 'bg-rose-50 text-rose-700 border-rose-200'
+};
+const PAYMENT_STATUS_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
+  Cleared: CheckCircle2, Pending: Clock, 'Short Payment': AlertCircle, Overdue: AlertCircle
+};
+
 export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDeleteInvoice }: BillingProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // New Invoice State
-  const [invoiceNo, setInvoiceNo] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [customerName, setCustomerName] = useState('');
-  const [amount, setAmount] = useState('');
-  const [status, setStatus] = useState<'Paid' | 'Pending' | 'Overdue'>('Pending');
-  const [description, setDescription] = useState('');
-  const [newEntryDocs, setNewEntryDocs] = useState<VehicleDocument[]>([]);
-
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
 
-  // Modal / Management State
-  const [selectedInvoiceForManage, setSelectedInvoiceForManage] = useState<BillingInvoice | null>(null);
-
-  // Modal Editing Fields
-  const [editInvoiceNo, setEditInvoiceNo] = useState('');
-  const [editDate, setEditDate] = useState('');
-  const [editCustomerName, setEditCustomerName] = useState('');
-  const [editAmount, setEditAmount] = useState('');
-  const [editStatus, setEditStatus] = useState<'Paid' | 'Pending' | 'Overdue'>('Pending');
-  const [editDescription, setEditDescription] = useState('');
-
-  const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => {
-    setNotif({ message, type });
-    setTimeout(() => setNotif(null), 4000);
-  };
+  // --- New Invoice form ---
+  const [form, setForm] = useState<InvoiceFormState>(() => emptyInvoiceForm(invoices));
+  const [newEntryDocs, setNewEntryDocs] = useState<VehicleDocument[]>([]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!invoiceNo || !customerName || !amount) {
-      alert('Please fill in all invoice details.');
+    if (!form.invoiceNo || !form.customerName || !form.listPrice) {
+      triggerNotif('Please fill in Invoice Reference Number, Customer Name, and List Price.', 'error');
       return;
     }
-
+    if (!form.gstType) {
+      triggerNotif('Pick a GST Type - IGST or CGST + SGST.', 'error');
+      return;
+    }
     setIsSubmitting(true);
     try {
-      await onAddInvoice({
-        invoiceNo: invoiceNo.toUpperCase().trim(),
-        date,
-        customerName,
-        amount: parseFloat(amount),
-        status,
-        description,
-        documents: newEntryDocs
-      });
-
-      // Reset
-      setInvoiceNo('');
-      setCustomerName('');
-      setAmount('');
-      setDescription('');
+      const computed = deriveComputed(form, undefined);
+      await onAddInvoice({ ...buildInvoicePayload(form, computed, []), documents: newEntryDocs });
+      setForm(emptyInvoiceForm(invoices));
       setNewEntryDocs([]);
       triggerNotif('🧾 Billing invoice posted successfully & dispatched to ledger!');
     } catch (err) {
@@ -90,38 +418,28 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
     }
   };
 
+  // --- Manage / Edit modal ---
+  const [selectedInvoiceForManage, setSelectedInvoiceForManage] = useState<BillingInvoice | null>(null);
+  const [editForm, setEditForm] = useState<InvoiceFormState | null>(null);
+
   const handleOpenManageModal = (inv: BillingInvoice) => {
     setSelectedInvoiceForManage(inv);
-    setEditInvoiceNo(inv.invoiceNo);
-    setEditDate(inv.date);
-    setEditCustomerName(inv.customerName);
-    setEditAmount(String(inv.amount));
-    setEditStatus(inv.status);
-    setEditDescription(inv.description || '');
+    setEditForm(invoiceToForm(inv));
   };
 
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedInvoiceForManage) return;
-
+    if (!selectedInvoiceForManage || !editForm) return;
+    if (!editForm.gstType) {
+      triggerNotif('Pick a GST Type - IGST or CGST + SGST.', 'error');
+      return;
+    }
     setIsSubmitting(true);
     try {
-      const updatedData: Partial<BillingInvoice> = {
-        invoiceNo: editInvoiceNo.toUpperCase().trim(),
-        date: editDate,
-        customerName: editCustomerName,
-        amount: parseFloat(editAmount),
-        status: editStatus,
-        description: editDescription
-      };
-
+      const computed = deriveComputed(editForm, selectedInvoiceForManage.creditNotes);
+      const updatedData = buildInvoicePayload(editForm, computed, selectedInvoiceForManage.creditNotes);
       await onUpdateInvoice(selectedInvoiceForManage.id, updatedData);
-
-      setSelectedInvoiceForManage({
-        ...selectedInvoiceForManage,
-        ...updatedData
-      });
-
+      setSelectedInvoiceForManage({ ...selectedInvoiceForManage, ...updatedData });
       triggerNotif('✏️ Invoice details updated successfully!');
     } catch (err) {
       console.error(err);
@@ -135,14 +453,59 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
     if (!selectedInvoiceForManage) return;
     try {
       await onUpdateInvoice(selectedInvoiceForManage.id, { documents: updatedDocs });
-      setSelectedInvoiceForManage({
-        ...selectedInvoiceForManage,
-        documents: updatedDocs
-      });
+      setSelectedInvoiceForManage({ ...selectedInvoiceForManage, documents: updatedDocs });
       triggerNotif('📎 Documents updated successfully.');
     } catch (err) {
       console.error(err);
       triggerNotif(err instanceof Error ? err.message : 'Failed to update documents.', 'error');
+    }
+  };
+
+  // --- Credit Notes (kept inline on the invoice - see types.ts) - persisted
+  // immediately, same as documents above, independent of the "Save Invoice
+  // Changes" button, since raising one is its own action against an
+  // already-existing invoice.
+  const [cnAmount, setCnAmount] = useState('');
+  const [cnDate, setCnDate] = useState(todayIso());
+  const [cnReason, setCnReason] = useState('');
+  const [cnSubmitting, setCnSubmitting] = useState(false);
+
+  const handleAddCreditNote = async () => {
+    if (!selectedInvoiceForManage || !editForm) return;
+    const amt = parseFloat(cnAmount);
+    if (!amt || amt <= 0) { triggerNotif('Enter a valid Credit Note amount greater than 0.', 'error'); return; }
+    setCnSubmitting(true);
+    try {
+      const note: BillingCreditNote = { id: String(Date.now()), date: cnDate, amount: amt, reason: cnReason.trim() || undefined };
+      const updatedNotes = [...(selectedInvoiceForManage.creditNotes || []), note];
+      const computed = deriveComputed(editForm, updatedNotes);
+      const updatedData = buildInvoicePayload(editForm, computed, updatedNotes);
+      await onUpdateInvoice(selectedInvoiceForManage.id, updatedData);
+      setSelectedInvoiceForManage({ ...selectedInvoiceForManage, ...updatedData });
+      setEditForm(f => f && ({ ...f, paymentStatus: updatedData.paymentStatus || f.paymentStatus }));
+      setCnAmount(''); setCnReason('');
+      triggerNotif('🧾 Credit note added - Amount Receivable updated.');
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to add credit note.', 'error');
+    } finally {
+      setCnSubmitting(false);
+    }
+  };
+
+  const handleRemoveCreditNote = async (noteId: string) => {
+    if (!selectedInvoiceForManage || !editForm) return;
+    if (!confirm('Remove this credit note? Amount Receivable will go back up.')) return;
+    try {
+      const updatedNotes = (selectedInvoiceForManage.creditNotes || []).filter(c => c.id !== noteId);
+      const computed = deriveComputed(editForm, updatedNotes);
+      const updatedData = buildInvoicePayload(editForm, computed, updatedNotes);
+      await onUpdateInvoice(selectedInvoiceForManage.id, updatedData);
+      setSelectedInvoiceForManage({ ...selectedInvoiceForManage, ...updatedData });
+      triggerNotif('Credit note removed.');
+    } catch (err) {
+      console.error(err);
+      triggerNotif(err instanceof Error ? err.message : 'Failed to remove credit note.', 'error');
     }
   };
 
@@ -162,10 +525,10 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
     (inv?.customerName || '').toLowerCase().includes((searchTerm || '').toLowerCase())
   );
 
-  const totalBilled = invoices.reduce((sum, inv) => sum + (inv.amount || 0), 0);
-  const totalPaid = invoices.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + (inv.amount || 0), 0);
-  const totalPending = invoices.filter(inv => inv.status === 'Pending').reduce((sum, inv) => sum + (inv.amount || 0), 0);
-  const totalOverdue = invoices.filter(inv => inv.status === 'Overdue').reduce((sum, inv) => sum + (inv.amount || 0), 0);
+  const totalBilled = invoices.reduce((sum, inv) => sum + effectiveInvoiceAmount(inv), 0);
+  const totalPaid = invoices.filter(inv => effectiveInvoiceStatus(inv) === 'Cleared').reduce((sum, inv) => sum + effectiveInvoiceAmount(inv), 0);
+  const totalPending = invoices.filter(inv => { const s = effectiveInvoiceStatus(inv); return s === 'Pending' || s === 'Short Payment'; }).reduce((sum, inv) => sum + effectiveInvoiceAmount(inv), 0);
+  const totalOverdue = invoices.filter(inv => effectiveInvoiceStatus(inv) === 'Overdue').reduce((sum, inv) => sum + effectiveInvoiceAmount(inv), 0);
 
   return (
     <div className="space-y-6" id="billing-view-wrapper">
@@ -207,7 +570,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
           <p className="font-bold text-slate-400 uppercase tracking-wider text-amber-600">Pending Receivables</p>
           <h3 className="text-lg font-bold text-amber-700 mt-1">₹{totalPending.toLocaleString('en-IN')}</h3>
-          <p className="text-slate-400 mt-0.5">Under invoice terms</p>
+          <p className="text-slate-400 mt-0.5">Under invoice terms (incl. Short Payment)</p>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
@@ -225,75 +588,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
             Issue New Freight Invoice
           </h2>
           <form onSubmit={handleSubmit} className="space-y-3.5">
-            <div>
-              <label className="block font-semibold text-slate-600 mb-1">Invoice Reference Number *</label>
-              <input
-                type="text"
-                required
-                value={invoiceNo}
-                onChange={(e) => setInvoiceNo(e.target.value)}
-                placeholder="e.g. INV-2026-004"
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold tracking-wider text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
-
-            <div>
-              <label className="block font-semibold text-slate-600 mb-1">B2B Customer Name *</label>
-              <input
-                type="text"
-                required
-                value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
-                placeholder="e.g. DHL Group Supply Chain"
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block font-semibold text-slate-600 mb-1">Invoice Value (₹) *</label>
-                <input
-                  type="number"
-                  required
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="e.g. 75000"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono font-semibold"
-                />
-              </div>
-              <div>
-                <label className="block font-semibold text-slate-600 mb-1">Payment Status</label>
-                <select
-                  value={status}
-                  onChange={(e) => setStatus(e.target.value as any)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-medium"
-                >
-                  <option value="Paid">Paid</option>
-                  <option value="Pending">Pending</option>
-                  <option value="Overdue">Overdue</option>
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <label className="block font-semibold text-slate-600 mb-1">Invoice Issue Date</label>
-              <DateInput
-                required
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono"
-              />
-            </div>
-
-            <div>
-              <label className="block font-semibold text-slate-600 mb-1">Consignment Cargo Description</label>
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Consignment weight, routes, and billing breakdown..."
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 h-16 focus:outline-none text-slate-800"
-              />
-            </div>
+            <InvoiceFormFields form={form} setForm={setForm} invoices={invoices} creditNotes={undefined} />
 
             <DocumentAttachment
               documents={newEntryDocs}
@@ -339,9 +634,11 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
                   <th className="px-3 py-2.5">Date</th>
                   <th className="px-3 py-2.5">Invoice No</th>
                   <th className="px-3 py-2.5">Customer Name</th>
-                  <th className="px-3 py-2.5">Description</th>
+                  <th className="px-3 py-2.5">Entity / Mode</th>
+                  <th className="px-3 py-2.5 text-right">Total Amt</th>
+                  <th className="px-3 py-2.5 text-right">Amt Receivable</th>
+                  <th className="px-3 py-2.5">Due Date</th>
                   <th className="px-3 py-2.5 text-center">Status</th>
-                  <th className="px-3 py-2.5 text-right">Invoice Amount</th>
                   <th className="px-3 py-2.5 text-center">Docs</th>
                   <th className="px-3 py-2.5 text-right">Actions</th>
                 </tr>
@@ -349,62 +646,64 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {filteredInvoices.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="text-center py-10 text-slate-400 font-mono">
+                    <td colSpan={10} className="text-center py-10 text-slate-400 font-mono">
                       NO CUSTOMER BILLINGS FOUND IN DIRECTORY JOURNAL.
                     </td>
                   </tr>
                 ) : (
-                  filteredInvoices.map((inv) => (
-                    <tr key={inv.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{inv.date}</td>
-                      <td className="px-3 py-2.5 font-bold font-mono text-slate-900 tracking-wider whitespace-nowrap">{inv.invoiceNo}</td>
-                      <td className="px-3 py-2.5 font-semibold text-slate-800">{inv.customerName}</td>
-                      <td className="px-3 py-2.5 text-slate-500 truncate max-w-[120px]">{inv.description || '-'}</td>
-                      <td className="px-3 py-2.5 text-center whitespace-nowrap">
-                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider flex items-center gap-1 w-fit mx-auto ${
-                          inv.status === 'Paid' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
-                          inv.status === 'Pending' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
-                          'bg-rose-50 text-rose-700 border border-rose-200'
-                        }`}>
-                          {inv.status === 'Paid' ? <CheckCircle2 className="w-2.5 h-2.5 text-emerald-500" /> :
-                           inv.status === 'Pending' ? <Clock className="w-2.5 h-2.5 text-amber-500" /> :
-                           <AlertCircle className="w-2.5 h-2.5 text-rose-500" />}
-                          {inv.status}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-900 whitespace-nowrap">
-                        ₹{(inv.amount || 0).toLocaleString('en-IN')}
-                      </td>
-                      <td className="px-3 py-2.5 text-center">
-                        {inv.documents && inv.documents.length > 0 ? (
-                          <span className="inline-flex items-center justify-center px-1.5 py-0.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-[10px] font-bold">
-                            <Paperclip className="w-2.5 h-2.5 mr-0.5" />
-                            {inv.documents.length}
+                  filteredInvoices.map((inv) => {
+                    const status = effectiveInvoiceStatus(inv);
+                    const StatusIcon = PAYMENT_STATUS_ICON[status];
+                    return (
+                      <tr key={inv.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{inv.date}</td>
+                        <td className="px-3 py-2.5 font-bold font-mono text-slate-900 tracking-wider whitespace-nowrap">{inv.invoiceNo}</td>
+                        <td className="px-3 py-2.5 font-semibold text-slate-800">{inv.customerName}</td>
+                        <td className="px-3 py-2.5 text-slate-500 whitespace-nowrap">{[inv.entity, inv.mode].filter(Boolean).join(' / ') || '-'}</td>
+                        <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-900 whitespace-nowrap">
+                          {rupee(effectiveInvoiceAmount(inv))}
+                        </td>
+                        <td className="px-3 py-2.5 text-right font-mono font-semibold text-emerald-700 whitespace-nowrap">
+                          {inv.amountReceivable != null ? rupee(inv.amountReceivable) : <span className="text-slate-300">-</span>}
+                        </td>
+                        <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{inv.dueDate || <span className="text-slate-300">-</span>}</td>
+                        <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider flex items-center gap-1 w-fit mx-auto border ${PAYMENT_STATUS_BADGE_CLASS[status]}`}>
+                            <StatusIcon className="w-2.5 h-2.5" />
+                            {status}
                           </span>
-                        ) : (
-                          <span className="text-slate-300">-</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                        <div className="flex items-center justify-end space-x-1">
-                          <button
-                            onClick={() => handleOpenManageModal(inv)}
-                            className="p-1 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer"
-                            title="Edit invoice details & manage files"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteInvoice(inv.id, inv.invoiceNo)}
-                            className="p-1 text-slate-400 hover:text-pink-600 hover:bg-slate-100 rounded cursor-pointer"
-                            title="Delete invoice record"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          {inv.documents && inv.documents.length > 0 ? (
+                            <span className="inline-flex items-center justify-center px-1.5 py-0.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-[10px] font-bold">
+                              <Paperclip className="w-2.5 h-2.5 mr-0.5" />
+                              {inv.documents.length}
+                            </span>
+                          ) : (
+                            <span className="text-slate-300">-</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end space-x-1">
+                            <button
+                              onClick={() => handleOpenManageModal(inv)}
+                              className="p-1 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer"
+                              title="Edit invoice details & manage files"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteInvoice(inv.id, inv.invoiceNo)}
+                              className="p-1 text-slate-400 hover:text-pink-600 hover:bg-slate-100 rounded cursor-pointer"
+                              title="Delete invoice record"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -413,9 +712,9 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
       </div>
 
       {/* Unified Manage & Documents Modal */}
-      {selectedInvoiceForManage && (
+      {selectedInvoiceForManage && editForm && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-hidden flex flex-col">
             {/* Header */}
             <div className="p-4 border-b border-slate-150 flex items-center justify-between bg-slate-50">
               <div className="flex items-center gap-2 text-slate-800">
@@ -425,8 +724,8 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
                   <p className="text-[10px] font-mono text-slate-500">Invoice: {selectedInvoiceForManage.invoiceNo} | ID: {selectedInvoiceForManage.id}</p>
                 </div>
               </div>
-              <button 
-                onClick={() => setSelectedInvoiceForManage(null)}
+              <button
+                onClick={() => { setSelectedInvoiceForManage(null); setEditForm(null); }}
                 className="p-1 hover:bg-slate-200 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
@@ -442,71 +741,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
                   Edit Invoice Fields
                 </h4>
                 <form onSubmit={handleSaveEdit} className="space-y-3">
-                  <div>
-                    <label className="block font-semibold text-slate-600 mb-1">Invoice Reference Number *</label>
-                    <input
-                      type="text"
-                      required
-                      value={editInvoiceNo}
-                      onChange={(e) => setEditInvoiceNo(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold tracking-wider uppercase text-slate-800"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-semibold text-slate-600 mb-1">Customer Name *</label>
-                    <input
-                      type="text"
-                      required
-                      value={editCustomerName}
-                      onChange={(e) => setEditCustomerName(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block font-semibold text-slate-600 mb-1">Invoice Value (₹) *</label>
-                      <input
-                        type="number"
-                        required
-                        value={editAmount}
-                        onChange={(e) => setEditAmount(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-mono font-semibold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-semibold text-slate-600 mb-1">Payment Status</label>
-                      <select
-                        value={editStatus}
-                        onChange={(e) => setEditStatus(e.target.value as any)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-semibold"
-                      >
-                        <option value="Paid">Paid</option>
-                        <option value="Pending">Pending</option>
-                        <option value="Overdue">Overdue</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block font-semibold text-slate-600 mb-1">Invoice Date *</label>
-                    <DateInput
-                      required
-                      value={editDate}
-                      onChange={(e) => setEditDate(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-mono"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-semibold text-slate-600 mb-1">cargo / Consignment Description</label>
-                    <textarea
-                      value={editDescription}
-                      onChange={(e) => setEditDescription(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 h-16 text-slate-800"
-                    />
-                  </div>
+                  <InvoiceFormFields form={editForm} setForm={setEditForm as React.Dispatch<React.SetStateAction<InvoiceFormState>>} invoices={invoices} creditNotes={selectedInvoiceForManage.creditNotes} />
 
                   <button
                     type="submit"
@@ -518,8 +753,40 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
                 </form>
               </div>
 
-              {/* Right Column: Document Upload & List */}
+              {/* Right Column: Credit Notes + Document Upload */}
               <div className="space-y-4 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-6">
+                <div>
+                  <h4 className="font-bold text-slate-800 uppercase tracking-wide border-b border-slate-100 pb-1 mb-2 flex items-center gap-1.5">
+                    <Receipt className="w-3.5 h-3.5 text-blue-600" />
+                    Credit Notes
+                  </h4>
+                  <p className="text-[9px] text-slate-400 font-mono mb-2">
+                    Raising one here reduces Amount Receivable and Shortage/Excess immediately - no need to re-enter the invoice.
+                  </p>
+                  <div className="space-y-1.5 mb-2">
+                    {(selectedInvoiceForManage.creditNotes || []).length === 0 ? (
+                      <p className="text-slate-400 text-center py-2">No credit notes raised against this invoice.</p>
+                    ) : (
+                      (selectedInvoiceForManage.creditNotes || []).map(cn => (
+                        <div key={cn.id} className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-100 rounded-lg px-2.5 py-1.5">
+                          <div className="min-w-0">
+                            <span className="font-mono font-bold text-slate-800">{rupee(cn.amount)}</span>
+                            <span className="text-slate-400 font-mono ml-1.5">{cn.date}</span>
+                            {cn.reason && <p className="text-slate-500 truncate">{cn.reason}</p>}
+                          </div>
+                          <button onClick={() => handleRemoveCreditNote(cn.id)} className="text-rose-400 hover:text-rose-600 cursor-pointer shrink-0" title="Remove"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  <div className="flex gap-1.5">
+                    <input type="number" placeholder="Amount" value={cnAmount} onChange={(e) => setCnAmount(e.target.value)} className="w-24 bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono text-slate-800" />
+                    <DateInput value={cnDate} onChange={(e) => setCnDate(e.target.value)} max={todayIso()} className="w-32 bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-mono text-slate-800" />
+                    <input type="text" placeholder="Reason (optional)" value={cnReason} onChange={(e) => setCnReason(e.target.value)} className="flex-1 bg-slate-50 border border-slate-200 rounded-lg p-1.5 text-slate-800" />
+                    <button type="button" onClick={handleAddCreditNote} disabled={cnSubmitting} className="bg-gradient-to-r from-blue-600 to-slate-800 hover:shadow-md text-white px-3 rounded-lg cursor-pointer flex items-center gap-1 disabled:opacity-50"><Plus className="w-3.5 h-3.5" /></button>
+                  </div>
+                </div>
+
                 <DocumentAttachment
                   documents={selectedInvoiceForManage.documents}
                   onChange={handleUpdateManageDocs}
