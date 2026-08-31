@@ -175,7 +175,6 @@ export interface Vendor {
 }
 
 export type BillingEntity = 'Regular' | 'Dedicated' | 'Adhoc' | 'Labour Charges' | 'Opex' | 'Toll';
-export type BillingMode = 'Dedicated' | 'Adhoc' | 'Labour Charges';
 export type BillingGstType = 'IGST' | 'CGST_SGST';
 // The fuller status logic (2026-09-02) - Payment Status keeps its dropdown
 // for manual override, but is auto-suggested from Amount Received vs
@@ -214,7 +213,6 @@ export interface BillingInvoice {
 
   // --- Billing details (2026-09-02 Invoice & Receivables expansion) ---
   entity?: BillingEntity;
-  mode?: BillingMode;
   location?: string; // Location / State - free text, no fixed list supplied
   billMonth?: string; // YYYY-MM
   listPrice?: number; // base amount before GST - replaces the old flat `amount` as the typed figure
@@ -229,7 +227,7 @@ export interface BillingInvoice {
   // ever change later) ---
   totalAmt?: number; // listPrice + igst + cgst + sgst
   tdsRate?: number; // % - defaults to 2, editable when a client's TDS terms differ
-  tdsAmount?: number; // auto-computed off totalAmt x tdsRate, editable override
+  tdsAmount?: number; // auto-computed off listPrice x tdsRate (not totalAmt), editable override
   discountAndDebit?: number; // manual entry
   creditNotes?: BillingCreditNote[];
   amountReceivable?: number; // totalAmt - discountAndDebit - tdsAmount - sum(creditNotes)

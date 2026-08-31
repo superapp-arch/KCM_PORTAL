@@ -30,7 +30,6 @@ interface BillingProps {
 }
 
 const ENTITY_OPTIONS = ['Regular', 'Dedicated', 'Adhoc', 'Labour Charges', 'Opex', 'Toll'] as const;
-const MODE_OPTIONS = ['Dedicated', 'Adhoc', 'Labour Charges'] as const;
 const PAYMENT_STATUS_OPTIONS = ['Pending', 'Cleared', 'Short Payment', 'Overdue'] as const;
 
 const rupee = (n: number) => `₹${(n || 0).toLocaleString('en-IN')}`;
@@ -46,7 +45,6 @@ interface InvoiceFormState {
   invoiceNo: string;
   customerName: string;
   entity: string;
-  modeField: string;
   location: string;
   billMonth: string;
   date: string;
@@ -70,7 +68,7 @@ function emptyInvoiceForm(invoices: BillingInvoice[]): InvoiceFormState {
   const date = todayIso();
   return {
     invoiceNo: nextInvoiceNo(invoices, date),
-    customerName: '', entity: '', modeField: '', location: '', billMonth: thisMonth(), date,
+    customerName: '', entity: '', location: '', billMonth: thisMonth(), date,
     listPrice: '', gstType: '', igst: '', cgst: '', sgst: '', tollCharges: '',
     discountAndDebit: '', creditPeriodDays: String(30), tdsRate: String(DEFAULT_TDS_RATE), tdsAmount: '',
     paymentStatus: 'Pending', amountReceived: '', receivedDate: '', description: ''
@@ -80,7 +78,7 @@ function emptyInvoiceForm(invoices: BillingInvoice[]): InvoiceFormState {
 function invoiceToForm(inv: BillingInvoice): InvoiceFormState {
   return {
     invoiceNo: inv.invoiceNo, customerName: inv.customerName,
-    entity: inv.entity || '', modeField: inv.mode || '', location: inv.location || '',
+    entity: inv.entity || '', location: inv.location || '',
     billMonth: inv.billMonth || (inv.date || '').slice(0, 7), date: inv.date,
     listPrice: inv.listPrice != null ? String(inv.listPrice) : (inv.amount != null ? String(inv.amount) : ''),
     gstType: inv.gstType || '', igst: inv.igst != null ? String(inv.igst) : '',
@@ -126,7 +124,6 @@ function buildInvoicePayload(form: InvoiceFormState, computed: ReturnType<typeof
     amount: computed.totalAmt,
     status: legacyStatusFor(paymentStatus!),
     entity: (form.entity || undefined) as BillingInvoice['entity'],
-    mode: (form.modeField || undefined) as BillingInvoice['mode'],
     location: form.location || undefined,
     billMonth: form.billMonth || undefined,
     listPrice: computed.listPrice,
@@ -163,14 +160,15 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
 }) {
   const computed = deriveComputed(form, creditNotes);
 
-  // Re-suggests TDS Amount whenever what it's computed from changes - still
-  // a normal editable input afterwards (same "auto-fills, still
+  // Re-suggests TDS Amount whenever what it's computed from changes - TDS is
+  // off List Price alone, not Total Amt (GST never inflates the TDS base) -
+  // still a normal editable input afterwards (same "auto-fills, still
   // overridable" pattern as Warehouse's Add Hour), so a client with
   // different TDS terms can just retype it.
   useEffect(() => {
-    setForm(f => ({ ...f, tdsAmount: String(computeTdsAmount(computed.totalAmt, Number(f.tdsRate) || DEFAULT_TDS_RATE)) }));
+    setForm(f => ({ ...f, tdsAmount: String(computeTdsAmount(computed.listPrice, Number(f.tdsRate) || DEFAULT_TDS_RATE)) }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [computed.totalAmt, form.tdsRate]);
+  }, [computed.listPrice, form.tdsRate]);
 
   // Re-suggests Payment Status whenever Amount Received/Amount
   // Receivable/Due Date change - the dropdown itself is still a plain
@@ -184,7 +182,7 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
 
   const set = (patch: Partial<InvoiceFormState>) => setForm(f => ({ ...f, ...patch }));
 
-  // Entity / Mode / GST-type / Credit Period smart-default from this exact
+  // Entity / GST-type / Credit Period smart-default from this exact
   // customer's own most recent invoice, applied once the name field loses
   // focus - still fully editable afterwards, this only saves re-typing for
   // a repeat customer.
@@ -193,7 +191,6 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
     setForm(f => ({
       ...f,
       entity: f.entity || last?.entity || f.entity,
-      modeField: f.modeField || last?.mode || f.modeField,
       gstType: f.gstType || last?.gstType || f.gstType,
       creditPeriodDays: f.creditPeriodDays && f.creditPeriodDays !== '30' ? f.creditPeriodDays : String(defaultCreditPeriodFor(invoices, form.customerName))
     }));
@@ -202,8 +199,6 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
   const selectGst = (type: 'IGST' | 'CGST_SGST') => {
     set(type === 'IGST' ? { gstType: type, cgst: '', sgst: '' } : { gstType: type, igst: '' });
   };
-
-  const showAmountReceived = form.paymentStatus !== 'Pending' || computed.amountReceived > 0;
 
   return (
     <>
@@ -219,7 +214,7 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
       </div>
 
       <div>
-        <label className="block font-semibold text-slate-600 mb-1">B2B Customer Name *</label>
+        <label className="block font-semibold text-slate-600 mb-1">Client Name *</label>
         <input
           type="text" required value={form.customerName}
           onChange={(e) => set({ customerName: e.target.value })}
@@ -229,19 +224,12 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
         />
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="block font-semibold text-slate-600 mb-1">Entity</label>
           <select value={form.entity} onChange={(e) => set({ entity: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-medium">
             <option value="">Select...</option>
             {ENTITY_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="block font-semibold text-slate-600 mb-1">Mode</label>
-          <select value={form.modeField} onChange={(e) => set({ modeField: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-medium">
-            <option value="">Select...</option>
-            {MODE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
           </select>
         </div>
         <div>
@@ -316,7 +304,7 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
         <div>
           <label className="block font-semibold text-slate-600 mb-1">TDS Amount (₹)</label>
           <input type="number" value={form.tdsAmount} onChange={(e) => set({ tdsAmount: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
-          <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-computed off Total Amt - editable if this client's TDS terms differ.</p>
+          <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-computed off List Price - editable if this client's TDS terms differ.</p>
         </div>
       </div>
 
@@ -335,6 +323,22 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
         </div>
       </div>
 
+      <div className="grid grid-cols-2 gap-3 border border-emerald-200 bg-emerald-50/30 rounded-lg p-2.5">
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">Amount Received (₹)</label>
+          <input type="number" value={form.amountReceived} onChange={(e) => set({ amountReceived: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
+        </div>
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">Received Date</label>
+          <DateInput value={form.receivedDate} onChange={(e) => set({ receivedDate: e.target.value })} max={todayIso()} className="w-full bg-white border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
+          <p className="text-[9px] text-slate-400 font-mono mt-0.5">Populated once payment actually comes in - feeds Shortage/Excess and Payment Status below.</p>
+        </div>
+        <div className="col-span-2 flex items-center justify-between pt-1 border-t border-emerald-100">
+          <span className="text-[10px] font-bold text-slate-500 uppercase">{computed.shortageExcess > 0 ? 'Shortage' : computed.shortageExcess < 0 ? 'Excess' : 'Shortage/Excess'}</span>
+          <span className={`font-mono font-black ${computed.shortageExcess > 0 ? 'text-rose-600' : computed.shortageExcess < 0 ? 'text-blue-600' : 'text-slate-500'}`}>{rupee(Math.abs(computed.shortageExcess))}</span>
+        </div>
+      </div>
+
       <div>
         <label className="block font-semibold text-slate-600 mb-1">Payment Status</label>
         <select value={form.paymentStatus} onChange={(e) => set({ paymentStatus: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-semibold">
@@ -343,25 +347,8 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
         <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-suggested from Amount Received vs Amount Receivable - still a manual override.</p>
       </div>
 
-      {showAmountReceived && (
-        <div className="grid grid-cols-2 gap-3 border border-emerald-200 bg-emerald-50/30 rounded-lg p-2.5">
-          <div>
-            <label className="block font-semibold text-slate-600 mb-1">Amount Received (₹)</label>
-            <input type="number" value={form.amountReceived} onChange={(e) => set({ amountReceived: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
-          </div>
-          <div>
-            <label className="block font-semibold text-slate-600 mb-1">Received Date</label>
-            <DateInput value={form.receivedDate} onChange={(e) => set({ receivedDate: e.target.value })} max={todayIso()} className="w-full bg-white border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
-          </div>
-          <div className="col-span-2 flex items-center justify-between pt-1 border-t border-emerald-100">
-            <span className="text-[10px] font-bold text-slate-500 uppercase">{computed.shortageExcess > 0 ? 'Shortage' : computed.shortageExcess < 0 ? 'Excess' : 'Shortage/Excess'}</span>
-            <span className={`font-mono font-black ${computed.shortageExcess > 0 ? 'text-rose-600' : computed.shortageExcess < 0 ? 'text-blue-600' : 'text-slate-500'}`}>{rupee(Math.abs(computed.shortageExcess))}</span>
-          </div>
-        </div>
-      )}
-
       <div>
-        <label className="block font-semibold text-slate-600 mb-1">Consignment Cargo Description</label>
+        <label className="block font-semibold text-slate-600 mb-1">Remarks</label>
         <textarea
           value={form.description}
           onChange={(e) => set({ description: e.target.value })}
@@ -634,7 +621,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
                   <th className="px-3 py-2.5">Date</th>
                   <th className="px-3 py-2.5">Invoice No</th>
                   <th className="px-3 py-2.5">Customer Name</th>
-                  <th className="px-3 py-2.5">Entity / Mode</th>
+                  <th className="px-3 py-2.5">Entity</th>
                   <th className="px-3 py-2.5 text-right">Total Amt</th>
                   <th className="px-3 py-2.5 text-right">Amt Receivable</th>
                   <th className="px-3 py-2.5">Due Date</th>
@@ -659,7 +646,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
                         <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{inv.date}</td>
                         <td className="px-3 py-2.5 font-bold font-mono text-slate-900 tracking-wider whitespace-nowrap">{inv.invoiceNo}</td>
                         <td className="px-3 py-2.5 font-semibold text-slate-800">{inv.customerName}</td>
-                        <td className="px-3 py-2.5 text-slate-500 whitespace-nowrap">{[inv.entity, inv.mode].filter(Boolean).join(' / ') || '-'}</td>
+                        <td className="px-3 py-2.5 text-slate-500 whitespace-nowrap">{inv.entity || '-'}</td>
                         <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-900 whitespace-nowrap">
                           {rupee(effectiveInvoiceAmount(inv))}
                         </td>

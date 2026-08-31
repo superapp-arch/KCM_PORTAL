@@ -58,8 +58,10 @@ export function computeTotalAmt(listPrice: number, igst: number, cgst: number, s
   return round2((listPrice || 0) + (igst || 0) + (cgst || 0) + (sgst || 0));
 }
 
-export function computeTdsAmount(totalAmt: number, tdsRate: number): number {
-  return round2((totalAmt || 0) * ((tdsRate ?? DEFAULT_TDS_RATE) / 100));
+// TDS is off List Price alone (2026-09-05 correction) - not Total Amt, so
+// GST never inflates the TDS base.
+export function computeTdsAmount(listPrice: number, tdsRate: number): number {
+  return round2((listPrice || 0) * ((tdsRate ?? DEFAULT_TDS_RATE) / 100));
 }
 
 export function sumCreditNotes(creditNotes: BillingCreditNote[] | undefined): number {
