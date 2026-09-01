@@ -728,6 +728,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
             <table className="w-full text-left text-xs">
               <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
                 <tr>
+                  <th className="px-3 py-2.5">Sl. No.</th>
                   <th className="px-3 py-2.5">Date</th>
                   <th className="px-3 py-2.5">Invoice No</th>
                   <th className="px-3 py-2.5">Customer Name</th>
@@ -743,16 +744,17 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {filteredInvoices.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="text-center py-10 text-slate-400 font-mono">
+                    <td colSpan={11} className="text-center py-10 text-slate-400 font-mono">
                       NO CUSTOMER BILLINGS FOUND IN DIRECTORY JOURNAL.
                     </td>
                   </tr>
                 ) : (
-                  filteredInvoices.map((inv) => {
+                  filteredInvoices.map((inv, idx) => {
                     const status = effectiveInvoiceStatus(inv);
                     const StatusIcon = PAYMENT_STATUS_ICON[status];
                     return (
                       <tr key={inv.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{idx + 1}</td>
                         <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{inv.date}</td>
                         <td className="px-3 py-2.5 font-bold font-mono text-slate-900 tracking-wider whitespace-nowrap">{inv.invoiceNo}</td>
                         <td className="px-3 py-2.5 font-semibold text-slate-800">{inv.customerName}</td>
