@@ -5,6 +5,7 @@ import { FuelLog, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage,
 import SortHeader from './SortHeader';
 import { SortState, SortDirection, extractLeadingNumber, compareText, compareNumber } from '../utils/sort';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
+import { nextBunkFuelIndentNumber, nextCardFuelIndentNumber } from '../utils/fuelIndentNumber';
 import {
   Fuel,
   Plus,
@@ -276,6 +277,13 @@ export default function FuelManagement({
   const [bunkOrCard, setBunkOrCard] = useState<'Bunk' | 'Card'>('Bunk');
   const [vehicleNumber, setVehicleNumber] = useState('');
   const [indentNumber, setIndentNumber] = useState('');
+  // True only when the live server preview (GET /api/fuel/next-indent-number)
+  // never came back after retrying and this field got filled from this
+  // browser's own already-loaded `logs` instead (see the auto-continue
+  // effect below) - shown as a small inline warning so the office knows to
+  // double-check the number rather than assuming it's as authoritative as
+  // the normal server-computed preview always was.
+  const [indentNumberIsLocalEstimate, setIndentNumberIsLocalEstimate] = useState(false);
   const [ltrs, setLtrs] = useState('');
   const [rate, setRate] = useState('');
   const [amount, setAmount] = useState('');
@@ -434,13 +442,16 @@ export default function FuelManagement({
   // - still sourced only from vendorProfiles (Vendor Management), never a
   // second maintained list.
   //
-  // A Fleet & Vehicles vehicle never has a vendor - no vehicle owned by KCM
-  // itself should ever show vendor info, even if it happens to also be
-  // (mis)listed under a vendor's vehicleNumbers, so a Fleet match always
-  // wins and clears Vendor Name/Code rather than leaving stale/random data
-  // from whatever vehicle was selected before it. Only when the vehicle
-  // number is a genuine Vendor Management vehicle does it get filled; a
-  // vehicle number that's neither Fleet nor a registered vendor vehicle
+  // A genuine Vendor Management registration always wins (2026-09-11
+  // correction, per direct instruction) - a vehicle can legitimately be both
+  // in Fleet & Vehicles AND registered under a vendor's own vehicleNumbers
+  // (e.g. KA51AH3973 / Chandrashekar VK), and that vendor's Name/Code must
+  // still auto-fill in that case. An earlier version of this effect had it
+  // backwards - treating any Fleet match as an automatic override that
+  // cleared Vendor Name/Code even when a real vendor registration existed,
+  // which is exactly the bug this fixes. Only a vehicle that's Fleet-owned
+  // AND NOT registered under any vendor gets its Vendor Name/Code cleared;
+  // a vehicle number that's neither Fleet nor a registered vendor vehicle
   // leaves the gap alone for manual entry.
   const isFleetVehicleNumber = (num: string) =>
     vehicles.some(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === num.trim().toUpperCase());
@@ -450,14 +461,14 @@ export default function FuelManagement({
   useEffect(() => {
     const trimmed = vehicleNumber.trim();
     if (!trimmed) return;
-    if (isFleetVehicleNumber(trimmed)) {
-      setVendorName('');
-      setVendorCode('');
-      return;
-    }
     if (matchedVendorByVehicle) {
       setVendorName(matchedVendorByVehicle.name);
       setVendorCode(matchedVendorByVehicle.code);
+      return;
+    }
+    if (isFleetVehicleNumber(trimmed)) {
+      setVendorName('');
+      setVendorCode('');
       return;
     }
     // Not Fleet-owned and not registered in Vendor Management - fall back to
@@ -513,17 +524,32 @@ export default function FuelManagement({
   }, [bunkName, date, logs, editingId]);
 
   // Indent No auto-continue - Bunk and Card are two completely independent
-  // sequences (see server.ts's nextBunkFuelIndentNumber/
-  // nextCardFuelIndentNumber), both computed fresh from the actual saved
-  // database rows via GET /api/fuel/next-indent-number rather than this
-  // form's own possibly-stale `logs` prop, so two people adding entries at
-  // the same time both see the real next number and never collide. Bunk
-  // continues within the selected Date's calendar month (blank on the first
-  // entry of a new month - typed by hand, then auto-continues from there for
-  // the rest of that month); Card is one continuous 5-digit sequence that
-  // never resets and ignores Date entirely. Still just a prefill - fully
-  // editable afterward, and the actual save is re-validated server-side
-  // (duplicate check) regardless of what ends up in this field.
+  // sequences (see utils/fuelIndentNumber.ts's nextBunkFuelIndentNumber/
+  // nextCardFuelIndentNumber), preferring the live server preview via GET
+  // /api/fuel/next-indent-number (computed fresh from the actual saved
+  // database rows, not this form's own possibly-stale `logs` prop) so two
+  // people adding entries at the same time both see the real next number and
+  // never collide. Bunk continues within the selected Date's calendar month
+  // (blank on the first entry of a new month - typed by hand, then
+  // auto-continues from there for the rest of that month); Card is one
+  // continuous 5-digit sequence that never resets and ignores Date entirely.
+  // Still just a prefill - fully editable afterward, and the actual save is
+  // re-validated server-side (duplicate check) regardless of what ends up in
+  // this field.
+  //
+  // 2026-09-10: a bare, un-retried fetch here used to leave the field
+  // silently blank on any single transient failure (a DB/network blip, a
+  // deploy mid-restart) - the office had no idea why, and could only "fix"
+  // it by repeatedly re-opening the form and hoping the next attempt
+  // happened to land after the blip passed. Now retries twice (short
+  // backoff) before giving up, and only THEN falls back to the same
+  // algorithm computed from this browser's own already-loaded `logs` -
+  // slightly less authoritative than the live server preview (another
+  // device's very latest entry might not be in this browser's own cache
+  // yet), but always something concrete instead of a silent blank, and
+  // flagged via indentNumberIsLocalEstimate so the inline warning below
+  // tells the office to double-check it.
+  //
   // Also keyed off `showSidebar`, not just [bunkOrCard, date, editingId] -
   // resetForm() (see "Add Entry" button below) unconditionally clears
   // indentNumber to '' every time the form is opened fresh, but if
@@ -537,15 +563,43 @@ export default function FuelManagement({
     if (!showSidebar || editingId) return;
     if (bunkOrCard === 'Bunk' && !date) return;
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const params = new URLSearchParams({ bunkOrCard });
     if (bunkOrCard === 'Bunk') params.set('date', date);
-    authFetch(`/api/fuel/next-indent-number?${params.toString()}`)
-      .then(r => r.json())
-      .then((body: { indentNumber: string | null }) => {
-        if (!cancelled) setIndentNumber(body.indentNumber || '');
-      })
-      .catch(() => { /* leave whatever's already typed - manual entry still works */ });
-    return () => { cancelled = true; };
+
+    const MAX_ATTEMPTS = 3;
+    const attempt = (n: number) => {
+      authFetch(`/api/fuel/next-indent-number?${params.toString()}`)
+        .then(async r => {
+          if (!r.ok) throw new Error(`status ${r.status}`);
+          const body = await r.json();
+          if (!body || typeof body !== 'object' || !('indentNumber' in body)) throw new Error('malformed response');
+          return body as { indentNumber: string | null };
+        })
+        .then(body => {
+          if (cancelled) return;
+          setIndentNumber(body.indentNumber || '');
+          setIndentNumberIsLocalEstimate(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          if (n < MAX_ATTEMPTS - 1) {
+            retryTimer = setTimeout(() => attempt(n + 1), 500 * (n + 1));
+            return;
+          }
+          // Every attempt failed - fall back to a local estimate rather than
+          // leaving the field silently blank (see this effect's own comment
+          // above).
+          const estimate = bunkOrCard === 'Card'
+            ? nextCardFuelIndentNumber(logs, user.username)
+            : nextBunkFuelIndentNumber(logs, date, user.username);
+          setIndentNumber(estimate || '');
+          setIndentNumberIsLocalEstimate(true);
+        });
+    };
+    attempt(0);
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bunkOrCard, date, editingId, showSidebar]);
 
   // --- Mileage section calculations - identical rules to the old standalone
@@ -753,6 +807,7 @@ export default function FuelManagement({
     setBunkOrCard('Bunk');
     setVehicleNumber('');
     setIndentNumber('');
+    setIndentNumberIsLocalEstimate(false);
     setLtrs('');
     setRate('');
     setAmount('');
@@ -798,6 +853,7 @@ export default function FuelManagement({
     setBunkOrCard(log.bunkOrCard || 'Bunk'); // pre-existing record saved before this field existed - see item 8 backward-compat note above
     setVehicleNumber(log.vehicleNumber);
     setIndentNumber(log.indentNumber);
+    setIndentNumberIsLocalEstimate(false);
     setLtrs(String(log.ltrs));
     setRate(String(log.rate));
     setAmount(String(log.amount));
@@ -2142,6 +2198,11 @@ export default function FuelManagement({
                         : 'Auto-continues within this month for Bunk - blank means this is the first entry of a new month; type the starting number.'}
                       {' '}Still fully editable - correcting an existing entry never renumbers others.
                     </p>
+                    {indentNumberIsLocalEstimate && (
+                      <p className="text-[9px] text-amber-600 font-mono mt-0.5 flex items-center gap-1">
+                        <AlertCircle className="w-2.5 h-2.5 shrink-0" /> Couldn't reach the live count just now - this is an estimate from this device's own last-loaded data. Please double-check it before saving.
+                      </p>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
