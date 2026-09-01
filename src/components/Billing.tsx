@@ -11,16 +11,21 @@ import {
   Trash2,
   Paperclip,
   X,
-  Receipt
+  Receipt,
+  Upload,
+  Download,
+  ChevronDown
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
+import BillingImportModal from './billing/BillingImportModal';
 import {
   nextInvoiceNo, lastInvoiceForCustomer, defaultCreditPeriodFor,
   computeTotalAmt, computeTdsAmount, computeAmountReceivable, computeDueDate,
   computeShortageExcess, suggestPaymentStatus, sumCreditNotes,
   effectiveInvoiceAmount, effectiveInvoiceStatus, legacyStatusFor, DEFAULT_TDS_RATE
 } from '../utils/billingInvoiceCalc';
+import { filterToCurrentFinancialYear, exportBillingInvoicesToExcel, exportBillingInvoicesToPdf } from '../utils/billingImportExport';
 
 interface BillingProps {
   invoices: BillingInvoice[];
@@ -58,6 +63,11 @@ interface InvoiceFormState {
   creditPeriodDays: string;
   tdsRate: string;
   tdsAmount: string;
+  // Only used while this invoice has no dated Credit Notes yet (see
+  // resolveEffectiveCreditNotes below) - once one exists (raised via the
+  // Manage modal's own list), the Credit Note field switches to a read-only
+  // auto-summed display instead and this stops being read.
+  creditNoteManual: string;
   paymentStatus: string;
   amountReceived: string;
   receivedDate: string;
@@ -71,6 +81,7 @@ function emptyInvoiceForm(invoices: BillingInvoice[]): InvoiceFormState {
     customerName: '', entity: '', location: '', billMonth: thisMonth(), date,
     listPrice: '', gstType: '', igst: '', cgst: '', sgst: '', tollCharges: '',
     discountAndDebit: '', creditPeriodDays: String(30), tdsRate: String(DEFAULT_TDS_RATE), tdsAmount: '',
+    creditNoteManual: '',
     paymentStatus: 'Pending', amountReceived: '', receivedDate: '', description: ''
   };
 }
@@ -88,9 +99,25 @@ function invoiceToForm(inv: BillingInvoice): InvoiceFormState {
     creditPeriodDays: inv.creditPeriodDays != null ? String(inv.creditPeriodDays) : String(30),
     tdsRate: inv.tdsRate != null ? String(inv.tdsRate) : String(DEFAULT_TDS_RATE),
     tdsAmount: inv.tdsAmount != null ? String(inv.tdsAmount) : '',
+    // Blank even if creditNotes already has entries - that case reads the
+    // list directly (see resolveEffectiveCreditNotes), never this field.
+    creditNoteManual: '',
     paymentStatus: effectiveInvoiceStatus(inv), amountReceived: inv.amountReceived != null ? String(inv.amountReceived) : '',
     receivedDate: inv.receivedDate || '', description: inv.description || ''
   };
+}
+
+// The Credit Note field is manual entry until this invoice has a real,
+// dated Credit Note raised against it (via the Manage modal's own list) -
+// once one exists, that list is authoritative and this typed value is
+// folded into it as a single synthetic entry instead of living separately,
+// so there's still only ever one underlying source of truth
+// (BillingInvoice.creditNotes) for "how much has been credited back."
+function resolveEffectiveCreditNotes(existing: BillingCreditNote[] | undefined, form: InvoiceFormState): BillingCreditNote[] {
+  if (existing && existing.length > 0) return existing;
+  const amt = Number(form.creditNoteManual) || 0;
+  if (amt <= 0) return [];
+  return [{ id: String(Date.now()), date: form.date, amount: amt, reason: 'Entered directly on the invoice' }];
 }
 
 // Every computed figure a form's current values imply - Total Amt, Amount
@@ -158,7 +185,10 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
   invoices: BillingInvoice[];
   creditNotes: BillingCreditNote[] | undefined;
 }) {
-  const computed = deriveComputed(form, creditNotes);
+  // Live preview reflects the manual Credit Note field too, once resolved -
+  // see resolveEffectiveCreditNotes.
+  const effectiveCreditNotes = resolveEffectiveCreditNotes(creditNotes, form);
+  const computed = deriveComputed(form, effectiveCreditNotes);
 
   // Re-suggests TDS Amount whenever what it's computed from changes - TDS is
   // off List Price alone, not Total Amt (GST never inflates the TDS base) -
@@ -308,6 +338,21 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
         </div>
       </div>
 
+      <div>
+        <label className="block font-semibold text-slate-600 mb-1">Credit Note (₹)</label>
+        {creditNotes && creditNotes.length > 0 ? (
+          <>
+            <input type="text" readOnly value={rupee(sumCreditNotes(creditNotes))} className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono text-slate-600 cursor-not-allowed" />
+            <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-pulled from the Credit Note(s) raised against this invoice (right panel) - add/remove there, not here.</p>
+          </>
+        ) : (
+          <>
+            <input type="number" value={form.creditNoteManual} onChange={(e) => set({ creditNoteManual: e.target.value })} placeholder="If applicable" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 focus:outline-none text-slate-800 font-mono" />
+            <p className="text-[9px] text-slate-400 font-mono mt-0.5">Optional - defaults to ₹0. Reduces Amount Receivable alongside TDS.</p>
+          </>
+        )}
+      </div>
+
       <div className="grid grid-cols-3 gap-2 bg-slate-50 border border-slate-200 rounded-lg p-2.5">
         <div>
           <p className="text-[9px] text-slate-400 uppercase font-bold">Total Amt</p>
@@ -372,6 +417,14 @@ const PAYMENT_STATUS_ICON: Record<string, React.ComponentType<{ className?: stri
 
 export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDeleteInvoice }: BillingProps) {
   const [searchTerm, setSearchTerm] = useState('');
+  // Filters the Import/Export buttons respect too (see filteredInvoices
+  // below) - client/invoice-no search, Payment Status, and an Issue Date
+  // range. All optional/empty by default (no filtering).
+  const [statusFilter, setStatusFilter] = useState('All');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
@@ -390,10 +443,15 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
       triggerNotif('Pick a GST Type - IGST or CGST + SGST.', 'error');
       return;
     }
+    const effectiveCreditNotes = resolveEffectiveCreditNotes(undefined, form);
+    const computed = deriveComputed(form, effectiveCreditNotes);
+    if (sumCreditNotes(effectiveCreditNotes) > computed.totalAmt) {
+      triggerNotif('Credit Note cannot exceed Total Amt.', 'error');
+      return;
+    }
     setIsSubmitting(true);
     try {
-      const computed = deriveComputed(form, undefined);
-      await onAddInvoice({ ...buildInvoicePayload(form, computed, []), documents: newEntryDocs });
+      await onAddInvoice({ ...buildInvoicePayload(form, computed, effectiveCreditNotes), documents: newEntryDocs });
       setForm(emptyInvoiceForm(invoices));
       setNewEntryDocs([]);
       triggerNotif('🧾 Billing invoice posted successfully & dispatched to ledger!');
@@ -421,10 +479,15 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
       triggerNotif('Pick a GST Type - IGST or CGST + SGST.', 'error');
       return;
     }
+    const effectiveCreditNotes = resolveEffectiveCreditNotes(selectedInvoiceForManage.creditNotes, editForm);
+    const computed = deriveComputed(editForm, effectiveCreditNotes);
+    if (sumCreditNotes(effectiveCreditNotes) > computed.totalAmt) {
+      triggerNotif('Credit Note cannot exceed Total Amt.', 'error');
+      return;
+    }
     setIsSubmitting(true);
     try {
-      const computed = deriveComputed(editForm, selectedInvoiceForManage.creditNotes);
-      const updatedData = buildInvoicePayload(editForm, computed, selectedInvoiceForManage.creditNotes);
+      const updatedData = buildInvoicePayload(editForm, computed, effectiveCreditNotes);
       await onUpdateInvoice(selectedInvoiceForManage.id, updatedData);
       setSelectedInvoiceForManage({ ...selectedInvoiceForManage, ...updatedData });
       triggerNotif('✏️ Invoice details updated successfully!');
@@ -461,11 +524,14 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
     if (!selectedInvoiceForManage || !editForm) return;
     const amt = parseFloat(cnAmount);
     if (!amt || amt <= 0) { triggerNotif('Enter a valid Credit Note amount greater than 0.', 'error'); return; }
+    const updatedNotes = [...(selectedInvoiceForManage.creditNotes || []), { id: String(Date.now()), date: cnDate, amount: amt, reason: cnReason.trim() || undefined }];
+    const computed = deriveComputed(editForm, updatedNotes);
+    if (sumCreditNotes(updatedNotes) > computed.totalAmt) {
+      triggerNotif('Credit Note cannot exceed Total Amt.', 'error');
+      return;
+    }
     setCnSubmitting(true);
     try {
-      const note: BillingCreditNote = { id: String(Date.now()), date: cnDate, amount: amt, reason: cnReason.trim() || undefined };
-      const updatedNotes = [...(selectedInvoiceForManage.creditNotes || []), note];
-      const computed = deriveComputed(editForm, updatedNotes);
       const updatedData = buildInvoicePayload(editForm, computed, updatedNotes);
       await onUpdateInvoice(selectedInvoiceForManage.id, updatedData);
       setSelectedInvoiceForManage({ ...selectedInvoiceForManage, ...updatedData });
@@ -507,10 +573,23 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
     }
   };
 
-  const filteredInvoices = invoices.filter(inv =>
-    (inv?.invoiceNo || '').toLowerCase().includes((searchTerm || '').toLowerCase()) ||
-    (inv?.customerName || '').toLowerCase().includes((searchTerm || '').toLowerCase())
-  );
+  const hasActiveFilters = !!searchTerm.trim() || statusFilter !== 'All' || !!fromDate || !!toDate;
+  const filteredInvoices = invoices.filter(inv => {
+    const matchesSearch = (inv?.invoiceNo || '').toLowerCase().includes((searchTerm || '').toLowerCase()) ||
+      (inv?.customerName || '').toLowerCase().includes((searchTerm || '').toLowerCase());
+    const matchesStatus = statusFilter === 'All' || effectiveInvoiceStatus(inv) === statusFilter;
+    const matchesFrom = !fromDate || (inv.date || '') >= fromDate;
+    const matchesTo = !toDate || (inv.date || '') <= toDate;
+    return matchesSearch && matchesStatus && matchesFrom && matchesTo;
+  });
+
+  // Export always respects the same 3 filters as the list above; with none
+  // active it defaults to the current financial year (see
+  // filterToCurrentFinancialYear) rather than the entire historical ledger,
+  // to keep a routine export fast - "Export All" explicitly opts out of
+  // that default.
+  const exportScope = (all: boolean): BillingInvoice[] =>
+    hasActiveFilters || all ? filteredInvoices : filterToCurrentFinancialYear(filteredInvoices);
 
   const totalBilled = invoices.reduce((sum, inv) => sum + effectiveInvoiceAmount(inv), 0);
   const totalPaid = invoices.filter(inv => effectiveInvoiceStatus(inv) === 'Cleared').reduce((sum, inv) => sum + effectiveInvoiceAmount(inv), 0);
@@ -595,22 +674,67 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
 
         {/* Right Tabular: Invoice Log */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 lg:col-span-2">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-2 border-b border-slate-100">
-            <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-              <FileText className="w-4 h-4 text-blue-600" />
-              Customer Billings & Invoice Journal
-            </h2>
-            <div className="relative w-full sm:w-48 text-xs">
-              <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400 pointer-events-none">
-                <Search className="w-3.5 h-3.5" />
-              </span>
-              <input
-                type="text"
-                placeholder="Search Client or Invoice No"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-7 pr-3 py-1.5 focus:outline-none text-slate-800 font-medium"
-              />
+          <div className="flex flex-col gap-3 mb-4 pb-3 border-b border-slate-100">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                <FileText className="w-4 h-4 text-blue-600" />
+                Customer Billings & Invoice Journal
+              </h2>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => setShowImportModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 font-bold cursor-pointer whitespace-nowrap">
+                  <Upload className="w-3.5 h-3.5" /> Import Invoices
+                </button>
+                <div className="relative">
+                  <button type="button" onClick={() => setShowExportMenu(v => !v)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 font-bold cursor-pointer whitespace-nowrap">
+                    <Download className="w-3.5 h-3.5" /> Export <ChevronDown className="w-3 h-3" />
+                  </button>
+                  {showExportMenu && (
+                    <>
+                      <div className="fixed inset-0 z-10" onClick={() => setShowExportMenu(false)} />
+                      <div className="absolute right-0 mt-1 w-56 bg-white border border-slate-200 rounded-xl shadow-lg z-20 p-1.5 text-[11px]">
+                        <p className="px-2 py-1 text-slate-400 font-mono">{hasActiveFilters ? 'Respects active filters' : 'This financial year'}</p>
+                        <button type="button" onClick={() => { exportBillingInvoicesToExcel(exportScope(false)); setShowExportMenu(false); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 font-semibold text-slate-700 cursor-pointer">Export Excel</button>
+                        <button type="button" onClick={() => { exportBillingInvoicesToPdf(exportScope(false)); setShowExportMenu(false); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 font-semibold text-slate-700 cursor-pointer">Export PDF</button>
+                        {!hasActiveFilters && (
+                          <>
+                            <div className="my-1 border-t border-slate-100" />
+                            <p className="px-2 py-1 text-slate-400 font-mono">Full history</p>
+                            <button type="button" onClick={() => { exportBillingInvoicesToExcel(exportScope(true)); setShowExportMenu(false); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 font-semibold text-slate-700 cursor-pointer">Export All (Excel)</button>
+                            <button type="button" onClick={() => { exportBillingInvoicesToPdf(exportScope(true)); setShowExportMenu(false); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 font-semibold text-slate-700 cursor-pointer">Export All (PDF)</button>
+                          </>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <div className="relative flex-1 min-w-[160px]">
+                <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400 pointer-events-none">
+                  <Search className="w-3.5 h-3.5" />
+                </span>
+                <input
+                  type="text"
+                  placeholder="Search Client or Invoice No"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-7 pr-3 py-1.5 focus:outline-none text-slate-800 font-medium"
+                />
+              </div>
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-bold text-slate-700">
+                <option value="All">All Statuses</option>
+                {PAYMENT_STATUS_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+              <span className="text-slate-400 font-semibold">From</span>
+              <DateInput value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-mono text-slate-700 w-32" />
+              <span className="text-slate-400 font-semibold">To</span>
+              <DateInput value={toDate} onChange={(e) => setToDate(e.target.value)} className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-mono text-slate-700 w-32" />
+              {hasActiveFilters && (
+                <button type="button" onClick={() => { setSearchTerm(''); setStatusFilter('All'); setFromDate(''); setToDate(''); }} className="text-slate-400 hover:text-slate-700 font-bold underline cursor-pointer">Clear</button>
+              )}
             </div>
           </div>
 
@@ -783,6 +907,15 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
             </div>
           </div>
         </div>
+      )}
+
+      {showImportModal && (
+        <BillingImportModal
+          invoices={invoices}
+          onAddInvoice={onAddInvoice}
+          onClose={() => setShowImportModal(false)}
+          onImported={() => triggerNotif('📥 Import complete - see the summary for details.')}
+        />
       )}
     </div>
   );
