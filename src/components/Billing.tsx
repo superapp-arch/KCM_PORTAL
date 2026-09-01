@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { BillingInvoice, BillingCreditNote, VehicleDocument } from '../types';
 import {
   FileText,
@@ -425,6 +426,10 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
   const [toDate, setToDate] = useState('');
   const [showImportModal, setShowImportModal] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  // "Issue New Freight Invoice" is now a right-side slide-out (matching
+  // every other module's own "+ Add Entry" pattern - see Petty Cash's own
+  // Add Petty Cash Entry sidebar) instead of a permanently-visible panel.
+  const [showCreateSidebar, setShowCreateSidebar] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
@@ -454,6 +459,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
       await onAddInvoice({ ...buildInvoicePayload(form, computed, effectiveCreditNotes), documents: newEntryDocs });
       setForm(emptyInvoiceForm(invoices));
       setNewEntryDocs([]);
+      setShowCreateSidebar(false);
       triggerNotif('🧾 Billing invoice posted successfully & dispatched to ledger!');
     } catch (err) {
       console.error(err);
@@ -646,34 +652,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Form: Create Invoice */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 h-fit text-xs">
-          <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-4 pb-2 border-b border-slate-100 flex items-center gap-1.5">
-            <Plus className="w-4 h-4 text-blue-600" />
-            Issue New Freight Invoice
-          </h2>
-          <form onSubmit={handleSubmit} className="space-y-3.5">
-            <InvoiceFormFields form={form} setForm={setForm} invoices={invoices} creditNotes={undefined} />
-
-            <DocumentAttachment
-              documents={newEntryDocs}
-              onChange={setNewEntryDocs}
-              label="Attach Signed POD / Invoice Copy"
-            />
-
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full bg-slate-900 hover:bg-slate-800 text-white rounded-lg py-2 font-semibold tracking-wide uppercase transition-colors shadow-xs mt-3 cursor-pointer"
-            >
-              {isSubmitting ? 'Posting Ledger...' : 'Publish Customer Invoice'}
-            </button>
-          </form>
-        </div>
-
-        {/* Right Tabular: Invoice Log */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 lg:col-span-2">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
           <div className="flex flex-col gap-3 mb-4 pb-3 border-b border-slate-100">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
@@ -681,6 +660,13 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
                 Customer Billings & Invoice Journal
               </h2>
               <div className="flex items-center gap-2">
+                {/* Issue New Freight Invoice - opens the slide-out sidebar,
+                    mirrors Petty Cash's own "+ Add Entry" pattern, rather
+                    than sitting permanently open on the page. */}
+                <button type="button" onClick={() => setShowCreateSidebar(true)}
+                  className="bg-gradient-to-r from-blue-600 to-slate-800 hover:shadow-md text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs whitespace-nowrap">
+                  <Plus className="w-3.5 h-3.5" /> Issue New Freight Invoice
+                </button>
                 <button type="button" onClick={() => setShowImportModal(true)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 font-bold cursor-pointer whitespace-nowrap">
                   <Upload className="w-3.5 h-3.5" /> Import Invoices
@@ -819,8 +805,66 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
               </tbody>
             </table>
           </div>
-        </div>
       </div>
+
+      {/* Issue New Freight Invoice - right-side slide-out, opened by the
+          "+" button above. Closing without submitting keeps the draft
+          in-progress (same "no surprise data loss" convention as Petty
+          Cash's own sidebar) - only a successful Publish or an explicit
+          Cancel resets the form. */}
+      <AnimatePresence>
+        {showCreateSidebar && (
+          <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex justify-end z-50">
+            <div className="absolute inset-0" onClick={() => setShowCreateSidebar(false)} />
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="relative w-full max-w-md bg-white h-full shadow-2xl flex flex-col z-10 border-l border-blue-100"
+            >
+              <div className="p-4 bg-gradient-to-r from-slate-900 to-blue-950 text-white flex items-center justify-between">
+                <h3 className="font-extrabold text-sm flex items-center gap-2">
+                  <Plus className="w-4 h-4 text-blue-400" /> Issue New Freight Invoice
+                </h3>
+                <button onClick={() => setShowCreateSidebar(false)} className="p-1.5 rounded-lg hover:bg-white/10 text-slate-200 hover:text-white cursor-pointer">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-5 text-xs">
+                <form id="billing-create-invoice-form" onSubmit={handleSubmit} className="space-y-3.5">
+                  <InvoiceFormFields form={form} setForm={setForm} invoices={invoices} creditNotes={undefined} />
+
+                  <DocumentAttachment
+                    documents={newEntryDocs}
+                    onChange={setNewEntryDocs}
+                    label="Attach Signed POD / Invoice Copy"
+                  />
+                </form>
+              </div>
+
+              <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowCreateSidebar(false); setForm(emptyInvoiceForm(invoices)); setNewEntryDocs([]); }}
+                  className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 transition-colors uppercase text-[10px] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  form="billing-create-invoice-form"
+                  disabled={isSubmitting}
+                  className="flex-1 bg-slate-900 hover:bg-slate-800 text-white rounded-xl py-2.5 font-extrabold tracking-wide uppercase text-[10px] transition-colors shadow-xs cursor-pointer"
+                >
+                  {isSubmitting ? 'Posting Ledger...' : 'Publish Customer Invoice'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Unified Manage & Documents Modal */}
       {selectedInvoiceForManage && editForm && (
