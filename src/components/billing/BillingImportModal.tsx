@@ -38,7 +38,7 @@ export default function BillingImportModal({ invoices, onAddInvoice, onClose, on
     try {
       const result = await parseBillingImportFile(file, invoices);
       if (!result.headerValid) {
-        setFileError(`This file doesn't match the expected Import Invoices template - missing column(s): ${result.missingHeaders.join(', ')}. Download the template below and try again.`);
+        setFileError(`Couldn't find a required column: ${result.missingHeaders.join(', ')}. Column names are matched flexibly (e.g. "Invoice No" or "Invoice Reference No" both work), but this one wasn't found under any recognized name - check the template below for the expected columns.`);
         return;
       }
       if (result.rows.length === 0) {
@@ -137,7 +137,7 @@ export default function BillingImportModal({ invoices, onAddInvoice, onClose, on
                         <th className="px-2 py-2">Client</th>
                         <th className="px-2 py-2">Entity</th>
                         <th className="px-2 py-2 text-right">List Price</th>
-                        <th className="px-2 py-2 text-right">GST %</th>
+                        <th className="px-2 py-2 text-right">GST</th>
                         <th className="px-2 py-2">Date</th>
                         <th className="px-2 py-2">Status</th>
                         <th className="px-2 py-2">Errors</th>
@@ -151,7 +151,7 @@ export default function BillingImportModal({ invoices, onAddInvoice, onClose, on
                           <td className="px-2 py-1.5">{r.customerName || '-'}</td>
                           <td className="px-2 py-1.5">{r.entity || '-'}</td>
                           <td className="px-2 py-1.5 text-right font-mono">{r.listPrice ? `₹${r.listPrice.toLocaleString('en-IN')}` : '-'}</td>
-                          <td className="px-2 py-1.5 text-right font-mono">{r.gstPercent || 0}%</td>
+                          <td className="px-2 py-1.5 text-right font-mono">₹{((r.igst || 0) + (r.cgst || 0) + (r.sgst || 0)).toLocaleString('en-IN')}</td>
                           <td className="px-2 py-1.5 font-mono">{r.date || '-'}</td>
                           <td className="px-2 py-1.5">{r.paymentStatus}</td>
                           <td className="px-2 py-1.5 max-w-[220px]">{r.errors.length > 0 ? r.errors.join(' ') : <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />}</td>
