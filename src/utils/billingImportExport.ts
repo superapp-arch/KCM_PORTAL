@@ -9,7 +9,7 @@ import { BillingInvoice, BillingCreditNote, BillingPaymentStatus, BillingGstType
 import {
   computeTotalAmt, computeTdsAmount, computeAmountReceivable, computeDueDate,
   computeShortageExcess, legacyStatusFor, DEFAULT_TDS_RATE, effectiveInvoiceAmount,
-  effectiveInvoiceStatus, financialYearLabel
+  effectiveInvoiceStatus, financialYearLabel, ENTITY_OPTIONS
 } from './billingInvoiceCalc';
 
 const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -84,7 +84,6 @@ function matchHeaders(headerRow: unknown[]): { fieldToColumn: Partial<Record<Fie
   return { fieldToColumn, missingRequired };
 }
 
-const VALID_ENTITIES = ['Regular', 'Dedicated', 'Adhoc', 'Labour Charges', 'Opex', 'Toll'];
 const VALID_STATUSES = ['Pending', 'Cleared', 'Short Payment', 'Overdue'];
 
 export function downloadBillingImportTemplate(): void {
@@ -211,7 +210,7 @@ export async function parseBillingImportFile(file: File, existingInvoices: Billi
     if (!customerName) errors.push('Client Name is required.');
     if (!(listPrice > 0)) errors.push('List Price must be greater than 0.');
     if (!date) errors.push('Invoice Issue Date is missing or not a recognized date (use YYYY-MM-DD or DD/MM/YYYY).');
-    if (entity && !VALID_ENTITIES.includes(entity)) errors.push(`Entity must be one of: ${VALID_ENTITIES.join(', ')}.`);
+    if (entity && !ENTITY_OPTIONS.includes(entity)) errors.push(`Entity must be one of: ${ENTITY_OPTIONS.join(', ')}.`);
     if (isNaN(creditPeriodDays) || creditPeriodDays < 0) errors.push('Credit Period must be a number 0 or greater.');
     if (paymentStatusRaw && !VALID_STATUSES.includes(paymentStatusRaw)) errors.push(`Payment Status must be one of: ${VALID_STATUSES.join(', ')}.`);
     if (invoiceNo) {

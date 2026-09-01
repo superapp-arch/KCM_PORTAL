@@ -7,6 +7,21 @@ import { BillingInvoice, BillingCreditNote, BillingPaymentStatus } from '../type
 const DEFAULT_CREDIT_PERIOD_DAYS = 30;
 export const DEFAULT_TDS_RATE = 2;
 
+// Entity dropdown options (2026-09-09) - these are the actual warehouse/
+// branch/billing-group names the office bills against, not a small fixed
+// enum, so BillingInvoice.entity is a plain string (see types.ts) rather
+// than a union type - this list is just what the dropdown offers, and both
+// the create/edit form (Billing.tsx) and the CSV import validator
+// (billingImportExport.ts) read from this one place so they can never drift
+// apart. Add a new one here whenever the office starts billing a new
+// branch/group.
+export const ENTITY_OPTIONS = [
+  'Regular', 'Dedicated', 'Adhoc', 'Labour Charges', 'Opex', 'Toll',
+  'BLR COLD', 'BLR DHL', 'BLR ECOM2', 'BLR IM2, IM4', 'Chennai', 'Goa',
+  'Hyd IM1', 'Hyd IM2 IM3', 'Hyd IM4', 'VIZ IMFC1', 'Bhubaneshwar',
+  'Opex | ECOM BLR', 'BLR IM1', 'BLR', 'Hosur', 'BLR IM1,IM4'
+];
+
 // ---------------------------------------------------------------------------
 // Invoice Reference Number: KCMI/{FY}/{seq} - Indian financial year (Apr-Mar),
 // sequential per FY. e.g. an invoice issued 2026-06-15 is FY "26-27"; one

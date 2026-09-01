@@ -24,7 +24,7 @@ import {
   nextInvoiceNo, lastInvoiceForCustomer, defaultCreditPeriodFor,
   computeTotalAmt, computeTdsAmount, computeAmountReceivable, computeDueDate,
   computeShortageExcess, suggestPaymentStatus, sumCreditNotes,
-  effectiveInvoiceAmount, effectiveInvoiceStatus, legacyStatusFor, DEFAULT_TDS_RATE
+  effectiveInvoiceAmount, effectiveInvoiceStatus, legacyStatusFor, DEFAULT_TDS_RATE, ENTITY_OPTIONS
 } from '../utils/billingInvoiceCalc';
 import { filterToCurrentFinancialYear, exportBillingInvoicesToExcel, exportBillingInvoicesToPdf } from '../utils/billingImportExport';
 
@@ -35,7 +35,6 @@ interface BillingProps {
   onDeleteInvoice: (id: string) => Promise<void>;
 }
 
-const ENTITY_OPTIONS = ['Regular', 'Dedicated', 'Adhoc', 'Labour Charges', 'Opex', 'Toll'] as const;
 const PAYMENT_STATUS_OPTIONS = ['Pending', 'Cleared', 'Short Payment', 'Overdue'] as const;
 
 const rupee = (n: number) => `₹${(n || 0).toLocaleString('en-IN')}`;

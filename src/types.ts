@@ -174,7 +174,11 @@ export interface Vendor {
   bankStatementDocuments: VehicleDocument[]; // mandatory, at least one file
 }
 
-export type BillingEntity = 'Regular' | 'Dedicated' | 'Adhoc' | 'Labour Charges' | 'Opex' | 'Toll';
+// Free text (2026-09-09) - these are real warehouse/branch/billing-group
+// names the office bills against, an open-ended and growing list rather
+// than a small fixed enum. See ENTITY_OPTIONS in utils/billingInvoiceCalc.ts
+// for what the dropdown actually offers.
+export type BillingEntity = string;
 export type BillingGstType = 'IGST' | 'CGST_SGST';
 // The fuller status logic (2026-09-02) - Payment Status keeps its dropdown
 // for manual override, but is auto-suggested from Amount Received vs
