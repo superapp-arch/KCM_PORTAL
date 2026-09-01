@@ -92,7 +92,7 @@ const statusBadge = (status: 'Completed' | 'Pending' | undefined) => (
 
 const warrantyBadge = (info: WarrantyPeriodInfo | null) => info ? (
   <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase border ${
-    info.status === 'InWarranty' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-slate-100 text-slate-500 border-slate-300'
+    info.status === 'InWarranty' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-500 border-slate-300'
   }`}>
     {info.status === 'InWarranty' ? 'In Warranty' : 'Out of Warranty'}
   </span>
@@ -169,6 +169,7 @@ export default function ServiceScheduleTab({
 
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
+  const [warrantyFilter, setWarrantyFilter] = useState<'All' | 'InWarranty' | 'OutOfWarranty'>('All');
   const [urgentOnly, setUrgentOnly] = useState(false);
   const [sortMode, setSortMode] = useState<'regNo' | 'urgency'>('regNo');
 
@@ -177,6 +178,16 @@ export default function ServiceScheduleTab({
   const vehicleFor = (regNo: string) => vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === regNo);
   const scheduleFor = (regNo: string) => vehicleServiceSchedules.find(s => s.regNo === regNo);
   const referenceFor = (regNo: string) => vehicleMaintenanceReferences.find(r => r.vehicleNo === regNo);
+  const currentKmFor = (regNo: string) => latestOdometerFor(regNo, mileageReports);
+  // Warranty Status is always computed from this vehicle's own Maintenance
+  // Reference Warranty Period ("{km}/{years} YEAR") + Fleet & Vehicles Reg
+  // Date + Current Odometer (see parseWarrantyPeriodStatus) - read-only
+  // everywhere, never a manual override in this tab. Either the km limit or
+  // the date limit alone is enough to flip it Out of Warranty. Returns null
+  // (shown as "Not set") when the Warranty Period or Reg Date is missing/
+  // unparseable - never guessed.
+  const warrantyInfoFor = (row: MergedRow): WarrantyPeriodInfo | null =>
+    parseWarrantyPeriodStatus(row.reference?.warrantyPeriod, regDateOf(vehicleFor(row.regNo) || {}), currentKmFor(row.regNo));
 
   // --- View panel (2026-09-06) - clicking a row's Vehicle No opens a
   // read-only consolidated view, same "look, don't touch" pattern as Fleet &
@@ -225,7 +236,8 @@ export default function ServiceScheduleTab({
     const matchesSearch = row.regNo.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesCategory = categoryFilter === 'All' || matchVehicleCategoryOption(row.category) === categoryFilter;
     const matchesUrgent = !urgentOnly || row.isUrgent;
-    return matchesSearch && matchesCategory && matchesUrgent;
+    const matchesWarranty = warrantyFilter === 'All' || warrantyInfoFor(row)?.status === warrantyFilter;
+    return matchesSearch && matchesCategory && matchesUrgent && matchesWarranty;
   });
   const filteredRows = [...filteredUnsorted].sort((a, b) =>
     sortMode === 'urgency' ? (a.urgencyRank - b.urgencyRank || a.regNo.localeCompare(b.regNo)) : a.regNo.localeCompare(b.regNo)
@@ -307,14 +319,6 @@ export default function ServiceScheduleTab({
     }
   };
 
-  const currentKmFor = (regNo: string) => latestOdometerFor(regNo, mileageReports);
-  // Warranty Status is now always computed from this vehicle's own
-  // Maintenance Reference Warranty Period ("{km}/{years} YEAR") + Fleet &
-  // Vehicles Reg Date + Current Odometer (see parseWarrantyPeriodStatus) -
-  // read-only everywhere, never a manual override in this tab.
-  const warrantyInfoFor = (row: MergedRow): WarrantyPeriodInfo | null =>
-    parseWarrantyPeriodStatus(row.reference?.warrantyPeriod, regDateOf(vehicleFor(row.regNo) || {}), currentKmFor(row.regNo));
-
   // Live previews inside the Edit panel, from the form's own in-progress
   // date values (not yet saved) - same "auto-fills, still just a preview"
   // pattern the rest of this tab already used.
@@ -371,6 +375,16 @@ export default function ServiceScheduleTab({
               {VEHICLE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
             <select
+              value={warrantyFilter}
+              onChange={(e) => setWarrantyFilter(e.target.value as 'All' | 'InWarranty' | 'OutOfWarranty')}
+              title="Filter by Warranty Status"
+              className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-bold text-slate-700"
+            >
+              <option value="All">All Warranty Status</option>
+              <option value="InWarranty">In Warranty</option>
+              <option value="OutOfWarranty">Out of Warranty</option>
+            </select>
+            <select
               value={sortMode}
               onChange={(e) => setSortMode(e.target.value as 'regNo' | 'urgency')}
               title="Sort"
@@ -417,6 +431,7 @@ export default function ServiceScheduleTab({
                 <th className="px-3 py-2.5">Reg. No.</th>
                 <th className="px-3 py-2.5">Type</th>
                 <th className="px-3 py-2.5">Responsible</th>
+                <th className="px-3 py-2.5 text-center">Warranty Status</th>
                 <th className="px-3 py-2.5 text-right">Last Service KM</th>
                 <th className="px-3 py-2.5 text-right">Current Odometer</th>
                 <th className="px-3 py-2.5">Warranty Period</th>
@@ -429,7 +444,7 @@ export default function ServiceScheduleTab({
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
               {filteredRows.length === 0 ? (
-                <tr><td colSpan={11} className="text-center py-10 text-slate-400 font-mono">NO VEHICLES FOUND.</td></tr>
+                <tr><td colSpan={12} className="text-center py-10 text-slate-400 font-mono">NO VEHICLES FOUND.</td></tr>
               ) : filteredRows.map(row => {
                 const currentKm = currentKmFor(row.regNo);
                 return (
@@ -447,6 +462,7 @@ export default function ServiceScheduleTab({
                       ) : <span className="text-slate-300">-</span>}
                     </td>
                     <td className="px-3 py-2.5 text-slate-700 whitespace-nowrap">{row.reference?.responsible || <span className="text-slate-300">-</span>}</td>
+                    <td className="px-3 py-2.5 text-center whitespace-nowrap">{warrantyBadge(warrantyInfoFor(row))}</td>
                     <td className="px-3 py-2.5 text-right font-mono text-slate-700 whitespace-nowrap">{row.reference?.lastServiceDoneKm != null ? row.reference.lastServiceDoneKm.toLocaleString('en-IN') : <span className="text-slate-300">-</span>}</td>
                     <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-700 whitespace-nowrap">
                       {currentKm != null ? `${currentKm.toLocaleString('en-IN')} km` : <span className="text-slate-300 font-normal">No reading yet</span>}
@@ -503,6 +519,7 @@ export default function ServiceScheduleTab({
                 <div className="grid grid-cols-2 gap-x-2 gap-y-1 font-mono text-slate-600">
                   <span>Responsible: {row.reference?.responsible || <span className="text-slate-300">-</span>}</span>
                   <span>{statusBadge(row.schedule?.serviceStatus)}</span>
+                  <span className="flex items-center gap-1">Warranty: {warrantyBadge(warrantyInfoFor(row))}</span>
                   <span>Last Service KM: {row.reference?.lastServiceDoneKm != null ? row.reference.lastServiceDoneKm.toLocaleString('en-IN') : <span className="text-slate-300">-</span>}</span>
                   <span>Current Odo: {currentKm != null ? `${currentKm.toLocaleString('en-IN')} km` : <span className="text-slate-300">-</span>}</span>
                   <span>Warranty: {row.reference?.warrantyPeriod || <span className="text-slate-300">-</span>}</span>
