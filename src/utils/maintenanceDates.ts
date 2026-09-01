@@ -117,6 +117,61 @@ export function computeWarrantyStatus(
   return 'InWarranty';
 }
 
+// Per-vehicle Warranty Period as actually stored on
+// vehicle_maintenance_reference (e.g. "300000/3 YEAR", or just "3 YEAR" when
+// there's no km limit at all) - distinct from computeWarrantyStatus's own
+// fixed 300000km/3yr fallback above (still used by Service Ledger and as
+// this same schedule's own manual override elsewhere). Used by Service
+// Schedule's Warranty Status column/View panel, always read-only, per an
+// explicit formula (confirmed with the user):
+//   Warranty End Date = Vehicle Reg Date + Warranty Years
+//   OUT OF WARRANTY if (Current KM > Warranty KM) OR (Today > Warranty End
+//   Date) - either condition alone is enough to flip it, neither requires
+//   the other.
+// Returns null when the Warranty Period string can't be parsed at all, so
+// the caller can show "Not set" rather than guessing.
+export interface WarrantyPeriodInfo {
+  warrantyKm: number | null; // null = this string encoded no km limit (e.g. "3 YEAR" alone)
+  warrantyYears: number;
+  warrantyEndDate: string | null; // YYYY-MM-DD - null only if Reg Date itself couldn't be parsed
+  status: 'InWarranty' | 'OutOfWarranty';
+}
+
+export function parseWarrantyPeriodStatus(
+  warrantyPeriod: string | undefined,
+  regDate: string | undefined,
+  currentKm: number | undefined
+): WarrantyPeriodInfo | null {
+  if (!warrantyPeriod) return null;
+  const withKm = warrantyPeriod.match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*YEAR/i);
+  const yearsOnly = warrantyPeriod.match(/^\s*(\d+(?:\.\d+)?)\s*YEAR/i);
+  let warrantyKm: number | null = null;
+  let warrantyYears: number | null = null;
+  if (withKm) {
+    warrantyKm = parseFloat(withKm[1]);
+    warrantyYears = parseFloat(withKm[2]);
+  } else if (yearsOnly) {
+    warrantyYears = parseFloat(yearsOnly[1]);
+  }
+  if (warrantyYears == null || isNaN(warrantyYears)) return null;
+
+  const reg = regDate ? parseAnyDate(regDate) : null;
+  let warrantyEndDate: string | null = null;
+  let pastEndDate = false;
+  if (reg) {
+    const end = new Date(reg);
+    end.setFullYear(end.getFullYear() + Math.floor(warrantyYears));
+    const fractionalMonths = Math.round((warrantyYears - Math.floor(warrantyYears)) * 12);
+    if (fractionalMonths > 0) end.setMonth(end.getMonth() + fractionalMonths);
+    warrantyEndDate = end.toISOString().slice(0, 10);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    pastEndDate = end.getTime() < today.getTime();
+  }
+  const overKm = warrantyKm != null && currentKm != null && currentKm > warrantyKm;
+  const status: 'InWarranty' | 'OutOfWarranty' = (overKm || pastEndDate) ? 'OutOfWarranty' : 'InWarranty';
+  return { warrantyKm, warrantyYears, warrantyEndDate, status };
+}
+
 // Registration Date on Fleet & Vehicles is entered in a couple of different
 // formats depending on when/how the row was created - handle both
 // DD.MM.YYYY (or DD-MM-YYYY / DD/MM/YYYY) and YYYY-MM-DD.
