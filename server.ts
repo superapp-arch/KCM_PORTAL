@@ -607,35 +607,45 @@ async function requireVendorManagementAccess(req: express.Request, res: express.
 // before insert, shrinks that window to a single request, and the
 // while-loop below is a belt-and-suspenders check against the (much
 // smaller) remaining chance of two inserts landing back-to-back.
-// Numbering scheme (per direct instruction, effective 2026-08-13):
-// - Aug 2026 and earlier: flat ENT-<year>-<4-digit-seq>, continuing from
-//   2673 for the rest of Aug 2026 specifically - the existing sequence had
-//   accumulated duplicate/out-of-order numbers (confusing the Ledger's
-//   Balance Net running total, which assumes Entry No order = real entry
-//   order), and this floor skips past that mess without touching any
-//   already-saved record.
-// - Sep 2026 onward: ENT-<year>-<2-digit-month><2-digit-seq>, e.g.
-//   ENT-2026-0901, 0902... - the 2-digit seq is a running count of entries
-//   within that real calendar month (however many get entered per day),
-//   resetting to 01 at the start of each new month. Month is always the
-//   real calendar month the entry is being saved in, not the voucher's own
-//   (possibly backdated) Date field - same "today's real date" convention
-//   the year prefix already used before this change.
-// `forceMonthlyFormat` lets a caller (see EARLY_MONTHLY_FORMAT_USERNAMES
-// below) opt a specific holder into the Sep-2026 monthly format early, ahead
-// of the real calendar date - without it this is exactly the same real-date
-// check as always.
-function nextPettyCashEntryNo(vouchers: PettyCashVoucher[], forceMonthlyFormat = false): string {
+//
+// Numbering scheme (per direct instruction, effective 2026-08-13, corrected
+// 2026-09-01):
+// - Each of the 3 handlers (Ramesh, Vinod, Saneel) keeps their own
+//   independent flat sequence ENT-<year>-<4-digit-seq>, mirroring a real
+//   physical cash-book each of them keeps - PER-HOLDER, not one sequence
+//   shared across all three (two different holders legitimately having the
+//   same-looking Entry No is expected - it's scoped to "this handler's own
+//   book", not a ledger-wide unique reference; the voucher's own `id` still
+//   is). This briefly grew a per-calendar-month reset (ENT-<year>-<MM><NN>)
+//   for a Sep 1 2026 cutover, but that's now deferred to
+//   MONTHLY_FORMAT_CUTOVER below - nothing already saved under the brief
+//   monthly format gets touched/renumbered, this only changes how new
+//   entries are numbered going forward.
+// - Ramesh already has a real, reliable continuous history in this flat
+//   format (e.g. his real last entry is ENT-2026-2941) - this just keeps
+//   continuing from his own highest number automatically, same as always.
+// - Vinod and Saneel's own historical Entry Nos (from when this was one
+//   sequence shared across all 3 handlers) don't reliably reflect where
+//   their own physical cash-book actually stands, so each of them manually
+//   types their own next Entry No exactly ONCE (see
+//   canManualFirstPettyCashEntry below) to continue their own physical
+//   numbering into the app - every entry after that is auto-sequential
+//   again, indefinitely, with no need to ever retype it (no monthly reset
+//   applies until the cutover below).
+const MONTHLY_FORMAT_CUTOVER_YEAR = 2027;
+const MONTHLY_FORMAT_CUTOVER_MONTH = 3; // March
+
+function nextPettyCashEntryNo(holderVouchers: PettyCashVoucher[]): string {
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1; // 1-12
-  const useMonthlyFormat = forceMonthlyFormat || year > 2026 || (year === 2026 && month >= 9);
-  const existing = new Set(vouchers.map(v => (v.entryNo || '').toUpperCase()));
+  const useMonthlyFormat = year > MONTHLY_FORMAT_CUTOVER_YEAR || (year === MONTHLY_FORMAT_CUTOVER_YEAR && month >= MONTHLY_FORMAT_CUTOVER_MONTH);
+  const existing = new Set(holderVouchers.map(v => (v.entryNo || '').toUpperCase()));
 
   if (useMonthlyFormat) {
     const prefix = `ENT-${year}-${String(month).padStart(2, '0')}`;
     let maxNum = 0;
-    for (const v of vouchers) {
+    for (const v of holderVouchers) {
       const upper = (v.entryNo || '').toUpperCase();
       // Length check matters here - an old flat-format entry can share the
       // same "ENT-<year>-<MM>" characters as a coincidental substring
@@ -652,11 +662,15 @@ function nextPettyCashEntryNo(vouchers: PettyCashVoucher[], forceMonthlyFormat =
     return candidate;
   }
 
+  // Flat, per-holder (current scheme through the cutover above). Excludes
+  // any stray monthly-shaped value that might already exist from the
+  // briefly-live Sep 1 2026 cutover (see looksLikeStrayMonthlyFormatEntry)
+  // so it never gets miscounted as a real flat sequence number.
   const prefix = `ENT-${year}-`;
-  let maxNum = (year === 2026 && month === 8) ? 2672 : 0;
-  for (const v of vouchers) {
+  let maxNum = 0;
+  for (const v of holderVouchers) {
     const upper = (v.entryNo || '').toUpperCase();
-    if (!upper.startsWith(prefix)) continue;
+    if (!upper.startsWith(prefix) || looksLikeStrayMonthlyFormatEntry(upper, prefix)) continue;
     const match = upper.match(/(\d+)$/);
     const n = match ? parseInt(match[1], 10) : 0;
     if (n > maxNum) maxNum = n;
@@ -669,69 +683,73 @@ function nextPettyCashEntryNo(vouchers: PettyCashVoucher[], forceMonthlyFormat =
   return candidate;
 }
 
-// Petty Cash change request (2026-08-26): Vinod and Saneel each manually
-// type that month's very first Entry No (continuing their own physical
-// cash-book numbering into the app), then every entry after that within the
-// same real calendar month is auto-sequential and locked again - same as
-// every other handler always was. Ramesh is unaffected (he'd already been
-// entering vouchers under the old scheme when this shipped) - he keeps the
-// fully-automatic behavior nextPettyCashEntryNo always had.
-//
-// Numbering is now per-HOLDER, not one global sequence shared by all three
-// logins (per direct instruction) - callers must pass nextPettyCashEntryNo
-// only that one holder's own vouchers, not every voucher in the ledger.
-// Two different holders legitimately having the same-looking Entry No (e.g.
-// both holders' own "ENT-2026-0901") is expected now - Entry No is scoped to
-// "this handler's book", it's no longer a ledger-wide unique reference (the
-// voucher's own `id` still is).
-//
-// Only meaningful once the monthly format is active (Sep 2026 onward) - the
-// flat pre-Sep-2026 format has no per-month reset for "first entry of the
-// month" to mean anything, so it (and its existing global 2672 floor) is
-// left exactly as-is for the rest of August.
+// A stray monthly-format entry (ENT-<year>-<MM><NN>) briefly created during
+// the now-reverted Sep 1 2026 cutover looks identical in shape to the flat
+// scheme's own ENT-<year>-<NNNN> - both are exactly 4 trailing digits. Value
+// is what tells them apart: MMNN maxes out at 1299 (month 01-12, seq 00-99),
+// while every genuine flat number in this dataset has been >= 2672 since the
+// 2026-08-13 floor. Excluding a stray <=1299 value here only means offering
+// the one-time manual entry (see canManualFirstPettyCashEntry) a little
+// longer than strictly needed - it can never cause a wrong AUTOMATIC number,
+// so it's a safe, one-directional bias.
+function looksLikeStrayMonthlyFormatEntry(entryNo: string | undefined, flatPrefix: string): boolean {
+  const upper = (entryNo || '').toUpperCase();
+  if (!upper.startsWith(flatPrefix) || upper.length !== flatPrefix.length + 4) return false;
+  const n = parseInt(upper.slice(flatPrefix.length), 10);
+  return !isNaN(n) && n <= 1299;
+}
+
+// Petty Cash change request (2026-08-26, corrected 2026-09-01): Vinod and
+// Saneel each manually type their own next Entry No exactly once (continuing
+// their own physical cash-book numbering into the app) - every entry after
+// that is auto-sequential and locked again, same as every other handler
+// always was. Ramesh is unaffected (he'd already been entering vouchers
+// under a reliable version of the flat scheme when this shipped) - he keeps
+// the fully-automatic behavior nextPettyCashEntryNo always had.
 const MANUAL_FIRST_ENTRY_USERNAMES = ['vinoda', 'saneel'];
 
-// 2026-08-28 follow-up: Vinod wants manual-first-entry-then-sequential
-// active immediately, rather than waiting for the Sep 1 cutover 3 days out.
-// Scoped to just Vinod (not Saneel, who wasn't asked for) - switches him
-// onto the monthly format (and per-holder numbering that comes with it) a
-// few days early; everyone else stays on the shared flat format exactly as
-// before until the real date threshold hits. Extremely low collision risk
-// this month specifically (Vinod's own already-saved August vouchers are in
-// the 2600s/2700s flat range, nowhere near an "08"-prefixed monthly-shaped
-// number) - see isHolderFirstEntryThisMonth's own doc comment for the
-// (pre-existing, already-accepted) same ambiguity risk in future months.
-const EARLY_MONTHLY_FORMAT_USERNAMES = ['vinoda'];
-
-function pettyCashMonthlyPrefix(username?: string): { prefix: string; useMonthlyFormat: boolean } {
+// Whether `username`'s next save is eligible for a manually-typed Entry No,
+// and what shape that manual entry must take - width/max differ between the
+// current flat scheme (4 digits, 1-9999) and the monthly scheme it'll
+// eventually resume being (2 digits, 1-99, once MONTHLY_FORMAT_CUTOVER
+// arrives). Not eligible at all for anyone outside MANUAL_FIRST_ENTRY_
+// USERNAMES, or once that holder already has a real entry under the current
+// scheme (only ever true for their very first save under each scheme).
+function canManualFirstPettyCashEntry(holderVouchers: PettyCashVoucher[], username: string): { can: boolean; prefix: string; width: number; max: number } {
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1;
-  const useMonthlyFormat = year > 2026 || (year === 2026 && month >= 9) || (!!username && EARLY_MONTHLY_FORMAT_USERNAMES.includes(username));
-  return { prefix: `ENT-${year}-${String(month).padStart(2, '0')}`, useMonthlyFormat };
-}
-
-// True when `holderVouchers` (already filtered to one holder) has no entry
-// yet under this real calendar month's prefix - i.e. their next save would
-// be that month's first entry, and (for Vinod/Saneel) manually settable.
-function isHolderFirstEntryThisMonth(holderVouchers: PettyCashVoucher[], prefix: string): boolean {
-  return !holderVouchers.some(v => {
+  const useMonthlyFormat = year > MONTHLY_FORMAT_CUTOVER_YEAR || (year === MONTHLY_FORMAT_CUTOVER_YEAR && month >= MONTHLY_FORMAT_CUTOVER_MONTH);
+  if (!MANUAL_FIRST_ENTRY_USERNAMES.includes(username)) {
+    return { can: false, prefix: useMonthlyFormat ? `ENT-${year}-${String(month).padStart(2, '0')}` : `ENT-${year}-`, width: useMonthlyFormat ? 2 : 4, max: useMonthlyFormat ? 99 : 9999 };
+  }
+  if (useMonthlyFormat) {
+    const prefix = `ENT-${year}-${String(month).padStart(2, '0')}`;
+    const can = !holderVouchers.some(v => {
+      const upper = (v.entryNo || '').toUpperCase();
+      return upper.startsWith(prefix) && upper.length === prefix.length + 2;
+    });
+    return { can, prefix, width: 2, max: 99 };
+  }
+  const prefix = `ENT-${year}-`;
+  const hasRelevant = holderVouchers.some(v => {
     const upper = (v.entryNo || '').toUpperCase();
-    return upper.startsWith(prefix) && upper.length === prefix.length + 2;
+    return upper.startsWith(prefix) && !looksLikeStrayMonthlyFormatEntry(upper, prefix);
   });
+  return { can: !hasRelevant, prefix, width: 4, max: 9999 };
 }
 
 // Normalizes a manually-typed trailing sequence into the full Entry No -
-// only the 1-2 digit number itself is ever user-supplied, the ENT-<year>-
-// <MM> prefix is fixed/known and never part of what they type. Returns null
-// for anything that isn't a plain 1-99 number so the route can reject it
-// with a clear error instead of silently coercing garbage input.
-function buildManualPettyCashEntryNo(prefix: string, rawSeq: unknown): string | null {
+// only the number itself is ever user-supplied, the ENT-<year>-<...> prefix
+// is fixed/known and never part of what they type. Returns null for
+// anything outside 1-`max` so the route can reject it with a clear error
+// instead of silently coercing garbage input.
+function buildManualPettyCashEntryNo(prefix: string, rawSeq: unknown, width: number, max: number): string | null {
   const digits = String(rawSeq ?? '').trim().replace(/\D/g, '');
   if (!digits) return null;
   const n = parseInt(digits, 10);
-  if (isNaN(n) || n < 1 || n > 99) return null;
-  return `${prefix}${String(n).padStart(2, '0')}`;
+  if (isNaN(n) || n < 1 || n > max) return null;
+  return `${prefix}${String(n).padStart(width, '0')}`;
 }
 
 // Which Entry No numbering "bucket" a voucher belongs to for renumbering
@@ -739,28 +757,25 @@ function buildManualPettyCashEntryNo(prefix: string, rawSeq: unknown): string | 
 // the flat-2026 format (ENT-2026-<4-digit-seq>), and only from the
 // 2026-08-13 floor (2672) onward - anything below that is the deliberately-
 // untouched messy legacy zone (duplicate/out-of-order numbers, see
-// nextPettyCashEntryNo's own comment) and must never be swept into a
-// renumbering pass.
+// nextPettyCashEntryNo's own comment), OR a stray monthly-format entry (see
+// looksLikeStrayMonthlyFormatEntry - always <=1299, so the >= 2672 floor
+// already excludes it too), and must never be swept into a renumbering pass.
 //
-// Deliberately does NOT also recognize nextPettyCashEntryNo's other format
-// (2026-09 onward, and every year after 2026: ENT-<year>-<2-digit month>
-// <2-digit seq>) - a monthly MM+NN value for 2026 and an old sub-2672 flat
-// legacy value both look like a plain 4-digit number with no way to tell
-// them apart from the string alone (e.g. is "1150" month 11 seq 50, or just
-// old flat entry #1150?), so guessing would risk corrupting the untouched
-// legacy zone. Since real monthly-format entries don't exist yet (today is
-// still within the flat-2026 period), this only means: once September 2026
-// genuinely arrives, newly-generated monthly entries simply won't be
-// gap-compacted by this function - a known gap, safer than a wrong guess.
+// Bucketed PER-HOLDER (2026-09-01 correction) - Entry No is now each
+// handler's own independent book (see nextPettyCashEntryNo's own header
+// comment), so gap-compaction must never cross from one holder's sequence
+// into another's; a voucher with no enteredBy at all (pre-dates per-holder
+// numbering entirely) buckets alone under its own empty-string holder key,
+// same "never mixed into a real handler's sequence" treatment.
 interface PettyCashEntryBucket { key: string; prefix: string; width: number; floor: number; seq: number }
-function pettyCashEntryBucket(entryNo: string): PettyCashEntryBucket | null {
-  const upper = (entryNo || '').toUpperCase();
+function pettyCashEntryBucket(v: PettyCashVoucher): PettyCashEntryBucket | null {
+  const upper = (v.entryNo || '').toUpperCase();
   const m = upper.match(/^ENT-(\d{4})-(\d{4})$/);
   if (!m) return null;
   const year = parseInt(m[1], 10);
   const value = parseInt(m[2], 10);
   if (isNaN(value) || year !== 2026 || value < 2672) return null;
-  return { key: `${year}-flat`, prefix: `ENT-${year}-`, width: 4, floor: 2672, seq: value };
+  return { key: `${v.enteredBy || ''}||${year}-flat`, prefix: `ENT-${year}-`, width: 4, floor: 2672, seq: value };
 }
 
 // Closes any gap left in the Entry No sequence - e.g. deleting ENT-2026-2713
@@ -780,7 +795,7 @@ async function renumberPettyCashSequence(): Promise<void> {
     const buckets = new Map<string, { prefix: string; width: number; floor: number; entries: { voucher: PettyCashVoucher; seq: number }[] }>();
 
     vouchers.forEach(v => {
-      const info = pettyCashEntryBucket(v.entryNo);
+      const info = pettyCashEntryBucket(v);
       if (!info) return;
       if (!buckets.has(info.key)) buckets.set(info.key, { prefix: info.prefix, width: info.width, floor: info.floor, entries: [] });
       buckets.get(info.key)!.entries.push({ voucher: v, seq: info.seq });
@@ -2734,27 +2749,21 @@ async function startServer() {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const allVouchers = await getPettyCashVouchers();
       const enteredBy = sessionUser?.username || '';
-      // Passing enteredBy lets Vinod (EARLY_MONTHLY_FORMAT_USERNAMES) switch
-      // onto the monthly format a few days early - everyone else's
-      // useMonthlyFormat is still purely date-based, unaffected.
-      const { prefix, useMonthlyFormat } = pettyCashMonthlyPrefix(enteredBy);
-      // Per-holder numbering (and the manual-first-entry option below) only
-      // applies once the monthly format is active - the flat pre-Sep-2026
-      // format keeps its one shared, already-calibrated sequence (see
-      // nextPettyCashEntryNo's own comment) untouched for its remaining few
-      // days, rather than suddenly renumbering it mid-scheme.
-      const scopedVouchers = useMonthlyFormat ? allVouchers.filter(v => v.enteredBy === enteredBy) : allVouchers;
-      const canManualFirstEntry = useMonthlyFormat && MANUAL_FIRST_ENTRY_USERNAMES.includes(enteredBy) && isHolderFirstEntryThisMonth(scopedVouchers, prefix);
+      // Entry No is per-holder now regardless of format (see
+      // nextPettyCashEntryNo's own header comment) - always scope to just
+      // this handler's own vouchers, never the whole ledger.
+      const scopedVouchers = allVouchers.filter(v => v.enteredBy === enteredBy);
+      const manualInfo = canManualFirstPettyCashEntry(scopedVouchers, enteredBy);
       const rawManualSeq = req.body?.manualEntryNoSeq;
 
       let entryNo: string;
-      if (canManualFirstEntry && rawManualSeq != null && String(rawManualSeq).trim() !== '') {
-        const manual = buildManualPettyCashEntryNo(prefix, rawManualSeq);
-        if (!manual) return res.status(400).json({ error: 'Enter a valid Entry No sequence (1-99) for this month\'s first entry.' });
+      if (manualInfo.can && rawManualSeq != null && String(rawManualSeq).trim() !== '') {
+        const manual = buildManualPettyCashEntryNo(manualInfo.prefix, rawManualSeq, manualInfo.width, manualInfo.max);
+        if (!manual) return res.status(400).json({ error: `Enter a valid Entry No (1-${manualInfo.max}) to continue your own numbering.` });
         if (findDuplicateEntryNo(scopedVouchers, manual)) return res.status(409).json({ error: `Entry No. ${manual} already exists in your own entries.` });
         entryNo = manual;
       } else {
-        entryNo = nextPettyCashEntryNo(scopedVouchers, useMonthlyFormat);
+        entryNo = nextPettyCashEntryNo(scopedVouchers);
         if (findDuplicateEntryNo(scopedVouchers, entryNo)) {
           return res.status(409).json({ error: `Entry No. ${entryNo} already exists.` });
         }

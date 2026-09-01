@@ -516,62 +516,78 @@ export default function PettyCash({
   };
 
   // Ledger Entry No is likewise auto-generated and never user-editable (for
-  // everyone except Vinod/Saneel's very first entry of a month - see
+  // everyone except Vinod/Saneel's very first entry - see
   // MANUAL_FIRST_ENTRY_USERNAMES below) - this is only a display preview of
   // what the server will assign (the actual save always regenerates it
   // server-side, see server.ts's own nextPettyCashEntryNo, which this
   // mirrors exactly so the preview shown before saving matches what
   // actually gets saved).
   //
-  // Numbering scheme (per direct instruction, effective 2026-08-13):
-  // - Aug 2026 and earlier: flat ENT-<year>-<4-digit-seq>, continuing from
-  //   2673 for the rest of Aug 2026 specifically, skipping past the
-  //   duplicate/out-of-order zone that had built up. One shared sequence
-  //   across all 3 handlers, unaffected by the per-holder change below.
-  // - Sep 2026 onward: ENT-<year>-<2-digit-month><2-digit-seq>, e.g.
-  //   ENT-2026-0901, 0902... - seq resets to 01 each new month, based on
-  //   the real calendar month (not the voucher's own Date field). Now
-  //   per-HOLDER (see holderVouchersFor below) - each of the 3 logins has
-  //   their own independent monthly count, so the same-looking Entry No can
-  //   legitimately belong to two different handlers.
+  // Numbering scheme (per direct instruction, effective 2026-08-13,
+  // corrected 2026-09-01):
+  // - Each of the 3 handlers (Ramesh, Vinod, Saneel) keeps their own
+  //   independent flat sequence ENT-<year>-<4-digit-seq>, mirroring a real
+  //   physical cash-book each of them keeps - PER-HOLDER (see
+  //   holderVouchersFor), not one sequence shared across all three. This
+  //   briefly grew a per-calendar-month reset (ENT-<year>-<MM><NN>) for a
+  //   Sep 1 2026 cutover, but that's now deferred to
+  //   MONTHLY_FORMAT_CUTOVER_YEAR/MONTH below.
+  // - Ramesh already has a real, reliable continuous history in this flat
+  //   format (e.g. his real last entry is ENT-2026-2941) - this just keeps
+  //   continuing from his own highest number automatically, same as always.
+  // - Vinod and Saneel's own historical Entry Nos (from when this was one
+  //   sequence shared across all 3 handlers) don't reliably reflect where
+  //   their own physical cash-book actually stands, so each of them
+  //   manually types their own next Entry No exactly once (see
+  //   canManualFirstEntryNo below) - every entry after that is
+  //   auto-sequential again, indefinitely, with no need to ever retype it.
   const holderVouchersFor = (username: string) => vouchers.filter(v => (v.enteredBy || user.username) === username);
-  // 2026-08-28: Vinod gets the monthly format (and the per-holder numbering
-  // that comes with it) a few days early, ahead of the real Sep 1 cutover -
-  // see server.ts's own EARLY_MONTHLY_FORMAT_USERNAMES, which this mirrors
-  // exactly so this preview never disagrees with what the server actually
-  // assigns.
-  const EARLY_MONTHLY_FORMAT_USERNAMES = ['vinoda'];
+  const MONTHLY_FORMAT_CUTOVER_YEAR = 2027;
+  const MONTHLY_FORMAT_CUTOVER_MONTH = 3; // March
   const pettyCashMonthlyPrefix = () => {
     const now = new Date();
     const year = now.getFullYear();
     const month = now.getMonth() + 1; // 1-12
-    const useMonthlyFormat = year > 2026 || (year === 2026 && month >= 9) || EARLY_MONTHLY_FORMAT_USERNAMES.includes(user.username);
+    const useMonthlyFormat = year > MONTHLY_FORMAT_CUTOVER_YEAR || (year === MONTHLY_FORMAT_CUTOVER_YEAR && month >= MONTHLY_FORMAT_CUTOVER_MONTH);
     return { year, month, prefix: `ENT-${year}-${String(month).padStart(2, '0')}`, useMonthlyFormat };
   };
-  // Vinod and Saneel each manually type that month's very first Entry No
-  // (continuing their own physical cash-book numbering into the app) -
-  // every entry after that within the same real calendar month is
-  // auto-sequential and locked again, same as every other handler always
-  // was. Ramesh is unaffected (he'd already been entering vouchers under
-  // the old scheme when this shipped). Only meaningful once the monthly
-  // format is active - the flat pre-Sep-2026 format has no per-month reset
-  // for "first entry of the month" to mean anything.
   const MANUAL_FIRST_ENTRY_USERNAMES = ['vinoda', 'saneel'];
+  // A stray monthly-format entry (ENT-<year>-<MM><NN>) briefly created
+  // during the now-reverted Sep 1 2026 cutover looks identical in shape to
+  // the flat scheme's own ENT-<year>-<NNNN> - both are exactly 4 trailing
+  // digits. Value is what tells them apart: MMNN maxes out at 1299 (month
+  // 01-12, seq 00-99), while every genuine flat number in this dataset has
+  // been >= 2672 since the 2026-08-13 floor - see server.ts's own identical
+  // looksLikeStrayMonthlyFormatEntry, which this mirrors exactly.
+  const looksLikeStrayMonthlyFormatEntry = (entryNo: string | undefined, flatPrefix: string) => {
+    const upper = (entryNo || '').toUpperCase();
+    if (!upper.startsWith(flatPrefix) || upper.length !== flatPrefix.length + 4) return false;
+    const n = parseInt(upper.slice(flatPrefix.length), 10);
+    return !isNaN(n) && n <= 1299;
+  };
   const canManualFirstEntryNo = (() => {
     if (editingId || isSuperAdmin) return false; // never applies to an edit, or to a Super Admin who isn't one of the 3 handlers
+    if (!MANUAL_FIRST_ENTRY_USERNAMES.includes(user.username)) return false;
     const { prefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
-    if (!useMonthlyFormat || !MANUAL_FIRST_ENTRY_USERNAMES.includes(user.username)) return false;
-    return !holderVouchersFor(user.username).some(v => {
+    const holderVouchers = holderVouchersFor(user.username);
+    if (useMonthlyFormat) {
+      return !holderVouchers.some(v => {
+        const upper = (v.entryNo || '').toUpperCase();
+        return upper.startsWith(prefix) && upper.length === prefix.length + 2;
+      });
+    }
+    const flatPrefix = `ENT-${new Date().getFullYear()}-`;
+    return !holderVouchers.some(v => {
       const upper = (v.entryNo || '').toUpperCase();
-      return upper.startsWith(prefix) && upper.length === prefix.length + 2;
+      return upper.startsWith(flatPrefix) && !looksLikeStrayMonthlyFormatEntry(upper, flatPrefix);
     });
   })();
 
   const nextPettyCashEntryNo = () => {
     const { year, month, prefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
+    const holderVouchers = holderVouchersFor(user.username);
 
     if (useMonthlyFormat) {
-      const holderVouchers = holderVouchersFor(user.username);
       const maxNum = holderVouchers.reduce((max, v) => {
         const upper = (v.entryNo || '').toUpperCase();
         if (!upper.startsWith(prefix) || upper.length !== prefix.length + 2) return max;
@@ -581,16 +597,15 @@ export default function PettyCash({
       return `${prefix}${String(maxNum + 1).padStart(2, '0')}`;
     }
 
-    // Flat pre-Sep-2026 format - one shared sequence across all 3 handlers,
-    // untouched by the per-holder change above (see this function's own
-    // doc comment).
+    // Flat, per-holder (current scheme through the cutover above).
     const flatPrefix = `ENT-${year}-`;
-    const maxNum = vouchers.reduce((max, v) => {
-      if (!(v.entryNo || '').toUpperCase().startsWith(flatPrefix)) return max;
-      const match = (v.entryNo || '').match(/(\d+)$/);
+    const maxNum = holderVouchers.reduce((max, v) => {
+      const upper = (v.entryNo || '').toUpperCase();
+      if (!upper.startsWith(flatPrefix) || looksLikeStrayMonthlyFormatEntry(upper, flatPrefix)) return max;
+      const match = upper.match(/(\d+)$/);
       const n = match ? parseInt(match[1], 10) : 0;
       return n > max ? n : max;
-    }, year === 2026 && month === 8 ? 2672 : 0);
+    }, 0);
     return `${flatPrefix}${String(maxNum + 1).padStart(4, '0')}`;
   };
 
@@ -884,13 +899,18 @@ export default function PettyCash({
     setIsSubmitting(true);
     try {
       const finalClient = clientName === 'Other' ? customClientName || 'Other' : clientName;
-      // A manually-typed first-of-month Entry No previews as what it'll
-      // actually become (prefix + the typed sequence) rather than the
-      // auto-generated preview, which the server would otherwise ignore.
+      // A manually-typed first entry previews as what it'll actually become
+      // (prefix + the typed sequence) rather than the auto-generated
+      // preview, which the server would otherwise ignore. Width matches
+      // whichever scheme is currently active (4 digits flat, 2 digits
+      // monthly - see pettyCashMonthlyPrefix).
+      const { prefix: monthlyPrefix, useMonthlyFormat: manualUsesMonthlyFormat } = pettyCashMonthlyPrefix();
+      const manualPrefix = manualUsesMonthlyFormat ? monthlyPrefix : `ENT-${new Date().getFullYear()}-`;
+      const manualWidth = manualUsesMonthlyFormat ? 2 : 4;
       const localEntryNo = editingId
         ? entryNo
         : canManualFirstEntryNo && manualEntryNoSeq.trim()
-        ? `${pettyCashMonthlyPrefix().prefix}${manualEntryNoSeq.trim().padStart(2, '0')}`
+        ? `${manualPrefix}${manualEntryNoSeq.trim().padStart(manualWidth, '0')}`
         : nextPettyCashEntryNo();
       const voucherData = {
         date,
@@ -3180,28 +3200,40 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
 
                   {/* Entry Number - auto-generated, not editable (same
                       convention as Market POD's Entry No) - except Vinod/
-                      Saneel's very first entry of a new month, which they
-                      type themselves to continue their own physical
-                      cash-book numbering (see canManualFirstEntryNo). */}
+                      Saneel's very first entry under the current scheme,
+                      which they type themselves to continue their own
+                      physical cash-book numbering (see canManualFirstEntryNo).
+                      Width is 4 digits for the current flat scheme, 2 for
+                      the monthly scheme (from March 2027) - see
+                      pettyCashMonthlyPrefix. */}
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Entry Number</label>
-                    {canManualFirstEntryNo ? (
-                      <>
-                        <div className="flex items-center gap-1.5">
-                          <span className="px-2 py-2 bg-slate-100 border border-slate-200 rounded-lg font-mono font-bold text-slate-500 uppercase shrink-0">{pettyCashMonthlyPrefix().prefix}</span>
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            value={manualEntryNoSeq}
-                            onChange={(e) => setManualEntryNoSeq(e.target.value.replace(/\D/g, '').slice(0, 2))}
-                            placeholder="01"
-                            required
-                            className="w-full bg-amber-50 border border-amber-300 rounded-lg p-2 font-mono font-bold tracking-wider text-amber-800 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                          />
-                        </div>
-                        <p className="text-[9px] text-amber-700 font-mono mt-0.5">This month's first entry - type its sequence number (e.g. 01). Every entry after this one auto-continues and locks again.</p>
-                      </>
-                    ) : (
+                    {canManualFirstEntryNo ? (() => {
+                      const { prefix: monthlyPrefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
+                      const manualPrefix = useMonthlyFormat ? monthlyPrefix : `ENT-${new Date().getFullYear()}-`;
+                      const manualWidth = useMonthlyFormat ? 2 : 4;
+                      return (
+                        <>
+                          <div className="flex items-center gap-1.5">
+                            <span className="px-2 py-2 bg-slate-100 border border-slate-200 rounded-lg font-mono font-bold text-slate-500 uppercase shrink-0">{manualPrefix}</span>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={manualEntryNoSeq}
+                              onChange={(e) => setManualEntryNoSeq(e.target.value.replace(/\D/g, '').slice(0, manualWidth))}
+                              placeholder={manualWidth === 2 ? '01' : '2941'}
+                              required
+                              className="w-full bg-amber-50 border border-amber-300 rounded-lg p-2 font-mono font-bold tracking-wider text-amber-800 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                            />
+                          </div>
+                          <p className="text-[9px] text-amber-700 font-mono mt-0.5">
+                            {useMonthlyFormat
+                              ? 'This month\'s first entry - type its sequence number (e.g. 01). Every entry after this one auto-continues and locks again.'
+                              : 'Type this entry\'s own number from your own cash-book (e.g. 2941, not the previous one). Every entry after this one auto-continues from it and locks again.'}
+                          </p>
+                        </>
+                      );
+                    })() : (
                       <>
                         <input
                           type="text"
