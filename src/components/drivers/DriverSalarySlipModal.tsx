@@ -4,6 +4,7 @@ import { DriverEmployee, DriverSalarySlipRecord } from '../../types';
 import { resolveOrGenerateDriverSlip, markDriverSlipDownloaded } from '../../utils/driverSalarySlipGenerate';
 import { buildDriverSalarySlipFile } from '../../utils/driverSalarySlipPdf';
 import { numberToIndianWords } from '../../utils/numberToWords';
+import DocumentHeader from '../DocumentHeader';
 
 interface DriverSalarySlipModalProps {
   driver: DriverEmployee;
@@ -56,7 +57,7 @@ export default function DriverSalarySlipModal({ driver, existingSlips, performed
     if (!slip) return;
     setDownloading(true);
     try {
-      const file = buildDriverSalarySlipFile(slip);
+      const file = await buildDriverSalarySlipFile(slip);
       const url = URL.createObjectURL(file);
       const link = document.createElement('a');
       link.href = url;
@@ -97,10 +98,7 @@ export default function DriverSalarySlipModal({ driver, existingSlips, performed
             </div>
           ) : slip ? (
             <div className="space-y-3">
-              <div className="text-center border-b border-slate-200 pb-3">
-                <p className="font-black text-slate-900 text-base">KCM LOGISTICS</p>
-                <p className="text-slate-500">Driver Salary Slip - {monthLabel(slip.month)}</p>
-              </div>
+              <DocumentHeader subtitle={`Driver Salary Slip - ${monthLabel(slip.month)}`} />
 
               <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 bg-slate-50 border border-slate-200 rounded-lg p-3">
                 <div><span className="text-slate-400">Slip Number: </span><span className="font-semibold font-mono">{slip.slipNumber}</span></div>

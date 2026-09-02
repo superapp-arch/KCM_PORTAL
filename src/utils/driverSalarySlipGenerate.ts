@@ -127,7 +127,7 @@ export async function resolveOrGenerateDriverSlip(params: {
   // module's documents already use, so this slip has a real, re-fetchable
   // pdfUrl rather than only ever existing as an in-memory download.
   try {
-    const file = buildDriverSalarySlipFile(slip);
+    const file = await buildDriverSalarySlipFile(slip);
     const formData = new FormData();
     formData.append('file', file);
     const uploadRes = await fetch('/api/upload/driver-salary-slips', { method: 'POST', body: formData });

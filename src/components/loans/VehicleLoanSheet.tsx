@@ -249,10 +249,21 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
     return bal != null && loan.monthlyEmi != null ? bal * loan.monthlyEmi : null;
   };
 
+  // Same displayStatus the Status badge/column itself shows (see
+  // resolveLoanStatus) - Active unless the office explicitly forced Closed/
+  // Active manually, otherwise auto from months-completed vs tenure.
+  const displayStatusOf = (loan: VehicleLoan): 'Active' | 'Closed' =>
+    resolveLoanStatus(loan.loanStatus, loan.loanStatusManual, computeMonthsCompleted(loan.emiStartDate, loan.tenure), loan.tenure);
+
   const sorted = useMemo(() => {
-    if (!sort) return filtered;
     const arr = [...filtered];
     arr.sort((a, b) => {
+      // Active always sits above Closed, regardless of whatever column sort
+      // is active - a closed loan doesn't need daily attention, so it's
+      // moved out of the way rather than mixed in with the ones that do.
+      const statusCmp = (displayStatusOf(a) === 'Closed' ? 1 : 0) - (displayStatusOf(b) === 'Closed' ? 1 : 0);
+      if (statusCmp !== 0) return statusCmp;
+      if (!sort) return 0;
       let cmp = 0;
       switch (sort.key) {
         case 'regNo': cmp = extractLeadingNumber(a.regNo) - extractLeadingNumber(b.regNo); break;

@@ -284,6 +284,12 @@ export default function FuelManagement({
   // double-check the number rather than assuming it's as authoritative as
   // the normal server-computed preview always was.
   const [indentNumberIsLocalEstimate, setIndentNumberIsLocalEstimate] = useState(false);
+  // Bumped by every resetForm() call, keepOpen or not - see the Indent No.
+  // auto-continue effect below. It's the one dependency that reliably
+  // changes on a back-to-back "add another" save, when Bunk Name/Date/
+  // Bunk-Card/showSidebar can all legitimately stay exactly the same as the
+  // entry that was just committed (same bunk stop, same day).
+  const [formResetToken, setFormResetToken] = useState(0);
   const [ltrs, setLtrs] = useState('');
   const [rate, setRate] = useState('');
   const [amount, setAmount] = useState('');
@@ -550,15 +556,19 @@ export default function FuelManagement({
   // flagged via indentNumberIsLocalEstimate so the inline warning below
   // tells the office to double-check it.
   //
-  // Also keyed off `showSidebar`, not just [bunkOrCard, date, editingId] -
-  // resetForm() (see "Add Entry" button below) unconditionally clears
-  // indentNumber to '' every time the form is opened fresh, but if
-  // bunkOrCard/date/editingId all happen to already equal their previous
-  // values (the common case - same day, still Bunk), those 3 alone never
-  // change and this effect would never re-run to refill it, leaving the
-  // field permanently blank after that clear. Including showSidebar
-  // guarantees a fresh fetch every single time Add Entry opens for a new
-  // entry, regardless of whether the other 3 values changed.
+  // Also keyed off `showSidebar` and `formResetToken`, not just
+  // [bunkOrCard, date, editingId] - resetForm() (see "Add Entry" button
+  // below) unconditionally clears indentNumber to '' every time the form is
+  // reset, but if bunkOrCard/date/editingId all happen to already equal
+  // their previous values (the common case - same day, still Bunk), those 3
+  // alone never change and this effect would never re-run to refill it,
+  // leaving the field permanently blank after that clear. showSidebar
+  // covers a fresh open of "Add Entry" (false -> true is always a real
+  // change); formResetToken additionally covers the back-to-back "add
+  // another" case (2026-09-02 fix) - resetForm(true) after a save keeps the
+  // sidebar open throughout, so showSidebar never toggles there either, and
+  // without formResetToken this preview would keep showing the just-used
+  // (now taken) number for every entry after the first in the same session.
   useEffect(() => {
     if (!showSidebar || editingId) return;
     if (bunkOrCard === 'Bunk' && !date) return;
@@ -600,7 +610,7 @@ export default function FuelManagement({
     attempt(0);
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bunkOrCard, date, editingId, showSidebar]);
+  }, [bunkOrCard, date, editingId, showSidebar, formResetToken]);
 
   // --- Mileage section calculations - identical rules to the old standalone
   // Trip Details form (see MileageReport.tsx), just keyed off this form's own
@@ -799,12 +809,34 @@ export default function FuelManagement({
   // as before.
   const resetForm = (keepOpen = false) => {
     setEditingId(null);
+    setFormResetToken(t => t + 1);
     setPeriod(new Date().toISOString().slice(0, 7));
-    setDate(new Date().toISOString().slice(0, 10));
-    setLocation('');
-    setLocationIsOther(false);
-    setBunkName('');
-    setBunkOrCard('Bunk');
+    // Date/Location/Bunk Name/Bunk-Card are left untouched when keepOpen is
+    // true (back-to-back logging, sidebar staying open for "add another") -
+    // 2026-09-02 fix. Back-to-back entries are almost always for the SAME
+    // bunk stop on the SAME day (that's exactly the scenario the "same bunk,
+    // same day -> carry forward the Rate" auto-fill exists for), so wiping
+    // these to blank forced re-typing Location/Bunk Name by hand every single
+    // entry. Re-typing is exactly where this silently broke: Bunk Name is a
+    // free-text field (see the datalist input below) and the Rate carry
+    // forward match is an exact string comparison against what was saved on
+    // the prior entry - a re-typed value that differs by so much as casing
+    // or a stray space/character (easy to do on a phone) would never match,
+    // leaving Rate blank with no explanation, "fixed" only by reloading the
+    // page and being more careful on the retry. Keeping these fields exactly
+    // as they were still lets the Rate/Indent No. previews correctly refire
+    // (their effects already depend on `logs`, which does change once the
+    // freshly-saved entry comes back from fetchAllData), now matching a
+    // guaranteed-identical Bunk Name/date instead of a hand-retyped one.
+    // Vehicle Number/Rate/Ltrs/Amount/driver etc. below still always clear -
+    // those are genuinely per-entry, not per-bunk-stop.
+    if (!keepOpen) {
+      setDate(new Date().toISOString().slice(0, 10));
+      setLocation('');
+      setLocationIsOther(false);
+      setBunkName('');
+      setBunkOrCard('Bunk');
+    }
     setVehicleNumber('');
     setIndentNumber('');
     setIndentNumberIsLocalEstimate(false);

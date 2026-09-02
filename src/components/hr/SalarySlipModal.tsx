@@ -4,7 +4,7 @@ import { StaffEmployee, StaffBankDetail, SalarySlipRecord } from '../../types';
 import { EnrichedPfRecord, resolveOrGenerateSlip, markSlipDownloaded } from '../../utils/salarySlipGenerate';
 import { buildSalarySlipFile } from '../../utils/salarySlipPdf';
 import { numberToIndianWords } from '../../utils/numberToWords';
-import kcmLogo from '../../assets/images/logo.png';
+import DocumentHeader from '../DocumentHeader';
 
 interface SalarySlipModalProps {
   employee: StaffEmployee;
@@ -109,10 +109,7 @@ export default function SalarySlipModal({ employee, month, pfRecord, bankDetail,
             </div>
           ) : slip ? (
             <div className="space-y-3">
-              <div className="text-center border-b border-slate-200 pb-3">
-                <img src={kcmLogo} alt="KCM Logistics" className="h-12 mx-auto mb-1" />
-                <p className="text-slate-500">Salary Slip - {monthLabel(slip.month)}</p>
-              </div>
+              <DocumentHeader subtitle={`Salary Slip - ${monthLabel(slip.month)}`} />
 
               <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 bg-slate-50 border border-slate-200 rounded-lg p-3">
                 <div><span className="text-slate-400">Employee Name: </span><span className="font-semibold">{slip.employeeName}</span></div>

@@ -69,7 +69,15 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
   const [drivingLicenseDocuments, setDrivingLicenseDocuments] = useState<VehicleDocument[]>(driver?.drivingLicenseDocuments || []);
   const [otherDocuments, setOtherDocuments] = useState<VehicleDocument[]>(driver?.otherDocuments || []);
 
-  const [salaryMonth, setSalaryMonth] = useState(driver?.month || currentMonthKey());
+  // Always the real current calendar month, not driver.month (whatever
+  // month was last saved on this record) - 2026-09-12 fix. Defaulting to
+  // driver.month meant Salary Breakup stayed stuck showing August forever
+  // once nobody happened to save a September entry, since that saved value
+  // kept winning over the real date - silently pulling in the wrong month's
+  // Attendance figures and the wrong Petty Cash/Advance total, and skewing
+  // Net Salary as a result. Still a normal editable month picker below, so
+  // switching to a past month to review/correct it is unaffected.
+  const [salaryMonth, setSalaryMonth] = useState(currentMonthKey());
   const [attendanceSummary, setAttendanceSummary] = useState({ totalDays: 0, presentDays: 0, lopDays: 0, exemptionLeaveDays: 0 });
   const [salaryForm, setSalaryForm] = useState({
     grossSalary: driver?.grossSalary != null ? String(driver.grossSalary) : '',

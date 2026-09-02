@@ -4,6 +4,7 @@ import { MaintenanceRecord, ServiceInvoiceRecord, Vehicle, VehicleServiceSchedul
 import { resolveOrGenerateInvoice, markInvoiceDownloaded, updateInvoicePaidAmount } from '../../utils/serviceInvoiceGenerate';
 import { buildServiceInvoiceFile } from '../../utils/serviceInvoicePdf';
 import { numberToIndianWords } from '../../utils/numberToWords';
+import DocumentHeader from '../DocumentHeader';
 
 interface ServiceInvoiceModalProps {
   record: MaintenanceRecord;
@@ -56,7 +57,7 @@ export default function ServiceInvoiceModal({
     if (!invoice) return;
     setDownloading(true);
     try {
-      const file = buildServiceInvoiceFile(invoice);
+      const file = await buildServiceInvoiceFile(invoice);
       const url = URL.createObjectURL(file);
       const link = document.createElement('a');
       link.href = url;
@@ -112,10 +113,7 @@ export default function ServiceInvoiceModal({
             </div>
           ) : invoice ? (
             <div className="space-y-3">
-              <div className="text-center border-b border-slate-200 pb-3">
-                <p className="font-black text-slate-900 text-base">KCM LOGISTICS</p>
-                <p className="text-slate-500">Service Invoice</p>
-              </div>
+              <DocumentHeader subtitle="Service Invoice" />
 
               <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 bg-slate-50 border border-slate-200 rounded-lg p-3">
                 <div><span className="text-slate-400">Invoice No.: </span><span className="font-semibold font-mono">{invoice.invoiceNumber}</span></div>

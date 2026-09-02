@@ -108,7 +108,7 @@ export async function resolveOrGenerateInvoice(params: {
   // re-fetchable pdfUrl rather than only ever existing as an in-memory
   // download.
   try {
-    const file = buildServiceInvoiceFile(invoice);
+    const file = await buildServiceInvoiceFile(invoice);
     const formData = new FormData();
     formData.append('file', file);
     const uploadRes = await fetch('/api/upload/service-invoices', { method: 'POST', body: formData });

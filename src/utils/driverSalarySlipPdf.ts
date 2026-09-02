@@ -7,6 +7,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { DriverSalarySlipRecord } from '../types';
 import { numberToIndianWords } from './numberToWords';
+import { getDocumentLogoDataUrl, drawDocumentPdfHeader } from './documentPdfHeader';
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 function monthLabel(month: string): string {
@@ -16,22 +17,16 @@ function monthLabel(month: string): string {
 
 const rupee = (n: number | undefined) => `Rs. ${Math.round(n || 0).toLocaleString('en-IN')}`;
 
-export function buildDriverSalarySlipDoc(slip: DriverSalarySlipRecord): jsPDF {
+export function buildDriverSalarySlipDoc(slip: DriverSalarySlipRecord, logoDataUrl?: string): jsPDF {
   const doc = new jsPDF();
 
-  // Header
-  doc.setFontSize(16);
-  doc.setTextColor(15, 23, 42);
-  doc.text('KCM LOGISTICS', 105, 16, { align: 'center' });
-  doc.setFontSize(11);
-  doc.setTextColor(100, 116, 139);
-  doc.text(`Driver Salary Slip - ${monthLabel(slip.month)}`, 105, 23, { align: 'center' });
-  doc.setDrawColor(203, 213, 225);
-  doc.line(14, 28, 196, 28);
+  // Header - the shared KCM Logistics logo (see utils/documentPdfHeader.ts),
+  // falling back to the plain text wordmark it replaces if it isn't ready.
+  const headerBottomY = drawDocumentPdfHeader(doc, `Driver Salary Slip - ${monthLabel(slip.month)}`, logoDataUrl);
 
   // Driver details block
   autoTable(doc, {
-    startY: 33,
+    startY: headerBottomY + 5,
     body: [
       ['Driver Name', slip.driverName, 'Driver ID', slip.driverId],
       ['Vehicle No', slip.vehicleNo || '-', 'Location', slip.location],
@@ -134,7 +129,13 @@ export function buildDriverSalarySlipDoc(slip: DriverSalarySlipRecord): jsPDF {
   return doc;
 }
 
-export function buildDriverSalarySlipFile(slip: DriverSalarySlipRecord): File {
-  const blob: Blob = buildDriverSalarySlipDoc(slip).output('blob');
+export async function buildDriverSalarySlipFile(slip: DriverSalarySlipRecord): Promise<File> {
+  let logoDataUrl: string | undefined;
+  try {
+    logoDataUrl = await getDocumentLogoDataUrl();
+  } catch (err) {
+    console.error('Failed to load KCM Logistics logo for the driver salary slip - falling back to the text-only header:', err);
+  }
+  const blob: Blob = buildDriverSalarySlipDoc(slip, logoDataUrl).output('blob');
   return new File([blob], `${slip.slipNumber}.pdf`, { type: 'application/pdf' });
 }

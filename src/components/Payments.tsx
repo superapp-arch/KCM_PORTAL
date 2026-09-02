@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   Landmark, Plus, ArrowLeft, Trash2, Edit2, CreditCard, Banknote, Wallet, X,
-  AlertTriangle, Wallet2, Building2, TrendingDown
+  Wallet2, Building2, TrendingDown
 } from 'lucide-react';
 import { User, FuelLog, DieselBunkAccount, DieselBunkPayment } from '../types';
 import DateInput from './DateInput';
@@ -162,10 +162,11 @@ export default function Payments({
     sortMode === 'balance' ? (a.balance - b.balance || a.bunkName.localeCompare(b.bunkName)) : (a.bunkName.localeCompare(b.bunkName) || a.location.localeCompare(b.location))
   ), [bunkRows, sortMode]);
 
-  // Dashboard cards - fleet-wide, independent of sort order.
+  // Dashboard cards - fleet-wide, independent of sort order. Highest
+  // Exposure no longer has its own card (2026-09-12) - the same information
+  // is now visually called out directly on that bunk's own tile below (see
+  // the Bunk Wise Balance tile grid's status-based border/label color).
   const totalOutstanding = bunkRows.reduce((s, r) => s + Math.max(0, -r.balance), 0);
-  const highestExposureBunk = bunkRows.reduce<BunkRow | null>((worst, r) =>
-    (!worst || -r.balance > -worst.balance) ? r : worst, null);
 
   const historyRow = historyKey ? bunkRows.find(r => r.key === historyKey) : undefined;
 
@@ -468,39 +469,57 @@ export default function Payments({
             </button>
           </div>
 
-          {/* Dashboard cards */}
+          {/* Total Outstanding - kept as its own KPI card, unchanged. */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
             <div className="bg-white p-4 rounded-xl border border-rose-200 shadow-xs">
               <p className="font-bold text-rose-600 uppercase tracking-wider flex items-center gap-1.5"><TrendingDown className="w-3.5 h-3.5" /> Total Outstanding</p>
               <h3 className="text-xl font-black text-rose-700 mt-1">₹{totalOutstanding.toLocaleString('en-IN')}</h3>
               <p className="text-slate-400 mt-0.5">Owed across every tracked bunk</p>
             </div>
-            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-              <p className="font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5"><Building2 className="w-3.5 h-3.5" /> Bunk Wise Balance</p>
-              <div className="mt-2 space-y-1 max-h-28 overflow-y-auto pr-1">
-                {sortedRows.length === 0 ? (
-                  <p className="text-slate-400 text-center py-2">No bunks tracked yet.</p>
-                ) : sortedRows.map(row => (
-                  <div key={row.key} className="flex items-center justify-between gap-2 text-[11px]">
-                    <span className="text-slate-600 font-semibold truncate">{row.bunkName}</span>
-                    <span className={`font-mono font-bold whitespace-nowrap ${row.balance < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
-                      {row.balance < 0 ? '-' : ''}₹{Math.abs(row.balance).toLocaleString('en-IN')}
-                    </span>
-                  </div>
-                ))}
+          </div>
+
+          {/* Bunk Wise Balance - one tile per bunk (2026-09-12), styled like
+              the fleet-status KPI cards, replacing the old scrolling list +
+              separate Highest Exposure card so every bunk is visible at once
+              without switching tabs. The bunk list itself is never hardcoded
+              - it's the same live-derived `sortedRows` the table below
+              already uses (every bunk Fuel Management or an explicit
+              DieselBunkAccount knows about), so a brand new bunk shows up
+              here automatically with zero code changes. Tiles inherit
+              whatever ordering the Sort dropdown below is set to (defaults
+              to most-owed-first) rather than a second, separate sort
+              control. Border/label color reuses each bunk's own already-
+              computed exposure Status (High/Pending/Clear - see
+              STATUS_BADGE_CLASS and each row's own `threshold`), so a bunk
+              above its configured exposure threshold is visually called out
+              in red the same way "Unresolved Alerts" is on the Fleet
+              dashboard - clicking a tile opens that bunk's own History. */}
+          <div>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5"><Building2 className="w-3.5 h-3.5" /> Bunk Wise Balance</p>
+            {sortedRows.length === 0 ? (
+              <p className="text-slate-400 text-xs bg-white border border-slate-200 rounded-xl p-4 text-center">No bunks tracked yet.</p>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 text-xs">
+                {sortedRows.map(row => {
+                  const tileBorderClass = row.status === 'High' ? 'border-rose-300 bg-rose-50/40' : row.status === 'Pending' ? 'border-amber-200 bg-amber-50/30' : 'border-emerald-200 bg-emerald-50/20';
+                  const labelColorClass = row.status === 'High' ? 'text-rose-600' : row.status === 'Pending' ? 'text-amber-600' : 'text-emerald-600';
+                  return (
+                    <button
+                      key={row.key}
+                      type="button"
+                      onClick={() => setHistoryKey(row.key)}
+                      title={`View ${row.bunkName} (${row.location}) history`}
+                      className={`text-left p-4 rounded-xl border shadow-xs hover:shadow-md transition-all cursor-pointer ${tileBorderClass}`}
+                    >
+                      <p className={`font-bold uppercase tracking-wider text-[10px] truncate ${labelColorClass}`}>{row.bunkName}</p>
+                      <h3 className={`text-lg font-black mt-1 whitespace-nowrap ${row.balance < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                        {row.balance < 0 ? '-' : ''}₹{Math.abs(row.balance).toLocaleString('en-IN')}
+                      </h3>
+                    </button>
+                  );
+                })}
               </div>
-            </div>
-            <div className="bg-white p-4 rounded-xl border border-amber-200 shadow-xs">
-              <p className="font-bold text-amber-600 uppercase tracking-wider flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5" /> Highest Exposure</p>
-              {highestExposureBunk && highestExposureBunk.balance < 0 ? (
-                <>
-                  <h3 className="text-base font-black text-amber-700 mt-1">{highestExposureBunk.bunkName} <span className="text-slate-400 font-normal text-xs">({highestExposureBunk.location})</span></h3>
-                  <p className="text-rose-600 font-mono font-bold mt-0.5">-₹{(-highestExposureBunk.balance).toLocaleString('en-IN')}</p>
-                </>
-              ) : (
-                <h3 className="text-base font-black text-emerald-700 mt-1">None - all clear</h3>
-              )}
-            </div>
+            )}
           </div>
 
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">

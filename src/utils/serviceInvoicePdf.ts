@@ -7,27 +7,22 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { ServiceInvoiceRecord } from '../types';
 import { numberToIndianWords } from './numberToWords';
+import { getDocumentLogoDataUrl, drawDocumentPdfHeader } from './documentPdfHeader';
 
 const rupee = (n: number | undefined) => `Rs. ${Math.round(n || 0).toLocaleString('en-IN')}`;
 
-export function buildServiceInvoiceDoc(invoice: ServiceInvoiceRecord): jsPDF {
+export function buildServiceInvoiceDoc(invoice: ServiceInvoiceRecord, logoDataUrl?: string): jsPDF {
   const doc = new jsPDF();
 
-  // Header
-  doc.setFontSize(16);
-  doc.setTextColor(15, 23, 42);
-  doc.text('KCM LOGISTICS', 105, 16, { align: 'center' });
-  doc.setFontSize(11);
-  doc.setTextColor(100, 116, 139);
-  doc.text('Service Invoice', 105, 23, { align: 'center' });
-  doc.setDrawColor(203, 213, 225);
-  doc.line(14, 28, 196, 28);
+  // Header - the shared KCM Logistics logo (see utils/documentPdfHeader.ts),
+  // falling back to the plain text wordmark it replaces if it isn't ready.
+  const headerBottomY = drawDocumentPdfHeader(doc, 'Service Invoice', logoDataUrl);
 
   // Invoice No / Work Order Date+Time - the header is always built from the
   // work order's own date/time, never today's system date (only the footer's
   // "Generated on" line reflects today).
   autoTable(doc, {
-    startY: 33,
+    startY: headerBottomY + 5,
     body: [
       ['Invoice No.', invoice.invoiceNumber, 'Work Order Date', `${invoice.workOrderDate}${invoice.workOrderTime ? ' ' + invoice.workOrderTime : ''}`],
       ['Service Station', invoice.garageName || '-', 'Vehicle No.', invoice.regNo]
@@ -146,7 +141,13 @@ export function buildServiceInvoiceDoc(invoice: ServiceInvoiceRecord): jsPDF {
   return doc;
 }
 
-export function buildServiceInvoiceFile(invoice: ServiceInvoiceRecord): File {
-  const blob: Blob = buildServiceInvoiceDoc(invoice).output('blob');
+export async function buildServiceInvoiceFile(invoice: ServiceInvoiceRecord): Promise<File> {
+  let logoDataUrl: string | undefined;
+  try {
+    logoDataUrl = await getDocumentLogoDataUrl();
+  } catch (err) {
+    console.error('Failed to load KCM Logistics logo for the service invoice - falling back to the text-only header:', err);
+  }
+  const blob: Blob = buildServiceInvoiceDoc(invoice, logoDataUrl).output('blob');
   return new File([blob], `${invoice.invoiceNumber.replace(/[^A-Za-z0-9-]/g, '_')}.pdf`, { type: 'application/pdf' });
 }
