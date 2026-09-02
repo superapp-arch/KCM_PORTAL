@@ -224,6 +224,12 @@ export interface BillingInvoice {
 
   // --- Billing details (2026-09-02 Invoice & Receivables expansion) ---
   company?: BillingCompany; // KCM Insta (default) or KCM Supply - see BillingCompany above
+  // KCM Supply only (2026-09-02) - Adhoc/Dedicated. Never set for a KCM
+  // Insta invoice - the form/table both treat this field as entirely absent
+  // (not blank, not disabled) outside the KCM Supply tab. Optional so an
+  // imported/pre-existing KCM Supply row can display blank until edited,
+  // rather than being blocked.
+  mode?: 'Adhoc' | 'Dedicated';
   entity?: BillingEntity;
   location?: string; // Location / State - free text, no fixed list supplied
   billMonth?: string; // YYYY-MM

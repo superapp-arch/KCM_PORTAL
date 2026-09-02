@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, User, Coins, Landmark, Wallet, Upload } from 'lucide-react';
+import { X, Plus, Trash2, User, Coins, Landmark, Wallet, Upload, RefreshCw } from 'lucide-react';
 import { StaffEmployee, StaffSalaryDetail, StaffSalaryHike, StaffAdvanceDeduction, StaffBankDetail, StaffProvidentFund, VehicleDocument } from '../../types';
 import DocumentAttachment from '../DocumentAttachment';
 import DateInput from '../DateInput';
@@ -30,6 +30,42 @@ const emptyPfForm = {
   basic: '', hra: '', conveyance: '', medicalAllowance: '', lta: '', cca: '', fuelAllowance: '', otherAllowances: '', extraDays: '',
   professionalTax: '', epf: '', esi: '', fullAndFinal: '', otherDeductions: '', advances: '', incomeTax: ''
 };
+
+// CTC -> Salary Breakup formulas (2026-09-02, confirmed with HR) - so
+// Basic/HRA/Conveyance/Medical/LTA/CCA and PF/ESI/Professional Tax don't
+// need to be hand-computed and re-typed every time CTC (the monthly figure
+// in the Salary Details tab, not Annual CTC) changes. Applied automatically
+// the moment CTC is edited (see the CTC input's onChange below) and via the
+// explicit "Recalculate from CTC" button on the Salary Breakup tab -
+// deliberately never on a plain modal reopen, so an already-saved or
+// carried-forward month's figures are never silently overwritten just by
+// viewing them. Every field this touches stays a normal editable input
+// afterward, same "auto-fills, still overridable" pattern as everywhere
+// else in this app - a one-off manual correction for a specific month holds
+// until CTC changes (or Recalculate is clicked) again.
+//   Basic       = CTC x 50%
+//   HRA         = Basic / 2
+//   Conveyance  = MIN(CTC x 8%, 1800)
+//   Medical     = 1800 (fixed)
+//   LTA         = Basic / 4
+//   CCA         = CTC - (Basic + HRA + Conveyance + Medical + LTA)  [balancing figure]
+//   PF (EPF)    = MIN(CTC x 12%, 1800)
+//   ESI         = CTC x 0.75% if CTC <= 21,000, else 0
+//   Professional Tax = 200 if CTC > 25,000, else 0
+//   TDS (Income Tax) - deliberately NOT touched, always manual entry
+function computeCtcBreakup(ctc: number) {
+  const round = (n: number) => Math.round(n);
+  const basic = round(ctc * 0.5);
+  const hra = round(basic / 2);
+  const conveyance = round(Math.min(ctc * 0.08, 1800));
+  const medicalAllowance = 1800;
+  const lta = round(basic / 4);
+  const cca = round(ctc - (basic + hra + conveyance + medicalAllowance + lta));
+  const epf = round(Math.min(ctc * 0.12, 1800));
+  const esi = ctc <= 21000 ? round(ctc * 0.0075) : 0;
+  const professionalTax = ctc > 25000 ? 200 : 0;
+  return { basic, hra, conveyance, medicalAllowance, lta, cca, epf, esi, professionalTax };
+}
 
 export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmployee, onClose, onSaved }: StaffFormModalProps) {
   const isEditing = !!employee;
@@ -303,6 +339,20 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
   // based only on the recurring monthly earnings (excludes extra-days pay, since that
   // pay is itself derived from this figure), and LOP Amount is linked straight from
   // attendance's LOP day count - so attendance and salary stay in sync automatically.
+  // Applies computeCtcBreakup's formulas to the Salary Breakup form - see
+  // that function's own comment for exactly when this fires.
+  const applyCtcBreakup = (ctcValue: string) => {
+    const ctc = Number(ctcValue) || 0;
+    if (!ctc) return;
+    const b = computeCtcBreakup(ctc);
+    setPfForm(f => ({
+      ...f,
+      basic: String(b.basic), hra: String(b.hra), conveyance: String(b.conveyance),
+      medicalAllowance: String(b.medicalAllowance), lta: String(b.lta), cca: String(b.cca),
+      epf: String(b.epf), esi: String(b.esi), professionalTax: String(b.professionalTax)
+    }));
+  };
+
   const num = (v: string) => Number(v) || 0;
   const pfRecurringEarnings = num(pfForm.basic) + num(pfForm.hra) + num(pfForm.conveyance) + num(pfForm.medicalAllowance) +
     num(pfForm.lta) + num(pfForm.cca) + num(pfForm.fuelAllowance) + num(pfForm.otherAllowances);
@@ -464,7 +514,10 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">CTC</label>
-                  <input type="number" value={salary.ctc25} onChange={e => setSalary({ ...salary, ctc25: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <input type="number" value={salary.ctc25}
+                    onChange={e => { setSalary({ ...salary, ctc25: e.target.value }); applyCtcBreakup(e.target.value); }}
+                    autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                  <p className="text-slate-400 mt-1">Basic/HRA/Conveyance/Medical/LTA/CCA and PF/ESI/Professional Tax on the Salary Breakup tab auto-recalculate from this.</p>
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Annual CTC</label>
@@ -536,6 +589,11 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <input type="month" value={pfMonth} onChange={e => setPfMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-lg px-2.5 py-1.5" />
+                <button type="button" onClick={() => applyCtcBreakup(salary.ctc25)} disabled={!num(salary.ctc25)}
+                  title={num(salary.ctc25) ? `Recompute Basic/HRA/Conveyance/Medical/LTA/CCA and PF/ESI/Professional Tax from CTC (Rs. ${num(salary.ctc25).toLocaleString('en-IN')})` : 'Set a CTC on the Salary Details tab first'}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-purple-300 bg-purple-50 text-purple-700 hover:bg-purple-100 font-bold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
+                  <RefreshCw className="w-3.5 h-3.5" /> Recalculate from CTC
+                </button>
               </div>
 
               <div className="grid grid-cols-4 gap-2">
@@ -559,13 +617,14 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
 
               <div className="border border-slate-200 rounded-lg p-3">
                 <p className="font-bold text-emerald-700 uppercase mb-2">Allowances (Earnings)</p>
+                <p className="text-slate-400 mb-2">Basic/HRA/Conveyance/Medical/LTA/CCA follow the CTC formula (see "Recalculate from CTC" above) - still editable for a one-off correction.</p>
                 <div className="grid grid-cols-2 gap-2">
                   {([
-                    ['basic', 'Basic Salary'], ['hra', 'HRA'], ['conveyance', 'Conveyance'], ['medicalAllowance', 'Medical Allowance'],
-                    ['lta', 'LTA'], ['cca', 'CCA'], ['fuelAllowance', 'Fuel Allowance'], ['otherAllowances', 'Other Allowances']
-                  ] as const).map(([key, label]) => (
+                    ['basic', 'Basic Salary', true], ['hra', 'HRA', true], ['conveyance', 'Conveyance', true], ['medicalAllowance', 'Medical Allowance', true],
+                    ['lta', 'LTA', true], ['cca', 'CCA', true], ['fuelAllowance', 'Fuel Allowance', false], ['otherAllowances', 'Other Allowances', false]
+                  ] as const).map(([key, label, fromCtc]) => (
                     <div key={key}>
-                      <label className="block text-slate-400 mb-0.5">{label}</label>
+                      <label className="block text-slate-400 mb-0.5">{label}{fromCtc && <span className="text-purple-400 font-semibold"> (from CTC)</span>}</label>
                       <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                     </div>
                   ))}
@@ -588,13 +647,14 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
 
               <div className="border border-slate-200 rounded-lg p-3">
                 <p className="font-bold text-rose-700 uppercase mb-2">Deductions</p>
+                <p className="text-slate-400 mb-2">Professional Tax/EPF/ESI follow the CTC formula. Income Tax (TDS) is always manual.</p>
                 <div className="grid grid-cols-2 gap-2">
                   {([
-                    ['professionalTax', 'Professional Tax'], ['epf', 'EPF'], ['esi', 'ESI'], ['fullAndFinal', 'F&F'],
-                    ['otherDeductions', 'Other Deductions'], ['advances', 'Advances'], ['incomeTax', 'Income Tax']
-                  ] as const).map(([key, label]) => (
+                    ['professionalTax', 'Professional Tax', true], ['epf', 'EPF', true], ['esi', 'ESI', true], ['fullAndFinal', 'F&F', false],
+                    ['otherDeductions', 'Other Deductions', false], ['advances', 'Advances', false], ['incomeTax', 'Income Tax', false]
+                  ] as const).map(([key, label, fromCtc]) => (
                     <div key={key}>
-                      <label className="block text-slate-400 mb-0.5">{label}</label>
+                      <label className="block text-slate-400 mb-0.5">{label}{fromCtc && <span className="text-purple-400 font-semibold"> (from CTC)</span>}</label>
                       <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
                     </div>
                   ))}

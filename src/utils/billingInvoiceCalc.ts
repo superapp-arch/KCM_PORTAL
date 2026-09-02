@@ -7,6 +7,10 @@ import { BillingInvoice, BillingCreditNote, BillingPaymentStatus, BillingCompany
 const DEFAULT_CREDIT_PERIOD_DAYS = 30;
 export const DEFAULT_TDS_RATE = 2;
 
+// Mode dropdown options (2026-09-02) - KCM Supply only, see
+// BillingInvoice.mode in types.ts. Never applicable to KCM Insta.
+export const BILLING_MODE_OPTIONS = ['Adhoc', 'Dedicated'] as const;
+
 // Entity dropdown options (2026-09-09) - these are the actual warehouse/
 // branch/billing-group names the office bills against, not a small fixed
 // enum, so BillingInvoice.entity is a plain string (see types.ts) rather

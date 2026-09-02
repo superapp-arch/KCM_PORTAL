@@ -162,6 +162,7 @@ export default function BillingImportModal({ invoices, onAddInvoice, onClose, on
                         <th className="px-2 py-2">Invoice No</th>
                         <th className="px-2 py-2">Client</th>
                         <th className="px-2 py-2">Entity</th>
+                        {company === 'KCM Supply' && <th className="px-2 py-2">Mode</th>}
                         <th className="px-2 py-2 text-right">List Price</th>
                         <th className="px-2 py-2 text-right">GST</th>
                         <th className="px-2 py-2">Date</th>
@@ -176,6 +177,7 @@ export default function BillingImportModal({ invoices, onAddInvoice, onClose, on
                           <td className="px-2 py-1.5 font-mono font-bold">{r.invoiceNo || '-'}</td>
                           <td className="px-2 py-1.5">{r.customerName || '-'}</td>
                           <td className="px-2 py-1.5">{r.entity || '-'}</td>
+                          {company === 'KCM Supply' && <td className="px-2 py-1.5">{r.mode || '-'}</td>}
                           <td className="px-2 py-1.5 text-right font-mono">{r.listPrice ? `₹${r.listPrice.toLocaleString('en-IN')}` : '-'}</td>
                           <td className="px-2 py-1.5 text-right font-mono">₹{((r.igst || 0) + (r.cgst || 0) + (r.sgst || 0)).toLocaleString('en-IN')}</td>
                           <td className="px-2 py-1.5 font-mono">{r.date || '-'}</td>

@@ -9,7 +9,7 @@ import { BillingInvoice, BillingCreditNote, BillingPaymentStatus, BillingGstType
 import {
   computeTotalAmt, computeTdsAmount, computeAmountReceivable, computeDueDate,
   computeShortageExcess, legacyStatusFor, DEFAULT_TDS_RATE, effectiveInvoiceAmount,
-  effectiveInvoiceStatus, financialYearLabel, ENTITY_OPTIONS
+  effectiveInvoiceStatus, financialYearLabel, ENTITY_OPTIONS, BILLING_MODE_OPTIONS
 } from './billingInvoiceCalc';
 
 const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -29,7 +29,7 @@ const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 1
 // SL No...) are simply ignored, never rejected - this importer always
 // recomputes those itself rather than trusting a file's own copies.
 type FieldKey =
-  | 'invoiceNo' | 'customerName' | 'entity' | 'location' | 'billMonth'
+  | 'invoiceNo' | 'customerName' | 'entity' | 'mode' | 'location' | 'billMonth'
   | 'date' | 'receivedDate' | 'tollCharges' | 'listPrice'
   | 'igst' | 'cgst' | 'sgst' | 'gstPercent'
   | 'discountAndDebit' | 'tdsAmount' | 'tdsRate' | 'creditNote' | 'amountReceived'
@@ -39,6 +39,9 @@ const HEADER_SYNONYMS: Record<FieldKey, string[]> = {
   invoiceNo: ['invoice reference number', 'invoice reference no', 'invoice ref no', 'invoice ref', 'invoice no', 'invoice number'],
   customerName: ['client name', 'customer name', 'client'],
   entity: ['entity'],
+  // KCM Supply only (see BillingInvoice.mode) - a KCM Insta import simply
+  // never reads this column even if the file happens to have one.
+  mode: ['mode'],
   location: ['location / state', 'location/state', 'location', 'state'],
   billMonth: ['bill month', 'billing month'],
   date: ['invoice issue date', 'invoice date', 'issue date'],
@@ -111,6 +114,7 @@ export interface ParsedBillingImportRow {
   invoiceNo: string;
   customerName: string;
   entity: string;
+  mode: string; // 'Adhoc' | 'Dedicated' | '' - only ever set when company is KCM Supply
   location: string;
   billMonth: string;
   listPrice: number;
@@ -176,6 +180,13 @@ export async function parseBillingImportFile(file: File, existingInvoices: Billi
     const invoiceNo = String(get(raw, 'invoiceNo') || '').trim().toUpperCase();
     const customerName = String(get(raw, 'customerName') || '').trim();
     const entity = String(get(raw, 'entity') || '').trim();
+    // Mode - KCM Supply only, ignored entirely for KCM Insta even if the
+    // file has a Mode column (never set on a KCM Insta invoice - see
+    // BillingInvoice.mode). Blank is allowed on import (existing/imported
+    // rows can be filled in later via Edit), unlike the manual create
+    // form's required validation.
+    const modeRaw = company === 'KCM Supply' ? String(get(raw, 'mode') || '').trim() : '';
+    const mode = BILLING_MODE_OPTIONS.find(o => o.toLowerCase() === modeRaw.toLowerCase()) || '';
     const location = String(get(raw, 'location') || '').trim();
     const billMonth = String(get(raw, 'billMonth') || '').trim();
     const listPrice = Number(get(raw, 'listPrice')) || 0;
@@ -218,6 +229,7 @@ export async function parseBillingImportFile(file: File, existingInvoices: Billi
     if (!(listPrice > 0)) errors.push('List Price must be greater than 0.');
     if (!date) errors.push('Invoice Issue Date is missing or not a recognized date (use YYYY-MM-DD or DD/MM/YYYY).');
     if (entity && company === 'KCM Insta' && !ENTITY_OPTIONS.includes(entity)) errors.push(`Entity must be one of: ${ENTITY_OPTIONS.join(', ')}.`);
+    if (modeRaw && !mode) errors.push(`Mode must be one of: ${BILLING_MODE_OPTIONS.join(', ')}.`);
     if (isNaN(creditPeriodDays) || creditPeriodDays < 0) errors.push('Credit Period must be a number 0 or greater.');
     if (paymentStatusRaw && !VALID_STATUSES.includes(paymentStatusRaw)) errors.push(`Payment Status must be one of: ${VALID_STATUSES.join(', ')}.`);
     if (invoiceNo) {
@@ -228,7 +240,7 @@ export async function parseBillingImportFile(file: File, existingInvoices: Billi
     if (creditNoteAmt > totalAmt) errors.push('Credit Note cannot exceed Total Amt.');
 
     return {
-      rowNumber: idx + 2, invoiceNo, customerName, entity, location, billMonth,
+      rowNumber: idx + 2, invoiceNo, customerName, entity, mode, location, billMonth,
       listPrice, igst, cgst, sgst, tollCharges, discountAndDebit, tdsAmount,
       creditNoteAmt, amountReceivedAmt, date, receivedDate, creditPeriodDays,
       paymentStatus, description, errors
@@ -261,6 +273,7 @@ export function buildInvoiceFromImportRow(row: ParsedBillingImportRow, company: 
     status: legacyStatusFor(paymentStatus),
     company,
     entity: (row.entity || undefined) as BillingInvoice['entity'],
+    mode: (row.mode || undefined) as BillingInvoice['mode'],
     location: row.location || undefined,
     billMonth: row.billMonth || undefined,
     listPrice: row.listPrice,
@@ -288,7 +301,7 @@ export function exportErrorRowsToExcel(rows: ParsedBillingImportRow[]): void {
   const errorRows = rows.filter(r => r.errors.length > 0);
   const data = errorRows.map(r => ({
     'Row': r.rowNumber, 'Invoice Reference No': r.invoiceNo, 'Client Name': r.customerName,
-    'Entity': r.entity, 'Location / State': r.location, 'Bill Month': r.billMonth,
+    'Entity': r.entity, 'Mode': r.mode, 'Location / State': r.location, 'Bill Month': r.billMonth,
     'List Price': r.listPrice, 'IGST': r.igst, 'CGST': r.cgst, 'SGST': r.sgst, 'Toll Charges': r.tollCharges,
     'Discount & Debit': r.discountAndDebit, 'TDS Amount': r.tdsAmount, 'Credit Note': r.creditNoteAmt,
     'Amount Received': r.amountReceivedAmt, 'Invoice Issue Date': r.date, 'Received Date': r.receivedDate,
@@ -313,7 +326,7 @@ export function filterToCurrentFinancialYear(invoices: BillingInvoice[]): Billin
 export function exportBillingInvoicesToExcel(invoices: BillingInvoice[]): void {
   const rows = invoices.map(inv => ({
     'Company': inv.company || 'KCM Insta', 'Date': inv.date, 'Invoice No': inv.invoiceNo, 'Customer Name': inv.customerName,
-    'Entity': inv.entity || '', 'List Price': inv.listPrice ?? '', 'GST Type': inv.gstType || '',
+    'Entity': inv.entity || '', 'Mode': inv.mode || '', 'List Price': inv.listPrice ?? '', 'GST Type': inv.gstType || '',
     'IGST': inv.igst ?? '', 'CGST': inv.cgst ?? '', 'SGST': inv.sgst ?? '', 'Toll Charges': inv.tollCharges ?? '',
     'Total Amt': effectiveInvoiceAmount(inv), 'TDS Rate (%)': inv.tdsRate ?? '', 'TDS Amount': inv.tdsAmount ?? '',
     'Discount & Debit': inv.discountAndDebit ?? '',

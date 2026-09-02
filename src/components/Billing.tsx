@@ -25,7 +25,7 @@ import {
   computeTotalAmt, computeTdsAmount, computeAmountReceivable, computeDueDate,
   computeShortageExcess, suggestPaymentStatus, sumCreditNotes,
   effectiveInvoiceAmount, effectiveInvoiceStatus, legacyStatusFor, DEFAULT_TDS_RATE, ENTITY_OPTIONS,
-  supplyEntityOptions
+  supplyEntityOptions, BILLING_MODE_OPTIONS
 } from '../utils/billingInvoiceCalc';
 import { filterToCurrentFinancialYear, exportBillingInvoicesToExcel, exportBillingInvoicesToPdf } from '../utils/billingImportExport';
 
@@ -52,6 +52,7 @@ interface InvoiceFormState {
   company: BillingCompany;
   customerName: string;
   entity: string;
+  mode: string; // 'Adhoc' | 'Dedicated' | '' - KCM Supply only, see BillingInvoice.mode
   location: string;
   billMonth: string;
   date: string;
@@ -81,7 +82,7 @@ function emptyInvoiceForm(invoices: BillingInvoice[], company: BillingCompany = 
   return {
     invoiceNo: nextInvoiceNo(invoices, date, company),
     company,
-    customerName: '', entity: '', location: '', billMonth: thisMonth(), date,
+    customerName: '', entity: '', mode: '', location: '', billMonth: thisMonth(), date,
     listPrice: '', gstType: '', igst: '', cgst: '', sgst: '', tollCharges: '',
     discountAndDebit: '', creditPeriodDays: String(30), tdsRate: String(DEFAULT_TDS_RATE), tdsAmount: '',
     creditNoteManual: '',
@@ -92,7 +93,7 @@ function emptyInvoiceForm(invoices: BillingInvoice[], company: BillingCompany = 
 function invoiceToForm(inv: BillingInvoice): InvoiceFormState {
   return {
     invoiceNo: inv.invoiceNo, company: inv.company || 'KCM Insta', customerName: inv.customerName,
-    entity: inv.entity || '', location: inv.location || '',
+    entity: inv.entity || '', mode: inv.mode || '', location: inv.location || '',
     billMonth: inv.billMonth || (inv.date || '').slice(0, 7), date: inv.date,
     listPrice: inv.listPrice != null ? String(inv.listPrice) : (inv.amount != null ? String(inv.amount) : ''),
     gstType: inv.gstType || '', igst: inv.igst != null ? String(inv.igst) : '',
@@ -155,6 +156,10 @@ function buildInvoicePayload(form: InvoiceFormState, computed: ReturnType<typeof
     status: legacyStatusFor(paymentStatus!),
     company: form.company || 'KCM Insta',
     entity: (form.entity || undefined) as BillingInvoice['entity'],
+    // Mode is strictly KCM Supply-only - never persisted for KCM Insta even
+    // if somehow present in form state (e.g. switching company after typing
+    // something in), so a KCM Insta invoice can never end up carrying one.
+    mode: form.company === 'KCM Supply' ? (form.mode || undefined) as BillingInvoice['mode'] : undefined,
     location: form.location || undefined,
     billMonth: form.billMonth || undefined,
     listPrice: computed.listPrice,
@@ -286,6 +291,11 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
         />
       </div>
 
+      {/* Entity is paired with Mode for KCM Supply (Mode is strictly
+          KCM Supply-only - absent entirely for KCM Insta, not blank/
+          disabled - see BillingInvoice.mode), with Location dropping to its
+          own row below. KCM Insta keeps its original Entity + Location
+          pairing, unchanged. */}
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="block font-semibold text-slate-600 mb-1">Entity</label>
@@ -308,11 +318,28 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
             </select>
           )}
         </div>
+        {form.company === 'KCM Supply' ? (
+          <div>
+            <label className="block font-semibold text-slate-600 mb-1">Mode *</label>
+            <select required value={form.mode} onChange={(e) => set({ mode: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-medium">
+              <option value="">Select...</option>
+              {BILLING_MODE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+        ) : (
+          <div>
+            <label className="block font-semibold text-slate-600 mb-1">Location / State</label>
+            <input type="text" value={form.location} onChange={(e) => set({ location: e.target.value })} placeholder="e.g. Hyderabad" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800" />
+          </div>
+        )}
+      </div>
+
+      {form.company === 'KCM Supply' && (
         <div>
           <label className="block font-semibold text-slate-600 mb-1">Location / State</label>
           <input type="text" value={form.location} onChange={(e) => set({ location: e.target.value })} placeholder="e.g. Hyderabad" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800" />
         </div>
-      </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         <div>
@@ -469,6 +496,8 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
   // split, so those all correctly land under the KCM Insta tab.
   const [activeCompany, setActiveCompany] = useState<BillingCompany>('KCM Insta');
   const companyInvoices = invoices.filter(inv => (inv.company || 'KCM Insta') === activeCompany);
+  // Mode column only exists on the KCM Supply tab - see BillingInvoice.mode.
+  const showModeColumn = activeCompany === 'KCM Supply';
 
   const [searchTerm, setSearchTerm] = useState('');
   // Filters the Import/Export buttons respect too (see filteredInvoices
@@ -499,6 +528,10 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
     }
     if (!form.gstType) {
       triggerNotif('Pick a GST Type - IGST or CGST + SGST.', 'error');
+      return;
+    }
+    if (form.company === 'KCM Supply' && !form.mode) {
+      triggerNotif('Pick a Mode - Adhoc or Dedicated.', 'error');
       return;
     }
     const effectiveCreditNotes = resolveEffectiveCreditNotes(undefined, form);
@@ -818,6 +851,10 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
                   <th className="px-3 py-2.5">Invoice No</th>
                   <th className="px-3 py-2.5">Customer Name</th>
                   <th className="px-3 py-2.5">Entity</th>
+                  {/* Mode - KCM Supply tab only, positioned right beside
+                      Entity - the KCM Insta tab's table never renders this
+                      column at all. */}
+                  {showModeColumn && <th className="px-3 py-2.5">Mode</th>}
                   <th className="px-3 py-2.5 text-right">Total Amt</th>
                   <th className="px-3 py-2.5 text-right">Amt Receivable</th>
                   <th className="px-3 py-2.5">Due Date</th>
@@ -829,7 +866,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {filteredInvoices.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="text-center py-10 text-slate-400 font-mono">
+                    <td colSpan={showModeColumn ? 12 : 11} className="text-center py-10 text-slate-400 font-mono">
                       NO CUSTOMER BILLINGS FOUND IN DIRECTORY JOURNAL.
                     </td>
                   </tr>
@@ -844,6 +881,13 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
                         <td className="px-3 py-2.5 font-bold font-mono text-slate-900 tracking-wider whitespace-nowrap">{inv.invoiceNo}</td>
                         <td className="px-3 py-2.5 font-semibold text-slate-800">{inv.customerName}</td>
                         <td className="px-3 py-2.5 text-slate-500 whitespace-nowrap">{inv.entity || '-'}</td>
+                        {showModeColumn && (
+                          <td className="px-3 py-2.5 whitespace-nowrap">
+                            {inv.mode ? (
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${inv.mode === 'Dedicated' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-teal-50 text-teal-700 border-teal-200'}`}>{inv.mode}</span>
+                            ) : <span className="text-slate-300">-</span>}
+                          </td>
+                        )}
                         <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-900 whitespace-nowrap">
                           {rupee(effectiveInvoiceAmount(inv))}
                         </td>
