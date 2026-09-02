@@ -28,14 +28,15 @@ const DRIVER_WRITE_LOCATION_SCOPES: Record<string, DriverLocationCategory[]> = {
   'nagaraju.linga@kcmlogistics.in': ['Hyd Swiggy', 'Swiggy - Vizag Driver', 'Walkes & Parking Drivers HYD', 'Vijayawada Drivers Details'],
   'ramesh@kcmlogistics.in': ['Nelmangala Reliance', 'Nidaghatta Reliance', 'Chennai Hybrid', 'Swiggy DHL'],
   'saneel@kcmlogistics.in': ['BLR Swiggy', 'Goa Vehicle', 'Cold Star BLR', 'Belgaum Drivers Details'],
-  'hemanth@kcmlogistics.in': ['BLR Swiggy', 'Goa Vehicle', 'Cold Star BLR', 'Belgaum Drivers Details'],
-  'vinod@kcmlogistics.in': ['Market Vehicle Driver Details', 'HSK RIL F&V Drivers', 'KCM Service Station']
+  'hemanth@kcmlogistics.in': ['BLR Swiggy', 'Goa Vehicle', 'Cold Star BLR', 'Belgaum Drivers Details']
+  // Vinod used to be scoped here - 2026-09-02: promoted to full read+write
+  // everywhere (Driver Salary and Driver Attendance both), see
+  // DRIVER_ALL_LOCATIONS_EMAILS below.
 };
 
-// Full read+write everywhere - mirrors server.ts's DRIVER_ALL_LOCATIONS_EMAILS.
-// Note Vinod is deliberately NOT here: he can view every location (server
-// already sends him every driver) but only write within his scope above.
-const DRIVER_ALL_LOCATIONS_EMAILS = ['bhagya@kcmlogistics.in', 'divya@kcmlogistics.in', 'ln.chandana@kcmlogistics.in'];
+// Full read+write everywhere (Driver Salary and Driver Attendance both, no
+// location restriction) - mirrors server.ts's DRIVER_ALL_LOCATIONS_EMAILS.
+const DRIVER_ALL_LOCATIONS_EMAILS = ['bhagya@kcmlogistics.in', 'divya@kcmlogistics.in', 'ln.chandana@kcmlogistics.in', 'vinod@kcmlogistics.in'];
 
 export default function DriverDetails({ user, drivers, vehicles, onAddDriver, onUpdateDriver, onDeleteDriver, driverPettyCashAdvanceVouchers }: DriverDetailsProps) {
   const [moduleTab, setModuleTab] = useState<ModuleTab>('salary');

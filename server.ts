@@ -1202,20 +1202,24 @@ const DRIVER_LOCATION_SCOPES: Record<string, DriverLocationCategory[]> = {
   'nagaraju.linga@kcmlogistics.in': ['Hyd Swiggy', 'Swiggy - Vizag Driver', 'Walkes & Parking Drivers HYD', 'Vijayawada Drivers Details'],
   'ramesh@kcmlogistics.in': ['Nelmangala Reliance', 'Nidaghatta Reliance', 'Chennai Hybrid', 'Swiggy DHL'],
   'saneel@kcmlogistics.in': ['BLR Swiggy', 'Goa Vehicle', 'Cold Star BLR', 'Belgaum Drivers Details'],
-  'hemanth@kcmlogistics.in': ['BLR Swiggy', 'Goa Vehicle', 'Cold Star BLR', 'Belgaum Drivers Details'],
-  'vinod@kcmlogistics.in': ['Market Vehicle Driver Details', 'HSK RIL F&V Drivers', 'KCM Service Station']
+  'hemanth@kcmlogistics.in': ['BLR Swiggy', 'Goa Vehicle', 'Cold Star BLR', 'Belgaum Drivers Details']
+  // Vinod used to be scoped here (a handful of locations, plus view-only
+  // everywhere else via DRIVER_VIEW_ALL_EMAILS) - 2026-09-02: promoted to
+  // full read+write everywhere, see DRIVER_ALL_LOCATIONS_EMAILS below.
 };
 
-// Bhagya, Divya, and Chandana get every location (like a super admin) rather
-// than a single region - their roles already span HR/Billing/Fleet/Vendor
-// admin duties. All read and write everywhere.
-const DRIVER_ALL_LOCATIONS_EMAILS = ['bhagya@kcmlogistics.in', 'divya@kcmlogistics.in', 'ln.chandana@kcmlogistics.in'];
+// Bhagya, Divya, Chandana, and Vinod get every location (like a super
+// admin) rather than a single region. All read and write everywhere -
+// Driver Details AND Driver Attendance/Driver Salary both, no location
+// restriction at all.
+const DRIVER_ALL_LOCATIONS_EMAILS = ['bhagya@kcmlogistics.in', 'divya@kcmlogistics.in', 'ln.chandana@kcmlogistics.in', 'vinod@kcmlogistics.in'];
 
-// Vinod: can VIEW every Driver Details location (drivers + attendance,
-// read-only outside his own scope), but may only ADD/EDIT/DELETE drivers and
-// mark/edit attendance within his own DRIVER_LOCATION_SCOPES entry above -
-// a view-all/write-scoped tier distinct from DRIVER_ALL_LOCATIONS_EMAILS.
-const DRIVER_VIEW_ALL_EMAILS = ['vinod@kcmlogistics.in'];
+// View-all/write-scoped tier (broader read than write) - currently unused
+// now that Vinod (its only member) has full read+write via
+// DRIVER_ALL_LOCATIONS_EMAILS above. Left in place since the access model
+// (view everywhere, write only within DRIVER_LOCATION_SCOPES) is a real,
+// reusable tier if a future hire needs it again.
+const DRIVER_VIEW_ALL_EMAILS: string[] = [];
 
 async function requireDriverAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
@@ -1234,7 +1238,7 @@ async function requireDriverAccess(req: express.Request, res: express.Response, 
 }
 
 // Read scope: which locations' drivers/attendance a GET returns. Super
-// admins, Bhagya/Divya, and Vinod (view-all) get every location; everyone
+// admins and DRIVER_ALL_LOCATIONS_EMAILS get every location; everyone
 // else only their assigned DRIVER_LOCATION_SCOPES set.
 function getAllowedDriverViewLocations(sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): DriverLocationCategory[] | 'ALL' {
   if (!sessionUser) return [];
@@ -1247,8 +1251,8 @@ function getAllowedDriverViewLocations(sessionUser?: Awaited<ReturnType<typeof g
 }
 
 // Write scope: which locations a user may add/edit/delete drivers in, or
-// mark/edit attendance for. Narrower than view scope for DRIVER_VIEW_ALL_EMAILS
-// (Vinod sees every location but can only write within his own).
+// mark/edit attendance for. Narrower than view scope for anyone in
+// DRIVER_VIEW_ALL_EMAILS (currently empty - see its own comment above).
 function getAllowedDriverWriteLocations(sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): DriverLocationCategory[] | 'ALL' {
   if (!sessionUser) return [];
   if (sessionUser.department === 'super_admin' || DRIVER_ALL_LOCATIONS_EMAILS.includes(sessionUser.email || '')) return 'ALL';
