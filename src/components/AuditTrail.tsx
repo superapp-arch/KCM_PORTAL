@@ -12,7 +12,7 @@ interface AuditTrailProps {
 }
 
 const ACTIONS: AuditAction[] = [
-  'LOGIN', 'LOGOUT', 'CREATE', 'UPDATE', 'DELETE', 'APPROVE', 'REJECT',
+  'LOGIN', 'LOGOUT', 'CREATE', 'UPDATE', 'DELETE', 'DEACTIVATE', 'APPROVE', 'REJECT',
   'EXPORT', 'IMPORT', 'PASSWORD_CHANGE', 'ROLE_CHANGE', 'ACCESS_DENIED', 'OTHER'
 ];
 
@@ -22,6 +22,10 @@ const ACTION_STYLES: Record<string, string> = {
   CREATE: 'bg-sky-50 text-sky-700 border-sky-200',
   UPDATE: 'bg-amber-50 text-amber-700 border-amber-200',
   DELETE: 'bg-rose-50 text-rose-700 border-rose-200',
+  // Distinct from DELETE (soft-delete, not a real removal - see AuditAction
+  // in types.ts) - orange rather than rose so it doesn't read as harshly at
+  // a glance.
+  DEACTIVATE: 'bg-orange-50 text-orange-700 border-orange-200',
   APPROVE: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   REJECT: 'bg-rose-50 text-rose-700 border-rose-200',
   EXPORT: 'bg-indigo-50 text-indigo-700 border-indigo-200',
@@ -343,7 +347,7 @@ function safeParse(json: string | undefined): unknown {
 function AuditDetailsModal({ log, onClose }: { log: AuditLog; onClose: () => void }) {
   const oldObj = safeParse(log.oldData);
   const newObj = safeParse(log.newData);
-  const isUpdate = log.action === 'UPDATE' && oldObj !== undefined && newObj !== undefined;
+  const isUpdate = (log.action === 'UPDATE' || log.action === 'DEACTIVATE') && oldObj !== undefined && newObj !== undefined;
   const changedFields = isUpdate ? computeChangedFields(oldObj, newObj) : [];
   const snapshotObj = log.action === 'DELETE' ? oldObj : newObj;
   const snapshotLabel = log.action === 'DELETE' ? 'Data Before Deletion' : 'Data';

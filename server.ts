@@ -212,7 +212,6 @@ import {
   deleteVendor,
   getDriverEmployees,
   saveDriverEmployee,
-  deleteDriverEmployee,
   getDriverAttendance,
   saveDriverAttendanceRecord,
   deleteDriverAttendanceRecord,
@@ -4264,7 +4263,18 @@ async function startServer() {
       if (!existing || !canWriteDriverLocation(existing.location, sessionUser) || !canWriteDriverLocation(targetLocation, sessionUser)) {
         return res.status(403).json({ error: 'You cannot modify this driver.' });
       }
-      const result = await saveDriverEmployee({ ...req.body, id: req.params.id });
+      // Merged with `existing` (2026-09-02 data-integrity fix) - saveDriverEmployee
+      // overwrites the whole stored record with whatever it's given, so this
+      // used to save req.body AS the complete new record. Every caller so far
+      // has happened to send a near-complete object (DriverFormModal builds
+      // its payload from the full form state) except the inline document-
+      // upload panel (DriverSalarySheet.tsx's handleUpdateDocs), which
+      // intentionally sends just `{ aadharDocuments: [...] }` - unmerged,
+      // that would have silently wiped every other field (name, location,
+      // salary, bank details...) off the record the next time someone
+      // attached a document from that panel. Merging here makes a genuine
+      // partial update safe for every current and future caller.
+      const result = await saveDriverEmployee({ ...existing, ...req.body, id: req.params.id });
       await createAuditLog({
         user: sessionUser, action: 'UPDATE', module: 'Driver Details', entityType: 'Driver', entityId: req.params.id,
         description: `Updated driver ${req.body?.name || existing.name || req.params.id} (${req.params.id})`,
@@ -4278,17 +4288,33 @@ async function startServer() {
     }
   });
 
+  // Soft-delete (2026-09-02 data-integrity fix) - "Delete Driver" used to
+  // physically remove the driver_employees row, which silently took that
+  // driver's entire Attendance/Salary history down with it everywhere the
+  // app resolves a driver's name/location/vehicle by looking them up in the
+  // CURRENT driver_employees table (which is most places - see
+  // DriverAttendanceSheet.tsx). This now just flips status to 'inactive'
+  // and keeps the row (and every field on it) exactly as it was - the
+  // driver stops appearing in active pick-lists but every historical record
+  // that points at their id keeps resolving correctly, forever. The
+  // physical deleteDriverEmployee() function still exists in db/service.ts
+  // for a genuine data-entry mistake (a duplicate/garbage row that never
+  // had real history against it), but nothing in the app calls it anymore -
+  // use a direct DB fix for that rare case instead of exposing it here.
   app.delete('/api/drivers/employees/:id', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getDriverEmployees()).find(d => d.id === req.params.id);
       if (!existing || !canWriteDriverLocation(existing.location, sessionUser)) {
-        return res.status(403).json({ error: 'You cannot delete this driver.' });
+        return res.status(403).json({ error: 'You cannot deactivate this driver.' });
       }
-      const result = await deleteDriverEmployee(req.params.id);
+      const inactivatedDate = new Date().toISOString().slice(0, 10);
+      const updated: DriverEmployee = { ...existing, status: 'inactive', inactivatedDate };
+      const result = await saveDriverEmployee(updated);
       await createAuditLog({
-        user: sessionUser, action: 'DELETE', module: 'Driver Details', entityType: 'Driver', entityId: req.params.id,
-        description: `Deleted driver ${existing.name || req.params.id} (${req.params.id})`, oldData: existing,
+        user: sessionUser, action: 'DEACTIVATE', module: 'Driver Details', entityType: 'Driver', entityId: req.params.id,
+        description: `Deactivated driver ${existing.name || req.params.id} (${req.params.id}) - historical Attendance/Salary records preserved`,
+        oldData: existing, newData: updated,
         ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
       });
       const allowed = getAllowedDriverViewLocations(sessionUser);
@@ -4311,6 +4337,18 @@ async function startServer() {
     return mode === 'view' ? canViewDriverLocation(driver.location, sessionUser) : canWriteDriverLocation(driver.location, sessionUser);
   }
 
+  // 2026-09-02 data-integrity note: this scoping is keyed off `driverId`
+  // resolving to a CURRENT driver_employees row's location - that's exactly
+  // right now that Delete Driver soft-deletes (see DELETE /api/drivers/
+  // employees/:id) rather than removing the row, since an inactive
+  // driver's row - and its location - persists forever, so their history
+  // keeps showing to anyone with access to that location. The only case
+  // this still excludes for a location-scoped (non-ALL) viewer is a
+  // driver_attendance row whose driverId has NO driver_employees row at
+  // all (a legacy gap predating this fix) - its location genuinely can't be
+  // resolved, so it's deliberately withheld from scoped viewers rather than
+  // guessed at; a full-access ('ALL') viewer still gets everything
+  // unconditionally below.
   app.get('/api/drivers/attendance', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));

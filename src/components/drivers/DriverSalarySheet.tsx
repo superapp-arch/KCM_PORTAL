@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, Lock, ChevronDown, ChevronUp, User as UserIcon, Paperclip, Receipt } from 'lucide-react';
+import { Coins, Plus, Search, Edit2, Trash2, RotateCcw, CheckCircle2, AlertCircle, Lock, ChevronDown, ChevronUp, User as UserIcon, Paperclip, Receipt } from 'lucide-react';
 import { DriverEmployee, DriverAttendance, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES, VehicleDocument, DriverSalarySlipRecord, Vehicle } from '../../types';
 import DriverFormModal from './DriverFormModal';
 import DriverSalarySlipModal from './DriverSalarySlipModal';
@@ -38,6 +38,14 @@ function currentMonthKey(): string {
 export default function DriverSalarySheet({ performedBy, drivers, vehicles, writableLocations, onAddDriver, onUpdateDriver, onDeleteDriver, driverPettyCashAdvanceVouchers }: DriverSalarySheetProps) {
   const thisMonth = currentMonthKey();
   const [searchTerm, setSearchTerm] = useState('');
+  // Defaults to Active only (2026-09-02 data-integrity fix) - "Delete
+  // Driver" now deactivates rather than removes the record (see server.ts's
+  // DELETE /api/drivers/employees/:id), so a driver who's left the company
+  // stays in `drivers` forever with status: 'inactive'. Hiding them by
+  // default keeps this working list exactly as clean as a real delete used
+  // to, without ever throwing away the row their Attendance/Salary history
+  // depends on - switch to Inactive/All to find, review, or reactivate one.
+  const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active');
   const [modalDriver, setModalDriver] = useState<DriverEmployee | null | undefined>(undefined); // undefined = closed
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   // Big, centered save/delete confirmation (see ConfirmationModal.tsx) for
@@ -95,6 +103,9 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
   // their own assigned location(s), enforced server-side).
   const groupedDrivers = useMemo(() => {
     const base = drivers.filter(d => {
+      const isInactive = d.status === 'inactive';
+      if (statusFilter === 'active' && isInactive) return false;
+      if (statusFilter === 'inactive' && !isInactive) return false;
       if (!searchTerm) return true;
       const q = searchTerm.toLowerCase();
       return d.id.toLowerCase().includes(q) || d.name.toLowerCase().includes(q) || (d.vehicleNo || '').toLowerCase().includes(q);
@@ -110,7 +121,7 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
         location: loc,
         drivers: [...byLocation.get(loc)!].sort((a, b) => compareTrailingNumber(a.id, b.id) || a.id.localeCompare(b.id))
       }));
-  }, [drivers, searchTerm]);
+  }, [drivers, searchTerm, statusFilter]);
 
   // Flat, grouped-and-sorted order - used for the "no results" check and for
   // Download All, so the exported sheet matches what's on screen.
@@ -122,10 +133,26 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
   const canWrite = (driver: DriverEmployee) => writableLocations === 'ALL' || writableLocations.includes(driver.location);
   const canAddAnywhere = writableLocations === 'ALL' || writableLocations.length > 0;
 
+  // "Delete" now deactivates, not removes (see server.ts) - the confirm
+  // copy reflects that so it doesn't read as more destructive than it is.
   const handleDelete = async (driver: DriverEmployee) => {
-    if (!confirm(`Delete driver ${driver.id} - ${driver.name}? This cannot be undone.`)) return;
+    if (!confirm(`Deactivate driver ${driver.id} - ${driver.name}? They'll no longer appear in the active list or be selectable for new attendance/salary entries, but all their historical records stay exactly as they are.`)) return;
     await onDeleteDriver(driver.id);
     setDeleteConfirmation({ identifier: `${driver.name} (${driver.id})`, key: Date.now() });
+  };
+
+  const handleReactivate = async (driver: DriverEmployee) => {
+    if (!confirm(`Reactivate driver ${driver.id} - ${driver.name}? They'll appear in the active list again.`)) return;
+    try {
+      // inactivatedDate is deliberately left as-is - it's just "when this
+      // driver was last deactivated", harmless (and a little useful) to
+      // keep around even once they're active again.
+      await onUpdateDriver(driver.id, { status: 'active' });
+      setSaveConfirmation({ identifier: `${driver.name} (${driver.id}) - reactivated`, key: Date.now() });
+    } catch (err) {
+      console.error(err);
+      triggerNotif('Failed to reactivate driver.', 'error');
+    }
   };
 
   const handleSaved = (driver: { id: string; name: string }) => {
@@ -203,6 +230,13 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
           <Search className="w-3.5 h-3.5 text-slate-400" />
           <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search by Driver Name, Driver ID, or Vehicle No..." autoComplete="off" className="flex-1 outline-none" />
         </div>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as 'active' | 'inactive' | 'all')}
+          title="A deactivated driver keeps their full Attendance/Salary history - this only filters this working list"
+          className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-bold text-slate-700">
+          <option value="active">Active Drivers</option>
+          <option value="inactive">Inactive Drivers</option>
+          <option value="all">All Drivers</option>
+        </select>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -256,7 +290,12 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                         <React.Fragment key={driver.id}>
                         <tr className="hover:bg-slate-50">
                           <td className="px-3 py-2.5 font-mono text-slate-500">{runningIndex}</td>
-                          <td className="px-3 py-2.5 font-semibold text-slate-700 whitespace-nowrap">{driver.name}</td>
+                          <td className="px-3 py-2.5 font-semibold text-slate-700 whitespace-nowrap">
+                            {driver.name}
+                            {driver.status === 'inactive' && (
+                              <span title={driver.inactivatedDate ? `Deactivated ${driver.inactivatedDate}` : 'Deactivated'} className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-black uppercase border bg-slate-100 text-slate-500 border-slate-300 align-middle">Inactive</span>
+                            )}
+                          </td>
                           <td className="px-3 py-2.5 whitespace-nowrap">
                             <button onClick={() => toggleExpand(driver.id)} className="flex items-center gap-1 font-mono font-bold text-slate-800 cursor-pointer hover:text-teal-700" title="Click to view details & documents">
                               {driver.id}
@@ -296,7 +335,11 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                             {canWrite(driver) ? (
                               <>
                                 <button onClick={() => setModalDriver(driver)} className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
-                                <button onClick={() => handleDelete(driver)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                                {driver.status === 'inactive' ? (
+                                  <button onClick={() => handleReactivate(driver)} title="Reactivate" className="p-1 text-slate-400 hover:text-emerald-600 hover:bg-slate-100 rounded cursor-pointer"><RotateCcw className="w-3.5 h-3.5" /></button>
+                                ) : (
+                                  <button onClick={() => handleDelete(driver)} title="Deactivate" className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                                )}
                               </>
                             ) : (
                               <span title="View only - outside your assigned locations" className="inline-flex p-1 text-slate-300"><Lock className="w-3.5 h-3.5" /></span>

@@ -52,6 +52,12 @@ const STATUS_ABBR: Record<AttendanceStatusCode, string> = {
 
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+// Adds the synthetic 'Unassigned / Deleted Drivers' bucket (see types.ts)
+// to the real, fixed group order - only used for iterating groups on THIS
+// screen, never for Add/Edit Driver's own location dropdown (which still
+// uses the un-extended DRIVER_LOCATION_CATEGORIES).
+const DISPLAY_LOCATION_ORDER: DriverLocationCategory[] = [...DRIVER_LOCATION_CATEGORIES, 'Unassigned / Deleted Drivers'];
+
 function daysInMonth(month: string): number {
   const [y, m] = month.split('-').map(Number);
   return new Date(y, m, 0).getDate();
@@ -213,13 +219,37 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
   const totalDays = daysInMonth(month);
   const monthAttendance = useMemo(() => attendance.filter(a => a.date.startsWith(month)), [attendance, month]);
 
+  // Placeholder rows (2026-09-02 data-integrity fix) for any driver_attendance
+  // record whose driverId has no matching entry in `drivers` at all - a
+  // legacy gap predating server.ts's soft-delete fix (Delete Driver used to
+  // physically remove the row), or any future truly-hard-deleted record.
+  // That attendance is 100% intact in the database, but every render below
+  // is driven by iterating `drivers`, never `attendance` itself - without
+  // this, it would stay invisible on screen and in every download even
+  // though nothing was actually lost. Bucketed under the synthetic
+  // 'Unassigned / Deleted Drivers' location so it groups through the exact
+  // same rendering path instead of needing a parallel one.
+  const driversForDisplay = useMemo(() => {
+    const knownIds = new Set(drivers.map(d => d.id));
+    const orphanedIds = Array.from(new Set(attendance.map(a => a.driverId))).filter(id => !knownIds.has(id)).sort();
+    if (orphanedIds.length === 0) return drivers;
+    const synthesized: DriverEmployee[] = orphanedIds.map(id => ({
+      id, name: 'Unknown Driver - no profile on record', driverNo: '',
+      location: 'Unassigned / Deleted Drivers' as DriverLocationCategory,
+      status: 'inactive'
+    }));
+    return [...drivers, ...synthesized];
+  }, [drivers, attendance]);
+
   // Grouped by location, one colored section header per group - same
   // treatment as Driver Salary. Writability (e.g. Vinod: can view every
   // location's attendance, but only mark/edit within his own
   // writableLocations) is uniform within a group since it's keyed off
-  // location, so it's decided once per group rather than per row.
+  // location, so it's decided once per group rather than per row. The
+  // synthetic 'Unassigned / Deleted Drivers' group is always view-only -
+  // there's no real location to check write access against.
   const groupedDrivers = useMemo(() => {
-    const base = !searchTerm ? drivers : drivers.filter(d => {
+    const base = !searchTerm ? driversForDisplay : driversForDisplay.filter(d => {
       const q = searchTerm.toLowerCase();
       return d.id.toLowerCase().includes(q) || d.name.toLowerCase().includes(q) || (d.vehicleNo || '').toLowerCase().includes(q);
     });
@@ -228,14 +258,14 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
       if (!byLocation.has(d.location)) byLocation.set(d.location, []);
       byLocation.get(d.location)!.push(d);
     }
-    return DRIVER_LOCATION_CATEGORIES
+    return DISPLAY_LOCATION_ORDER
       .filter(loc => byLocation.has(loc))
       .map(loc => ({
         location: loc,
-        writable: writableLocations === 'ALL' || writableLocations.includes(loc),
+        writable: loc === 'Unassigned / Deleted Drivers' ? false : (writableLocations === 'ALL' || writableLocations.includes(loc)),
         drivers: [...byLocation.get(loc)!].sort((a, b) => compareTrailingNumber(a.id, b.id) || a.id.localeCompare(b.id))
       }));
-  }, [drivers, searchTerm, writableLocations]);
+  }, [driversForDisplay, searchTerm, writableLocations]);
 
   // This user's own writable locations, in the same order/shape as
   // groupedDrivers - the subset "Download My Locations" bundles into one
@@ -445,7 +475,11 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
                   </tr>
                   {group.drivers.map(driver => {
                     const { lopDays, exemptionLeaveDays, workingDays } = driverMonthSummary(driver.id);
-                    const writable = group.writable;
+                    // An inactive/deactivated driver is view-only here too -
+                    // their history stays fully visible/downloadable, they
+                    // just can't be marked for any new date (2026-09-02).
+                    const isInactive = driver.status === 'inactive';
+                    const writable = group.writable && !isInactive;
                     return (
                       <tr key={driver.id} className={`hover:bg-purple-50/40 ${writable ? '' : 'opacity-70'}`}>
                         <td
@@ -453,7 +487,12 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
                           onClick={() => setSummaryDriver(driver)}
                           title="Click to view monthly summary"
                         >
-                          <div className="font-semibold text-teal-700 hover:underline">{driver.name}</div>
+                          <div className="font-semibold text-teal-700 hover:underline flex items-center gap-1">
+                            {driver.name}
+                            {isInactive && (
+                              <span title={driver.inactivatedDate ? `Deactivated ${driver.inactivatedDate}` : 'Deactivated - history preserved'} className="px-1.5 py-0.5 rounded text-[8.5px] font-black uppercase border bg-slate-100 text-slate-500 border-slate-300">Inactive</span>
+                            )}
+                          </div>
                           {/* Vehicle No(s) are read straight off the driver record (same field
                               Driver Salary edits, see DriverFormModal) - not a separate copy, so a
                               change made in Driver Salary shows here immediately with no extra sync
@@ -471,7 +510,7 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
                             <td key={day} className="p-0.5 relative group">
                               <button onClick={() => cellWritable && handleCellClick(driver.id, day)}
                                 disabled={!cellWritable}
-                                title={future ? 'Future date - attendance cannot be marked ahead of today' : (!writable ? 'View only - outside your assigned locations' : cellTitle(record))}
+                                title={future ? 'Future date - attendance cannot be marked ahead of today' : (isInactive ? 'View only - this driver is deactivated' : !writable ? 'View only - outside your assigned locations' : cellTitle(record))}
                                 className={`w-9 h-6 rounded text-[9px] font-bold border ${cellWritable ? 'cursor-pointer' : 'cursor-not-allowed'} ${future ? 'bg-slate-100 border-slate-100 text-slate-300' : record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}>
                                 {record ? STATUS_ABBR[record.status] : '-'}
                               </button>

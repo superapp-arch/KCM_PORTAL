@@ -1176,7 +1176,15 @@ export type DriverLocationCategory =
   | 'Nelmangala Reliance'
   | 'Nidaghatta Reliance'
   | 'Swiggy DHL'
-  | 'KCM Service Station';
+  | 'KCM Service Station'
+  // Synthetic bucket (2026-09-02, attendance data-integrity fix) - never
+  // saved on a real DriverEmployee. Only used by DriverAttendanceSheet to
+  // group placeholder rows it synthesizes for driver_attendance records
+  // whose driverId has no matching driver_employees row at all (a legacy
+  // gap predating this fix, or any future truly-hard-deleted record), so
+  // that history still renders instead of silently vanishing. See
+  // DriverAttendanceSheet.tsx's `driversForDisplay`.
+  | 'Unassigned / Deleted Drivers';
 
 export const DRIVER_LOCATION_CATEGORIES: DriverLocationCategory[] = [
   'HSK RIL F&V Drivers', 'Market Vehicle Driver Details', 'Belgaum Drivers Details',
@@ -1238,6 +1246,20 @@ export interface DriverEmployee {
   aadharDocuments?: VehicleDocument[]; // optional
   drivingLicenseDocuments?: VehicleDocument[]; // optional
   otherDocuments?: VehicleDocument[];
+
+  // --- Active/Inactive status (2026-09-02 data-integrity fix) ---
+  // Absent/undefined means 'active' - every driver saved before this field
+  // existed. "Delete Driver" in the UI now sets this to 'inactive' instead
+  // of physically removing the row (see server.ts's DELETE /api/drivers/
+  // employees/:id) specifically so Driver Attendance/Driver Salary history
+  // never loses the driver identity its records point to. An inactive
+  // driver: doesn't appear in the default (active) Driver Salary list or
+  // any "pick a driver" selector for new records; DOES still appear in
+  // Driver Attendance (badged Inactive, cells locked from new marks) and
+  // every historical download, since those need the name/location/vehicle
+  // to render at all.
+  status?: 'active' | 'inactive';
+  inactivatedDate?: string; // YYYY-MM-DD - when status last became 'inactive'
 }
 
 export interface DriverAttendance {
@@ -1371,7 +1393,12 @@ export interface BusinessLoan {
 // to use every action - use whichever actually describes what happened.
 export type AuditAction =
   | 'LOGIN' | 'LOGOUT' | 'CREATE' | 'UPDATE' | 'DELETE' | 'APPROVE' | 'REJECT'
-  | 'EXPORT' | 'IMPORT' | 'PASSWORD_CHANGE' | 'ROLE_CHANGE' | 'ACCESS_DENIED' | 'OTHER';
+  | 'EXPORT' | 'IMPORT' | 'PASSWORD_CHANGE' | 'ROLE_CHANGE' | 'ACCESS_DENIED' | 'OTHER'
+  // Soft-delete (2026-09-02) - distinct from DELETE so the Audit Trail can
+  // tell "record physically removed" apart from "record deactivated,
+  // history preserved". Currently only Driver Details' Delete Driver uses
+  // this (see server.ts).
+  | 'DEACTIVATE';
 
 export interface AuditLog {
   id: string;
