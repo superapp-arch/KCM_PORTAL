@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { X, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
-import { BillingInvoice } from '../../types';
+import { BillingInvoice, BillingCompany } from '../../types';
 import {
   downloadBillingImportTemplate, parseBillingImportFile, buildInvoiceFromImportRow,
   exportErrorRowsToExcel, ParsedBillingImportRow
@@ -11,16 +11,24 @@ interface BillingImportModalProps {
   onAddInvoice: (inv: Omit<BillingInvoice, 'id'>) => Promise<void>;
   onClose: () => void;
   onImported: () => void; // lets the parent refresh its list after a successful batch
+  initialCompany: BillingCompany; // defaults to whichever tab was open when Import was clicked - still changeable here before choosing a file
 }
 
 type Stage = 'idle' | 'preview' | 'importing' | 'done';
 
-// Import wizard: pick file -> validate + preview (errors highlighted, never
-// imported blind) -> import only the valid rows, one at a time so the UI
-// stays responsive and shows live progress -> summary, with a one-click
-// re-download of just the rows that failed for correction/re-upload.
-export default function BillingImportModal({ invoices, onAddInvoice, onClose, onImported }: BillingImportModalProps) {
+// Import wizard: pick the company this file belongs to -> pick file ->
+// validate + preview (errors highlighted, never imported blind) -> import
+// only the valid rows, one at a time so the UI stays responsive and shows
+// live progress -> summary, with a one-click re-download of just the rows
+// that failed for correction/re-upload.
+//
+// Company (2026-09-02 KCM Insta / KCM Supply split) is chosen once, up
+// front, for the whole file - every row gets tagged with it and only ever
+// shows up under that company's own tab afterward, never mixed with the
+// other company's rows.
+export default function BillingImportModal({ invoices, onAddInvoice, onClose, onImported, initialCompany }: BillingImportModalProps) {
   const [stage, setStage] = useState<Stage>('idle');
+  const [company, setCompany] = useState<BillingCompany>(initialCompany);
   const [fileError, setFileError] = useState('');
   const [rows, setRows] = useState<ParsedBillingImportRow[]>([]);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
@@ -36,7 +44,7 @@ export default function BillingImportModal({ invoices, onAddInvoice, onClose, on
     if (!file) return;
     setFileError('');
     try {
-      const result = await parseBillingImportFile(file, invoices);
+      const result = await parseBillingImportFile(file, invoices, company);
       if (!result.headerValid) {
         setFileError(`Couldn't find a required column: ${result.missingHeaders.join(', ')}. Column names are matched flexibly (e.g. "Invoice No" or "Invoice Reference No" both work), but this one wasn't found under any recognized name - check the template below for the expected columns.`);
         return;
@@ -64,7 +72,7 @@ export default function BillingImportModal({ invoices, onAddInvoice, onClose, on
     for (let i = 0; i < validRows.length; i++) {
       if (cancelRequested) break;
       try {
-        await onAddInvoice(buildInvoiceFromImportRow(validRows[i]));
+        await onAddInvoice(buildInvoiceFromImportRow(validRows[i], company));
         imported++;
       } catch (err) {
         console.error(`Failed to import row ${validRows[i].rowNumber}:`, err);
@@ -92,8 +100,26 @@ export default function BillingImportModal({ invoices, onAddInvoice, onClose, on
         </div>
 
         <div className="p-5 overflow-y-auto flex-1 space-y-4">
+          {stage !== 'idle' && (
+            <div className="flex items-center gap-1.5 text-slate-500">
+              <span className="font-bold uppercase text-[9px] tracking-wider">Company:</span>
+              <span className="px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 font-bold text-slate-700">{company}</span>
+            </div>
+          )}
           {stage === 'idle' && (
             <>
+              <div>
+                <label className="block font-bold text-slate-600 mb-1.5 uppercase text-[10px] tracking-wider">Which company does this file belong to? *</label>
+                <div className="flex gap-2">
+                  {(['KCM Insta', 'KCM Supply'] as BillingCompany[]).map(c => (
+                    <button key={c} type="button" onClick={() => setCompany(c)}
+                      className={`flex-1 py-2 rounded-lg border font-bold text-xs cursor-pointer transition-colors ${company === c ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'}`}>
+                      {c}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[9px] text-slate-400 font-mono mt-1">Every row in this file will be tagged {company} and will only ever show up under that tab - never mixed with the other company's invoices.</p>
+              </div>
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-start gap-2 text-blue-800">
                 <FileSpreadsheet className="w-4 h-4 shrink-0 mt-0.5" />
                 <div>

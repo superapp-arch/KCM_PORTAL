@@ -7,7 +7,7 @@ import DriverSalarySlipModal from './DriverSalarySlipModal';
 import DocumentAttachment from '../DocumentAttachment';
 import { authFetch } from '../../authFetch';
 import { compareTrailingNumber } from '../../utils/sort';
-import { payableAmountLive, vehiclesLabel, salarySections, exportDriverSalary } from '../../utils/driverSalaryExport';
+import { payableAmountLiveCurrentMonth, vehiclesLabel, salarySections, exportDriverSalary } from '../../utils/driverSalaryExport';
 import DownloadMenu from './DownloadMenu';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
 import { DriverSalaryAdvanceVoucherSlim, computeDriverPettyCashAdvance, driverPettyCashAdvanceTooltip } from '../../utils/driverPettyCashAdvance';
@@ -25,7 +25,18 @@ interface DriverSalarySheetProps {
   driverPettyCashAdvanceVouchers: DriverSalaryAdvanceVoucherSlim[];
 }
 
+// Real current calendar month (YYYY-MM) - the Petty Cash/Advance and
+// Payable Amount columns below must always reflect THIS month, not whatever
+// month a driver was last saved in (driver.month), otherwise every driver's
+// figures stay pinned to their last-saved month until someone opens and
+// re-saves them one by one - see the fix note on payableAmountLiveCurrentMonth.
+function currentMonthKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 export default function DriverSalarySheet({ performedBy, drivers, vehicles, writableLocations, onAddDriver, onUpdateDriver, onDeleteDriver, driverPettyCashAdvanceVouchers }: DriverSalarySheetProps) {
+  const thisMonth = currentMonthKey();
   const [searchTerm, setSearchTerm] = useState('');
   const [modalDriver, setModalDriver] = useState<DriverEmployee | null | undefined>(undefined); // undefined = closed
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -59,11 +70,13 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
   }, []);
 
   // Fetched once so Payable Amount here can be computed LIVE from actual
-  // attendance for each driver's own `month` (see payableAmountLive) -
-  // otherwise this list would only ever reflect whatever workingDays/
+  // attendance for the real current month (see payableAmountLiveCurrentMonth)
+  // - otherwise this list would only ever reflect whatever workingDays/
   // lopAmount snapshot happened to be persisted at a driver's last Salary
-  // Breakup save, which can lag behind what the Salary Breakup tab itself
-  // is showing live for the exact same driver/month right now.
+  // Breakup save, which can lag behind (and, once the calendar rolls over,
+  // permanently disagree with) what the Salary Breakup tab itself computes
+  // live for the current month, right up until someone opens and re-saves
+  // that driver by hand.
   const [attendance, setAttendance] = useState<DriverAttendance[]>([]);
   useEffect(() => {
     authFetch('/api/drivers/attendance').then(r => r.json()).then(setAttendance).catch(() => {});
@@ -262,12 +275,12 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                               // utils/driverPettyCashAdvance.ts) rather than
                               // the possibly-stale driver.pettyCashAdvance
                               // snapshot - hover shows the breakdown + who
-                              // entered each one in Petty Cash.
-                              const advance = driver.month
-                                ? computeDriverPettyCashAdvance(driverPettyCashAdvanceVouchers, driver.id, driver.month)
-                                : { total: driver.pettyCashAdvance || 0, entries: [] };
+                              // entered each one in Petty Cash. Scoped to the
+                              // real current month (thisMonth), not
+                              // driver.month - see currentMonthKey above.
+                              const advance = computeDriverPettyCashAdvance(driverPettyCashAdvanceVouchers, driver.id, thisMonth);
                               return (
-                                <span title={driver.month ? driverPettyCashAdvanceTooltip(advance) : undefined}>
+                                <span title={driverPettyCashAdvanceTooltip(advance)}>
                                   {advance.total ? `Rs. ${advance.total.toLocaleString('en-IN')}` : '-'}
                                 </span>
                               );
@@ -277,7 +290,7 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                             <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded text-[9.5px] font-bold">{driver.location}</span>
                           </td>
                           <td className="px-3 py-2.5 text-right font-mono text-slate-700">{driver.grossSalary ? `Rs. ${driver.grossSalary.toLocaleString('en-IN')}` : '-'}</td>
-                          <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">Rs. {payableAmountLive(driver, attendance).toLocaleString('en-IN')}</td>
+                          <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">Rs. {payableAmountLiveCurrentMonth(driver, attendance, driverPettyCashAdvanceVouchers, thisMonth).toLocaleString('en-IN')}</td>
                           <td className="px-3 py-2.5 text-right whitespace-nowrap">
                             <button onClick={() => setSlipModalDriver(driver)} title="Generate Salary Slip" className="p-1 text-slate-400 hover:text-purple-700 hover:bg-slate-100 rounded cursor-pointer"><Receipt className="w-3.5 h-3.5" /></button>
                             {canWrite(driver) ? (

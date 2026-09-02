@@ -29,6 +29,8 @@ const regDateOf = (v: Vehicle) => v.regDate || v['Reg Date'] || '';
 const categoryOf = (v: Vehicle | undefined) => String(v?.Category || v?.category || '').trim().toLowerCase();
 const vehicleTypeOf = (v: Vehicle | undefined) => String(v?.type || v?.['Type'] || '').trim();
 const modelOf = (v: Vehicle | undefined) => String(v?.model || v?.['Model'] || '').trim();
+const chassisNoOf = (v: Vehicle | undefined) => String(v?.chassisNo || v?.['Chassis No'] || '').trim();
+const engineNoOf = (v: Vehicle | undefined) => String(v?.engineNo || v?.['Engine No'] || '').trim();
 
 const CATEGORY_BADGE_CLASS: Record<string, string> = {
   dry: 'bg-amber-50 text-amber-800 border-amber-300',
@@ -89,6 +91,23 @@ const statusBadge = (status: 'Completed' | 'Pending' | undefined) => (
     {status === 'Completed' ? 'Completed' : 'Pending'}
   </span>
 );
+
+const DEF_STATUS_OPTIONS = ['No DEF', 'DEF ON', 'DEF Connected', 'DEF Cancelled'] as const;
+// Site list confirmed for the DEF_Status_Site_Log.xlsx seed data - add to
+// this list (and re-confirm with fleet ops) if a new site comes up.
+const DEF_SITE_OPTIONS = ['VIZAG', 'CHENNAI', 'HYD', 'GOA', 'HOSKOTE', 'HOSKOTE SOUKYA', 'Belagum'];
+
+const DEF_STATUS_BADGE_CLASS: Record<string, string> = {
+  'No DEF': 'bg-slate-100 text-slate-500 border-slate-300',
+  'DEF ON': 'bg-sky-50 text-sky-700 border-sky-300',
+  'DEF Connected': 'bg-emerald-50 text-emerald-700 border-emerald-300',
+  'DEF Cancelled': 'bg-rose-50 text-rose-700 border-rose-300'
+};
+const defStatusBadge = (status: string | undefined) => status ? (
+  <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase border whitespace-nowrap ${DEF_STATUS_BADGE_CLASS[status] || 'bg-slate-100 text-slate-500 border-slate-300'}`}>
+    {status}
+  </span>
+) : <span className="text-slate-300">-</span>;
 
 const warrantyBadge = (info: WarrantyPeriodInfo | null) => info ? (
   <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase border ${
@@ -419,7 +438,7 @@ export default function ServiceScheduleTab({
           Washing applies to {WASHING_CATEGORIES.map(c => c.charAt(0).toUpperCase() + c.slice(1)).join(', ')} (every {WASHING_CYCLE_DAYS} days) &middot;
           AC Service applies to {AC_SERVICE_CATEGORIES.map(c => c.charAt(0).toUpperCase() + c.slice(1)).join(', ')} (every {AC_SERVICE_CYCLE_DAYS} days) &middot;
           reminder email {REMINDER_DAYS_BEFORE_DUE} days before due &middot;
-          click a Vehicle No to view full details, or the Edit icon to change anything.
+          click a Vehicle No to view full details (incl. Chassis/Engine ID), or the Edit icon to change anything (incl. DEF Status/Site).
         </p>
 
         {/* Desktop/tablet: one flat table, one row per vehicle - no grouping
@@ -438,13 +457,14 @@ export default function ServiceScheduleTab({
                 <th className="px-3 py-2.5">Washing Due Date</th>
                 <th className="px-3 py-2.5">AC Service Due Date</th>
                 <th className="px-3 py-2.5 text-right">Service Period</th>
+                <th className="px-3 py-2.5 text-center">DEF Status</th>
                 <th className="px-3 py-2.5 text-center">Status</th>
                 <th className="px-3 py-2.5 text-center">Edit</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
               {filteredRows.length === 0 ? (
-                <tr><td colSpan={12} className="text-center py-10 text-slate-400 font-mono">NO VEHICLES FOUND.</td></tr>
+                <tr><td colSpan={13} className="text-center py-10 text-slate-400 font-mono">NO VEHICLES FOUND.</td></tr>
               ) : filteredRows.map(row => {
                 const currentKm = currentKmFor(row.regNo);
                 return (
@@ -483,6 +503,7 @@ export default function ServiceScheduleTab({
                       ) : <span className="text-slate-300 italic text-[10px]">Not Applicable</span>}
                     </td>
                     <td className="px-3 py-2.5 text-right font-mono text-slate-700 whitespace-nowrap">{row.reference?.servicePeriod != null ? `${row.reference.servicePeriod.toLocaleString('en-IN')} km` : <span className="text-slate-300">-</span>}</td>
+                    <td className="px-3 py-2.5 text-center whitespace-nowrap">{defStatusBadge(row.schedule?.defStatus)}</td>
                     <td className="px-3 py-2.5 text-center whitespace-nowrap">{statusBadge(row.schedule?.serviceStatus)}</td>
                     <td className="px-3 py-2.5 text-center">
                       <button onClick={() => openEdit(row.regNo)} title="Edit" className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
@@ -524,6 +545,7 @@ export default function ServiceScheduleTab({
                   <span>Current Odo: {currentKm != null ? `${currentKm.toLocaleString('en-IN')} km` : <span className="text-slate-300">-</span>}</span>
                   <span>Warranty: {row.reference?.warrantyPeriod || <span className="text-slate-300">-</span>}</span>
                   <span>Service Period: {row.reference?.servicePeriod != null ? `${row.reference.servicePeriod.toLocaleString('en-IN')} km` : <span className="text-slate-300">-</span>}</span>
+                  <span className="flex items-center gap-1">DEF Status: {defStatusBadge(row.schedule?.defStatus)}</span>
                   <span className="col-span-2 flex items-center gap-1">Washing Due: {row.washingApplicable ? <><UrgencyDot remainingDays={row.washingInfo!.remainingDays} /> {row.washingInfo!.nextDueDate}</> : <span className="text-slate-300 italic">Not Applicable</span>}</span>
                   <span className="col-span-2 flex items-center gap-1">AC Service Due: {row.acApplicable ? <><UrgencyDot remainingDays={row.acInfo!.remainingDays} /> {row.acInfo!.nextDueDate}</> : <span className="text-slate-300 italic">Not Applicable</span>}</span>
                 </div>
@@ -555,6 +577,16 @@ export default function ServiceScheduleTab({
                   <div><span className="block text-[9px] text-slate-400 uppercase font-bold">Model</span><span className="font-mono text-slate-700">{modelOf(vehicle) || '-'}</span></div>
                 </div>
 
+                {/* Chassis/Engine ID (2026-09-02) - live from Fleet & Vehicles
+                    by Vehicle No, read-only here (edit from Fleet & Vehicles
+                    itself). "Not found" only when this Vehicle No has no
+                    match in Fleet & Vehicles at all - a matched vehicle with
+                    a genuinely blank field shows "-" instead. */}
+                <div className="grid grid-cols-2 gap-2.5 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <div><span className="block text-[9px] text-slate-400 uppercase font-bold">Chassis Identification Number</span><span className="font-mono text-slate-700">{!vehicle ? <span className="text-amber-600">Not found</span> : (chassisNoOf(vehicle) || '-')}</span></div>
+                  <div><span className="block text-[9px] text-slate-400 uppercase font-bold">Engine Identification Number</span><span className="font-mono text-slate-700">{!vehicle ? <span className="text-amber-600">Not found</span> : (engineNoOf(vehicle) || '-')}</span></div>
+                </div>
+
                 <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-2">
                   <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1"><UserSearch className="w-3.5 h-3.5" /> Maintenance Reference</span>
                   <div className="grid grid-cols-2 gap-2.5 font-mono text-slate-700">
@@ -574,6 +606,8 @@ export default function ServiceScheduleTab({
                       {warrantyBadge(warranty)}
                       {warranty?.warrantyEndDate && <span className="block text-[9px] text-slate-400 mt-0.5">Ends {warranty.warrantyEndDate}</span>}
                     </div>
+                    <div><span className="block text-[9px] text-slate-400 uppercase font-sans font-bold">DEF Status</span>{defStatusBadge(viewingRow.schedule?.defStatus)}</div>
+                    <div><span className="block text-[9px] text-slate-400 uppercase font-sans font-bold">Site</span>{viewingRow.schedule?.site || <span className="text-slate-300">-</span>}</div>
                   </div>
                 </div>
 
@@ -696,6 +730,25 @@ export default function ServiceScheduleTab({
                     <option value="Pending">Pending</option>
                     <option value="Completed">Completed</option>
                   </select>
+                </div>
+                {/* DEF Status / Site (2026-09-02) - the only place either can
+                    be changed; DEF Status also shows read-only in the table
+                    (right of Service Period). */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block font-semibold text-slate-600 mb-1">DEF Status</label>
+                    <select value={form.defStatus || ''} onChange={(e) => setForm(f => f && ({ ...f, defStatus: (e.target.value || undefined) as VehicleServiceSchedule['defStatus'] }))} className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-800 font-semibold">
+                      <option value="">Not set</option>
+                      {DEF_STATUS_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-600 mb-1">Site</label>
+                    <select value={form.site || ''} onChange={(e) => setForm(f => f && ({ ...f, site: e.target.value || undefined }))} className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-800 font-semibold">
+                      <option value="">Not set</option>
+                      {DEF_SITE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
                 </div>
                 <div className="pt-2 border-t border-slate-200 grid grid-cols-2 gap-2 font-mono">
                   <div>

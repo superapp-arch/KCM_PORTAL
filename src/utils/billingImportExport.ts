@@ -5,7 +5,7 @@
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { BillingInvoice, BillingCreditNote, BillingPaymentStatus, BillingGstType } from '../types';
+import { BillingInvoice, BillingCreditNote, BillingPaymentStatus, BillingGstType, BillingCompany } from '../types';
 import {
   computeTotalAmt, computeTdsAmount, computeAmountReceivable, computeDueDate,
   computeShortageExcess, legacyStatusFor, DEFAULT_TDS_RATE, effectiveInvoiceAmount,
@@ -144,7 +144,14 @@ function normalizeDate(raw: unknown): string {
 // the 4 truly required columns (see REQUIRED_FIELDS) can't be found under
 // any recognized name, which the caller should reject with a clear message
 // rather than silently misaligning columns.
-export async function parseBillingImportFile(file: File, existingInvoices: BillingInvoice[]): Promise<{ headerValid: boolean; missingHeaders: string[]; rows: ParsedBillingImportRow[] }> {
+//
+// `company` (2026-09-02 KCM Insta / KCM Supply split) is chosen once by the
+// employee before picking a file (see BillingImportModal), not read from
+// the file itself - every row in this file belongs to that one company.
+// Entity validation only enforces the fixed ENTITY_OPTIONS list for KCM
+// Insta; KCM Supply's own ~140-value Entity list is sourced from imported
+// data (see supplyEntityOptions), so any non-blank value is accepted there.
+export async function parseBillingImportFile(file: File, existingInvoices: BillingInvoice[], company: BillingCompany): Promise<{ headerValid: boolean; missingHeaders: string[]; rows: ParsedBillingImportRow[] }> {
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: 'array', cellDates: true });
   const sheet = wb.Sheets[wb.SheetNames[0]];
@@ -210,7 +217,7 @@ export async function parseBillingImportFile(file: File, existingInvoices: Billi
     if (!customerName) errors.push('Client Name is required.');
     if (!(listPrice > 0)) errors.push('List Price must be greater than 0.');
     if (!date) errors.push('Invoice Issue Date is missing or not a recognized date (use YYYY-MM-DD or DD/MM/YYYY).');
-    if (entity && !ENTITY_OPTIONS.includes(entity)) errors.push(`Entity must be one of: ${ENTITY_OPTIONS.join(', ')}.`);
+    if (entity && company === 'KCM Insta' && !ENTITY_OPTIONS.includes(entity)) errors.push(`Entity must be one of: ${ENTITY_OPTIONS.join(', ')}.`);
     if (isNaN(creditPeriodDays) || creditPeriodDays < 0) errors.push('Credit Period must be a number 0 or greater.');
     if (paymentStatusRaw && !VALID_STATUSES.includes(paymentStatusRaw)) errors.push(`Payment Status must be one of: ${VALID_STATUSES.join(', ')}.`);
     if (invoiceNo) {
@@ -236,7 +243,7 @@ export async function parseBillingImportFile(file: File, existingInvoices: Billi
 // Price/IGST/CGST/SGST/TDS/Credit Note/Discount, exactly like the manual
 // form does, never read as raw values even when the file has its own
 // columns for them.
-export function buildInvoiceFromImportRow(row: ParsedBillingImportRow): Omit<BillingInvoice, 'id'> {
+export function buildInvoiceFromImportRow(row: ParsedBillingImportRow, company: BillingCompany): Omit<BillingInvoice, 'id'> {
   const totalAmt = computeTotalAmt(row.listPrice, row.igst, row.cgst, row.sgst);
   const gstType: BillingGstType | undefined = row.igst > 0 ? 'IGST' : (row.cgst > 0 || row.sgst > 0) ? 'CGST_SGST' : undefined;
   const creditNotes: BillingCreditNote[] = row.creditNoteAmt > 0
@@ -252,6 +259,7 @@ export function buildInvoiceFromImportRow(row: ParsedBillingImportRow): Omit<Bil
     description: row.description,
     amount: totalAmt,
     status: legacyStatusFor(paymentStatus),
+    company,
     entity: (row.entity || undefined) as BillingInvoice['entity'],
     location: row.location || undefined,
     billMonth: row.billMonth || undefined,
@@ -304,7 +312,7 @@ export function filterToCurrentFinancialYear(invoices: BillingInvoice[]): Billin
 
 export function exportBillingInvoicesToExcel(invoices: BillingInvoice[]): void {
   const rows = invoices.map(inv => ({
-    'Date': inv.date, 'Invoice No': inv.invoiceNo, 'Customer Name': inv.customerName,
+    'Company': inv.company || 'KCM Insta', 'Date': inv.date, 'Invoice No': inv.invoiceNo, 'Customer Name': inv.customerName,
     'Entity': inv.entity || '', 'List Price': inv.listPrice ?? '', 'GST Type': inv.gstType || '',
     'IGST': inv.igst ?? '', 'CGST': inv.cgst ?? '', 'SGST': inv.sgst ?? '', 'Toll Charges': inv.tollCharges ?? '',
     'Total Amt': effectiveInvoiceAmount(inv), 'TDS Rate (%)': inv.tdsRate ?? '', 'TDS Amount': inv.tdsAmount ?? '',

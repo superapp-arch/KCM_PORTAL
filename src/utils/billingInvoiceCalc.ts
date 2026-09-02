@@ -2,7 +2,7 @@
 // Freight Invoice" form and its Manage modal (see components/Billing.tsx) -
 // kept here, not inline in the component, so the two places that build a
 // BillingInvoice (create form + edit form) can never drift on the formulas.
-import { BillingInvoice, BillingCreditNote, BillingPaymentStatus } from '../types';
+import { BillingInvoice, BillingCreditNote, BillingPaymentStatus, BillingCompany } from '../types';
 
 const DEFAULT_CREDIT_PERIOD_DAYS = 30;
 export const DEFAULT_TDS_RATE = 2;
@@ -22,10 +22,37 @@ export const ENTITY_OPTIONS = [
   'Opex | ECOM BLR', 'BLR IM1', 'BLR', 'Hosur', 'BLR IM1,IM4'
 ];
 
+// KCM Supply's own Entity values (2026-09-02 KCM Insta / KCM Supply split) -
+// unlike KCM Insta's fixed ENTITY_OPTIONS above, KCM Supply's Entity is
+// ~140 distinct, messy, imported values (vehicle/route/branch codes like
+// SE52/SD36/Y737, plus city names like Bangalore/Hyderabad) with
+// inconsistent casing and likely typos (Regular vs Regualr, SK40 vs
+// Sk40/sk40) - not something a small hardcoded dropdown can sensibly cover.
+// So there's no fixed list here at all: this derives a live autocomplete
+// suggestion list straight from whatever Entity values already exist on
+// saved/imported KCM Supply invoices, deduped case-insensitively (first-seen
+// casing wins so an office-typed correction doesn't get silently reverted)
+// and sorted for a stable, scannable dropdown.
+export function supplyEntityOptions(invoices: BillingInvoice[]): string[] {
+  const seen = new Map<string, string>(); // lowercased -> first-seen original casing
+  for (const inv of invoices) {
+    if ((inv.company || 'KCM Insta') !== 'KCM Supply') continue;
+    const raw = (inv.entity || '').trim();
+    if (!raw) continue;
+    const key = raw.toLowerCase();
+    if (!seen.has(key)) seen.set(key, raw);
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+
 // ---------------------------------------------------------------------------
-// Invoice Reference Number: KCMI/{FY}/{seq} - Indian financial year (Apr-Mar),
-// sequential per FY. e.g. an invoice issued 2026-06-15 is FY "26-27"; one
-// issued 2026-02-15 is FY "25-26".
+// Invoice Reference Number: KCMI/{FY}/{seq} for KCM Insta, KCM/{FY}/{seq} for
+// KCM Supply - Indian financial year (Apr-Mar), sequential per FY AND per
+// company (2026-09-02 KCM Insta / KCM Supply split - the two companies each
+// keep their own independent running counter per FY, so issuing a KCM Supply
+// invoice can never skip or collide with KCM Insta's own numbering, or vice
+// versa). e.g. an invoice issued 2026-06-15 is FY "26-27"; one issued
+// 2026-02-15 is FY "25-26".
 // ---------------------------------------------------------------------------
 export function financialYearLabel(dateIso: string): string {
   const [y, m] = (dateIso || '').split('-').map(Number);
@@ -36,10 +63,15 @@ export function financialYearLabel(dateIso: string): string {
   return `${shortStart}-${shortEnd}`;
 }
 
-export function nextInvoiceNo(invoices: BillingInvoice[], issueDateIso: string): string {
+export function invoiceNoPrefix(company: BillingCompany | undefined, fy: string): string {
+  return company === 'KCM Supply' ? `KCM/${fy}/` : `KCMI/${fy}/`;
+}
+
+export function nextInvoiceNo(invoices: BillingInvoice[], issueDateIso: string, company: BillingCompany = 'KCM Insta'): string {
   const fy = financialYearLabel(issueDateIso || new Date().toISOString().slice(0, 10));
-  const prefix = `KCMI/${fy}/`;
+  const prefix = invoiceNoPrefix(company, fy);
   const maxSeq = invoices.reduce((max, inv) => {
+    if ((inv.company || 'KCM Insta') !== company) return max;
     if (!inv.invoiceNo || !inv.invoiceNo.toUpperCase().startsWith(prefix)) return max;
     const n = parseInt(inv.invoiceNo.slice(prefix.length), 10);
     return isNaN(n) ? max : Math.max(max, n);

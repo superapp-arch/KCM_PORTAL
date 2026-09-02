@@ -46,6 +46,17 @@ const BUNK_NAMES = [
 
 const CLIENTS = ['KCM', 'Swiggy', 'Reliance', 'Market Vehicle', 'Shadowfax', 'One Time Vendor'];
 
+// Requested By - search-as-you-type suggestions (2026-09-02), same native
+// list/datalist pattern already used for Bunk Name and Vehicle Number below:
+// still a free-text field (a name outside this list can still be typed and
+// saved), the datalist just surfaces a matching name after a few letters so
+// picking one of these doesn't need to be typed out in full.
+const REQUESTED_BY_NAMES = [
+  'Hemanth', 'Shashi Supervisor', 'Sathaya Prakash', 'Bharath Supervisor',
+  'Muniraj Supervisor', 'Saneel', 'Gangaraju Supervisor', 'Pavan Supervisor',
+  'Arun Supervisor'
+];
+
 // Extra Fuel accepts a sum-of-numbers expression typed directly into the
 // field (e.g. "30+40" for two separate top-ups during one trip - say
 // Bangalore->Mysore, one top-up mid-route and another near the destination)
@@ -284,6 +295,11 @@ export default function FuelManagement({
   // double-check the number rather than assuming it's as authoritative as
   // the normal server-computed preview always was.
   const [indentNumberIsLocalEstimate, setIndentNumberIsLocalEstimate] = useState(false);
+  // True only while the Indent No. preview fetch above is actually in
+  // flight - lets the field tell apart "still loading" from "loaded, and
+  // genuinely nothing to continue from" (see the first-of-period hint below)
+  // instead of both looking like the same blank field.
+  const [indentNumberLoading, setIndentNumberLoading] = useState(false);
   // Bumped by every resetForm() call, keepOpen or not - see the Indent No.
   // auto-continue effect below. It's the one dependency that reliably
   // changes on a back-to-back "add another" save, when Bunk Name/Date/
@@ -570,12 +586,13 @@ export default function FuelManagement({
   // without formResetToken this preview would keep showing the just-used
   // (now taken) number for every entry after the first in the same session.
   useEffect(() => {
-    if (!showSidebar || editingId) return;
-    if (bunkOrCard === 'Bunk' && !date) return;
+    if (!showSidebar || editingId) { setIndentNumberLoading(false); return; }
+    if (bunkOrCard === 'Bunk' && !date) { setIndentNumberLoading(false); return; }
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const params = new URLSearchParams({ bunkOrCard });
     if (bunkOrCard === 'Bunk') params.set('date', date);
+    setIndentNumberLoading(true);
 
     const MAX_ATTEMPTS = 3;
     const attempt = (n: number) => {
@@ -590,6 +607,7 @@ export default function FuelManagement({
           if (cancelled) return;
           setIndentNumber(body.indentNumber || '');
           setIndentNumberIsLocalEstimate(false);
+          setIndentNumberLoading(false);
         })
         .catch(() => {
           if (cancelled) return;
@@ -600,6 +618,7 @@ export default function FuelManagement({
           // Every attempt failed - fall back to a local estimate rather than
           // leaving the field silently blank (see this effect's own comment
           // above).
+          setIndentNumberLoading(false);
           const estimate = bunkOrCard === 'Card'
             ? nextCardFuelIndentNumber(logs, user.username)
             : nextBunkFuelIndentNumber(logs, date, user.username);
@@ -611,6 +630,22 @@ export default function FuelManagement({
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bunkOrCard, date, editingId, showSidebar, formResetToken]);
+
+  // True once the preview above has actually finished loading, isn't a
+  // failed-fetch local estimate, and still came back blank - i.e. this is
+  // genuinely the first entry of a new month (Bunk) or the first entry ever
+  // under this login (Card), by design (see nextBunkFuelIndentNumber's own
+  // comment) - not a bug. 2026-09-02: surfaced as an unmissable banner
+  // instead of only the small grey caption below, since the tiny caption
+  // alone was clearly not enough - the same "Indent No. isn't coming" report
+  // kept recurring right as a new calendar month started, which is exactly
+  // when this by-design blank is expected to show up for the very first
+  // entry.
+  const indentNumberFirstOfPeriod = !editingId && !indentNumberLoading && !indentNumberIsLocalEstimate && !indentNumber
+    && (bunkOrCard === 'Card' || !!date);
+  const indentNumberPeriodLabel = bunkOrCard === 'Bunk' && date
+    ? new Date(`${date}T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
+    : '';
 
   // --- Mileage section calculations - identical rules to the old standalone
   // Trip Details form (see MileageReport.tsx), just keyed off this form's own
@@ -2235,6 +2270,16 @@ export default function FuelManagement({
                         <AlertCircle className="w-2.5 h-2.5 shrink-0" /> Couldn't reach the live count just now - this is an estimate from this device's own last-loaded data. Please double-check it before saving.
                       </p>
                     )}
+                    {indentNumberFirstOfPeriod && (
+                      <p className="text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-2 py-1.5 mt-1 flex items-start gap-1.5">
+                        <AlertCircle className="w-3 h-3 shrink-0 mt-px" />
+                        <span>
+                          {bunkOrCard === 'Card'
+                            ? "This is the first Card entry ever logged under your login - that's why it's blank, not a bug. Type a starting number (e.g. 00001) and every entry after this will auto-continue from it."
+                            : `This is the first Bunk entry for ${indentNumberPeriodLabel} under your login - the sequence restarts every month, so it's correctly blank, not a bug. Type the starting number and every other entry this month will auto-continue from it.`}
+                        </span>
+                      </p>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -2344,11 +2389,16 @@ export default function FuelManagement({
                       <label className="block font-semibold text-slate-600 mb-1">Requested By</label>
                       <input
                         type="text"
+                        list="fuel-requested-by-datalist"
                         value={requestedBy}
                         onChange={(e) => setRequestedBy(e.target.value)}
+                        placeholder="Search name"
                         autoComplete="off"
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
                       />
+                      <datalist id="fuel-requested-by-datalist">
+                        {REQUESTED_BY_NAMES.map((n, i) => <option key={i} value={n} />)}
+                      </datalist>
                     </div>
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1 flex items-center gap-1">

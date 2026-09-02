@@ -180,6 +180,13 @@ export interface Vendor {
 // for what the dropdown actually offers.
 export type BillingEntity = string;
 export type BillingGstType = 'IGST' | 'CGST_SGST';
+// KCM Insta / KCM Supply split (2026-09-02) - two separate sub-companies
+// billed through this one module, each with its own Invoice No. sequence
+// (see nextInvoiceNo in utils/billingInvoiceCalc.ts) and never mixed in the
+// same tab/table view. Defaults to 'KCM Insta' wherever absent (every
+// invoice created before this split belongs to KCM Insta, the only company
+// this module handled until now).
+export type BillingCompany = 'KCM Insta' | 'KCM Supply';
 // The fuller status logic (2026-09-02) - Payment Status keeps its dropdown
 // for manual override, but is auto-suggested from Amount Received vs
 // Amount Receivable (see utils/billingInvoiceCalc.ts's suggestPaymentStatus).
@@ -216,6 +223,7 @@ export interface BillingInvoice {
   documents?: VehicleDocument[];
 
   // --- Billing details (2026-09-02 Invoice & Receivables expansion) ---
+  company?: BillingCompany; // KCM Insta (default) or KCM Supply - see BillingCompany above
   entity?: BillingEntity;
   location?: string; // Location / State - free text, no fixed list supplied
   billMonth?: string; // YYYY-MM
@@ -465,6 +473,16 @@ export interface VehicleServiceSchedule {
   warrantyExpiryDate?: string; // optional manual tracking, nullable
   warrantyExpiryKm?: number; // optional manual tracking, nullable
   remarks?: string;
+
+  // --- DEF Status + Site (2026-09-02, DEF_Status_Site_Log.xlsx import) ---
+  // Both are read via the existing row Edit form only - DEF Status also
+  // renders read-only in the table (a plain badge, right of Service Period);
+  // Site has no table column at all. Seeded from the resolved latest-per-
+  // vehicle state in that import (see the def_status_history table); either
+  // field is blank when a vehicle has no matching row. Changes to either are
+  // audit-logged server-side (see auditDefStatusSiteChange in server.ts).
+  defStatus?: 'No DEF' | 'DEF ON' | 'DEF Connected' | 'DEF Cancelled';
+  site?: string;
 
   // --- Washing tab (Walkes/Reefer/Hybrid, fixed 10-day cycle, 2-day-before
   // reminder - see WASHING_CYCLE_DAYS/WASHING_CATEGORIES in

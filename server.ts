@@ -3011,6 +3011,34 @@ async function startServer() {
   app.get('/api/vehicle-service-schedules', async (req, res) => {
     try { res.json(await getVehicleServiceSchedules()); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
+  // DEF Status/Site changes (2026-09-02) are logged - user, timestamp,
+  // before/after - same createAuditLog helper Fuel Management/Service
+  // Invoice already use, since these two fields (unlike the rest of this
+  // record) are compliance-relevant (DEF/AdBlue status per vehicle) and the
+  // spec explicitly calls for a change trail. Only fires when one of the two
+  // actually changed, and only ever describes those two - not a full-record
+  // diff.
+  async function auditDefStatusSiteChange(sessionUser: Awaited<ReturnType<typeof getSessionUser>>, existing: VehicleServiceSchedule | undefined, updated: VehicleServiceSchedule, req: express.Request) {
+    const oldDef = existing?.defStatus, newDef = updated.defStatus;
+    const oldSite = existing?.site, newSite = updated.site;
+    if (oldDef === newDef && oldSite === newSite) return;
+    const parts: string[] = [];
+    if (oldDef !== newDef) parts.push(`DEF Status: ${oldDef || '(blank)'} -> ${newDef || '(blank)'}`);
+    if (oldSite !== newSite) parts.push(`Site: ${oldSite || '(blank)'} -> ${newSite || '(blank)'}`);
+    await createAuditLog({
+      user: sessionUser,
+      action: 'UPDATE',
+      module: 'Fleet Maintenance',
+      entityType: 'DEF Status / Site',
+      entityId: updated.regNo || updated.id,
+      description: `${updated.regNo || updated.id}: ${parts.join('; ')}`,
+      oldData: { defStatus: oldDef, site: oldSite },
+      newData: { defStatus: newDef, site: newSite },
+      ipAddress: req.ip || '127.0.0.1',
+      userAgent: req.headers['user-agent']
+    });
+  }
+
   // Only Last Service/Washing Date are restricted to no-future here -
   // Warranty Expiry Date is deliberately left alone since it's normally a
   // real future date (that's the whole point of an expiry date).
@@ -3019,7 +3047,12 @@ async function startServer() {
       if (isFutureDate(req.body?.lastServiceDate) || isFutureDate(req.body?.lastWashingDate)) {
         return res.status(400).json({ error: 'Last Service/Washing Date cannot be in the future.' });
       }
-      res.json({ success: true, data: await saveVehicleServiceSchedule(req.body as VehicleServiceSchedule) });
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getVehicleServiceSchedules()).find(s => s.id === req.body?.id);
+      const toSave = req.body as VehicleServiceSchedule;
+      const saved = await saveVehicleServiceSchedule(toSave);
+      await auditDefStatusSiteChange(sessionUser, existing, toSave, req);
+      res.json({ success: true, data: saved });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/vehicle-service-schedules/:id', async (req, res) => {
@@ -3027,7 +3060,12 @@ async function startServer() {
       if (isFutureDate(req.body?.lastServiceDate) || isFutureDate(req.body?.lastWashingDate)) {
         return res.status(400).json({ error: 'Last Service/Washing Date cannot be in the future.' });
       }
-      res.json({ success: true, data: await saveVehicleServiceSchedule({ ...req.body, id: req.params.id } as VehicleServiceSchedule) });
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getVehicleServiceSchedules()).find(s => s.id === req.params.id);
+      const toSave = { ...req.body, id: req.params.id } as VehicleServiceSchedule;
+      const saved = await saveVehicleServiceSchedule(toSave);
+      await auditDefStatusSiteChange(sessionUser, existing, toSave, req);
+      res.json({ success: true, data: saved });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/vehicle-service-schedules/:id', async (req, res) => {

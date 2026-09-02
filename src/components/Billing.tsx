@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { BillingInvoice, BillingCreditNote, VehicleDocument } from '../types';
+import { BillingInvoice, BillingCreditNote, VehicleDocument, BillingCompany } from '../types';
 import {
   FileText,
   Plus,
@@ -24,7 +24,8 @@ import {
   nextInvoiceNo, lastInvoiceForCustomer, defaultCreditPeriodFor,
   computeTotalAmt, computeTdsAmount, computeAmountReceivable, computeDueDate,
   computeShortageExcess, suggestPaymentStatus, sumCreditNotes,
-  effectiveInvoiceAmount, effectiveInvoiceStatus, legacyStatusFor, DEFAULT_TDS_RATE, ENTITY_OPTIONS
+  effectiveInvoiceAmount, effectiveInvoiceStatus, legacyStatusFor, DEFAULT_TDS_RATE, ENTITY_OPTIONS,
+  supplyEntityOptions
 } from '../utils/billingInvoiceCalc';
 import { filterToCurrentFinancialYear, exportBillingInvoicesToExcel, exportBillingInvoicesToPdf } from '../utils/billingImportExport';
 
@@ -48,6 +49,7 @@ const thisMonth = () => todayIso().slice(0, 7);
 // empty input is just '' rather than a stray 0.
 interface InvoiceFormState {
   invoiceNo: string;
+  company: BillingCompany;
   customerName: string;
   entity: string;
   location: string;
@@ -74,10 +76,11 @@ interface InvoiceFormState {
   description: string;
 }
 
-function emptyInvoiceForm(invoices: BillingInvoice[]): InvoiceFormState {
+function emptyInvoiceForm(invoices: BillingInvoice[], company: BillingCompany = 'KCM Insta'): InvoiceFormState {
   const date = todayIso();
   return {
-    invoiceNo: nextInvoiceNo(invoices, date),
+    invoiceNo: nextInvoiceNo(invoices, date, company),
+    company,
     customerName: '', entity: '', location: '', billMonth: thisMonth(), date,
     listPrice: '', gstType: '', igst: '', cgst: '', sgst: '', tollCharges: '',
     discountAndDebit: '', creditPeriodDays: String(30), tdsRate: String(DEFAULT_TDS_RATE), tdsAmount: '',
@@ -88,7 +91,7 @@ function emptyInvoiceForm(invoices: BillingInvoice[]): InvoiceFormState {
 
 function invoiceToForm(inv: BillingInvoice): InvoiceFormState {
   return {
-    invoiceNo: inv.invoiceNo, customerName: inv.customerName,
+    invoiceNo: inv.invoiceNo, company: inv.company || 'KCM Insta', customerName: inv.customerName,
     entity: inv.entity || '', location: inv.location || '',
     billMonth: inv.billMonth || (inv.date || '').slice(0, 7), date: inv.date,
     listPrice: inv.listPrice != null ? String(inv.listPrice) : (inv.amount != null ? String(inv.amount) : ''),
@@ -150,6 +153,7 @@ function buildInvoicePayload(form: InvoiceFormState, computed: ReturnType<typeof
     // (both of which sum `amount` / group by `status`) keep working.
     amount: computed.totalAmt,
     status: legacyStatusFor(paymentStatus!),
+    company: form.company || 'KCM Insta',
     entity: (form.entity || undefined) as BillingInvoice['entity'],
     location: form.location || undefined,
     billMonth: form.billMonth || undefined,
@@ -230,17 +234,45 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
     set(type === 'IGST' ? { gstType: type, cgst: '', sgst: '' } : { gstType: type, igst: '' });
   };
 
+  // Re-suggests the Invoice No. when Company changes - KCM Insta and KCM
+  // Supply keep entirely separate sequences/formats (KCMI/FY/NNN vs
+  // KCM/FY/NNN - see nextInvoiceNo). Only replaces the field when it still
+  // holds the auto-suggestion for whichever company was previously
+  // selected (i.e. nobody's hand-edited it since) - an already-typed/
+  // already-saved number is never silently overwritten.
+  const prevCompanyRef = React.useRef(form.company);
+  useEffect(() => {
+    if (prevCompanyRef.current === form.company) return;
+    const suggestionForPrevCompany = nextInvoiceNo(invoices, form.date, prevCompanyRef.current);
+    if (form.invoiceNo === suggestionForPrevCompany) {
+      set({ invoiceNo: nextInvoiceNo(invoices, form.date, form.company) });
+    }
+    prevCompanyRef.current = form.company;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.company]);
+
+  const supplyEntitySuggestions = form.company === 'KCM Supply' ? supplyEntityOptions(invoices) : [];
+
   return (
     <>
-      <div>
-        <label className="block font-semibold text-slate-600 mb-1">Invoice Reference Number *</label>
-        <input
-          type="text" required value={form.invoiceNo}
-          onChange={(e) => set({ invoiceNo: e.target.value })}
-          placeholder="e.g. KCMI/25-26/001"
-          className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold tracking-wider text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-blue-500"
-        />
-        <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-suggested, sequential per financial year - still editable if it needs adjusting.</p>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">Invoice Reference Number *</label>
+          <input
+            type="text" required value={form.invoiceNo}
+            onChange={(e) => set({ invoiceNo: e.target.value })}
+            placeholder="e.g. KCMI/25-26/001"
+            className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold tracking-wider text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-blue-500"
+          />
+          <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-suggested, sequential per financial year - still editable if it needs adjusting.</p>
+        </div>
+        <div>
+          <label className="block font-semibold text-slate-600 mb-1">Company *</label>
+          <select value={form.company} onChange={(e) => set({ company: e.target.value as BillingCompany })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-bold">
+            <option value="KCM Insta">KCM Insta</option>
+            <option value="KCM Supply">KCM Supply</option>
+          </select>
+        </div>
       </div>
 
       <div>
@@ -257,10 +289,24 @@ function InvoiceFormFields({ form, setForm, invoices, creditNotes }: {
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="block font-semibold text-slate-600 mb-1">Entity</label>
-          <select value={form.entity} onChange={(e) => set({ entity: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-medium">
-            <option value="">Select...</option>
-            {ENTITY_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-          </select>
+          {form.company === 'KCM Supply' ? (
+            <>
+              <input
+                type="text" list="billing-supply-entity-datalist" value={form.entity}
+                onChange={(e) => set({ entity: e.target.value })}
+                placeholder="Search entity"
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-medium"
+              />
+              <datalist id="billing-supply-entity-datalist">
+                {supplyEntitySuggestions.map((o, i) => <option key={i} value={o} />)}
+              </datalist>
+            </>
+          ) : (
+            <select value={form.entity} onChange={(e) => set({ entity: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-medium">
+              <option value="">Select...</option>
+              {ENTITY_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+          )}
         </div>
         <div>
           <label className="block font-semibold text-slate-600 mb-1">Location / State</label>
@@ -416,6 +462,14 @@ const PAYMENT_STATUS_ICON: Record<string, React.ComponentType<{ className?: stri
 };
 
 export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDeleteInvoice }: BillingProps) {
+  // KCM Insta / KCM Supply split (2026-09-02) - two separate sub-companies
+  // billed through this one module. Selecting a tab scopes everything below
+  // (KPIs, table, Import/Export) to that company's own invoices only -
+  // company.invoice = 'KCM Insta' on every invoice created before this
+  // split, so those all correctly land under the KCM Insta tab.
+  const [activeCompany, setActiveCompany] = useState<BillingCompany>('KCM Insta');
+  const companyInvoices = invoices.filter(inv => (inv.company || 'KCM Insta') === activeCompany);
+
   const [searchTerm, setSearchTerm] = useState('');
   // Filters the Import/Export buttons respect too (see filteredInvoices
   // below) - client/invoice-no search, Payment Status, and an Issue Date
@@ -434,7 +488,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
   const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
 
   // --- New Invoice form ---
-  const [form, setForm] = useState<InvoiceFormState>(() => emptyInvoiceForm(invoices));
+  const [form, setForm] = useState<InvoiceFormState>(() => emptyInvoiceForm(invoices, activeCompany));
   const [newEntryDocs, setNewEntryDocs] = useState<VehicleDocument[]>([]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -456,7 +510,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
     setIsSubmitting(true);
     try {
       await onAddInvoice({ ...buildInvoicePayload(form, computed, effectiveCreditNotes), documents: newEntryDocs });
-      setForm(emptyInvoiceForm(invoices));
+      setForm(emptyInvoiceForm(invoices, activeCompany));
       setNewEntryDocs([]);
       setShowCreateSidebar(false);
       triggerNotif('🧾 Billing invoice posted successfully & dispatched to ledger!');
@@ -579,7 +633,11 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
   };
 
   const hasActiveFilters = !!searchTerm.trim() || statusFilter !== 'All' || !!fromDate || !!toDate;
-  const filteredInvoices = invoices.filter(inv => {
+  // Scoped to the active company tab first (companyInvoices), then the
+  // search/status/date filters on top - so switching tabs, KPIs, the table,
+  // and Import/Export all stay in lockstep about which company's ledger is
+  // currently being looked at.
+  const filteredInvoices = companyInvoices.filter(inv => {
     const matchesSearch = (inv?.invoiceNo || '').toLowerCase().includes((searchTerm || '').toLowerCase()) ||
       (inv?.customerName || '').toLowerCase().includes((searchTerm || '').toLowerCase());
     const matchesStatus = statusFilter === 'All' || effectiveInvoiceStatus(inv) === statusFilter;
@@ -596,10 +654,10 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
   const exportScope = (all: boolean): BillingInvoice[] =>
     hasActiveFilters || all ? filteredInvoices : filterToCurrentFinancialYear(filteredInvoices);
 
-  const totalBilled = invoices.reduce((sum, inv) => sum + effectiveInvoiceAmount(inv), 0);
-  const totalPaid = invoices.filter(inv => effectiveInvoiceStatus(inv) === 'Cleared').reduce((sum, inv) => sum + effectiveInvoiceAmount(inv), 0);
-  const totalPending = invoices.filter(inv => { const s = effectiveInvoiceStatus(inv); return s === 'Pending' || s === 'Short Payment'; }).reduce((sum, inv) => sum + effectiveInvoiceAmount(inv), 0);
-  const totalOverdue = invoices.filter(inv => effectiveInvoiceStatus(inv) === 'Overdue').reduce((sum, inv) => sum + effectiveInvoiceAmount(inv), 0);
+  const totalBilled = companyInvoices.reduce((sum, inv) => sum + effectiveInvoiceAmount(inv), 0);
+  const totalPaid = companyInvoices.filter(inv => effectiveInvoiceStatus(inv) === 'Cleared').reduce((sum, inv) => sum + effectiveInvoiceAmount(inv), 0);
+  const totalPending = companyInvoices.filter(inv => { const s = effectiveInvoiceStatus(inv); return s === 'Pending' || s === 'Short Payment'; }).reduce((sum, inv) => sum + effectiveInvoiceAmount(inv), 0);
+  const totalOverdue = companyInvoices.filter(inv => effectiveInvoiceStatus(inv) === 'Overdue').reduce((sum, inv) => sum + effectiveInvoiceAmount(inv), 0);
 
   return (
     <div className="space-y-6" id="billing-view-wrapper">
@@ -629,7 +687,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
           <p className="font-bold text-slate-400 uppercase tracking-wider">Total Gross Billing</p>
           <h3 className="text-lg font-bold text-slate-800 mt-1">₹{totalBilled.toLocaleString('en-IN')}</h3>
-          <p className="text-slate-400 mt-0.5">{invoices.length} invoices logged</p>
+          <p className="text-slate-400 mt-0.5">{companyInvoices.length} invoices logged</p>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
@@ -662,7 +720,17 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
                 {/* Issue New Freight Invoice - opens the slide-out sidebar,
                     mirrors Petty Cash's own "+ Add Entry" pattern, rather
                     than sitting permanently open on the page. */}
-                <button type="button" onClick={() => setShowCreateSidebar(true)}
+                <button type="button" onClick={() => {
+                    // Pre-selects whichever company tab is currently open -
+                    // still just a default, the dropdown inside the form
+                    // stays fully editable. Only applied when the invoiceNo
+                    // still matches the auto-suggestion (no in-progress
+                    // manual edit gets clobbered by reopening).
+                    setForm(f => f.company === activeCompany || f.invoiceNo !== nextInvoiceNo(invoices, f.date, f.company)
+                      ? f
+                      : { ...f, company: activeCompany, invoiceNo: nextInvoiceNo(invoices, f.date, activeCompany) });
+                    setShowCreateSidebar(true);
+                  }}
                   className="bg-gradient-to-r from-blue-600 to-slate-800 hover:shadow-md text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs whitespace-nowrap">
                   <Plus className="w-3.5 h-3.5" /> Issue New Freight Invoice
                 </button>
@@ -720,6 +788,24 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
               {hasActiveFilters && (
                 <button type="button" onClick={() => { setSearchTerm(''); setStatusFilter('All'); setFromDate(''); setToDate(''); }} className="text-slate-400 hover:text-slate-700 font-bold underline cursor-pointer">Clear</button>
               )}
+            </div>
+
+            {/* KCM Insta / KCM Supply company tabs (2026-09-02) - filters
+                everything below (KPIs above, table, Import/Export) to this
+                company's own invoices only, never mixed with the other. */}
+            <div className="flex items-center gap-1.5 border-b border-slate-100 pt-1">
+              {(['KCM Insta', 'KCM Supply'] as BillingCompany[]).map(c => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setActiveCompany(c)}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-t-lg border-b-2 -mb-px cursor-pointer transition-colors ${
+                    activeCompany === c ? 'border-blue-600 text-blue-700 bg-blue-50/60' : 'border-transparent text-slate-400 hover:text-slate-600'
+                  }`}
+                >
+                  {c}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -848,7 +934,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
               <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-2">
                 <button
                   type="button"
-                  onClick={() => { setShowCreateSidebar(false); setForm(emptyInvoiceForm(invoices)); setNewEntryDocs([]); }}
+                  onClick={() => { setShowCreateSidebar(false); setForm(emptyInvoiceForm(invoices, activeCompany)); setNewEntryDocs([]); }}
                   className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 transition-colors uppercase text-[10px] cursor-pointer"
                 >
                   Cancel
@@ -957,6 +1043,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
       {showImportModal && (
         <BillingImportModal
           invoices={invoices}
+          initialCompany={activeCompany}
           onAddInvoice={onAddInvoice}
           onClose={() => setShowImportModal(false)}
           onImported={() => triggerNotif('📥 Import complete - see the summary for details.')}

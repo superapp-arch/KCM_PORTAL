@@ -6,6 +6,7 @@
 // instead of each download button keeping its own copy in sync by hand.
 import { DriverEmployee, DriverAttendance } from '../types';
 import { exportReportToExcel, exportReportToPdf, ReportTableSection } from './reportExport';
+import { DriverSalaryAdvanceVoucherSlim, computeDriverPettyCashAdvance } from './driverPettyCashAdvance';
 
 const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -113,6 +114,38 @@ export function payableAmountLive(driver: DriverEmployee, attendance: DriverAtte
   const { payableAmount: amount } = computeDriverEarnings({
     grossSalary: driver.grossSalary || 0, otherAdditions: driver.otherAdditions || 0,
     pettyCashAdvance: driver.pettyCashAdvance || 0, loanDeduction: driver.loanDeduction || 0,
+    recoveryAmount: driver.recoveryAmount || 0, driverWelfare: driver.driverWelfare || 0, bata: driver.bata || 0,
+    totalDays, workingDays, lopDays
+  });
+  return amount;
+}
+
+// Real-current-calendar-month version of the above (2026-09-02) - the
+// Driver Salary list column was still computing Payable Amount off
+// driver.month, which only ever advances when someone opens that driver's
+// Salary Breakup tab and hits Save. Left untouched, every driver's column
+// figure stayed pinned to whatever month they were last saved in (often the
+// month they were first added), silently wrong for the entire rest of the
+// list every time the calendar rolled over, unless the office opened and
+// re-saved each driver by hand every month - exactly the manual-per-driver
+// workaround this was meant to remove.
+//
+// Petty Cash/Advance is also re-derived live for the current month here
+// (computeDriverPettyCashAdvance), not read from driver.pettyCashAdvance -
+// that field is the same kind of last-saved-month snapshot as driver.month
+// itself, so trusting it here would just trade one stale figure for
+// another. Every other input (Gross Salary, Loan Deduction, Recovery
+// Amount, Driver Welfare, BATA, Other Additions) still comes straight off
+// the driver record, same as everywhere else - those are maintained by hand
+// and aren't tied to a specific month the way attendance/Petty Cash are.
+export function payableAmountLiveCurrentMonth(
+  driver: DriverEmployee, attendance: DriverAttendance[], pettyCashVouchers: DriverSalaryAdvanceVoucherSlim[], currentMonth: string
+): number {
+  const { totalDays, workingDays, lopDays } = liveMonthAttendance(driver.id, currentMonth, attendance);
+  const pettyCashAdvance = computeDriverPettyCashAdvance(pettyCashVouchers, driver.id, currentMonth).total;
+  const { payableAmount: amount } = computeDriverEarnings({
+    grossSalary: driver.grossSalary || 0, otherAdditions: driver.otherAdditions || 0,
+    pettyCashAdvance, loanDeduction: driver.loanDeduction || 0,
     recoveryAmount: driver.recoveryAmount || 0, driverWelfare: driver.driverWelfare || 0, bata: driver.bata || 0,
     totalDays, workingDays, lopDays
   });
