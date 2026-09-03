@@ -269,8 +269,16 @@ export interface PettyCashVoucher {
   vendor: 'kcm insta' | 'kcm supply' | string; // kcm insta, kcm supply
   vehicleNumber: string; // Vehicle number - from Fleet & Vehicles master
   vendorVehicleNumber?: string; // Separate vendor-owned vehicle number - from Vendor Management's registered vehicleNumbers, not Fleet & Vehicles
-  receiver: string; // Manual receiver text
-  vendorId: string; // Vendor ID
+  receiver: string; // Manual receiver text (2026-09-03: no longer mandatory - many expenses have no single person to name)
+  vendorId: string; // Vendor ID - only ever set alongside vendorVehicleNumber (the "vendor vehicle" mode); '' for a KCM-vehicle-mode entry
+  // Driver ID (2026-09-03) - only ever set alongside vehicleNumber (the "KCM
+  // vehicle" mode); absent for a vendor-vehicle-mode entry. Split out from
+  // vendorId, which used to double as this field before Vehicle Number and
+  // Vendor Vehicle Number became two mutually-exclusive modes - a record
+  // saved before this change still has its Driver ID sitting in vendorId
+  // instead; see PettyCash.tsx's handleStartEdit for the fallback that
+  // reads it from there when this field is absent.
+  driverId?: string;
   amountReceived: number; // Amount received
   cashPaid: number; // Cash paid
   balance: number; // Balance (amountReceived - cashPaid)
@@ -1248,7 +1256,27 @@ export interface DriverEmployee {
   // payableAmount() for the fallback (treats the whole month as worked,
   // reproducing that record's pre-fix Payable Amount exactly).
   workingDays?: number;
-  location: DriverLocationCategory;
+  location: DriverLocationCategory; // PRIMARY location - always set, unchanged for backward compatibility
+  // --- Multi-location assignment (2026-09-03) ---
+  // A driver can be assigned to more than one location (e.g. covers
+  // Hyderabad most of the month, Vizag for a stretch) WITHOUT creating a
+  // second driver profile - `location` above stays their primary/first
+  // location, and any further ones live here. Use driverAllLocations() in
+  // utils/driverLocations.ts to get the full set (location + this) rather
+  // than reading either field directly, so every caller treats them
+  // consistently. See DriverFormModal's Locations chip picker (mirrors the
+  // existing Vehicle No chips).
+  additionalLocations?: DriverLocationCategory[];
+  // Per-location active/inactive (2026-09-03) - which of the driver's
+  // assigned locations (location + additionalLocations) are currently
+  // deactivated, independent of each other. A location in this list: the
+  // driver no longer appears as active/selectable AT THAT location, but
+  // still appears (badged Inactive) in that location's Attendance history/
+  // downloads, and remains fully active at any location NOT listed here.
+  // Use isDriverActiveAtLocation() in utils/driverLocations.ts rather than
+  // checking this array directly. Independent of `status` below, which
+  // (when 'inactive') overrides every location at once.
+  inactiveLocations?: DriverLocationCategory[];
   aadharDocuments?: VehicleDocument[]; // optional
   drivingLicenseDocuments?: VehicleDocument[]; // optional
   otherDocuments?: VehicleDocument[];
@@ -1263,7 +1291,9 @@ export interface DriverEmployee {
   // any "pick a driver" selector for new records; DOES still appear in
   // Driver Attendance (badged Inactive, cells locked from new marks) and
   // every historical download, since those need the name/location/vehicle
-  // to render at all.
+  // to render at all. This deactivates the driver EVERYWHERE, all
+  // locations at once - see inactiveLocations above for a single-location
+  // deactivation instead.
   status?: 'active' | 'inactive';
   inactivatedDate?: string; // YYYY-MM-DD - when status last became 'inactive'
 }
@@ -1272,6 +1302,15 @@ export interface DriverAttendance {
   id: string; // deterministic: `${driverId}-${date}`
   driverId: string;
   date: string; // YYYY-MM-DD
+  // Which of the driver's assigned locations this specific day was marked
+  // under (2026-09-03, multi-location support) - stamped once at mark time
+  // and never re-resolved later, so a driver's location history stays
+  // accurate even if their current assignments change afterward. Absent on
+  // every record marked before this field existed - see
+  // attendanceBelongsToLocation() in utils/driverLocations.ts, which treats
+  // an absent location as belonging to whatever the driver's PRIMARY
+  // location was, so old data keeps displaying exactly where it always did.
+  location?: DriverLocationCategory;
   status: AttendanceStatusCode;
   remarks?: string;
   // username, stamped server-side every time this specific driver+date cell

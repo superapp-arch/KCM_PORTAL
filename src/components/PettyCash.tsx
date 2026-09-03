@@ -86,6 +86,13 @@ const PAYMENT_MODE_LABELS: Record<MarketPodPaymentMode, string> = {
 // else. Now shared from utils/pettyCashUsers.ts - see that file's comment for
 // every other place that also reads this same list.
 
+// The single source of truth for Expense Category everywhere in this file -
+// the searchable dropdown below, the summary matrix's row list, and the
+// mandatory-Vendor-ID set all read straight from this one array, so adding
+// a category here (like VEHICLE MAINTENANCE, 2026-09-03) makes it available
+// everywhere at once with nothing else to keep in sync. There's no separate
+// admin "manage categories" screen anywhere else in the app - this constant
+// already is that mechanism.
 const EXPENSE_CATEGORIES = [
   "ACCIDENT AND SETTELMENT",
   "BANK CHARGES",
@@ -113,6 +120,7 @@ const EXPENSE_CATEGORIES = [
   "TOLL CHARGES",
   "TRAVELLING EXPENSES",
   "VEHICLE HIRE EXPENSES-ADHOC",
+  "VEHICLE MAINTENANCE",
   "VEHICLE REGISTERATION EXPS",
   "VENDOR ADVANCE"
 ];
@@ -141,6 +149,14 @@ const VENDOR_ID_MANDATORY_CATEGORIES = new Set([
 // Locations selectable (dropdown/type-to-search) for Ramesh's Petty Cash
 // login only - every other login keeps the free-text Location field.
 const RAMESH_LOCATIONS = ["Nelamangala", "Nidagatta", "DHL Attibele", "Chennai"];
+
+// Vinod's own Petty Cash locations (2026-09-03) - his 5 primary ones listed
+// first (highest priority in the suggestion list), with Ramesh's own 4
+// (RAMESH_LOCATIONS) kept at the end/lowest priority - Vinod used to just
+// share Ramesh's list outright, but now has his own dedicated set he
+// actually uses most, while still occasionally covering Ramesh's locations
+// too (kept as low-priority suggestions, never removed).
+const VINOD_LOCATIONS = ["Hyderabad", "Vizag", "Vijayawada", "Hoskote", "Service Station", ...RAMESH_LOCATIONS];
 
 // Dedicated fleet vehicles with a fixed operating location - selecting one of
 // these Vehicle Numbers auto-fills Location accordingly (see the auto-fill
@@ -380,9 +396,16 @@ export default function PettyCash({
   const [clientName, setClientName] = useState('Swiggy');
   const [customClientName, setCustomClientName] = useState('');
   const [vendor, setVendor] = useState<PettyCashVoucher['vendor']>('kcm supply');
+  // Two mutually-exclusive vehicle-identity modes (2026-09-03) - a KCM
+  // vehicle (Vehicle Number -> Driver ID) or a vendor-owned vehicle (Vendor
+  // Vehicle Number -> Vendor ID), never both at once. Switching modes
+  // clears the other mode's fields (see switchVehicleMode) so a save can
+  // never carry a conflicting Vehicle Number + Vendor ID (or vice versa).
+  const [vehicleMode, setVehicleMode] = useState<'vehicle' | 'vendor'>('vehicle');
   const [vehicleNumber, setVehicleNumber] = useState('');
   const [vendorVehicleNumber, setVendorVehicleNumber] = useState('');
   const [receiver, setReceiver] = useState('');
+  const [driverId, setDriverId] = useState('');
   const [vendorId, setVendorId] = useState('');
   const [amountReceived, setAmountReceived] = useState('');
   const [cashPaid, setCashPaid] = useState('');
@@ -733,27 +756,43 @@ export default function PettyCash({
     setBalance(String(r - p));
   }, [amountReceived, cashPaid]);
 
-  // Auto-fetch Vendor ID / Driver ID: on Vehicle Number OR Vendor Vehicle
-  // Number match, checks Vendor Management first (by registered
-  // vehicleNumbers), then falls back to Driver Details (by vehicleNo) -
-  // whichever matches first wins, trying Vehicle Number before Vendor
-  // Vehicle Number. Leaves the field blank (still manually editable) when
-  // neither module has this vehicle mapped.
+  // Auto-fetch Driver ID from Vehicle Number - Driver Details only (2026-09-03
+  // split: this used to also check Vendor Management and share one field
+  // with the vendor-vehicle path, but Vehicle Number and Vendor Vehicle
+  // Number are now two fully separate, mutually-exclusive modes - see
+  // vehicleMode above). Leaves the field blank (still manually editable)
+  // when Driver Details has no match for this vehicle.
   useEffect(() => {
     const vNo = vehicleNumber.trim().toUpperCase();
+    if (!vNo) return;
+    const matchedDriverRecord = driverVehicleLookup.find(d => (d.vehicleNo || '').trim().toUpperCase() === vNo);
+    setDriverId(matchedDriverRecord ? matchedDriverRecord.id : '');
+  }, [vehicleNumber, driverVehicleLookup]);
+
+  // Auto-fetch Vendor ID from Vendor Vehicle Number - Vendor Management
+  // only (2026-09-03 split, see above). Leaves the field blank (still
+  // manually editable) when Vendor Management has no match.
+  useEffect(() => {
     const vvNo = vendorVehicleNumber.trim().toUpperCase();
-    if (!vNo && !vvNo) return;
+    if (!vvNo) return;
+    const matchedVendor = vendors.find(v => (v.vehicleNumbers || []).some(num => (num || '').trim().toUpperCase() === vvNo));
+    setVendorId(matchedVendor ? matchedVendor.code : '');
+  }, [vendorVehicleNumber, vendors]);
 
-    const matchFor = (regNo: string): string | undefined => {
-      if (!regNo) return undefined;
-      const matchedVendor = vendors.find(v => (v.vehicleNumbers || []).some(num => (num || '').trim().toUpperCase() === regNo));
-      if (matchedVendor) return matchedVendor.code;
-      const matchedDriverRecord = driverVehicleLookup.find(d => (d.vehicleNo || '').trim().toUpperCase() === regNo);
-      return matchedDriverRecord ? matchedDriverRecord.id : undefined;
-    };
-
-    setVendorId(matchFor(vNo) || matchFor(vvNo) || '');
-  }, [vehicleNumber, vendorVehicleNumber, vendors, driverVehicleLookup]);
+  // Switching modes (2026-09-03) always clears the OTHER mode's fields, so
+  // a save can never carry e.g. a Vehicle Number alongside a Vendor ID -
+  // see PART 15 of the spec this implements.
+  const switchVehicleMode = (mode: 'vehicle' | 'vendor') => {
+    if (mode === vehicleMode) return;
+    setVehicleMode(mode);
+    if (mode === 'vehicle') {
+      setVendorVehicleNumber('');
+      setVendorId('');
+    } else {
+      setVehicleNumber('');
+      setDriverId('');
+    }
+  };
 
   // Location -> Client Name auto-fill (Nelamangala/Nidagatta => Reliance
   // F&V, DHL Attibele/Chennai or a TN Vehicle Number => Swiggy). Applied from
@@ -835,8 +874,18 @@ export default function PettyCash({
     setVendor(v.vendor);
     setVehicleNumber(v.vehicleNumber);
     setVendorVehicleNumber(v.vendorVehicleNumber || '');
+    // Mode inferred from which vehicle field the record actually has
+    // (2026-09-03) - a record predating the Vehicle/Vendor split only ever
+    // had one of these two populated anyway. Legacy records also predate
+    // the driverId field itself, so a vehicle-mode legacy record's Driver
+    // ID is read from the old shared `vendorId` value it was actually
+    // stored in - v.driverId (present on any record saved after this
+    // change) always wins when it exists.
+    const editMode: 'vehicle' | 'vendor' = v.vendorVehicleNumber ? 'vendor' : 'vehicle';
+    setVehicleMode(editMode);
+    setDriverId(editMode === 'vehicle' ? (v.driverId || v.vendorId || '') : '');
+    setVendorId(editMode === 'vendor' ? (v.vendorId || '') : '');
     setReceiver(v.receiver);
-    setVendorId(v.vendorId);
     setAmountReceived(v.amountReceived ? String(v.amountReceived) : '');
     setCashPaid(v.cashPaid ? String(v.cashPaid) : '');
     setBalance(v.balance ? String(v.balance) : '');
@@ -851,9 +900,11 @@ export default function PettyCash({
     setManualEntryNoSeq('');
     setCategoryInput('');
     setLocation('');
+    setVehicleMode('vehicle');
     setVehicleNumber('');
     setVendorVehicleNumber('');
     setReceiver('');
+    setDriverId('');
     setVendorId('');
     setAmountReceived('');
     setCashPaid('');
@@ -875,8 +926,10 @@ export default function PettyCash({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!date || !categoryInput || !receiver) {
-      triggerNotif('Please fill in Date, Category, and Receiver.', 'error');
+    // Receiver Name is deliberately NOT required (2026-09-03) - many
+    // expenses (e.g. a bank charge, a toll) have no single person to name.
+    if (!date || !categoryInput) {
+      triggerNotif('Please fill in Date and Category.', 'error');
       return;
     }
     if (canManualFirstEntryNo && !manualEntryNoSeq.trim()) {
@@ -891,8 +944,10 @@ export default function PettyCash({
     if (!((parseFloat(cashPaid) || 0) > 0)) {
       return;
     }
-    if (VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase()) && !vendorId.trim()) {
-      triggerNotif(`Vendor ID / Driver ID is mandatory for ${categoryInput.trim()}.`, 'error');
+    // Checked against whichever mode is active (2026-09-03) - Vendor ID for
+    // a vendor vehicle, Driver ID for a KCM vehicle.
+    if (VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase()) && !(vehicleMode === 'vehicle' ? driverId.trim() : vendorId.trim())) {
+      triggerNotif(`${vehicleMode === 'vehicle' ? 'Driver ID' : 'Vendor ID'} is mandatory for ${categoryInput.trim()}.`, 'error');
       return;
     }
 
@@ -924,10 +979,15 @@ export default function PettyCash({
         location: location.trim(),
         clientName: finalClient,
         vendor,
-        vehicleNumber: vehicleNumber.toUpperCase().trim(),
-        vendorVehicleNumber: vendorVehicleNumber.toUpperCase().trim() || undefined,
+        // Mutually exclusive (2026-09-03) - only the active mode's vehicle/
+        // ID fields are ever sent, the other mode's are always blanked here
+        // regardless of whatever's still in that form state, so a stray
+        // leftover value can never sneak into a save.
+        vehicleNumber: vehicleMode === 'vehicle' ? vehicleNumber.toUpperCase().trim() : '',
+        vendorVehicleNumber: vehicleMode === 'vendor' ? (vendorVehicleNumber.toUpperCase().trim() || undefined) : undefined,
+        driverId: vehicleMode === 'vehicle' ? (driverId.trim() || undefined) : undefined,
         receiver: receiver.trim(),
-        vendorId: vendorId.trim(),
+        vendorId: vehicleMode === 'vendor' ? vendorId.trim() : '',
         amountReceived: parseFloat(amountReceived) || 0,
         cashPaid: parseFloat(cashPaid) || 0,
         balance: parseFloat(balance) || 0,
@@ -1385,8 +1445,9 @@ export default function PettyCash({
       'Client Name': v.clientName,
       'Vendor': v.vendor,
       'Vehicle Number': v.vehicleNumber,
+      'Vendor Vehicle Number': v.vendorVehicleNumber || '',
       'Receiver': v.receiver,
-      'Vendor ID': v.vendorId,
+      'Vendor ID / Driver ID': v.vendorId || v.driverId || '',
       'Transaction Type': 'Debit', // every Petty Cash-sourced row is a Debit
       'Source': 'Petty cash',
       'Amount Received': amtRecAt(v) > 0 ? amtRecAt(v) : '',
@@ -1403,8 +1464,9 @@ export default function PettyCash({
       'Client Name': t.customer,
       'Vendor': '-',
       'Vehicle Number': t.vehicleNumber,
+      'Vendor Vehicle Number': '-',
       'Receiver': t.coordinator || '-',
-      'Vendor ID': '-',
+      'Vendor ID / Driver ID': '-',
       'Transaction Type': 'Credit',
       'Source': 'Market trip',
       'Amount Received': amount,
@@ -1421,8 +1483,9 @@ export default function PettyCash({
       'Client Name': '-',
       'Vendor': a.account || '-',
       'Vehicle Number': '-',
+      'Vendor Vehicle Number': '-',
       'Receiver': PETTY_CASH_USERS.find(u => u.username === a.username)?.label || a.username,
-      'Vendor ID': '-',
+      'Vendor ID / Driver ID': '-',
       'Transaction Type': 'Credit',
       'Source': 'Amount received',
       'Amount Received': a.amount,
@@ -2118,7 +2181,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <th className="px-3 py-2.5"><SortHeader label="Vehicle #" sortKey="vehicleNumber" sort={sort} onSort={handleSort} type="numeric" /></th>
                     <th className="px-3 py-2.5">Vendor Vehicle #</th>
                     <th className="px-3 py-2.5">Receiver</th>
-                    <th className="px-3 py-2.5">Vendor ID</th>
+                    <th className="px-3 py-2.5" title="Vendor ID for a vendor-vehicle entry, Driver ID for a KCM-vehicle entry">Vendor ID / Driver ID</th>
                     <th className="px-3 py-2.5"><SortHeader label="Type" sortKey="type" sort={sort} onSort={handleSort} labels={{ asc: 'Credit First', desc: 'Debit First' }} /></th>
                     <th className="px-3 py-2.5">Source</th>
                     <th className="px-3 py-2.5 text-right">Cash Paid</th>
@@ -2165,8 +2228,8 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         </td>
                         <td className="px-3 py-2 font-mono font-bold text-slate-800 whitespace-nowrap">{v.vehicleNumber || '-'}</td>
                         <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">{v.vendorVehicleNumber || '-'}</td>
-                        <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{v.receiver}</td>
-                        <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{v.vendorId || '-'}</td>
+                        <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{v.receiver || '-'}</td>
+                        <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{v.vendorId || v.driverId || '-'}</td>
                         {/* Type is fully determined by Source now - every
                             Petty Cash-sourced row is a Debit (money paid
                             out), full stop. Market Trip rows are always
@@ -2819,7 +2882,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                             <div className="font-bold text-slate-800">{v.clientName}</div>
                             {v.vehicleNumber && <div className="text-[9px] text-slate-500 font-mono">{v.vehicleNumber}</div>}
                           </td>
-                          <td className="px-4 py-2.5 font-semibold text-slate-800 whitespace-nowrap">{v.receiver}</td>
+                          <td className="px-4 py-2.5 font-semibold text-slate-800 whitespace-nowrap">{v.receiver || '-'}</td>
                           <td className="px-4 py-2.5 text-slate-500 max-w-[200px] truncate" title={v.remarks}>{v.remarks || '-'}</td>
                           <td className="px-4 py-2.5 text-right font-mono font-black text-rose-700 bg-rose-50/20 whitespace-nowrap">₹{(v.cashPaid || 0).toLocaleString('en-IN')}</td>
                           <td className="px-4 py-2.5 text-center whitespace-nowrap">
@@ -3288,52 +3351,131 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     )}
                   </div>
 
-                  {/* Vehicle Number & Receiver - placed above Location since
+                  {/* Receiver Name - no longer paired with Vehicle Number
+                      (2026-09-03, that field moved into the mode-switched
+                      block below) and no longer mandatory. */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Receiver Name</label>
+                    <input
+                      type="text"
+                      placeholder="Cash recipient (optional)"
+                      value={receiver}
+                      onChange={(e) => setReceiver(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    />
+                  </div>
+
+                  {/* Vehicle / Vendor Identity (2026-09-03) - two mutually
+                      exclusive modes, never shown together: a KCM vehicle
+                      (Vehicle Number -> Driver ID, from Fleet & Vehicles/
+                      Driver Details) or a vendor-owned vehicle (Vendor
+                      Vehicle Number -> Vendor ID, from Vendor Management).
+                      Switching modes clears the other one's fields (see
+                      switchVehicleMode) - placed above Location since
                       selecting a Vehicle Number can auto-fill Location (see
                       the auto-fill effect above: dedicated fleet vehicles /
                       TN-registered vehicles). */}
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Vehicle Number</label>
-                      <input
-                        type="text"
-                        list="petty-cash-vehicles-datalist"
-                        placeholder="Search or select a vehicle"
-                        value={vehicleNumber}
-                        onChange={(e) => handleVehicleNumberChange(e.target.value)}
-                        onKeyDown={(e) => handleVehicleNumberEnterKey(e, vehicleNumber, mpVehicleList, handleVehicleNumberChange)}
-                        autoComplete="off"
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 uppercase font-bold"
-                      />
-                      <datalist id="petty-cash-vehicles-datalist">
-                        {mpVehicleList.map(v => <option key={v} value={v} />)}
-                      </datalist>
-                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">Live from Fleet &amp; Vehicles - type to search.</p>
+                  <div className="border border-slate-200 rounded-lg p-2.5 bg-slate-50/50 space-y-2.5">
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => switchVehicleMode('vehicle')}
+                        className={`flex-1 py-1.5 rounded-lg border font-bold text-[11px] uppercase cursor-pointer transition-colors ${vehicleMode === 'vehicle' ? 'bg-teal-600 border-teal-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'}`}>
+                        KCM Vehicle
+                      </button>
+                      <button type="button" onClick={() => switchVehicleMode('vendor')}
+                        className={`flex-1 py-1.5 rounded-lg border font-bold text-[11px] uppercase cursor-pointer transition-colors ${vehicleMode === 'vendor' ? 'bg-teal-600 border-teal-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'}`}>
+                        Vendor Vehicle
+                      </button>
                     </div>
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Receiver Name *</label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="Cash recipient"
-                        value={receiver}
-                        onChange={(e) => setReceiver(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                      />
-                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-fetched from Driver Details by Vehicle Number - editable.</p>
-                    </div>
+
+                    {vehicleMode === 'vehicle' ? (
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">Vehicle Number</label>
+                          <input
+                            type="text"
+                            list="petty-cash-vehicles-datalist"
+                            placeholder="Search or select a vehicle"
+                            value={vehicleNumber}
+                            onChange={(e) => handleVehicleNumberChange(e.target.value)}
+                            onKeyDown={(e) => handleVehicleNumberEnterKey(e, vehicleNumber, mpVehicleList, handleVehicleNumberChange)}
+                            autoComplete="off"
+                            className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 uppercase font-bold"
+                          />
+                          <datalist id="petty-cash-vehicles-datalist">
+                            {mpVehicleList.map(v => <option key={v} value={v} />)}
+                          </datalist>
+                          <p className="text-[9px] text-slate-400 font-mono mt-0.5">Live from Fleet &amp; Vehicles - type to search.</p>
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Driver ID {VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase()) && <span className="text-rose-500">*</span>}
+                          </label>
+                          <input
+                            type="text"
+                            required={VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase())}
+                            placeholder="Driver Identification"
+                            value={driverId}
+                            onChange={(e) => setDriverId(e.target.value)}
+                            className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                          />
+                          <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                            {VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase())
+                              ? 'Mandatory for this expense category.'
+                              : 'Auto-fetched from Driver Details by Vehicle Number - editable.'}
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">Vendor Vehicle Number</label>
+                          <input
+                            type="text"
+                            list="petty-cash-vendor-vehicles-datalist"
+                            placeholder="Search or select a vendor-owned vehicle"
+                            value={vendorVehicleNumber}
+                            onChange={(e) => setVendorVehicleNumber(e.target.value.toUpperCase())}
+                            onKeyDown={(e) => handleVehicleNumberEnterKey(e, vendorVehicleNumber, vendorVehicleList, setVendorVehicleNumber)}
+                            autoComplete="off"
+                            className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 uppercase font-bold"
+                          />
+                          <datalist id="petty-cash-vendor-vehicles-datalist">
+                            {vendorVehicleList.map(v => <option key={v} value={v} />)}
+                          </datalist>
+                          <p className="text-[9px] text-slate-400 font-mono mt-0.5">Live from Vendor Management&apos;s registered vehicles - type to search.</p>
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Vendor ID {VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase()) && <span className="text-rose-500">*</span>}
+                          </label>
+                          <input
+                            type="text"
+                            required={VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase())}
+                            placeholder="Vendor Identification"
+                            value={vendorId}
+                            onChange={(e) => setVendorId(e.target.value)}
+                            className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                          />
+                          <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                            {VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase())
+                              ? 'Mandatory for this expense category.'
+                              : 'Auto-fetched from Vendor Management by Vendor Vehicle Number - editable.'}
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Location - free text for everyone, but Ramesh (and now
-                      Vinod) additionally get a type-to-search suggestion list
-                      of Nelamangala / Nidagatta / DHL Attibele / Chennai (his
-                      4 fixed locations) - purely autocomplete, never
-                      restrictive. For Vinod specifically these 4 are only
-                      low-priority suggestions (he covers far more locations
-                      than Ramesh and mostly types his own in free text) - kept
-                      last/lowest priority in the list rather than offered as
-                      his primary options. May be auto-filled by Vehicle
-                      Number above. */}
+                  {/* Location - free text for everyone, but Ramesh and Vinod
+                      additionally get a type-to-search suggestion list -
+                      purely autocomplete, never restrictive. Ramesh's own 4
+                      (Nelamangala/Nidagatta/DHL Attibele/Chennai); Vinod's
+                      own 5 (Hyderabad/Vizag/Vijayawada/Hoskote/Service
+                      Station, 2026-09-03) listed first/highest priority,
+                      with Ramesh's 4 appended at the end/lowest priority -
+                      he still occasionally covers those, they're just no
+                      longer his primary suggestions. May be auto-filled by
+                      Vehicle Number above. */}
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Location *</label>
                     {(user.username === 'ramesh' || isVinod) ? (
@@ -3349,7 +3491,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                         />
                         <datalist id="petty-cash-ramesh-locations-datalist">
-                          {RAMESH_LOCATIONS.map(loc => <option key={loc} value={loc} />)}
+                          {(isVinod ? VINOD_LOCATIONS : RAMESH_LOCATIONS).map(loc => <option key={loc} value={loc} />)}
                         </datalist>
                       </>
                     ) : (
@@ -3406,58 +3548,18 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     </div>
                   )}
 
-                  {/* Vendor Vehicle Number - separate from Vehicle Number
-                      above: this one is vendor-owned vehicles, sourced from
-                      Vendor Management's registered vehicleNumbers rather
-                      than Fleet & Vehicles. */}
+                  {/* Trip Sheet - Vendor ID/Driver ID moved into the
+                      mode-switched Vehicle/Vendor Identity block above
+                      (2026-09-03), Vendor Vehicle Number along with it. */}
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Vendor Vehicle Number</label>
+                    <label className="block font-semibold text-slate-700 mb-1">Trip Sheet #</label>
                     <input
                       type="text"
-                      list="petty-cash-vendor-vehicles-datalist"
-                      placeholder="Search or select a vendor-owned vehicle"
-                      value={vendorVehicleNumber}
-                      onChange={(e) => setVendorVehicleNumber(e.target.value.toUpperCase())}
-                      onKeyDown={(e) => handleVehicleNumberEnterKey(e, vendorVehicleNumber, vendorVehicleList, setVendorVehicleNumber)}
-                      autoComplete="off"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 uppercase font-bold"
+                      placeholder="e.g. TRIP-9121"
+                      value={tripSheet}
+                      onChange={(e) => setTripSheet(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                     />
-                    <datalist id="petty-cash-vendor-vehicles-datalist">
-                      {vendorVehicleList.map(v => <option key={v} value={v} />)}
-                    </datalist>
-                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">Live from Vendor Management&apos;s registered vehicles - type to search.</p>
-                  </div>
-
-                  {/* Vendor ID / Driver ID & Trip Sheet */}
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">
-                        Vendor ID / Driver ID {VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase()) && <span className="text-rose-500">*</span>}
-                      </label>
-                      <input
-                        type="text"
-                        required={VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase())}
-                        placeholder="Vendor Identification"
-                        value={vendorId}
-                        onChange={(e) => setVendorId(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                      />
-                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                        {VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase())
-                          ? 'Mandatory for this expense category.'
-                          : 'Auto-fetched from Vendor Management or Driver Details by Vehicle Number - editable if neither matches.'}
-                      </p>
-                    </div>
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Trip Sheet #</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. TRIP-9121"
-                        value={tripSheet}
-                        onChange={(e) => setTripSheet(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                      />
-                    </div>
                   </div>
 
                   {/* Cash Paid (Amount Received/Balance were removed - that

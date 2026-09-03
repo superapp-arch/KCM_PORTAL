@@ -11,8 +11,18 @@ import { payableAmountLiveCurrentMonth, vehiclesLabel, salarySections, exportDri
 import DownloadMenu from './DownloadMenu';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
 import { DriverSalaryAdvanceVoucherSlim, computeDriverPettyCashAdvance, driverPettyCashAdvanceTooltip } from '../../utils/driverPettyCashAdvance';
+import { driverAllLocations, isDriverActiveAtLocation } from '../../utils/driverLocations';
 
 const safeFileToken = (s: string): string => s.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
+
+// One driver, at ONE of their assigned locations (2026-09-03 multi-location
+// support) - a driver covering more than one location produces more than
+// one of these, so the same person is listed once per location instead of
+// only under a single primary one.
+interface LocationDriverRow {
+  driver: DriverEmployee;
+  location: DriverLocationCategory;
+}
 
 interface DriverSalarySheetProps {
   performedBy: string; // current user's username - for the Salary Slip audit trail
@@ -95,46 +105,59 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
     setTimeout(() => setNotif(null), 4000);
   };
 
-  // Grouped by location, one colored section header per group, drivers
-  // sorted by Driver ID within each group - never by name, never by entry
-  // order. Groups themselves stay in DRIVER_LOCATION_CATEGORIES' fixed
-  // master order (only locations with at least one matching driver get a
-  // section at all - a location-scoped user's drivers already only cover
-  // their own assigned location(s), enforced server-side).
+  // One row per (driver, location) assignment (2026-09-03 multi-location
+  // support), then grouped by location - one colored section header per
+  // group, rows sorted by Driver ID within each group - never by name,
+  // never by entry order. Groups themselves stay in
+  // DRIVER_LOCATION_CATEGORIES' fixed master order (only locations with at
+  // least one matching row get a section at all - a location-scoped user's
+  // drivers already only cover their own assigned location(s), enforced
+  // server-side). Active/Inactive/All filters per-location (not per whole
+  // driver) via isDriverActiveAtLocation, so a driver active at Vizag but
+  // deactivated at Hyderabad shows up correctly in each location's own
+  // filtered view.
   const groupedDrivers = useMemo(() => {
-    const base = drivers.filter(d => {
-      const isInactive = d.status === 'inactive';
+    const allRows: LocationDriverRow[] = drivers.flatMap(driver => driverAllLocations(driver).map(location => ({ driver, location })));
+    const base = allRows.filter(({ driver, location }) => {
+      const isInactive = !isDriverActiveAtLocation(driver, location);
       if (statusFilter === 'active' && isInactive) return false;
       if (statusFilter === 'inactive' && !isInactive) return false;
       if (!searchTerm) return true;
       const q = searchTerm.toLowerCase();
-      return d.id.toLowerCase().includes(q) || d.name.toLowerCase().includes(q) || (d.vehicleNo || '').toLowerCase().includes(q);
+      return driver.id.toLowerCase().includes(q) || driver.name.toLowerCase().includes(q) || (driver.vehicleNo || '').toLowerCase().includes(q);
     });
-    const byLocation = new Map<DriverLocationCategory, DriverEmployee[]>();
-    for (const d of base) {
-      if (!byLocation.has(d.location)) byLocation.set(d.location, []);
-      byLocation.get(d.location)!.push(d);
+    const byLocation = new Map<DriverLocationCategory, LocationDriverRow[]>();
+    for (const row of base) {
+      if (!byLocation.has(row.location)) byLocation.set(row.location, []);
+      byLocation.get(row.location)!.push(row);
     }
     return DRIVER_LOCATION_CATEGORIES
       .filter(loc => byLocation.has(loc))
       .map(loc => ({
         location: loc,
-        drivers: [...byLocation.get(loc)!].sort((a, b) => compareTrailingNumber(a.id, b.id) || a.id.localeCompare(b.id))
+        rows: [...byLocation.get(loc)!].sort((a, b) => compareTrailingNumber(a.driver.id, b.driver.id) || a.driver.id.localeCompare(b.driver.id))
       }));
   }, [drivers, searchTerm, statusFilter]);
 
   // Flat, grouped-and-sorted order - used for the "no results" check and for
   // Download All, so the exported sheet matches what's on screen.
-  const flatFiltered = useMemo(() => groupedDrivers.flatMap(g => g.drivers), [groupedDrivers]);
+  const flatFiltered = useMemo(() => groupedDrivers.flatMap(g => g.rows), [groupedDrivers]);
 
   // e.g. Vinod: view every location's drivers, but only add/edit/delete
   // within his own writableLocations - everyone else's writable set is the
   // same as what they can see, so this is a no-op distinction for them.
-  const canWrite = (driver: DriverEmployee) => writableLocations === 'ALL' || writableLocations.includes(driver.location);
+  // Checked against ONE specific location (2026-09-03) rather than the
+  // driver's primary location, since a scoped user may manage some but not
+  // all of a multi-location driver's assignments.
+  const canWrite = (location: DriverLocationCategory) => writableLocations === 'ALL' || writableLocations.includes(location);
   const canAddAnywhere = writableLocations === 'ALL' || writableLocations.length > 0;
 
   // "Delete" now deactivates, not removes (see server.ts) - the confirm
   // copy reflects that so it doesn't read as more destructive than it is.
+  // Whole-driver deactivation - used directly for a single-location driver,
+  // and offered from the per-location action for a multi-location driver
+  // being deactivated at their LAST remaining active location (see
+  // handleDeactivateLocation below).
   const handleDelete = async (driver: DriverEmployee) => {
     if (!confirm(`Deactivate driver ${driver.id} - ${driver.name}? They'll no longer appear in the active list or be selectable for new attendance/salary entries, but all their historical records stay exactly as they are.`)) return;
     await onDeleteDriver(driver.id);
@@ -155,6 +178,36 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
     }
   };
 
+  // Per-location deactivate/reactivate (2026-09-03) - only ever offered for
+  // a driver with more than one assigned location; a single-location driver
+  // still just uses the whole-driver handleDelete/handleReactivate above
+  // (identical behavior to before multi-location support existed). Only
+  // touches inactiveLocations - never the driver's other locations, salary,
+  // or history.
+  const handleDeactivateLocation = async (driver: DriverEmployee, location: DriverLocationCategory) => {
+    const otherActiveLocations = driverAllLocations(driver).filter(l => l !== location && isDriverActiveAtLocation(driver, l));
+    if (!confirm(`Deactivate ${driver.name} (${driver.id}) at ${location} only? ${otherActiveLocations.length > 0 ? `They'll remain active at ${otherActiveLocations.join(', ')}.` : ''} Historical attendance at ${location} stays available.`)) return;
+    try {
+      const inactiveLocations = Array.from(new Set([...(driver.inactiveLocations || []), location]));
+      await onUpdateDriver(driver.id, { inactiveLocations });
+      setSaveConfirmation({ identifier: `${driver.name} (${driver.id}) - ${location} deactivated`, key: Date.now() });
+    } catch (err) {
+      console.error(err);
+      triggerNotif('Failed to deactivate this location.', 'error');
+    }
+  };
+
+  const handleReactivateLocation = async (driver: DriverEmployee, location: DriverLocationCategory) => {
+    try {
+      const inactiveLocations = (driver.inactiveLocations || []).filter(l => l !== location);
+      await onUpdateDriver(driver.id, { inactiveLocations });
+      setSaveConfirmation({ identifier: `${driver.name} (${driver.id}) - ${location} reactivated`, key: Date.now() });
+    } catch (err) {
+      console.error(err);
+      triggerNotif('Failed to reactivate this location.', 'error');
+    }
+  };
+
   const handleSaved = (driver: { id: string; name: string }) => {
     setSaveConfirmation({ identifier: `${driver.name} (${driver.id})`, key: Date.now() });
   };
@@ -163,23 +216,32 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
   // as "Download All" and per-location below (a one-driver, one-group
   // section), so this row-level button offers the same Excel/PDF choice with
   // guaranteed content parity instead of its own Excel-only shortcut.
+  // salarySections still groups by {location, drivers: DriverEmployee[]} -
+  // Driver Salary's own figures (Gross Salary, Payable Amount, etc.) are a
+  // whole-driver concept, never fragmented per location (unlike Driver
+  // Attendance's own exports) - only the grouping/display is location-aware,
+  // so a multi-location driver's row is simply repeated, unchanged, under
+  // each of their location sections.
+  const toDriverGroups = (groups: { location: DriverLocationCategory; rows: LocationDriverRow[] }[]) =>
+    groups.map(g => ({ location: g.location, drivers: g.rows.map(r => r.driver) }));
+
   const handleDownloadAllExcel = () => {
     if (flatFiltered.length === 0) { triggerNotif('No driver records to download.', 'error'); return; }
-    exportDriverSalary('KCM_All_Drivers', salarySections(groupedDrivers, attendance), 'excel', 'All Locations');
+    exportDriverSalary('KCM_All_Drivers', salarySections(toDriverGroups(groupedDrivers), attendance), 'excel', 'All Locations');
   };
 
   const handleDownloadAllPdf = () => {
     if (flatFiltered.length === 0) { triggerNotif('No driver records to download.', 'error'); return; }
-    exportDriverSalary('KCM_All_Drivers', salarySections(groupedDrivers, attendance), 'pdf', 'All Locations');
+    exportDriverSalary('KCM_All_Drivers', salarySections(toDriverGroups(groupedDrivers), attendance), 'pdf', 'All Locations');
   };
 
   // One location's drivers only - the Download control on that group's
   // header row.
-  const handleDownloadLocationExcel = (location: string, list: DriverEmployee[]) =>
-    exportDriverSalary(`KCM_Driver_Salary_${safeFileToken(location)}`, salarySections([{ location, drivers: list }], attendance), 'excel', location);
+  const handleDownloadLocationExcel = (location: DriverLocationCategory, rows: LocationDriverRow[]) =>
+    exportDriverSalary(`KCM_Driver_Salary_${safeFileToken(location)}`, salarySections([{ location, drivers: rows.map(r => r.driver) }], attendance), 'excel', location);
 
-  const handleDownloadLocationPdf = (location: string, list: DriverEmployee[]) =>
-    exportDriverSalary(`KCM_Driver_Salary_${safeFileToken(location)}`, salarySections([{ location, drivers: list }], attendance), 'pdf', location);
+  const handleDownloadLocationPdf = (location: DriverLocationCategory, rows: LocationDriverRow[]) =>
+    exportDriverSalary(`KCM_Driver_Salary_${safeFileToken(location)}`, salarySections([{ location, drivers: rows.map(r => r.driver) }], attendance), 'pdf', location);
 
   // Inline document upload from the expand panel - persists immediately
   // (same "no separate Save button" convention DocumentAttachment's callers
@@ -274,32 +336,35 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                           <span>
                             {group.location}
                             <span className="ml-2 font-semibold normal-case text-emerald-100 text-[10px]">
-                              ({group.drivers.length} driver{group.drivers.length === 1 ? '' : 's'})
+                              ({group.rows.length} driver{group.rows.length === 1 ? '' : 's'})
                             </span>
                           </span>
                           <DownloadMenu variant="ghost" label="Download" options={[
-                            { key: 'excel', label: 'Excel (.xlsx)', icon: 'excel', onClick: () => handleDownloadLocationExcel(group.location, group.drivers) },
-                            { key: 'pdf', label: 'PDF', icon: 'pdf', onClick: () => handleDownloadLocationPdf(group.location, group.drivers) },
+                            { key: 'excel', label: 'Excel (.xlsx)', icon: 'excel', onClick: () => handleDownloadLocationExcel(group.location, group.rows) },
+                            { key: 'pdf', label: 'PDF', icon: 'pdf', onClick: () => handleDownloadLocationPdf(group.location, group.rows) },
                           ]} />
                         </div>
                       </td>
                     </tr>
-                    {group.drivers.map(driver => {
+                    {group.rows.map(({ driver, location }) => {
                       runningIndex += 1;
+                      const rowKey = `${driver.id}-${location}`;
+                      const isInactiveHere = !isDriverActiveAtLocation(driver, location);
+                      const multiLocation = driverAllLocations(driver).length > 1;
                       return (
-                        <React.Fragment key={driver.id}>
+                        <React.Fragment key={rowKey}>
                         <tr className="hover:bg-slate-50">
                           <td className="px-3 py-2.5 font-mono text-slate-500">{runningIndex}</td>
                           <td className="px-3 py-2.5 font-semibold text-slate-700 whitespace-nowrap">
                             {driver.name}
-                            {driver.status === 'inactive' && (
-                              <span title={driver.inactivatedDate ? `Deactivated ${driver.inactivatedDate}` : 'Deactivated'} className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-black uppercase border bg-slate-100 text-slate-500 border-slate-300 align-middle">Inactive</span>
+                            {isInactiveHere && (
+                              <span title={driver.inactivatedDate ? `Deactivated ${driver.inactivatedDate}` : `Deactivated${multiLocation ? ` at ${location}` : ''}`} className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-black uppercase border bg-slate-100 text-slate-500 border-slate-300 align-middle">Inactive</span>
                             )}
                           </td>
                           <td className="px-3 py-2.5 whitespace-nowrap">
-                            <button onClick={() => toggleExpand(driver.id)} className="flex items-center gap-1 font-mono font-bold text-slate-800 cursor-pointer hover:text-teal-700" title="Click to view details & documents">
+                            <button onClick={() => toggleExpand(rowKey)} className="flex items-center gap-1 font-mono font-bold text-slate-800 cursor-pointer hover:text-teal-700" title="Click to view details & documents">
                               {driver.id}
-                              {expandedId === driver.id ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
+                              {expandedId === rowKey ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
                             </button>
                           </td>
                           <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{driver.driverNo}</td>
@@ -326,19 +391,28 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                             })()}
                           </td>
                           <td className="px-3 py-2.5 whitespace-nowrap">
-                            <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded text-[9.5px] font-bold">{driver.location}</span>
+                            <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded text-[9.5px] font-bold">{location}</span>
+                            {multiLocation && <span title={`Also assigned to: ${driverAllLocations(driver).filter(l => l !== location).join(', ')}`} className="ml-1 text-slate-400 font-bold cursor-help">+{driverAllLocations(driver).length - 1}</span>}
                           </td>
                           <td className="px-3 py-2.5 text-right font-mono text-slate-700">{driver.grossSalary ? `Rs. ${driver.grossSalary.toLocaleString('en-IN')}` : '-'}</td>
                           <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">Rs. {payableAmountLiveCurrentMonth(driver, attendance, driverPettyCashAdvanceVouchers, thisMonth).toLocaleString('en-IN')}</td>
                           <td className="px-3 py-2.5 text-right whitespace-nowrap">
                             <button onClick={() => setSlipModalDriver(driver)} title="Generate Salary Slip" className="p-1 text-slate-400 hover:text-purple-700 hover:bg-slate-100 rounded cursor-pointer"><Receipt className="w-3.5 h-3.5" /></button>
-                            {canWrite(driver) ? (
+                            {canWrite(location) ? (
                               <>
-                                <button onClick={() => setModalDriver(driver)} className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
-                                {driver.status === 'inactive' ? (
-                                  <button onClick={() => handleReactivate(driver)} title="Reactivate" className="p-1 text-slate-400 hover:text-emerald-600 hover:bg-slate-100 rounded cursor-pointer"><RotateCcw className="w-3.5 h-3.5" /></button>
+                                <button onClick={() => setModalDriver(driver)} className="p-1 text-slate-500 hover:text-teal-700 hover:bg-slate-100 rounded cursor-pointer" title="Edit driver"><Edit2 className="w-3.5 h-3.5" /></button>
+                                {multiLocation ? (
+                                  isInactiveHere ? (
+                                    <button onClick={() => handleReactivateLocation(driver, location)} title={`Reactivate at ${location}`} className="p-1 text-slate-400 hover:text-emerald-600 hover:bg-slate-100 rounded cursor-pointer"><RotateCcw className="w-3.5 h-3.5" /></button>
+                                  ) : (
+                                    <button onClick={() => handleDeactivateLocation(driver, location)} title={`Deactivate at ${location} only`} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                                  )
                                 ) : (
-                                  <button onClick={() => handleDelete(driver)} title="Deactivate" className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                                  driver.status === 'inactive' ? (
+                                    <button onClick={() => handleReactivate(driver)} title="Reactivate" className="p-1 text-slate-400 hover:text-emerald-600 hover:bg-slate-100 rounded cursor-pointer"><RotateCcw className="w-3.5 h-3.5" /></button>
+                                  ) : (
+                                    <button onClick={() => handleDelete(driver)} title="Deactivate" className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                                  )
                                 )}
                               </>
                             ) : (
@@ -347,7 +421,7 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                           </td>
                         </tr>
 
-                        {expandedId === driver.id && (
+                        {expandedId === rowKey && (
                           <tr>
                             <td colSpan={13} className="bg-slate-50/50 p-5 border-t border-slate-100">
                               <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="grid grid-cols-1 lg:grid-cols-3 gap-4 text-slate-700">
@@ -366,8 +440,8 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                                     <dd className="font-mono text-slate-800">{driver.ifscCode || '-'}</dd>
                                     <dt className="text-slate-400">Reporting</dt>
                                     <dd className="text-slate-800">{driver.reporting || '-'}</dd>
-                                    <dt className="text-slate-400">Location</dt>
-                                    <dd className="text-slate-800">{driver.location}</dd>
+                                    <dt className="text-slate-400">Location{driverAllLocations(driver).length > 1 ? 's' : ''}</dt>
+                                    <dd className="text-slate-800">{driverAllLocations(driver).join(', ')}</dd>
                                     <dt className="text-slate-400">Remark</dt>
                                     <dd className="text-slate-800 break-words col-span-2">{driver.remark || '-'}</dd>
                                   </dl>
@@ -381,7 +455,7 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                                   <h4 className="text-xs font-bold text-slate-400 tracking-wider uppercase mb-3 flex items-center gap-1.5 pb-1 border-b border-slate-100">
                                     <Paperclip className="w-3.5 h-3.5 text-teal-600" /> Documents
                                   </h4>
-                                  {canWrite(driver) ? (
+                                  {canWrite(location) ? (
                                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                                       <DocumentAttachment documents={driver.aadharDocuments} onChange={(docs) => handleUpdateDocs(driver, 'aadharDocuments', docs)} label="Aadhar" hideDropzone maxFiles={1} />
                                       <DocumentAttachment documents={driver.drivingLicenseDocuments} onChange={(docs) => handleUpdateDocs(driver, 'drivingLicenseDocuments', docs)} label="Driving License" hideDropzone maxFiles={1} />

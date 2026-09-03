@@ -4,6 +4,7 @@ import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import { DriverEmployee, DriverAttendance, AttendanceStatusCode, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES } from '../../types';
 import { authFetch } from '../../authFetch';
 import { compareTrailingNumber } from '../../utils/sort';
+import { driverAllLocations, isDriverActiveAtLocation, attendanceBelongsToLocation } from '../../utils/driverLocations';
 import DriverAttendanceSummaryModal from './DriverAttendanceSummaryModal';
 import { exportReportToExcel, ReportTableSection } from '../../utils/reportExport';
 import { buildDriverAttendancePdf, buildDriverAttendanceSummaryPdf, DriverAttendanceSummaryRow } from '../../utils/driverAttendancePdf';
@@ -13,6 +14,17 @@ import { computeDriverEarnings } from '../../utils/driverSalaryExport';
 interface DriverAttendanceSheetProps {
   drivers: DriverEmployee[];
   writableLocations: DriverLocationCategory[] | 'ALL'; // locations this user may mark/edit attendance for - others show read-only
+}
+
+// One driver, at ONE of their assigned locations (2026-09-03 multi-location
+// support) - a driver covering more than one location produces more than
+// one of these, one per location, so the same person renders as a separate
+// row under each location group. Every attendance lookup below is scoped to
+// `location`, not just `driver.id`, so a multi-location driver's history
+// never mixes between locations - see attendanceBelongsToLocation.
+interface LocationDriverRow {
+  driver: DriverEmployee;
+  location: DriverLocationCategory;
 }
 
 const QUICK_CODES: { status: AttendanceStatusCode; label: string }[] = [
@@ -82,10 +94,11 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-// One driver's month rows -> {lopDays, exemptionLeaveDays, workingDays} -
-// shared by the on-screen summary columns and every export below so both can
-// never drift apart. Paid Leave counts as a worked day for salary purposes,
-// same rule as the server's own computeDriverMonthlyAttendanceSummary.
+// One (driver, location) row's month rows -> {lopDays, exemptionLeaveDays,
+// workingDays} - shared by the on-screen summary columns and every export
+// below so both can never drift apart. Paid Leave counts as a worked day
+// for salary purposes, same rule as the server's own
+// computeDriverMonthlyAttendanceSummary.
 function summarizeMonthRows(rows: DriverAttendance[]): { lopDays: number; exemptionLeaveDays: number; workingDays: number } {
   const lopDays = rows.filter(r => r.status === 'AbsentLOP').length;
   const exemptionLeaveDays = rows.filter(r => r.status === 'LeaveWithPermission').length;
@@ -93,20 +106,27 @@ function summarizeMonthRows(rows: DriverAttendance[]): { lopDays: number; exempt
   return { lopDays, exemptionLeaveDays, workingDays };
 }
 
-// Gross Salary/Payable Amount for the "Download All" export (and every other
-// Excel export below, for consistency) - Gross Salary/Other Additions/
-// deductions are read straight off the driver record already passed into
-// this sheet (DriverEmployee carries one salary snapshot per driver, tagged
-// with `month` - see types.ts), but Working Days/LOP are taken from THIS
-// month's own live attendance (already computed by the caller via
-// summarizeMonthRows) rather than a persisted snapshot, so Payable Amount is
-// always correct for whichever month is actually being viewed/exported.
-// Formula: utils/driverSalaryExport.ts's computeDriverEarnings - the exact
-// same one Salary Breakup and the Salary Slip use, so none of them can drift
-// apart. Blank ('N/A') whenever the driver record's own `month` doesn't
-// match the month being exported, rather than showing a stale figure from
-// whatever month Driver Salary was last saved for (Gross Salary/deductions
-// are still only trustworthy for that one recorded month).
+// Attendance actually belonging to this row's (driver, location) pair, for
+// the given month - the one filter every export/summary function below
+// runs through, so none of them can accidentally mix a multi-location
+// driver's locations together.
+function rowsForLocation(row: LocationDriverRow, attendance: DriverAttendance[], month: string): DriverAttendance[] {
+  return attendance.filter(a => a.driverId === row.driver.id && a.date.startsWith(month) && attendanceBelongsToLocation(a, row.driver, row.location));
+}
+
+// Gross Salary/Payable Amount shown alongside the Attendance module's own
+// exports - Gross Salary/Other Additions/deductions are read straight off
+// the driver record (DriverEmployee carries one salary snapshot per driver,
+// tagged with `month` - see types.ts), same figures regardless of location,
+// but Working Days/LOP are this row's own location-scoped counts, so a
+// multi-location driver's Payable Amount here is prorated per location
+// (the two/more rows sum to their true whole-month pay) - purely an
+// operational preview for this screen; Driver Salary's own Payable Amount
+// column (and the Salary Slip) remain the actual payroll authority,
+// unaffected, always computed off the driver's full cross-location
+// attendance. Blank ('N/A') whenever the driver record's own `month`
+// doesn't match the month being exported, rather than showing a stale
+// figure from whatever month Driver Salary was last saved for.
 function driverSalarySnapshotFor(driver: DriverEmployee, month: string, workingDays: number, lopDays: number): { grossSalary: number | string; payable: number | string } {
   if (driver.month !== month) return { grossSalary: 'N/A', payable: 'N/A' };
   const { payableAmount } = computeDriverEarnings({
@@ -118,47 +138,54 @@ function driverSalarySnapshotFor(driver: DriverEmployee, month: string, workingD
   return { grossSalary: driver.grossSalary || 0, payable: payableAmount };
 }
 
-// The on-screen day-grid (Driver | day-by-day status | Working Days / LOP /
-// Exemption Leave), as an export section - used for a single location, a set
-// of a user's writable locations, or every location, depending on what
-// `list` is handed.
-function attendanceGridSection(month: string, list: DriverEmployee[], attendance: DriverAttendance[], heading: string): ReportTableSection {
+// The on-screen day-grid (Driver | Location? | day-by-day status | Working
+// Days / LOP / Exemption Leave), as an export section - used for a single
+// location, a set of a user's writable locations, or every location,
+// depending on what `rows` is handed. `includeLocationColumn` adds a
+// Location column (2026-09-03) - used when `rows` spans more than one
+// location (Download All/My Locations), so every row in that single sheet
+// stays identifiable; omitted for a single-location download where it'd be
+// redundant (every row is already that one location).
+function attendanceGridSection(month: string, rows: LocationDriverRow[], attendance: DriverAttendance[], heading: string, includeLocationColumn = false): ReportTableSection {
   const total = daysInMonth(month);
   const columns = [
-    'Driver ID', 'Driver Name', ...Array.from({ length: total }, (_, i) => dayLabel(month, i + 1)),
+    'Driver ID', 'Driver Name', ...(includeLocationColumn ? ['Location'] : []),
+    ...Array.from({ length: total }, (_, i) => dayLabel(month, i + 1)),
     'No. of Days', 'Working Days', 'LOP', 'Exemption Leave', 'Gross Salary', 'Payable Amount'
   ];
-  const rows = list.map(driver => {
-    const driverRows = attendance.filter(a => a.driverId === driver.id && a.date.startsWith(month));
+  const tableRows = rows.map(row => {
+    const locationRows = rowsForLocation(row, attendance, month);
     const dayCells = Array.from({ length: total }, (_, i) => {
       const date = `${month}-${String(i + 1).padStart(2, '0')}`;
-      const record = driverRows.find(a => a.date === date);
+      const record = locationRows.find(a => a.date === date);
       return record ? STATUS_ABBR[record.status] : '-';
     });
-    const { lopDays, exemptionLeaveDays, workingDays } = summarizeMonthRows(driverRows);
-    const { grossSalary, payable } = driverSalarySnapshotFor(driver, month, workingDays, lopDays);
-    return [driver.id, driver.name, ...dayCells, total, workingDays, lopDays, exemptionLeaveDays, grossSalary, payable];
+    const { lopDays, exemptionLeaveDays, workingDays } = summarizeMonthRows(locationRows);
+    const { grossSalary, payable } = driverSalarySnapshotFor(row.driver, month, workingDays, lopDays);
+    return [
+      row.driver.id, row.driver.name, ...(includeLocationColumn ? [row.location] : []),
+      ...dayCells, total, workingDays, lopDays, exemptionLeaveDays, grossSalary, payable
+    ];
   });
-  return { heading, columns, rows };
+  return { heading, columns, rows: tableRows };
 }
 
-// Same one-row-per-driver summary the Excel "Download All" export's own
+// Same one-row-per-(driver, location) summary the Excel exports' own
 // columns already carry (see attendanceGridSection above), minus the
-// day-by-day P/A/PL grid - reused by the PDF "Download All" export so both
-// formats show identical data for the same month (see
-// buildDriverAttendanceSummaryPdf).
-function driverAttendanceSummaryRows(month: string, groups: { location: string; drivers: DriverEmployee[] }[], attendance: DriverAttendance[]): DriverAttendanceSummaryRow[] {
+// day-by-day P/A/PL grid - reused by the PDF exports so both formats show
+// identical data for the same month (see buildDriverAttendanceSummaryPdf).
+function driverAttendanceSummaryRows(month: string, rows: LocationDriverRow[], attendance: DriverAttendance[]): DriverAttendanceSummaryRow[] {
   const total = daysInMonth(month);
-  return groups.flatMap(g => g.drivers.map(driver => {
-    const driverRows = attendance.filter(a => a.driverId === driver.id && a.date.startsWith(month));
-    const { lopDays, exemptionLeaveDays, workingDays } = summarizeMonthRows(driverRows);
-    const { grossSalary, payable } = driverSalarySnapshotFor(driver, month, workingDays, lopDays);
+  return rows.map(row => {
+    const locationRows = rowsForLocation(row, attendance, month);
+    const { lopDays, exemptionLeaveDays, workingDays } = summarizeMonthRows(locationRows);
+    const { grossSalary, payable } = driverSalarySnapshotFor(row.driver, month, workingDays, lopDays);
     return {
-      driverId: driver.id, driverName: driver.name, location: g.location,
+      driverId: row.driver.id, driverName: row.driver.name, location: row.location,
       noOfDays: total, workingDays, lop: lopDays, exemptionLeave: exemptionLeaveDays,
       grossSalary, payableAmount: payable
     };
-  }));
+  });
 }
 
 // "driver_attendance_<full month name>_<year>" - the file naming convention
@@ -174,32 +201,42 @@ function downloadAllFileBase(month: string): string {
 // tab's Summary sheet/table - deliberately separate from the raw day-grid
 // sections so the export carries both the full detail and an at-a-glance
 // total, same as the on-screen grid's own Working Days/LOP/Exemption Leave
-// columns but rolled up to location level instead of per-driver.
-function attendanceSummarySection(month: string, groups: { location: string; drivers: DriverEmployee[] }[], attendance: DriverAttendance[]): ReportTableSection {
+// columns but rolled up to location level instead of per-row. Groups `rows`
+// by their own `.location` internally rather than requiring a separate
+// groups structure.
+function attendanceSummarySection(month: string, rows: LocationDriverRow[], attendance: DriverAttendance[]): ReportTableSection {
   const columns = ['Location', 'Drivers', ...ALL_STATUSES.map(s => s.label), 'Avg Working Days'];
-  const rows = groups.map(g => {
+  const byLocation = new Map<DriverLocationCategory, LocationDriverRow[]>();
+  for (const row of rows) {
+    if (!byLocation.has(row.location)) byLocation.set(row.location, []);
+    byLocation.get(row.location)!.push(row);
+  }
+  const tableRows = Array.from(byLocation.entries()).map(([location, locRows]) => {
     const counts: Record<AttendanceStatusCode, number> = Object.fromEntries(ALL_STATUSES.map(s => [s.status, 0])) as Record<AttendanceStatusCode, number>;
     let workingDaysTotal = 0;
-    g.drivers.forEach(driver => {
-      const driverRows = attendance.filter(a => a.driverId === driver.id && a.date.startsWith(month));
-      driverRows.forEach(r => { counts[r.status] += 1; });
-      workingDaysTotal += summarizeMonthRows(driverRows).workingDays;
+    locRows.forEach(row => {
+      const locationRows = rowsForLocation(row, attendance, month);
+      locationRows.forEach(r => { counts[r.status] += 1; });
+      workingDaysTotal += summarizeMonthRows(locationRows).workingDays;
     });
-    const avgWorkingDays = g.drivers.length ? Math.round((workingDaysTotal / g.drivers.length) * 10) / 10 : 0;
-    return [g.location, g.drivers.length, ...ALL_STATUSES.map(s => counts[s.status]), avgWorkingDays];
+    const avgWorkingDays = locRows.length ? Math.round((workingDaysTotal / locRows.length) * 10) / 10 : 0;
+    return [location, locRows.length, ...ALL_STATUSES.map(s => counts[s.status]), avgWorkingDays];
   });
-  return { heading: 'Summary', columns, rows };
+  return { heading: 'Summary', columns, rows: tableRows };
 }
 
-// Every attendance record ever logged for one driver, oldest first - the
-// "Full History" option on the per-driver download, as opposed to the
-// current-month grid the other export options use.
-function driverHistorySection(driver: DriverEmployee, attendance: DriverAttendance[]): ReportTableSection {
+// Every attendance record ever logged for this (driver, location) pair,
+// oldest first - the "Full History" option on the per-row download, as
+// opposed to the current-month grid the other export options use. Scoped
+// to the row's own location (2026-09-03) - "Full History" downloaded from
+// the Hyderabad row shows only Hyderabad's history, forever; the Vizag row
+// has its own separate Full History download.
+function driverHistorySection(row: LocationDriverRow, attendance: DriverAttendance[]): ReportTableSection {
   const rows = attendance
-    .filter(a => a.driverId === driver.id)
+    .filter(a => a.driverId === row.driver.id && attendanceBelongsToLocation(a, row.driver, row.location))
     .sort((a, b) => a.date.localeCompare(b.date))
     .map(a => [a.date, ALL_STATUSES.find(s => s.status === a.status)?.label || a.status, a.remarks || '', a.markedBy || '']);
-  return { heading: `${driver.id} Full History`, columns: ['Date', 'Status', 'Remarks', 'Marked By'], rows };
+  return { heading: `${row.driver.id} - ${row.location} Full History`, columns: ['Date', 'Status', 'Remarks', 'Marked By'], rows };
 }
 
 const safeFileToken = (s: string): string => s.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
@@ -209,7 +246,7 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
   const [attendance, setAttendance] = useState<DriverAttendance[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [summaryDriver, setSummaryDriver] = useState<DriverEmployee | null>(null);
-  const [popover, setPopover] = useState<{ driverId: string; day: number; top: number; left: number } | null>(null);
+  const [popover, setPopover] = useState<{ driverId: string; location: DriverLocationCategory; day: number; top: number; left: number } | null>(null);
   const [popoverStatus, setPopoverStatus] = useState<AttendanceStatusCode>('Present');
   const [popoverRemarks, setPopoverRemarks] = useState('');
 
@@ -241,6 +278,15 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
     return [...drivers, ...synthesized];
   }, [drivers, attendance]);
 
+  // One row per (driver, location) assignment (2026-09-03 multi-location
+  // support) - a driver covering more than one location appears once per
+  // location here, each independently filtered to just that location's own
+  // attendance everywhere below.
+  const driverLocationRows: LocationDriverRow[] = useMemo(
+    () => driversForDisplay.flatMap(driver => driverAllLocations(driver).map(location => ({ driver, location }))),
+    [driversForDisplay]
+  );
+
   // Grouped by location, one colored section header per group - same
   // treatment as Driver Salary. Writability (e.g. Vinod: can view every
   // location's attendance, but only mark/edit within his own
@@ -249,23 +295,23 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
   // synthetic 'Unassigned / Deleted Drivers' group is always view-only -
   // there's no real location to check write access against.
   const groupedDrivers = useMemo(() => {
-    const base = !searchTerm ? driversForDisplay : driversForDisplay.filter(d => {
+    const base = !searchTerm ? driverLocationRows : driverLocationRows.filter(({ driver }) => {
       const q = searchTerm.toLowerCase();
-      return d.id.toLowerCase().includes(q) || d.name.toLowerCase().includes(q) || (d.vehicleNo || '').toLowerCase().includes(q);
+      return driver.id.toLowerCase().includes(q) || driver.name.toLowerCase().includes(q) || (driver.vehicleNo || '').toLowerCase().includes(q);
     });
-    const byLocation = new Map<DriverLocationCategory, DriverEmployee[]>();
-    for (const d of base) {
-      if (!byLocation.has(d.location)) byLocation.set(d.location, []);
-      byLocation.get(d.location)!.push(d);
+    const byLocation = new Map<DriverLocationCategory, LocationDriverRow[]>();
+    for (const row of base) {
+      if (!byLocation.has(row.location)) byLocation.set(row.location, []);
+      byLocation.get(row.location)!.push(row);
     }
     return DISPLAY_LOCATION_ORDER
       .filter(loc => byLocation.has(loc))
       .map(loc => ({
         location: loc,
         writable: loc === 'Unassigned / Deleted Drivers' ? false : (writableLocations === 'ALL' || writableLocations.includes(loc)),
-        drivers: [...byLocation.get(loc)!].sort((a, b) => compareTrailingNumber(a.id, b.id) || a.id.localeCompare(b.id))
+        rows: [...byLocation.get(loc)!].sort((a, b) => compareTrailingNumber(a.driver.id, b.driver.id) || a.driver.id.localeCompare(b.driver.id))
       }));
-  }, [driversForDisplay, searchTerm, writableLocations]);
+  }, [driverLocationRows, searchTerm, writableLocations]);
 
   // This user's own writable locations, in the same order/shape as
   // groupedDrivers - the subset "Download My Locations" bundles into one
@@ -274,6 +320,8 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
   // than one location (a single writable location is already just one click
   // via that location's own group-header download).
   const myLocationGroups = useMemo(() => groupedDrivers.filter(g => g.writable), [groupedDrivers]);
+  const myLocationRows = useMemo(() => myLocationGroups.flatMap(g => g.rows), [myLocationGroups]);
+  const allRows = useMemo(() => groupedDrivers.flatMap(g => g.rows), [groupedDrivers]);
 
   const monthLabel = useMemo(() => {
     const [y, m] = month.split('-').map(Number);
@@ -288,52 +336,59 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
   // buildDriverAttendanceSummaryPdf - both formats now carry the same
   // current-month figures instead of PDF's old separate multi-month
   // historical shape (buildLocationAttendancePdf, removed).
-  const handleDownloadLocationExcel = (location: string, list: DriverEmployee[]) =>
-    exportReportToExcel(`KCM_Driver_Attendance_${safeFileToken(location)}_${month}`, [attendanceGridSection(month, list, attendance, location), attendanceSummarySection(month, [{ location, drivers: list }], attendance)]);
-  const handleDownloadLocationPdf = (location: string, list: DriverEmployee[]) =>
-    buildDriverAttendanceSummaryPdf(`${location} - ${monthLabel}`, driverAttendanceSummaryRows(month, [{ location, drivers: list }], attendance))
+  const handleDownloadLocationExcel = (location: string, rows: LocationDriverRow[]) =>
+    exportReportToExcel(`KCM_Driver_Attendance_${safeFileToken(location)}_${month}`, [attendanceGridSection(month, rows, attendance, location), attendanceSummarySection(month, rows, attendance)]);
+  const handleDownloadLocationPdf = (location: string, rows: LocationDriverRow[]) =>
+    buildDriverAttendanceSummaryPdf(`${location} - ${monthLabel}`, driverAttendanceSummaryRows(month, rows, attendance))
       .save(`KCM_Driver_Attendance_${safeFileToken(location)}_${month}.pdf`);
 
   const handleDownloadMyLocationsExcel = () =>
-    exportReportToExcel(`KCM_Driver_Attendance_My_Locations_${month}`, [...myLocationGroups.map(g => attendanceGridSection(month, g.drivers, attendance, g.location)), attendanceSummarySection(month, myLocationGroups, attendance)]);
+    exportReportToExcel(`KCM_Driver_Attendance_My_Locations_${month}`, [attendanceGridSection(month, myLocationRows, attendance, 'Driver Attendance', true), attendanceSummarySection(month, myLocationRows, attendance)]);
   const handleDownloadMyLocationsPdf = () =>
-    buildDriverAttendanceSummaryPdf(`My Locations - ${monthLabel}`, driverAttendanceSummaryRows(month, myLocationGroups, attendance))
+    buildDriverAttendanceSummaryPdf(`My Locations - ${monthLabel}`, driverAttendanceSummaryRows(month, myLocationRows, attendance))
       .save(`KCM_Driver_Attendance_My_Locations_${month}.pdf`);
 
   // "Download tab" (item 4) - every driver, every location. Excel keeps its
-  // full day-by-day grid (plus a per-location Summary sheet) - a spreadsheet
-  // handles that many columns fine. PDF shows the same one-row-per-driver
-  // data (Driver ID/Name/Location/No. of Days/Working Days/LOP/Exemption
-  // Leave/Gross Salary/Payable Amount) as a clean table instead - identical
-  // dataset to Excel, just without the day-grid columns that would be
-  // unreadable in a PDF (see buildDriverAttendanceSummaryPdf). Both use the
-  // same driver_attendance_<month>_<year> file naming convention.
+  // full day-by-day grid as ONE single sheet spanning every location (plus
+  // a separate Summary rollup sheet) - 2026-09-03: previously one sheet per
+  // location, which made filtering/sorting across the whole roster
+  // impossible without stitching sheets back together by hand; a Location
+  // column keeps every row identifiable now that they're all in one place.
+  // PDF shows the same one-row-per-driver data (Driver ID/Name/Location/No.
+  // of Days/Working Days/LOP/Exemption Leave/Gross Salary/Payable Amount)
+  // as a clean table instead - identical dataset to Excel, just without the
+  // day-grid columns that would be unreadable in a PDF (see
+  // buildDriverAttendanceSummaryPdf) - already a single flat table,
+  // unchanged. Both use the same driver_attendance_<month>_<year> file
+  // naming convention.
   const handleDownloadAllExcel = () =>
-    exportReportToExcel(downloadAllFileBase(month), [...groupedDrivers.map(g => attendanceGridSection(month, g.drivers, attendance, g.location)), attendanceSummarySection(month, groupedDrivers, attendance)]);
+    exportReportToExcel(downloadAllFileBase(month), [attendanceGridSection(month, allRows, attendance, 'Driver Attendance', true), attendanceSummarySection(month, allRows, attendance)]);
   const handleDownloadAllPdf = () =>
-    buildDriverAttendanceSummaryPdf(`All Locations - ${monthLabel}`, driverAttendanceSummaryRows(month, groupedDrivers, attendance))
+    buildDriverAttendanceSummaryPdf(`All Locations - ${monthLabel}`, driverAttendanceSummaryRows(month, allRows, attendance))
       .save(`${downloadAllFileBase(month)}.pdf`);
 
-  // Per-driver row download (item 3) - "both" full history and the
-  // currently-selected month, each in Excel or PDF, so this one dropdown
-  // carries 4 options rather than picking one scope for the user.
-  const driverDownloadOptions = (driver: DriverEmployee): DownloadMenuOption[] => [
-    { key: 'month-excel', label: `${monthLabel} - Excel`, icon: 'excel', onClick: () => exportReportToExcel(`KCM_Attendance_${driver.id}_${month}`, [attendanceGridSection(month, [driver], attendance, `${driver.id} - ${monthLabel}`)]) },
-    { key: 'month-pdf', label: `${monthLabel} - PDF`, icon: 'pdf', onClick: () => buildDriverAttendancePdf(driver, attendance, 'month', month).save(`KCM_Attendance_${driver.id}_${month}.pdf`) },
-    { key: 'history-excel', label: 'Full History - Excel', icon: 'excel', onClick: () => exportReportToExcel(`KCM_Attendance_${driver.id}_Full_History`, [driverHistorySection(driver, attendance)]) },
-    { key: 'history-pdf', label: 'Full History - PDF', icon: 'pdf', onClick: () => buildDriverAttendancePdf(driver, attendance, 'history').save(`KCM_Attendance_${driver.id}_Full_History.pdf`) },
+  // Per-row download (item 3) - "both" full history and the currently-
+  // selected month, each in Excel or PDF, scoped to this row's own
+  // (driver, location) pair throughout.
+  const driverDownloadOptions = (row: LocationDriverRow): DownloadMenuOption[] => [
+    { key: 'month-excel', label: `${monthLabel} - Excel`, icon: 'excel', onClick: () => exportReportToExcel(`KCM_Attendance_${row.driver.id}_${safeFileToken(row.location)}_${month}`, [attendanceGridSection(month, [row], attendance, `${row.driver.id} - ${row.location} - ${monthLabel}`)]) },
+    { key: 'month-pdf', label: `${monthLabel} - PDF`, icon: 'pdf', onClick: () => buildDriverAttendancePdf(row.driver, rowsForLocation(row, attendance, month), 'month', month).save(`KCM_Attendance_${row.driver.id}_${safeFileToken(row.location)}_${month}.pdf`) },
+    { key: 'history-excel', label: 'Full History - Excel', icon: 'excel', onClick: () => exportReportToExcel(`KCM_Attendance_${row.driver.id}_${safeFileToken(row.location)}_Full_History`, [driverHistorySection(row, attendance)]) },
+    { key: 'history-pdf', label: 'Full History - PDF', icon: 'pdf', onClick: () => buildDriverAttendancePdf(row.driver, attendance.filter(a => attendanceBelongsToLocation(a, row.driver, row.location)), 'history').save(`KCM_Attendance_${row.driver.id}_${safeFileToken(row.location)}_Full_History.pdf`) },
   ];
 
   // LOP/Exemption Leave/Working Days summary columns - mirrors the server's
   // computeDriverMonthlyAttendanceSummary so this and the Salary Breakup tab
-  // always agree. LOP <- AbsentLOP, Exemption Leave <- LeaveWithPermission,
-  // Working Days (salaryWorkingDays) <- Present + PaidLeave, since Paid Leave
-  // counts as a worked day for salary purposes.
-  const driverMonthSummary = (driverId: string) => summarizeMonthRows(monthAttendance.filter(a => a.driverId === driverId));
+  // always agree, scoped to this row's own location. LOP <- AbsentLOP,
+  // Exemption Leave <- LeaveWithPermission, Working Days (salaryWorkingDays)
+  // <- Present + PaidLeave, since Paid Leave counts as a worked day for
+  // salary purposes.
+  const driverMonthSummary = (row: LocationDriverRow) =>
+    summarizeMonthRows(monthAttendance.filter(a => a.driverId === row.driver.id && attendanceBelongsToLocation(a, row.driver, row.location)));
 
-  const cellRecord = (driverId: string, day: number) => {
+  const cellRecord = (row: LocationDriverRow, day: number) => {
     const date = `${month}-${String(day).padStart(2, '0')}`;
-    return monthAttendance.find(a => a.driverId === driverId && a.date === date) || null;
+    return monthAttendance.find(a => a.driverId === row.driver.id && a.date === date && attendanceBelongsToLocation(a, row.driver, row.location)) || null;
   };
 
   // Attendance can only ever be marked for today or earlier - a day cell
@@ -353,11 +408,11 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
     return parts.length > 0 ? parts.join(' • ') : undefined;
   };
 
-  const markCell = async (driverId: string, day: number, status: AttendanceStatusCode, remarks?: string) => {
+  const markCell = async (driverId: string, location: DriverLocationCategory, day: number, status: AttendanceStatusCode, remarks?: string) => {
     const date = `${month}-${String(day).padStart(2, '0')}`;
     const res = await authFetch('/api/drivers/attendance/mark', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ driverId, date, status, remarks })
+      body: JSON.stringify({ driverId, date, status, remarks, location })
     });
     if (res.ok) {
       const { data } = await res.json();
@@ -365,27 +420,27 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
     }
   };
 
-  const handleCellClick = (driverId: string, day: number) => {
+  const handleCellClick = (row: LocationDriverRow, day: number) => {
     if (isFutureDay(day)) return;
-    const current = cellRecord(driverId, day);
+    const current = cellRecord(row, day);
     const idx = current ? QUICK_CODES.findIndex(c => c.status === current.status) : -1;
     const next = QUICK_CODES[(idx + 1) % QUICK_CODES.length];
-    markCell(driverId, day, next.status);
+    markCell(row.driver.id, row.location, day, next.status);
   };
 
-  const openPopover = (e: React.MouseEvent, driverId: string, day: number) => {
+  const openPopover = (e: React.MouseEvent, row: LocationDriverRow, day: number) => {
     e.stopPropagation();
     if (isFutureDay(day)) return;
-    const current = cellRecord(driverId, day);
+    const current = cellRecord(row, day);
     setPopoverStatus(current?.status || 'Present');
     setPopoverRemarks(current?.remarks || '');
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    setPopover({ driverId, day, top: rect.bottom + 4, left: rect.left });
+    setPopover({ driverId: row.driver.id, location: row.location, day, top: rect.bottom + 4, left: rect.left });
   };
 
   const savePopover = async () => {
     if (!popover) return;
-    await markCell(popover.driverId, popover.day, popoverStatus, popoverRemarks || undefined);
+    await markCell(popover.driverId, popover.location, popover.day, popoverStatus, popoverRemarks || undefined);
     setPopover(null);
   };
 
@@ -445,7 +500,7 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
                   <th key={day} className="px-1 py-2 text-center font-bold text-purple-200 w-9">{dayLabel(month, day)}</th>
                 ))}
                 <th className="px-2 py-2 text-center font-bold text-teal-200 uppercase tracking-wider min-w-[70px]" title="Total calendar days in the selected month">No. of Days</th>
-                <th className="px-2 py-2 text-center font-bold text-emerald-200 uppercase tracking-wider min-w-[70px]" title="Present + Paid Leave days this month">Working Days</th>
+                <th className="px-2 py-2 text-center font-bold text-emerald-200 uppercase tracking-wider min-w-[70px]" title="Present + Paid Leave days this month, at this location only">Working Days</th>
                 <th className="px-2 py-2 text-center font-bold text-orange-200 uppercase tracking-wider min-w-[50px]">LOP</th>
                 <th className="px-2 py-2 text-center font-bold text-sky-200 uppercase tracking-wider min-w-[70px]">Exemption Leave</th>
                 <th className="px-2 py-2 text-center font-bold text-purple-200 uppercase tracking-wider min-w-[40px]">Download</th>
@@ -462,26 +517,30 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
                         <span>
                           {group.location}
                           <span className="ml-2 font-semibold normal-case text-emerald-100 text-[10px]">
-                            ({group.drivers.length} driver{group.drivers.length === 1 ? '' : 's'})
+                            ({group.rows.length} driver{group.rows.length === 1 ? '' : 's'})
                           </span>
                           {!group.writable && <span className="ml-2 text-[9px] font-bold uppercase bg-white/20 rounded px-1.5 py-0.5">View only</span>}
                         </span>
                         <DownloadMenu variant="ghost" label="Download" options={[
-                          { key: 'excel', label: 'Excel (.xlsx)', icon: 'excel', onClick: () => handleDownloadLocationExcel(group.location, group.drivers) },
-                          { key: 'pdf', label: 'PDF', icon: 'pdf', onClick: () => handleDownloadLocationPdf(group.location, group.drivers) },
+                          { key: 'excel', label: 'Excel (.xlsx)', icon: 'excel', onClick: () => handleDownloadLocationExcel(group.location, group.rows) },
+                          { key: 'pdf', label: 'PDF', icon: 'pdf', onClick: () => handleDownloadLocationPdf(group.location, group.rows) },
                         ]} />
                       </div>
                     </td>
                   </tr>
-                  {group.drivers.map(driver => {
-                    const { lopDays, exemptionLeaveDays, workingDays } = driverMonthSummary(driver.id);
-                    // An inactive/deactivated driver is view-only here too -
-                    // their history stays fully visible/downloadable, they
-                    // just can't be marked for any new date (2026-09-02).
-                    const isInactive = driver.status === 'inactive';
+                  {group.rows.map(row => {
+                    const { driver, location } = row;
+                    const { lopDays, exemptionLeaveDays, workingDays } = driverMonthSummary(row);
+                    // An inactive/deactivated driver (at THIS location - see
+                    // isDriverActiveAtLocation) is view-only here too - their
+                    // history at this location stays fully visible/
+                    // downloadable, they just can't be marked for any new
+                    // date at this location (2026-09-02, extended to
+                    // per-location 2026-09-03).
+                    const isInactive = !isDriverActiveAtLocation(driver, location);
                     const writable = group.writable && !isInactive;
                     return (
-                      <tr key={driver.id} className={`hover:bg-purple-50/40 ${writable ? '' : 'opacity-70'}`}>
+                      <tr key={`${driver.id}-${location}`} className={`hover:bg-purple-50/40 ${writable ? '' : 'opacity-70'}`}>
                         <td
                           className="px-2 py-1 cursor-pointer sticky left-0 z-10 bg-white whitespace-nowrap"
                           onClick={() => setSummaryDriver(driver)}
@@ -503,19 +562,19 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
                           })()}
                         </td>
                         {Array.from({ length: totalDays }, (_, i) => i + 1).map(day => {
-                          const record = cellRecord(driver.id, day);
+                          const record = cellRecord(row, day);
                           const future = isFutureDay(day);
                           const cellWritable = writable && !future;
                           return (
                             <td key={day} className="p-0.5 relative group">
-                              <button onClick={() => cellWritable && handleCellClick(driver.id, day)}
+                              <button onClick={() => cellWritable && handleCellClick(row, day)}
                                 disabled={!cellWritable}
-                                title={future ? 'Future date - attendance cannot be marked ahead of today' : (isInactive ? 'View only - this driver is deactivated' : !writable ? 'View only - outside your assigned locations' : cellTitle(record))}
+                                title={future ? 'Future date - attendance cannot be marked ahead of today' : (isInactive ? 'View only - this driver is deactivated at this location' : !writable ? 'View only - outside your assigned locations' : cellTitle(record))}
                                 className={`w-9 h-6 rounded text-[9px] font-bold border ${cellWritable ? 'cursor-pointer' : 'cursor-not-allowed'} ${future ? 'bg-slate-100 border-slate-100 text-slate-300' : record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}>
                                 {record ? STATUS_ABBR[record.status] : '-'}
                               </button>
                               {cellWritable && <button
-                                onClick={e => openPopover(e, driver.id, day)}
+                                onClick={e => openPopover(e, row, day)}
                                 className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-slate-700 text-white text-[8px] opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer"
                                 title="More statuses & remarks"
                               >
@@ -537,7 +596,7 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
                           <span className="inline-block bg-sky-50 text-sky-700 border border-sky-200 rounded-full px-2 py-0.5 font-bold">{exemptionLeaveDays}</span>
                         </td>
                         <td className="px-2 py-1 text-center">
-                          <DownloadMenu label="" options={driverDownloadOptions(driver)} />
+                          <DownloadMenu label="" options={driverDownloadOptions(row)} />
                         </td>
                       </tr>
                     );

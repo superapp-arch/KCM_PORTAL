@@ -4,6 +4,7 @@ import { DriverEmployee, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES, Veh
 import DocumentAttachment from '../DocumentAttachment';
 import { authFetch } from '../../authFetch';
 import { computeDriverEarnings } from '../../utils/driverSalaryExport';
+import { driverAllLocations } from '../../utils/driverLocations';
 import { DriverSalaryAdvanceVoucherSlim, computeDriverPettyCashAdvance, driverPettyCashAdvanceTooltip } from '../../utils/driverPettyCashAdvance';
 
 interface DriverFormModalProps {
@@ -31,20 +32,38 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
   const [error, setError] = useState('');
 
   // Only offer locations this user can actually save into - if editing a
-  // driver whose existing location falls outside that scope (shouldn't
+  // driver whose existing location(s) fall outside that scope (shouldn't
   // normally happen, since DriverSalarySheet only opens Edit for writable
-  // rows), keep it in the list so an unrelated field edit can't silently
-  // reassign the driver's location.
+  // rows), keep them in the list so an unrelated field edit can't silently
+  // drop a location assignment this user doesn't otherwise manage.
   const locationOptions: DriverLocationCategory[] = writableLocations === 'ALL'
     ? DRIVER_LOCATION_CATEGORIES
-    : (driver && !writableLocations.includes(driver.location) ? [driver.location, ...writableLocations] : writableLocations);
+    : Array.from(new Set([...(driver ? driverAllLocations(driver) : []), ...writableLocations]));
 
   const [basic, setBasic] = useState({
     id: driver?.id || '', name: driver?.name || '', driverNo: driver?.driverNo || '',
     accountNumber: driver?.accountNumber || '', ifscCode: driver?.ifscCode || '',
-    reporting: driver?.reporting || '', remark: driver?.remark || '',
-    location: driver?.location || (locationOptions[0] || DRIVER_LOCATION_CATEGORIES[0]) as DriverLocationCategory
+    reporting: driver?.reporting || '', remark: driver?.remark || ''
   });
+  // A driver can be assigned to more than one location (2026-09-03) - chips,
+  // same pattern as Vehicle Nos below. locations[0] is always saved as the
+  // driver's primary `location`; everything after it becomes
+  // additionalLocations. Order matters: removing the first chip promotes
+  // whichever is next to primary.
+  const [locations, setLocations] = useState<DriverLocationCategory[]>(
+    driver ? driverAllLocations(driver) : [locationOptions[0] || DRIVER_LOCATION_CATEGORIES[0]]
+  );
+  const [locationToAdd, setLocationToAdd] = useState<DriverLocationCategory | ''>('');
+  const addLocation = () => {
+    if (!locationToAdd || locations.includes(locationToAdd)) return;
+    setLocations(prev => [...prev, locationToAdd]);
+    setLocationToAdd('');
+  };
+  const removeLocation = (loc: DriverLocationCategory) => {
+    if (locations.length <= 1) return; // always at least one location
+    setLocations(prev => prev.filter(l => l !== loc));
+  };
+  const addableLocationOptions = locationOptions.filter(loc => !locations.includes(loc));
   // A driver can legitimately cover more than one vehicle - chips instead of
   // a single text field. Falls back to the legacy single vehicleNo for a
   // driver saved before vehicleNos existed.
@@ -151,6 +170,14 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
     try {
       const payload = {
         ...basic,
+        location: locations[0],
+        // Always sent as a real array (even empty), never omitted - the
+        // save route merges a partial patch onto the existing record (see
+        // server.ts's PUT /api/drivers/employees/:id), so an omitted/
+        // undefined field would leave a stale additionalLocations value in
+        // place instead of clearing it when a location is removed down to
+        // just the primary.
+        additionalLocations: locations.slice(1),
         vehicleNos,
         vehicleNo: vehicleNos[0] || undefined, // kept in sync for old readers that only need "a" vehicle to show
         aadharDocuments,
@@ -258,17 +285,32 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
                   <input value={basic.ifscCode} onChange={e => setBasic({ ...basic, ifscCode: e.target.value.toUpperCase() })} autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-500 mb-1">Reporting</label>
-                  <input value={basic.reporting} onChange={e => setBasic({ ...basic, reporting: e.target.value })} autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-500 mb-1">Location</label>
-                  <select value={basic.location} onChange={e => setBasic({ ...basic, location: e.target.value as DriverLocationCategory })} className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5">
-                    {locationOptions.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+              <div>
+                <label className="block font-semibold text-slate-500 mb-1">Reporting</label>
+                <input value={basic.reporting} onChange={e => setBasic({ ...basic, reporting: e.target.value })} autoComplete="off" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-500 mb-1">
+                  Location <span className="text-slate-400 font-normal">(add more than one if this driver covers several)</span>
+                </label>
+                <div className="flex gap-1.5">
+                  <select value={locationToAdd} onChange={e => setLocationToAdd(e.target.value as DriverLocationCategory)} className="flex-1 border border-slate-300 rounded-lg px-2.5 py-1.5">
+                    <option value="">Select a location to add...</option>
+                    {addableLocationOptions.map(loc => <option key={loc} value={loc}>{loc}</option>)}
                   </select>
+                  <button type="button" onClick={addLocation} disabled={!locationToAdd} className="px-3 border border-slate-300 rounded-lg bg-slate-50 hover:bg-slate-100 font-bold text-slate-600 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">Add</button>
                 </div>
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {locations.map((loc, i) => (
+                    <span key={loc} className="inline-flex items-center gap-1 bg-teal-50 border border-teal-200 text-teal-800 font-bold text-[11px] px-2 py-1 rounded-full">
+                      {loc}{i === 0 && <span className="text-teal-500 font-semibold">(Primary)</span>}
+                      {locations.length > 1 && (
+                        <button type="button" onClick={() => removeLocation(loc)} title={`Remove ${loc}`} className="hover:text-rose-600 cursor-pointer"><X className="w-3 h-3" /></button>
+                      )}
+                    </span>
+                  ))}
+                </div>
+                <p className="text-[9px] text-slate-400 font-mono mt-0.5">Attendance stays separate per location - marking Hyderabad never affects Vizag, and vice versa. Removing a location here only removes the assignment; history already recorded there is never deleted.</p>
               </div>
               <div>
                 <label className="block font-semibold text-slate-500 mb-1">Remark</label>

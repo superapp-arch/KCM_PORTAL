@@ -23,6 +23,7 @@ import {
 } from './src/utils/vehicleCycleDefaults.ts';
 import { latestOdometerFor, computeKmStatus, computeAlignmentStatus, nextAlignmentDueKm, projectDueDate, daysUntil } from './src/utils/maintenanceDates.ts';
 import { PETTY_CASH_USERS } from './src/utils/pettyCashUsers.ts';
+import { driverAllLocations, isDriverActiveAtLocation, attendanceBelongsToLocation } from './src/utils/driverLocations.ts';
 import {
   User,
   Vehicle,
@@ -1617,10 +1618,18 @@ async function startServer() {
 
   // Builds and sends the Compliance digest email right now - every vehicle
   // whose insurance/permit/FC/tax expiry falls exactly on its 3/7/15-day
-  // milestone today, sorted soonest-first - to the Super Admin(s) and the
-  // Vehicle Data Manager (Chandana). Used both by the automatic daily
-  // schedule and the manual "Send Alerts Now" button; the manual path always
-  // sends regardless of whether today's automatic digest already went out.
+  // milestone today, sorted soonest-first - to the Super Admin(s) and
+  // Bhagya. Used both by the automatic daily schedule and the manual "Send
+  // Alerts Now" button; the manual path always sends regardless of whether
+  // today's automatic digest already went out.
+  //
+  // 2026-09-03: recipient swapped from Chandana to Bhagya (bhagya@
+  // kcmlogistics.in) - same recipient-selection logic (Super Admin(s) plus
+  // one named non-admin recipient), just a different person. Matched by
+  // email rather than username, unlike the old Chandana check, since that's
+  // the same identifier this file already uses elsewhere for Bhagya (see
+  // BHAGYA_EMAIL below) - no assumption needed about her exact `username`
+  // value.
   //
   // 2026-08-29: deliberately compliance-only again - it used to also fold in
   // Scheduled Service/Wheel Alignment (calculateMaintenanceMilestoneAlerts
@@ -1636,7 +1645,7 @@ async function startServer() {
 
     const usersList = await getUsersWithFallback();
     const recipients = usersList
-      .filter((u: any) => u.department === 'super_admin' || u.username === 'chandana')
+      .filter((u: any) => u.department === 'super_admin' || u.email === 'bhagya@kcmlogistics.in')
       .map((u: any) => u.email)
       .filter(Boolean) as string[];
 
@@ -4208,7 +4217,7 @@ async function startServer() {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const allowed = getAllowedDriverViewLocations(sessionUser);
       const all = await getDriverEmployees();
-      res.json(allowed === 'ALL' ? all : all.filter(d => allowed.includes(d.location)));
+      res.json(allowed === 'ALL' ? all : all.filter(d => driverAllLocations(d).some(loc => allowed.includes(loc))));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -4253,7 +4262,7 @@ async function startServer() {
         ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
       });
       const allowed = getAllowedDriverViewLocations(sessionUser);
-      res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => allowed.includes(d.location)) });
+      res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => driverAllLocations(d).some(loc => allowed.includes(loc))) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -4263,8 +4272,14 @@ async function startServer() {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getDriverEmployees()).find(d => d.id === req.params.id);
-      const targetLocation = req.body.location || existing?.location;
-      if (!existing || !canWriteDriverLocation(existing.location, sessionUser) || !canWriteDriverLocation(targetLocation, sessionUser)) {
+      // 2026-09-03 multi-location support: write access to ANY of the
+      // driver's currently-assigned locations is enough to edit their
+      // shared profile fields (name, bank details, the location list
+      // itself, etc.) - matches the "any overlap" rule view scoping
+      // already uses. Which NEW locations can be added is left to the
+      // client's own locationOptions (already restricted to the caller's
+      // writable set), not re-validated here per-location.
+      if (!existing || !driverAllLocations(existing).some(loc => canWriteDriverLocation(loc, sessionUser))) {
         return res.status(403).json({ error: 'You cannot modify this driver.' });
       }
       // Merged with `existing` (2026-09-02 data-integrity fix) - saveDriverEmployee
@@ -4286,7 +4301,7 @@ async function startServer() {
         ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
       });
       const allowed = getAllowedDriverViewLocations(sessionUser);
-      res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => allowed.includes(d.location)) });
+      res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => driverAllLocations(d).some(loc => allowed.includes(loc))) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -4309,7 +4324,7 @@ async function startServer() {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getDriverEmployees()).find(d => d.id === req.params.id);
-      if (!existing || !canWriteDriverLocation(existing.location, sessionUser)) {
+      if (!existing || !driverAllLocations(existing).some(loc => canWriteDriverLocation(loc, sessionUser))) {
         return res.status(403).json({ error: 'You cannot deactivate this driver.' });
       }
       const inactivatedDate = new Date().toISOString().slice(0, 10);
@@ -4322,7 +4337,7 @@ async function startServer() {
         ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
       });
       const allowed = getAllowedDriverViewLocations(sessionUser);
-      res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => allowed.includes(d.location)) });
+      res.json({ success: true, data: allowed === 'ALL' ? result : result.filter(d => driverAllLocations(d).some(loc => allowed.includes(loc))) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -4335,10 +4350,22 @@ async function startServer() {
   // `mode: 'view'` allows read-only access outside the caller's write scope
   // (i.e. for DRIVER_VIEW_ALL_EMAILS like Vinod); `mode: 'write'` (default)
   // is the stricter check used before actually marking/editing/deleting.
-  async function assertDriverAccessible(driverId: string, sessionUser: Awaited<ReturnType<typeof getSessionUser>> | undefined, mode: 'view' | 'write' = 'write') {
+  // `location`, when given (2026-09-03 multi-location support), checks
+  // access against that ONE specific assignment - e.g. marking a Vizag cell
+  // requires write access to Vizag specifically, even if this same driver
+  // also has a Hyderabad assignment the caller happens to manage. Omitted
+  // (the default), it checks whether the caller has access to ANY of the
+  // driver's assigned locations - used for actions on the driver's shared
+  // profile fields (name, bank details, etc.) rather than one location.
+  async function assertDriverAccessible(
+    driverId: string, sessionUser: Awaited<ReturnType<typeof getSessionUser>> | undefined,
+    mode: 'view' | 'write' = 'write', location?: DriverLocationCategory
+  ) {
     const driver = (await getDriverEmployees()).find(d => d.id === driverId);
     if (!driver) return false;
-    return mode === 'view' ? canViewDriverLocation(driver.location, sessionUser) : canWriteDriverLocation(driver.location, sessionUser);
+    const check = mode === 'view' ? canViewDriverLocation : canWriteDriverLocation;
+    if (location) return check(location, sessionUser);
+    return driverAllLocations(driver).some(loc => check(loc, sessionUser));
   }
 
   // 2026-09-02 data-integrity note: this scoping is keyed off `driverId`
@@ -4359,7 +4386,7 @@ async function startServer() {
       const allowed = getAllowedDriverViewLocations(sessionUser);
       const [rows, drivers] = await Promise.all([getDriverAttendance(), getDriverEmployees()]);
       const scoped = allowed === 'ALL' ? rows : (() => {
-        const allowedDriverIds = new Set(drivers.filter(d => allowed.includes(d.location)).map(d => d.id));
+        const allowedDriverIds = new Set(drivers.filter(d => driverAllLocations(d).some(loc => allowed.includes(loc))).map(d => d.id));
         return rows.filter(r => allowedDriverIds.has(r.driverId));
       })();
       res.json(maskAttributionField(scoped, 'markedBy', sessionUser));
@@ -4368,19 +4395,29 @@ async function startServer() {
     }
   });
 
+  // `location` (2026-09-03 multi-location support) is stamped onto the
+  // saved record and validated against the driver's own assignments, so a
+  // driver covering more than one location has their attendance correctly
+  // attributed to whichever location it was actually marked under rather
+  // than always resolving to their primary location. Omitted entirely, it
+  // falls back to the driver's primary location - keeps any older client
+  // request shape working exactly as before.
   app.post('/api/drivers/attendance/mark', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
-      const { driverId, date, status, remarks } = req.body;
-      if (!(await assertDriverAccessible(driverId, sessionUser))) {
-        return res.status(403).json({ success: false, error: 'You cannot mark attendance for this driver.' });
+      const { driverId, date, status, remarks, location } = req.body;
+      const driver = (await getDriverEmployees()).find(d => d.id === driverId);
+      if (!driver) return res.status(404).json({ success: false, error: 'Driver not found.' });
+      const effectiveLocation: DriverLocationCategory = location && driverAllLocations(driver).includes(location) ? location : driver.location;
+      if (!(await assertDriverAccessible(driverId, sessionUser, 'write', effectiveLocation))) {
+        return res.status(403).json({ success: false, error: 'You cannot mark attendance for this driver at this location.' });
       }
       if (isFutureDate(date)) return res.status(400).json({ success: false, error: 'Attendance cannot be marked for a future date.' });
       const id = `${driverId}-${date}`;
       // markedBy always reflects whoever most recently set *this* day's
       // status (unlike a flat ledger's enteredBy) - each driver+date cell is
       // its own record, independently re-stamped every time it's re-marked.
-      const record: DriverAttendance = { id, driverId, date, status, remarks, markedBy: sessionUser?.username };
+      const record: DriverAttendance = { id, driverId, date, status, remarks, location: effectiveLocation, markedBy: sessionUser?.username };
       await saveDriverAttendanceRecord(record);
       res.json({ success: true, data: maskAttributionField([record], 'markedBy', sessionUser)[0] });
     } catch (err: any) {
@@ -4391,14 +4428,18 @@ async function startServer() {
   app.post('/api/drivers/attendance/bulk', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
-      const entries = req.body as Array<{ driverId: string; date: string; status: string }>;
+      const entries = req.body as Array<{ driverId: string; date: string; status: string; location?: DriverLocationCategory }>;
       if (!Array.isArray(entries)) return res.status(400).json({ success: false, error: 'Request body must be an array of attendance entries.' });
+      const allDrivers = await getDriverEmployees();
       const results: DriverAttendance[] = [];
       for (const entry of entries) {
-        if (!(await assertDriverAccessible(entry.driverId, sessionUser))) continue;
+        const driver = allDrivers.find(d => d.id === entry.driverId);
+        if (!driver) continue;
+        const effectiveLocation: DriverLocationCategory = entry.location && driverAllLocations(driver).includes(entry.location) ? entry.location : driver.location;
+        if (!(await assertDriverAccessible(entry.driverId, sessionUser, 'write', effectiveLocation))) continue;
         if (isFutureDate(entry.date)) continue; // silently skipped, same treatment as an out-of-scope driver just above
         const id = `${entry.driverId}-${entry.date}`;
-        const record: DriverAttendance = { id, driverId: entry.driverId, date: entry.date, status: entry.status as DriverAttendance['status'], markedBy: sessionUser?.username };
+        const record: DriverAttendance = { id, driverId: entry.driverId, date: entry.date, status: entry.status as DriverAttendance['status'], location: effectiveLocation, markedBy: sessionUser?.username };
         await saveDriverAttendanceRecord(record);
         results.push(record);
       }
@@ -4412,7 +4453,11 @@ async function startServer() {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const existing = (await getDriverAttendance()).find(r => r.id === req.params.id);
-      if (!existing || !(await assertDriverAccessible(existing.driverId, sessionUser))) {
+      // Checked against the record's own stamped location (2026-09-03) when
+      // it has one, falling back to the driver's primary location for a
+      // legacy record with none - matches attendanceBelongsToLocation's own
+      // fallback rule.
+      if (!existing || !(await assertDriverAccessible(existing.driverId, sessionUser, 'write', existing.location))) {
         return res.status(403).json({ error: 'You cannot delete this attendance record.' });
       }
       const [rows, drivers] = await Promise.all([deleteDriverAttendanceRecord(req.params.id), getDriverEmployees()]);
@@ -4420,7 +4465,7 @@ async function startServer() {
       if (allowed === 'ALL') {
         res.json({ success: true, data: rows });
       } else {
-        const allowedDriverIds = new Set(drivers.filter(d => allowed.includes(d.location)).map(d => d.id));
+        const allowedDriverIds = new Set(drivers.filter(d => driverAllLocations(d).some(loc => allowed.includes(loc))).map(d => d.id));
         res.json({ success: true, data: rows.filter(r => allowedDriverIds.has(r.driverId)) });
       }
     } catch (err: any) {
