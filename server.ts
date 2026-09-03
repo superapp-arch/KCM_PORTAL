@@ -3,6 +3,7 @@ import path from "path";
 import { Resend } from "resend";
 import dotenv from "dotenv";
 import upload from "./src/upload/upload.ts";
+import multer from "multer";
 
 dotenv.config();
 
@@ -1940,10 +1941,28 @@ async function startServer() {
   });
 
   // Generic document upload used by DocumentAttachment across every module
-  // (Fleet documents, HR Aadhar/PAN, driver salary bank proof, etc.) - saves
-  // the file to disk and returns its path for the frontend to store on the
-  // record, instead of embedding the file as base64 in the database.
-  app.post('/api/upload/:module', upload.single('file'), (req, res) => {
+  // (Fleet documents, HR Aadhar/PAN, driver salary bank proof, Petty Cash
+  // voucher receipts, etc.) - saves the file to disk and returns its path
+  // for the frontend to store on the record, instead of embedding the file
+  // as base64 in the database. Limit raised to 500MB (2026-09-04, was
+  // 25MB) - see src/upload/upload.ts. Wrapped here (rather than passed
+  // straight to app.post) so a file that's still over the limit, or an
+  // unsupported type, fails with a clean JSON error instead of Multer's
+  // error propagating unhandled - previously that would have surfaced as a
+  // generic server error page instead of a real "why did this fail"
+  // message, which is exactly the kind of silent failure a save should
+  // never leave the office guessing about.
+  app.post('/api/upload/:module', (req, res, next) => {
+    upload.single('file')(req, res, (err: unknown) => {
+      if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ success: false, message: 'File is too large - the maximum upload size is 500MB.' });
+      }
+      if (err) {
+        return res.status(400).json({ success: false, message: err instanceof Error ? err.message : 'Failed to upload file.' });
+      }
+      next();
+    });
+  }, (req, res) => {
     const moduleName = req.params.module;
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No file was uploaded.' });
@@ -2770,6 +2789,19 @@ async function startServer() {
       const allVouchers = await getPettyCashVouchers();
       const existing = allVouchers.find(v => v.id === req.params.id);
       if (!canModifyPettyCashRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
+      // Merged with `existing` (2026-09-04 fix, same class of bug as
+      // Driver Details' own PUT route) - savePettyCashVoucher overwrites
+      // the whole stored record with whatever it's given, so a genuinely
+      // partial update (the Docs modal saves only `{ documents }`) would
+      // have silently wiped every other field - category, amounts, vehicle
+      // numbers, everything - off the voucher. It also used to reject that
+      // same docs-only save outright with "Please enter a valid Cash Paid
+      // amount" (req.body.cashPaid was undefined, since the docs save never
+      // touches it) - validating the merged value instead of the raw
+      // request body fixes both: a full edit-form save (which always
+      // includes cashPaid) still validates normally, and a docs-only save
+      // now correctly inherits the already-valid existing cashPaid/date.
+      const merged = { ...existing, ...req.body, id: req.params.id, enteredBy: existing?.enteredBy };
       // Scoped to this same holder's own vouchers - Entry No is per-holder
       // now (see nextPettyCashEntryNo's own comment), so a different
       // handler legitimately using the same-looking Entry No isn't a
@@ -2777,13 +2809,13 @@ async function startServer() {
       if (req.body.entryNo && findDuplicateEntryNo(allVouchers.filter(v => v.enteredBy === existing?.enteredBy), req.body.entryNo, req.params.id)) {
         return res.status(409).json({ error: `Entry No. ${req.body.entryNo} already exists.` });
       }
-      if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Petty cash entry date cannot be in the future.' });
-      if (!(Number(req.body?.cashPaid) > 0)) return res.status(400).json({ error: 'Please enter a valid Cash Paid amount.' });
-      const result = await savePettyCashVoucher({ ...req.body, id: req.params.id, enteredBy: existing?.enteredBy });
+      if (isFutureDate(merged.date)) return res.status(400).json({ error: 'Petty cash entry date cannot be in the future.' });
+      if (!(Number(merged.cashPaid) > 0)) return res.status(400).json({ error: 'Please enter a valid Cash Paid amount.' });
+      const result = await savePettyCashVoucher(merged);
       await createAuditLog({
         user: sessionUser, action: 'UPDATE', module: 'Petty Cash', entityType: 'Petty Cash Entry', entityId: req.params.id,
         description: `Updated petty cash entry ${req.body?.entryNo || existing?.entryNo || req.params.id}`,
-        oldData: existing, newData: { ...req.body, id: req.params.id },
+        oldData: existing, newData: merged,
         ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
       });
       res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, PETTY_CASH_FULL_VIEW_EMAILS) });

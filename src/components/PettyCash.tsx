@@ -150,13 +150,14 @@ const VENDOR_ID_MANDATORY_CATEGORIES = new Set([
 // login only - every other login keeps the free-text Location field.
 const RAMESH_LOCATIONS = ["Nelamangala", "Nidagatta", "DHL Attibele", "Chennai"];
 
-// Vinod's own Petty Cash locations (2026-09-03) - his 5 primary ones listed
-// first (highest priority in the suggestion list), with Ramesh's own 4
-// (RAMESH_LOCATIONS) kept at the end/lowest priority - Vinod used to just
-// share Ramesh's list outright, but now has his own dedicated set he
-// actually uses most, while still occasionally covering Ramesh's locations
-// too (kept as low-priority suggestions, never removed).
-const VINOD_LOCATIONS = ["Hyderabad", "Vizag", "Vijayawada", "Hoskote", "Service Station", ...RAMESH_LOCATIONS];
+// Vinod's own Petty Cash locations (2026-09-03, +Goa/Belgaum 2026-09-04) -
+// his 7 primary ones listed first (highest priority in the suggestion
+// list), with Ramesh's own 4 (RAMESH_LOCATIONS) kept at the end/lowest
+// priority - Vinod used to just share Ramesh's list outright, but now has
+// his own dedicated set he actually uses most, while still occasionally
+// covering Ramesh's locations too (kept as low-priority suggestions, never
+// removed).
+const VINOD_LOCATIONS = ["Hyderabad", "Vizag", "Vijayawada", "Hoskote", "Service Station", "Goa", "Belgaum", ...RAMESH_LOCATIONS];
 
 // Dedicated fleet vehicles with a fixed operating location - selecting one of
 // these Vehicle Numbers auto-fills Location accordingly (see the auto-fill
@@ -527,6 +528,20 @@ export default function PettyCash({
   const vehicleByRegNo = (regNo: string): Vehicle | undefined =>
     vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === regNo.trim().toUpperCase());
 
+  // Vendor Entity (2026-09-04) from Fleet & Vehicles' own Ownership field -
+  // same KCM INSTA / KCM SUPPLY values FleetSheet.tsx's own
+  // normalizeOwnership resolves to, just matched case-insensitively and
+  // mapped to this form's lowercase 'kcm insta'/'kcm supply' values. Returns
+  // undefined (no change) rather than a default when Ownership is blank or
+  // some other free-text value, since Vendor Entity has no sensible "blank"
+  // state to fall back to - see its onChange caller below.
+  const vendorFromOwnership = (ownership: string | undefined): PettyCashVoucher['vendor'] | undefined => {
+    const o = (ownership || '').toUpperCase();
+    if (o.includes('KCM INSTA')) return 'kcm insta';
+    if (o.includes('KCM SUPPLY')) return 'kcm supply';
+    return undefined;
+  };
+
   // Entry No is auto-generated and never user-editable, e.g. "TRIP-000001" -
   // same live-max-plus-one convention as Fuel Entry's own auto-numbering.
   const nextMarketPodEntryNo = () => {
@@ -756,29 +771,6 @@ export default function PettyCash({
     setBalance(String(r - p));
   }, [amountReceived, cashPaid]);
 
-  // Auto-fetch Driver ID from Vehicle Number - Driver Details only (2026-09-03
-  // split: this used to also check Vendor Management and share one field
-  // with the vendor-vehicle path, but Vehicle Number and Vendor Vehicle
-  // Number are now two fully separate, mutually-exclusive modes - see
-  // vehicleMode above). Leaves the field blank (still manually editable)
-  // when Driver Details has no match for this vehicle.
-  useEffect(() => {
-    const vNo = vehicleNumber.trim().toUpperCase();
-    if (!vNo) return;
-    const matchedDriverRecord = driverVehicleLookup.find(d => (d.vehicleNo || '').trim().toUpperCase() === vNo);
-    setDriverId(matchedDriverRecord ? matchedDriverRecord.id : '');
-  }, [vehicleNumber, driverVehicleLookup]);
-
-  // Auto-fetch Vendor ID from Vendor Vehicle Number - Vendor Management
-  // only (2026-09-03 split, see above). Leaves the field blank (still
-  // manually editable) when Vendor Management has no match.
-  useEffect(() => {
-    const vvNo = vendorVehicleNumber.trim().toUpperCase();
-    if (!vvNo) return;
-    const matchedVendor = vendors.find(v => (v.vehicleNumbers || []).some(num => (num || '').trim().toUpperCase() === vvNo));
-    setVendorId(matchedVendor ? matchedVendor.code : '');
-  }, [vendorVehicleNumber, vendors]);
-
   // Switching modes (2026-09-03) always clears the OTHER mode's fields, so
   // a save can never carry e.g. a Vehicle Number alongside a Vendor ID -
   // see PART 15 of the spec this implements.
@@ -812,12 +804,17 @@ export default function PettyCash({
   // Vehicle Number field's onChange: also auto-fills Location for dedicated
   // fleet vehicles (DEDICATED_VEHICLE_LOCATIONS) or TN-registered vehicles
   // (assumed Chennai), which in turn cascades into the Client Name auto-fill;
-  // and auto-fills Receiver Name from that vehicle's assigned driver in
-  // Driver Details (same vehicleNo match Vendor ID/Driver ID already uses).
-  // Onchange-driven rather than a useEffect for the same reason as the
-  // Location/Client Name auto-fill above - so re-opening a saved entry for
-  // edit never overwrites who actually received the cash on that entry, even
-  // if Driver Details' vehicle-to-driver assignment has since changed.
+  // auto-fills Receiver Name from that vehicle's assigned driver in Driver
+  // Details; auto-fills Driver ID the same way (2026-09-04, moved here from
+  // its own useEffect - an effect keyed on vehicleNumber would also fire
+  // when handleStartEdit sets vehicleNumber directly while re-opening a
+  // saved entry, silently overwriting that entry's actual recorded Driver
+  // ID with whatever Driver Details shows right now); and auto-fills Vendor
+  // Entity from this vehicle's own Ownership field in Fleet & Vehicles
+  // (2026-09-04 - see vendorFromOwnership above). Onchange-driven rather
+  // than a useEffect for all of these, for the same reason - so re-opening
+  // a saved entry for edit never overwrites what was actually recorded on
+  // it, even if Driver Details/Fleet & Vehicles have since changed.
   const handleVehicleNumberChange = (raw: string) => {
     const vNo = raw.toUpperCase();
     setVehicleNumber(vNo);
@@ -832,6 +829,22 @@ export default function PettyCash({
     if (matchedDriverRecord?.name) {
       setReceiver(matchedDriverRecord.name);
     }
+    setDriverId(matchedDriverRecord ? matchedDriverRecord.id : '');
+    const matchedVendorEntity = vendorFromOwnership(vehicleByRegNo(trimmed)?.ownership || vehicleByRegNo(trimmed)?.['Ownership']);
+    if (matchedVendorEntity) setVendor(matchedVendorEntity);
+  };
+
+  // Vendor Vehicle Number field's onChange: auto-fills Vendor ID from
+  // Vendor Management (2026-09-04, moved here from its own useEffect for
+  // the same re-opening-a-saved-entry reason as handleVehicleNumberChange
+  // above).
+  const handleVendorVehicleNumberChange = (raw: string) => {
+    const vvNo = raw.toUpperCase();
+    setVendorVehicleNumber(vvNo);
+    const trimmed = vvNo.trim();
+    if (!trimmed) return;
+    const matchedVendor = vendors.find(v => (v.vehicleNumbers || []).some(num => (num || '').trim().toUpperCase() === trimmed));
+    setVendorId(matchedVendor ? matchedVendor.code : '');
   };
 
   // Location field's onChange (both the Ramesh dropdown and the free-text
@@ -1186,7 +1199,13 @@ export default function PettyCash({
 
   const handleAddAdvance = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!advanceAmount || parseFloat(advanceAmount) <= 0 || !advanceDate) {
+    // Negative amounts are allowed (2026-09-04) - a holder whose Balance Net
+    // is already negative (spent more than they've been floated, before the
+    // company has transferred more funds) needs to be able to log that as a
+    // negative Amount Received, so Balance Net keeps displaying the true
+    // shortfall until it's actually settled - only truly blank/zero/NaN is
+    // rejected, every other rule (date required, etc.) is unchanged.
+    if (!advanceAmount || parseFloat(advanceAmount) === 0 || isNaN(parseFloat(advanceAmount)) || !advanceDate) {
       triggerNotif('Enter a valid amount and date.', 'error');
       return;
     }
@@ -3047,12 +3066,13 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Amount *</label>
                     <input
-                      type="number" step="0.01" required min="0.01"
+                      type="number" step="0.01" required
                       value={advanceAmount}
                       onChange={(e) => setAdvanceAmount(e.target.value)}
-                      placeholder="₹ Received"
+                      placeholder="₹ Received (negative allowed)"
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
                     />
+                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">Negative allowed - e.g. to reflect a shortfall until the company transfers more funds.</p>
                   </div>
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Account *</label>
@@ -3434,8 +3454,8 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                             list="petty-cash-vendor-vehicles-datalist"
                             placeholder="Search or select a vendor-owned vehicle"
                             value={vendorVehicleNumber}
-                            onChange={(e) => setVendorVehicleNumber(e.target.value.toUpperCase())}
-                            onKeyDown={(e) => handleVehicleNumberEnterKey(e, vendorVehicleNumber, vendorVehicleList, setVendorVehicleNumber)}
+                            onChange={(e) => handleVendorVehicleNumberChange(e.target.value)}
+                            onKeyDown={(e) => handleVehicleNumberEnterKey(e, vendorVehicleNumber, vendorVehicleList, handleVendorVehicleNumberChange)}
                             autoComplete="off"
                             className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 uppercase font-bold"
                           />

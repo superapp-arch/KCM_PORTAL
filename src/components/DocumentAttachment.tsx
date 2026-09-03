@@ -176,7 +176,7 @@ export default function DocumentAttachment({
             <p className="text-xs font-semibold text-slate-600">
               Drag and drop files here, or <span className="text-teal-600 font-bold">browse</span>
             </p>
-            <p className="text-[10px] text-slate-400">PDF, JPG, PNG, Excel, Word (Up to 10MB)</p>
+            <p className="text-[10px] text-slate-400">PDF, JPG, PNG, Excel, Word (Up to 500MB)</p>
           </div>
         </div>
       )}

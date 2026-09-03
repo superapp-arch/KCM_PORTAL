@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import ExcelJS from 'exceljs';
 import { createPortal } from 'react-dom';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import { DriverEmployee, DriverAttendance, AttendanceStatusCode, DriverLocationCategory, DRIVER_LOCATION_CATEGORIES } from '../../types';
@@ -138,36 +139,109 @@ function driverSalarySnapshotFor(driver: DriverEmployee, month: string, workingD
   return { grossSalary: driver.grossSalary || 0, payable: payableAmount };
 }
 
-// The on-screen day-grid (Driver | Location? | day-by-day status | Working
-// Days / LOP / Exemption Leave), as an export section - used for a single
-// location, a set of a user's writable locations, or every location,
-// depending on what `rows` is handed. `includeLocationColumn` adds a
-// Location column (2026-09-03) - used when `rows` spans more than one
-// location (Download All/My Locations), so every row in that single sheet
-// stays identifiable; omitted for a single-location download where it'd be
-// redundant (every row is already that one location).
-function attendanceGridSection(month: string, rows: LocationDriverRow[], attendance: DriverAttendance[], heading: string, includeLocationColumn = false): ReportTableSection {
+// The day-grid Excel export (2026-09-04 rework, ExcelJS-based) - one single
+// worksheet, one colored green banner row per location group (matching the
+// on-screen grouped table's own header row, and the office's existing
+// reference sheet), driver profile columns (Driver ID/No/Vehicle/A-C No/
+// IFSC/Reporting/Remarks) alongside the day-by-day grid, exactly like that
+// reference layout - rather than a flat "Location" column, which is what
+// the plain-xlsx-based export (see reportExport.ts, still used for Full
+// History and everywhere else in the app) can't do since the free SheetJS
+// build can't write cell colors at all. Used for a single location, a set
+// of a user's writable locations, or every location, depending on `groups`.
+const LOCATION_BANNER_FILL = 'FF059669'; // emerald-600, matches the on-screen group header gradient
+const HEADER_ROW_FILL = 'FF312E81'; // indigo-900, matches the on-screen thead gradient
+async function buildAttendanceExcelWorkbook(month: string, groups: { location: DriverLocationCategory; rows: LocationDriverRow[] }[], attendance: DriverAttendance[]): Promise<ExcelJS.Workbook> {
   const total = daysInMonth(month);
-  const columns = [
-    'Driver ID', 'Driver Name', ...(includeLocationColumn ? ['Location'] : []),
+  const wb = new ExcelJS.Workbook();
+  const sheet = wb.addWorksheet('Driver Attendance');
+
+  const headerLabels = [
+    'S.No', 'Driver Name', 'Driver ID', 'Driver No', 'Vehicle No', 'A/C No', 'IFSC Code', 'Reporting', 'Remarks',
     ...Array.from({ length: total }, (_, i) => dayLabel(month, i + 1)),
     'No. of Days', 'Working Days', 'LOP', 'Exemption Leave', 'Gross Salary', 'Payable Amount'
   ];
-  const tableRows = rows.map(row => {
-    const locationRows = rowsForLocation(row, attendance, month);
-    const dayCells = Array.from({ length: total }, (_, i) => {
-      const date = `${month}-${String(i + 1).padStart(2, '0')}`;
-      const record = locationRows.find(a => a.date === date);
-      return record ? STATUS_ABBR[record.status] : '-';
-    });
-    const { lopDays, exemptionLeaveDays, workingDays } = summarizeMonthRows(locationRows);
-    const { grossSalary, payable } = driverSalarySnapshotFor(row.driver, month, workingDays, lopDays);
-    return [
-      row.driver.id, row.driver.name, ...(includeLocationColumn ? [row.location] : []),
-      ...dayCells, total, workingDays, lopDays, exemptionLeaveDays, grossSalary, payable
-    ];
+  sheet.addRow(headerLabels);
+  sheet.getRow(1).eachCell(cell => {
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_ROW_FILL } };
   });
-  return { heading, columns, rows: tableRows };
+  sheet.views = [{ state: 'frozen', ySplit: 1 }];
+
+  let slNo = 0;
+  for (const group of groups) {
+    const bannerRow = sheet.addRow([group.location]);
+    sheet.mergeCells(bannerRow.number, 1, bannerRow.number, headerLabels.length);
+    const bannerCell = sheet.getCell(bannerRow.number, 1);
+    bannerCell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    bannerCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOCATION_BANNER_FILL } };
+
+    for (const row of group.rows) {
+      slNo += 1;
+      const locationRows = rowsForLocation(row, attendance, month);
+      const dayCells = Array.from({ length: total }, (_, i) => {
+        const date = `${month}-${String(i + 1).padStart(2, '0')}`;
+        const record = locationRows.find(a => a.date === date);
+        return record ? STATUS_ABBR[record.status] : '-';
+      });
+      const { lopDays, exemptionLeaveDays, workingDays } = summarizeMonthRows(locationRows);
+      const { grossSalary, payable } = driverSalarySnapshotFor(row.driver, month, workingDays, lopDays);
+      const vehicles = row.driver.vehicleNos && row.driver.vehicleNos.length > 0 ? row.driver.vehicleNos.join(' / ') : (row.driver.vehicleNo || '');
+      sheet.addRow([
+        slNo, row.driver.name, row.driver.id, row.driver.driverNo || '', vehicles,
+        row.driver.accountNumber || '', row.driver.ifscCode || '', row.driver.reporting || '', row.driver.remark || '',
+        ...dayCells, total, workingDays, lopDays, exemptionLeaveDays, grossSalary, payable
+      ]);
+    }
+  }
+
+  sheet.getColumn(2).width = 22; // Driver Name
+  sheet.getColumn(3).width = 14; // Driver ID
+  for (let i = 4; i <= 9; i++) sheet.getColumn(i).width = 14; // profile columns
+  for (let i = 10; i <= headerLabels.length; i++) sheet.getColumn(i).width = 7; // day cells + summary columns
+  return wb;
+}
+
+// Per-location headcount/status-count rollup as its own worksheet in the
+// same workbook (2026-09-04) - same figures the plain-xlsx Summary sheet
+// always carried, rebuilt in ExcelJS so it lives in the same workbook as
+// the colored grid sheet above instead of a second, separately-generated
+// file.
+async function appendAttendanceSummarySheet(wb: ExcelJS.Workbook, month: string, rows: LocationDriverRow[], attendance: DriverAttendance[]) {
+  const sheet = wb.addWorksheet('Summary');
+  const columns = ['Location', 'Drivers', ...ALL_STATUSES.map(s => s.label), 'Avg Working Days'];
+  sheet.addRow(columns);
+  sheet.getRow(1).font = { bold: true };
+  const byLocation = new Map<DriverLocationCategory, LocationDriverRow[]>();
+  for (const row of rows) {
+    if (!byLocation.has(row.location)) byLocation.set(row.location, []);
+    byLocation.get(row.location)!.push(row);
+  }
+  for (const [location, locRows] of byLocation.entries()) {
+    const counts: Record<AttendanceStatusCode, number> = Object.fromEntries(ALL_STATUSES.map(s => [s.status, 0])) as Record<AttendanceStatusCode, number>;
+    let workingDaysTotal = 0;
+    locRows.forEach(row => {
+      const locationRows = rowsForLocation(row, attendance, month);
+      locationRows.forEach(r => { counts[r.status] += 1; });
+      workingDaysTotal += summarizeMonthRows(locationRows).workingDays;
+    });
+    const avgWorkingDays = locRows.length ? Math.round((workingDaysTotal / locRows.length) * 10) / 10 : 0;
+    sheet.addRow([location, locRows.length, ...ALL_STATUSES.map(s => counts[s.status]), avgWorkingDays]);
+  }
+  sheet.columns.forEach(c => { c.width = 16; });
+}
+
+// Triggers the actual file download for an ExcelJS workbook - same
+// buffer/Blob/anchor-click pattern HR & Payroll's own AttendanceReportDownload
+// already uses for its ExcelJS exports.
+async function downloadAttendanceWorkbook(filename: string, wb: ExcelJS.Workbook) {
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${filename}.xlsx`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // Same one-row-per-(driver, location) summary the Excel exports' own
@@ -197,33 +271,6 @@ function downloadAllFileBase(month: string): string {
   return `driver_attendance_${FULL_MONTH_NAMES_LOWER[m - 1]}_${y}`;
 }
 
-// Per-location headcount/status-count rollup for the "download everything"
-// tab's Summary sheet/table - deliberately separate from the raw day-grid
-// sections so the export carries both the full detail and an at-a-glance
-// total, same as the on-screen grid's own Working Days/LOP/Exemption Leave
-// columns but rolled up to location level instead of per-row. Groups `rows`
-// by their own `.location` internally rather than requiring a separate
-// groups structure.
-function attendanceSummarySection(month: string, rows: LocationDriverRow[], attendance: DriverAttendance[]): ReportTableSection {
-  const columns = ['Location', 'Drivers', ...ALL_STATUSES.map(s => s.label), 'Avg Working Days'];
-  const byLocation = new Map<DriverLocationCategory, LocationDriverRow[]>();
-  for (const row of rows) {
-    if (!byLocation.has(row.location)) byLocation.set(row.location, []);
-    byLocation.get(row.location)!.push(row);
-  }
-  const tableRows = Array.from(byLocation.entries()).map(([location, locRows]) => {
-    const counts: Record<AttendanceStatusCode, number> = Object.fromEntries(ALL_STATUSES.map(s => [s.status, 0])) as Record<AttendanceStatusCode, number>;
-    let workingDaysTotal = 0;
-    locRows.forEach(row => {
-      const locationRows = rowsForLocation(row, attendance, month);
-      locationRows.forEach(r => { counts[r.status] += 1; });
-      workingDaysTotal += summarizeMonthRows(locationRows).workingDays;
-    });
-    const avgWorkingDays = locRows.length ? Math.round((workingDaysTotal / locRows.length) * 10) / 10 : 0;
-    return [location, locRows.length, ...ALL_STATUSES.map(s => counts[s.status]), avgWorkingDays];
-  });
-  return { heading: 'Summary', columns, rows: tableRows };
-}
 
 // Every attendance record ever logged for this (driver, location) pair,
 // oldest first - the "Full History" option on the per-row download, as
@@ -328,50 +375,61 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
     return `${MONTH_ABBR[m - 1]} ${y}`;
   }, [month]);
 
-  // Same format-consistency fix as "Download All" below, applied here too:
-  // Excel keeps the on-screen day-grid shape (one column per day) plus a
-  // per-location Summary sheet, and PDF shows the identical one-row-per-
-  // driver dataset (Driver ID/Name/Location/No. of Days/Working Days/LOP/
-  // Exemption Leave/Gross Salary/Payable Amount) via
-  // buildDriverAttendanceSummaryPdf - both formats now carry the same
-  // current-month figures instead of PDF's old separate multi-month
-  // historical shape (buildLocationAttendancePdf, removed).
-  const handleDownloadLocationExcel = (location: string, rows: LocationDriverRow[]) =>
-    exportReportToExcel(`KCM_Driver_Attendance_${safeFileToken(location)}_${month}`, [attendanceGridSection(month, rows, attendance, location), attendanceSummarySection(month, rows, attendance)]);
+  // Excel (2026-09-04, ExcelJS) now matches the office's own reference
+  // layout: one worksheet, a colored green banner row per location group
+  // (see buildAttendanceExcelWorkbook), driver profile columns alongside
+  // the day grid, and a separate Summary sheet in the same workbook - same
+  // single-sheet-per-download principle as before, just with real color
+  // instead of a flat Location column (the plain-xlsx path this used to go
+  // through can't write cell colors at all). PDF is unchanged - already a
+  // single flat table (Driver ID/Name/Location/No. of Days/Working Days/
+  // LOP/Exemption Leave/Gross Salary/Payable Amount) via
+  // buildDriverAttendanceSummaryPdf.
+  const handleDownloadLocationExcel = async (location: DriverLocationCategory, rows: LocationDriverRow[]) => {
+    const wb = await buildAttendanceExcelWorkbook(month, [{ location, rows }], attendance);
+    await appendAttendanceSummarySheet(wb, month, rows, attendance);
+    await downloadAttendanceWorkbook(`KCM_Driver_Attendance_${safeFileToken(location)}_${month}`, wb);
+  };
   const handleDownloadLocationPdf = (location: string, rows: LocationDriverRow[]) =>
     buildDriverAttendanceSummaryPdf(`${location} - ${monthLabel}`, driverAttendanceSummaryRows(month, rows, attendance))
       .save(`KCM_Driver_Attendance_${safeFileToken(location)}_${month}.pdf`);
 
-  const handleDownloadMyLocationsExcel = () =>
-    exportReportToExcel(`KCM_Driver_Attendance_My_Locations_${month}`, [attendanceGridSection(month, myLocationRows, attendance, 'Driver Attendance', true), attendanceSummarySection(month, myLocationRows, attendance)]);
+  const handleDownloadMyLocationsExcel = async () => {
+    const wb = await buildAttendanceExcelWorkbook(month, myLocationGroups, attendance);
+    await appendAttendanceSummarySheet(wb, month, myLocationRows, attendance);
+    await downloadAttendanceWorkbook(`KCM_Driver_Attendance_My_Locations_${month}`, wb);
+  };
   const handleDownloadMyLocationsPdf = () =>
     buildDriverAttendanceSummaryPdf(`My Locations - ${monthLabel}`, driverAttendanceSummaryRows(month, myLocationRows, attendance))
       .save(`KCM_Driver_Attendance_My_Locations_${month}.pdf`);
 
-  // "Download tab" (item 4) - every driver, every location. Excel keeps its
-  // full day-by-day grid as ONE single sheet spanning every location (plus
-  // a separate Summary rollup sheet) - 2026-09-03: previously one sheet per
-  // location, which made filtering/sorting across the whole roster
-  // impossible without stitching sheets back together by hand; a Location
-  // column keeps every row identifiable now that they're all in one place.
-  // PDF shows the same one-row-per-driver data (Driver ID/Name/Location/No.
-  // of Days/Working Days/LOP/Exemption Leave/Gross Salary/Payable Amount)
-  // as a clean table instead - identical dataset to Excel, just without the
-  // day-grid columns that would be unreadable in a PDF (see
+  // "Download tab" (item 4) - every driver, every location, one worksheet
+  // with a colored banner row per location group, plus a Summary sheet -
+  // see buildAttendanceExcelWorkbook. PDF shows the same one-row-per-driver
+  // data as a clean table instead - identical dataset to Excel, just
+  // without the day-grid columns that would be unreadable in a PDF (see
   // buildDriverAttendanceSummaryPdf) - already a single flat table,
   // unchanged. Both use the same driver_attendance_<month>_<year> file
   // naming convention.
-  const handleDownloadAllExcel = () =>
-    exportReportToExcel(downloadAllFileBase(month), [attendanceGridSection(month, allRows, attendance, 'Driver Attendance', true), attendanceSummarySection(month, allRows, attendance)]);
+  const handleDownloadAllExcel = async () => {
+    const wb = await buildAttendanceExcelWorkbook(month, groupedDrivers, attendance);
+    await appendAttendanceSummarySheet(wb, month, allRows, attendance);
+    await downloadAttendanceWorkbook(downloadAllFileBase(month), wb);
+  };
   const handleDownloadAllPdf = () =>
     buildDriverAttendanceSummaryPdf(`All Locations - ${monthLabel}`, driverAttendanceSummaryRows(month, allRows, attendance))
       .save(`${downloadAllFileBase(month)}.pdf`);
 
   // Per-row download (item 3) - "both" full history and the currently-
   // selected month, each in Excel or PDF, scoped to this row's own
-  // (driver, location) pair throughout.
+  // (driver, location) pair throughout. Month-Excel reuses the same colored
+  // single-group workbook builder as the location/all downloads above, for
+  // one consistent look everywhere in this module.
   const driverDownloadOptions = (row: LocationDriverRow): DownloadMenuOption[] => [
-    { key: 'month-excel', label: `${monthLabel} - Excel`, icon: 'excel', onClick: () => exportReportToExcel(`KCM_Attendance_${row.driver.id}_${safeFileToken(row.location)}_${month}`, [attendanceGridSection(month, [row], attendance, `${row.driver.id} - ${row.location} - ${monthLabel}`)]) },
+    { key: 'month-excel', label: `${monthLabel} - Excel`, icon: 'excel', onClick: async () => {
+      const wb = await buildAttendanceExcelWorkbook(month, [{ location: row.location, rows: [row] }], attendance);
+      await downloadAttendanceWorkbook(`KCM_Attendance_${row.driver.id}_${safeFileToken(row.location)}_${month}`, wb);
+    } },
     { key: 'month-pdf', label: `${monthLabel} - PDF`, icon: 'pdf', onClick: () => buildDriverAttendancePdf(row.driver, rowsForLocation(row, attendance, month), 'month', month).save(`KCM_Attendance_${row.driver.id}_${safeFileToken(row.location)}_${month}.pdf`) },
     { key: 'history-excel', label: 'Full History - Excel', icon: 'excel', onClick: () => exportReportToExcel(`KCM_Attendance_${row.driver.id}_${safeFileToken(row.location)}_Full_History`, [driverHistorySection(row, attendance)]) },
     { key: 'history-pdf', label: 'Full History - PDF', icon: 'pdf', onClick: () => buildDriverAttendancePdf(row.driver, attendance.filter(a => attendanceBelongsToLocation(a, row.driver, row.location)), 'history').save(`KCM_Attendance_${row.driver.id}_${safeFileToken(row.location)}_Full_History.pdf`) },
