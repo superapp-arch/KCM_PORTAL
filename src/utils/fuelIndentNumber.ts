@@ -13,30 +13,43 @@
 // as 'Bunk' - the same default the Add Entry form itself has always used.
 //
 // Both sequences are further scoped per enteredBy - each fuel-access login
-// gets their own independent Bunk sequence (still per calendar month) and
-// their own independent Card sequence (still always starts at 00001), so
-// two different people's Indent Nos are never mixed up, told apart only by
-// who entered them. A legacy row with no enteredBy at all buckets under ''
-// - isolated from every real login's own sequence.
+// gets their own independent Bunk sequence and their own independent Card
+// sequence (always starts at 00001), so two different people's Indent Nos
+// are never mixed up, told apart only by who entered them. A legacy row
+// with no enteredBy at all buckets under '' - isolated from every real
+// login's own sequence.
+//
+// Bunk is ALSO scoped per bunk name (2026-09-04 fix - it previously wasn't,
+// which silently merged every bunk one person filled up at into one shared
+// monthly sequence: e.g. ABC Bunk manually started at 001 and BCD Bunk
+// manually started at 501 that same month would make ABC's very next entry
+// come out as 502, continuing off BCD's higher starting number, instead of
+// its own 002). Each (bunk name, calendar month, enteredBy) combination now
+// keeps its own independent run, matching each bunk's own manually-typed
+// starting number exactly as the office actually uses it.
 import { extractLeadingNumber } from './sort';
 
 interface IndentableFuelLog {
   bunkOrCard?: string;
+  bunkName?: string;
   date?: string;
   enteredBy?: string;
   indentNumber?: string;
 }
 
+const normBunkName = (name: string | undefined) => (name || '').trim().toLowerCase();
+
 // Bunk: plain numeric string (e.g. "6412"), continuing within the entry's
-// own Date's calendar month. The first entry of a new month has nothing to
-// continue from (returns null), so the office types a fresh starting number
-// by hand; every entry after that, that same month, auto-continues from the
-// highest one already saved.
-export function nextBunkFuelIndentNumber(logs: IndentableFuelLog[], refDate: string, enteredBy: string | undefined): string | null {
+// own Date's calendar month AND its own bunk name. The first entry of a new
+// (bunk, month) combination has nothing to continue from (returns null), so
+// the office types a fresh starting number by hand; every entry after that,
+// same bunk, same month, auto-continues from the highest one already saved
+// for that exact bunk.
+export function nextBunkFuelIndentNumber(logs: IndentableFuelLog[], refDate: string, bunkName: string | undefined, enteredBy: string | undefined): string | null {
   const monthKey = (refDate || '').slice(0, 7);
   if (!monthKey) return null;
   const monthNumbers = logs
-    .filter(l => (l.bunkOrCard || 'Bunk') === 'Bunk' && (l.date || '').slice(0, 7) === monthKey && (l.enteredBy || '') === (enteredBy || ''))
+    .filter(l => (l.bunkOrCard || 'Bunk') === 'Bunk' && (l.date || '').slice(0, 7) === monthKey && normBunkName(l.bunkName) === normBunkName(bunkName) && (l.enteredBy || '') === (enteredBy || ''))
     .map(l => extractLeadingNumber(l.indentNumber))
     .filter(n => n > 0);
   if (monthNumbers.length === 0) return null;

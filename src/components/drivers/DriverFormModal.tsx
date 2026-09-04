@@ -49,9 +49,13 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
   // same pattern as Vehicle Nos below. locations[0] is always saved as the
   // driver's primary `location`; everything after it becomes
   // additionalLocations. Order matters: removing the first chip promotes
-  // whichever is next to primary.
+  // whichever is next to primary. Starts genuinely empty for a brand-new
+  // driver (2026-09-04 fix) - it used to default to locationOptions[0], so
+  // whoever's writable scope happened to list a location first (e.g. "HSK
+  // RIL F&V Drivers") silently ended up pre-selected even though nobody
+  // picked it; Location is now required at Save instead (see handleSubmit).
   const [locations, setLocations] = useState<DriverLocationCategory[]>(
-    driver ? driverAllLocations(driver) : [locationOptions[0] || DRIVER_LOCATION_CATEGORIES[0]]
+    driver ? driverAllLocations(driver) : []
   );
   const [locationToAdd, setLocationToAdd] = useState<DriverLocationCategory | ''>('');
   const addLocation = () => {
@@ -59,8 +63,12 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
     setLocations(prev => [...prev, locationToAdd]);
     setLocationToAdd('');
   };
+  // 2026-09-04: no longer blocks removing the last remaining chip - a brand
+  // new driver can genuinely have zero picked yet (see locations' own
+  // comment above), and a mistakenly-added location needs to be removable
+  // even when it's the only one on the list. Save itself still requires at
+  // least one (see handleSubmit).
   const removeLocation = (loc: DriverLocationCategory) => {
-    if (locations.length <= 1) return; // always at least one location
     setLocations(prev => prev.filter(l => l !== loc));
   };
   const addableLocationOptions = locationOptions.filter(loc => !locations.includes(loc));
@@ -162,6 +170,13 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
   const handleSubmit = async () => {
     if (!basic.id.trim() || !basic.name.trim()) {
       setError('Driver ID and Driver Name are required.');
+      setTab('basic');
+      return;
+    }
+    // 2026-09-04: Location no longer defaults to anything, so it needs its
+    // own explicit check now instead of always having at least locations[0].
+    if (locations.length === 0) {
+      setError('Select at least one Location.');
       setTab('basic');
       return;
     }
@@ -311,9 +326,7 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
                   {locations.map((loc) => (
                     <span key={loc} className="inline-flex items-center gap-1 bg-teal-50 border border-teal-200 text-teal-800 font-bold text-[11px] px-2 py-1 rounded-full">
                       {loc}
-                      {locations.length > 1 && (
-                        <button type="button" onClick={() => removeLocation(loc)} title={`Remove ${loc}`} className="hover:text-rose-600 cursor-pointer"><X className="w-3 h-3" /></button>
-                      )}
+                      <button type="button" onClick={() => removeLocation(loc)} title={`Remove ${loc}`} className="hover:text-rose-600 cursor-pointer"><X className="w-3 h-3" /></button>
                     </span>
                   ))}
                 </div>

@@ -854,27 +854,29 @@ function findDuplicateEntryNo<T extends { id?: string; entryNo?: string }>(rows:
 // into one of them by accident.
 
 // Duplicate guard for both sequences - scoped to match how each is
-// generated: Bunk within the same (Bunk, calendar month, enteredBy) bucket
-// (the same number can legitimately recur across different months or
-// different people, since Bunk restarts by hand each month and each person
-// has their own sequence), Card across its whole per-person sequence (never
-// resets, so no two Card entries by the SAME person should ever share a
-// number - two different people's Card sequences may coincide freely). Only
-// ever rejects a genuinely new-to-this-id value - resubmitting a record's
-// own unchanged Indent No (a normal edit that didn't touch it) always
-// passes.
-function findDuplicateFuelIndentNumber(logs: FuelLog[], indentNumber: string | undefined, candidate: { bunkOrCard?: string; date?: string; enteredBy?: string }, excludeId?: string): boolean {
+// generated: Bunk within the same (bunk name, calendar month, enteredBy)
+// bucket (2026-09-04: bunk name added to match nextBunkFuelIndentNumber's
+// own scoping - the same number can legitimately recur across different
+// bunks, different months, or different people), Card across its whole
+// per-person sequence (never resets, so no two Card entries by the SAME
+// person should ever share a number - two different people's Card
+// sequences may coincide freely). Only ever rejects a genuinely
+// new-to-this-id value - resubmitting a record's own unchanged Indent No
+// (a normal edit that didn't touch it) always passes.
+function findDuplicateFuelIndentNumber(logs: FuelLog[], indentNumber: string | undefined, candidate: { bunkOrCard?: string; bunkName?: string; date?: string; enteredBy?: string }, excludeId?: string): boolean {
   const target = (indentNumber || '').trim().toUpperCase();
   if (!target) return false;
   const isCard = candidate.bunkOrCard === 'Card';
   const monthKey = (candidate.date || '').slice(0, 7);
+  const bunkNameKey = (candidate.bunkName || '').trim().toLowerCase();
   return logs.some(l => {
     if (l.id === excludeId) return false;
     if ((l.indentNumber || '').trim().toUpperCase() !== target) return false;
     if ((l.enteredBy || '') !== (candidate.enteredBy || '')) return false; // separate sequence per person
     const lIsCard = l.bunkOrCard === 'Card';
     if (isCard !== lIsCard) return false;
-    if (isCard) return true; // Card: one sequence per person, no month scoping
+    if (isCard) return true; // Card: one sequence per person, no month/bunk scoping
+    if ((l.bunkName || '').trim().toLowerCase() !== bunkNameKey) return false; // separate sequence per bunk
     return (l.date || '').slice(0, 7) === monthKey;
   });
 }
@@ -901,7 +903,9 @@ async function renumberFuelIndentSequence(): Promise<void> {
   try {
     const logs = await getFuelLogs();
 
-    // Bunk - one bucket per (calendar month, enteredBy).
+    // Bunk - one bucket per (bunk name, calendar month, enteredBy) -
+    // 2026-09-04: bunk name added, matching nextBunkFuelIndentNumber's own
+    // scoping fix.
     const bunkBuckets = new Map<string, { log: FuelLog; seq: number }[]>();
     logs.forEach(l => {
       if ((l.bunkOrCard || 'Bunk') !== 'Bunk') return;
@@ -909,7 +913,7 @@ async function renumberFuelIndentSequence(): Promise<void> {
       if (seq <= 0) return;
       const monthKey = (l.date || '').slice(0, 7);
       if (!monthKey) return;
-      const bucketKey = `${monthKey}::${l.enteredBy || ''}`;
+      const bucketKey = `${(l.bunkName || '').trim().toLowerCase()}::${monthKey}::${l.enteredBy || ''}`;
       if (!bunkBuckets.has(bucketKey)) bunkBuckets.set(bucketKey, []);
       bunkBuckets.get(bucketKey)!.push({ log: l, seq });
     });
@@ -1301,9 +1305,20 @@ async function startServer() {
   // existed before renumberPettyCashSequence started running on every
   // delete - no-op once the sequence is already gap-free.
   await renumberPettyCashSequence();
-  // Same one-time sweep for Fuel Indent No (Bunk and Card sequences) - see
-  // renumberFuelIndentSequence.
-  await renumberFuelIndentSequence();
+  // Fuel Indent No's own equivalent sweep is DELIBERATELY NOT run here
+  // (2026-09-04) - Bunk's bucketing just changed to also scope by bunk name
+  // (previously only (calendar month, enteredBy), which silently blended
+  // every bunk one person filled up at that month into one shared sequence -
+  // the real bug behind "ABC bunk's next entry should be 002, not
+  // continuing off BCD bunk's 501"). Running the full sweep here would
+  // immediately re-bucket and renumber every pre-existing historical Bunk
+  // entry onto the new scheme on the very next restart - a real, physical-
+  // paper-matching Indent No changing under records that were already
+  // fine, with nobody having asked for that. renumberFuelIndentSequence()
+  // still runs after every delete (its original, narrower, incremental
+  // job - see DELETE /api/fuel/:id) so gaps left by a deletion still close
+  // correctly under the new per-bunk scoping; it's just not swept
+  // wholesale across all existing data on boot.
   // Petty Cash / Market POD change request part 2: backfill pre-existing
   // Petty-Cash-mode trips that predate the float-sync logic (see
   // backfillMarketPodPettyCashFloats above) - no-op once every trip's
@@ -2577,8 +2592,9 @@ async function startServer() {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const bunkOrCard = req.query.bunkOrCard === 'Card' ? 'Card' : 'Bunk';
       const date = typeof req.query.date === 'string' ? req.query.date : '';
+      const bunkName = typeof req.query.bunkName === 'string' ? req.query.bunkName : '';
       const logs = await getFuelLogs();
-      const indentNumber = bunkOrCard === 'Card' ? nextCardFuelIndentNumber(logs, sessionUser?.username) : nextBunkFuelIndentNumber(logs, date, sessionUser?.username);
+      const indentNumber = bunkOrCard === 'Card' ? nextCardFuelIndentNumber(logs, sessionUser?.username) : nextBunkFuelIndentNumber(logs, date, bunkName, sessionUser?.username);
       res.json({ indentNumber });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });

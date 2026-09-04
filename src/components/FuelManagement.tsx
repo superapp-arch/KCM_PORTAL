@@ -595,7 +595,7 @@ export default function FuelManagement({
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const params = new URLSearchParams({ bunkOrCard });
-    if (bunkOrCard === 'Bunk') params.set('date', date);
+    if (bunkOrCard === 'Bunk') { params.set('date', date); params.set('bunkName', bunkName); }
     setIndentNumberLoading(true);
 
     const MAX_ATTEMPTS = 3;
@@ -625,7 +625,7 @@ export default function FuelManagement({
           setIndentNumberLoading(false);
           const estimate = bunkOrCard === 'Card'
             ? nextCardFuelIndentNumber(logs, user.username)
-            : nextBunkFuelIndentNumber(logs, date, user.username);
+            : nextBunkFuelIndentNumber(logs, date, bunkName, user.username);
           setIndentNumber(estimate || '');
           setIndentNumberIsLocalEstimate(true);
         });
@@ -633,7 +633,7 @@ export default function FuelManagement({
     attempt(0);
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bunkOrCard, date, editingId, showSidebar, formResetToken]);
+  }, [bunkOrCard, date, bunkName, editingId, showSidebar, formResetToken]);
 
   // True once the preview above has actually finished loading, isn't a
   // failed-fetch local estimate, and still came back blank - i.e. this is
