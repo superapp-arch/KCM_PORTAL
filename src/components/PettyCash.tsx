@@ -27,7 +27,8 @@ import {
   AlertTriangle,
   Trash2,
   Clock,
-  ArrowRightLeft
+  ArrowRightLeft,
+  FileText
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
@@ -316,6 +317,59 @@ function AmountReceivedCreditRow({ advance, balanceNet, isSuperAdmin, onDelete }
   );
 }
 
+// Docs button with an on-hover quick-look preview (2026-09-04) - a fast
+// visual check ("does this voucher actually have a bill attached, and does
+// it look right") no longer needs the click-through-modal-then-download-
+// then-open-manually round trip: hovering the button pops a thumbnail strip
+// for images, a file icon otherwise, and every thumbnail opens the real
+// file in a new tab (no `download` attribute) so it renders in-browser
+// instead of forcing a save-to-disk. Clicking the button itself is
+// unchanged - still opens the full Manage Attachments modal for add/remove.
+function DocsButtonWithPreview({ documents, onClick, className }: {
+  documents: VehicleDocument[] | undefined; onClick: () => void; className: string;
+}) {
+  const docs = documents || [];
+  return (
+    <div className="relative inline-block group/docs">
+      <button onClick={onClick} className={className} title="Manage Attachments - hover for a quick preview">
+        <Paperclip className="w-3 h-3" />
+        {docs.length > 0 ? `Docs (${docs.length})` : 'Docs'}
+      </button>
+      {docs.length > 0 && (
+        <div className="hidden group-hover/docs:flex absolute z-50 top-full left-1/2 -translate-x-1/2 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl p-2 gap-1.5 flex-wrap w-max max-w-[240px]">
+          {docs.slice(0, 6).map(doc => {
+            const src = doc.filePath ? `/${doc.filePath}` : doc.fileData;
+            return (
+              <a
+                key={doc.id}
+                href={src}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`${doc.name} - click to view`}
+                onClick={(e) => e.stopPropagation()}
+                className="block w-12 h-12 rounded border border-slate-200 overflow-hidden bg-slate-50 hover:ring-2 hover:ring-blue-400 transition-all shrink-0"
+              >
+                {doc.type === 'image' && src ? (
+                  <img src={src} alt={doc.name} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-slate-400">
+                    <FileText className="w-5 h-5" />
+                  </div>
+                )}
+              </a>
+            );
+          })}
+          {docs.length > 6 && (
+            <div className="w-12 h-12 rounded border border-dashed border-slate-200 flex items-center justify-center text-slate-400 text-[10px] font-bold shrink-0">
+              +{docs.length - 6}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PettyCash({
   user,
   vouchers,
@@ -391,6 +445,9 @@ export default function PettyCash({
   const [selectedClientFilter, setSelectedClientFilter] = useState('All');
   const [selectedVehicleFilter, setSelectedVehicleFilter] = useState('All');
   const [selectedReceiverFilter, setSelectedReceiverFilter] = useState('All');
+  // Entered By filter (2026-09-04) - Super Admin/Principal only, same
+  // Excel-style "show just this person's rows" ask as Fuel Management.
+  const [selectedEnteredByFilter, setSelectedEnteredByFilter] = useState('All');
   // Defaults to newest-first by Date (the "Sort by" dropdown's default) so
   // the most recent entry is always on top when the module opens fresh -
   // still fully overridable via the column sort headers or the dropdown.
@@ -478,6 +535,10 @@ export default function PettyCash({
   const [mpBalanceReceiptDate, setMpBalanceReceiptDate] = useState(new Date().toISOString().slice(0, 10));
   const [mpBalanceReceiptSubmitting, setMpBalanceReceiptSubmitting] = useState(false);
   const [mpSearchTerm, setMpSearchTerm] = useState('');
+  // Entered By filter (2026-09-04) - Super Admin/Principal only, same
+  // Excel-style isolate-one-person's-rows ask as the Petty Cash Ledger/Fuel
+  // Management copies of this filter.
+  const [mpSelectedEnteredByFilter, setMpSelectedEnteredByFilter] = useState('All');
   // Same newest-first-by-default convention as the Petty Cash Ledger's `sort`
   // above.
   const [mpSort, setMpSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
@@ -758,7 +819,12 @@ export default function PettyCash({
     }
   };
 
+  const mpUsedEnteredByUsernames = isSuperAdmin
+    ? Array.from(new Set(marketPodEntries.map(e => e.enteredBy).filter((x): x is string => !!x))).sort()
+    : [];
+
   const filteredMarketPodUnsorted = marketPodEntries.filter(e => {
+    if (isSuperAdmin && mpSelectedEnteredByFilter !== 'All' && e.enteredBy !== mpSelectedEnteredByFilter) return false;
     if (!mpSearchTerm) return true;
     const q = mpSearchTerm.toLowerCase();
     return (e.entryNo || '').toLowerCase().includes(q) ||
@@ -885,15 +951,23 @@ export default function PettyCash({
     if (matched) setDriverId(matched.id);
   };
 
-  // Receiver Name dropdown options (2026-09-04) - this vehicle's own
-  // assigned driver(s) first (so the multi-driver-per-vehicle case above
-  // surfaces its candidates right at the top), then every other registered
-  // driver so a manually-typed name still gets type-to-search suggestions.
+  // Receiver Name dropdown options (2026-09-04, refined same day per direct
+  // feedback: showing this vehicle's own drivers ALONGSIDE the full company
+  // directory made the dropdown noisy - "the two names only, not the two
+  // then everyone else"). Selected vehicle has assigned driver(s) -> show
+  // ONLY those, unless what's actually typed no longer matches any of them
+  // (the user cleared the field and is searching for someone else), in
+  // which case this falls back to the full directory so that search still
+  // works. No vehicle selected, or it has no assigned driver -> full
+  // directory straight away.
   const receiverNameOptions = (() => {
     const vehicleUpper = vehicleNumber.trim().toUpperCase();
     const vehicleNames = driverVehicleLookup.filter(d => (d.vehicleNo || '').trim().toUpperCase() === vehicleUpper).map(d => d.name);
     const allNames = Array.from(new Set(driverVehicleLookup.map(d => d.name))).sort();
-    return Array.from(new Set([...vehicleNames, ...allNames]));
+    if (vehicleNames.length === 0) return allNames;
+    const typed = receiver.trim().toLowerCase();
+    const stillBrowsingVehicleDrivers = !typed || vehicleNames.some(n => n.toLowerCase().includes(typed));
+    return stillBrowsingVehicleDrivers ? vehicleNames : allNames;
   })();
 
   // Vendor Vehicle Number field's onChange: auto-fills Vendor ID from
@@ -1428,8 +1502,18 @@ export default function PettyCash({
     return idx === -1 ? HANDLER_ORDER.length : idx;
   };
 
+  // Entered By filter's own options (2026-09-04) - only handlers who
+  // actually have a row in this merged view, Excel-column-filter style, and
+  // only ever meaningful for a Super Admin (everyone else's own enteredBy is
+  // stripped server-side and handlerOf() just falls back to themselves, so
+  // there'd be nothing else to pick).
+  const usedEnteredByUsernames = isSuperAdmin ? HANDLER_ORDER.filter(u => mergedLedgerRowsUnsorted.some(row => handlerOf(row) === u)) : [];
+  const mergedLedgerRowsEnteredByFiltered = (isSuperAdmin && selectedEnteredByFilter !== 'All')
+    ? mergedLedgerRowsUnsorted.filter(row => handlerOf(row) === selectedEnteredByFilter)
+    : mergedLedgerRowsUnsorted;
+
   const mergedLedgerRows = sort
-    ? [...mergedLedgerRowsUnsorted].sort((a, b) => {
+    ? [...mergedLedgerRowsEnteredByFiltered].sort((a, b) => {
         // Group by handler first so a Super Admin/Rakshina's merged view
         // never interleaves Vinod/Ramesh/Saneel's entries purely by date
         // (which read as "shuffled") - each handler's own block of rows
@@ -1453,7 +1537,7 @@ export default function PettyCash({
           : extractLeadingNumber(a.vehicleNumberSort) - extractLeadingNumber(b.vehicleNumberSort);
         return sort.direction === 'asc' ? cmp : -cmp;
       })
-    : mergedLedgerRowsUnsorted;
+    : mergedLedgerRowsEnteredByFiltered;
 
   // "7 entries (5 petty cash + 1 market trip + 1 amount received)" - the
   // mixed-source breakdown for the entry-count label, so the different kinds
@@ -2229,6 +2313,25 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   </datalist>
                 </div>
 
+                {/* Entered By filter (2026-09-04) - Super Admin/Principal
+                    only, same Excel-style isolate-one-person's-rows ask as
+                    Fuel Management/Mileage Report's own copy of this. */}
+                {isSuperAdmin && usedEnteredByUsernames.length > 0 && (
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Entered By</label>
+                    <select
+                      value={selectedEnteredByFilter}
+                      onChange={(e) => setSelectedEnteredByFilter(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-semibold text-slate-700"
+                    >
+                      <option value="All">All</option>
+                      {usedEnteredByUsernames.map(username => (
+                        <option key={username} value={username}>{PETTY_CASH_USERS.find(u => u.username === username)?.label || username}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 {/* Live search input */}
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Keyword Search</label>
@@ -2284,10 +2387,23 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     </tr>
                   ) : (
                     mergedLedgerRows.map((row) => row.source === 'market-trip' ? (
-                      <MarketTripCreditRow key={row.key} trip={row.trip} date={row.date} amount={row.amount} isSuperAdmin={isSuperAdmin} balanceNet={row.balanceNet} onViewInMarketTrip={() => { setActiveTab('marketpod'); handleStartEditMarketPod(row.trip); }} onDelete={row.key.includes(':bal:') ? () => {
-                        const receiptId = row.key.split(':bal:')[1];
-                        onDeleteMarketPodBalanceReceipt(row.trip.id, receiptId).catch(err => triggerNotif(err instanceof Error ? err.message : 'Failed to delete this entry.', 'error'));
-                      } : undefined} />
+                      <MarketTripCreditRow key={row.key} trip={row.trip} date={row.date} amount={row.amount} isSuperAdmin={isSuperAdmin} balanceNet={row.balanceNet} onViewInMarketTrip={() => { setActiveTab('marketpod'); handleStartEditMarketPod(row.trip); }} onDelete={() => {
+                        if (row.key.includes(':bal:')) {
+                          const receiptId = row.key.split(':bal:')[1];
+                          if (!window.confirm(`Delete this ₹${row.amount.toLocaleString('en-IN')} balance settlement for Trip ${row.trip.entryNo}?`)) return;
+                          onDeleteMarketPodBalanceReceipt(row.trip.id, receiptId).catch(err => triggerNotif(err instanceof Error ? err.message : 'Failed to delete this entry.', 'error'));
+                        } else {
+                          // ":adv" row - this IS the trip's own Received
+                          // Advance figure, not a discrete appendable event
+                          // like a balance receipt, so "deleting" it means
+                          // zeroing receivedAdvance on the trip itself.
+                          // syncMarketPodPettyCashLinks (server.ts) then
+                          // deletes the linked float record automatically
+                          // the same way it does on any other edit.
+                          if (!window.confirm(`Delete the ₹${row.amount.toLocaleString('en-IN')} Received Advance recorded on Trip ${row.trip.entryNo}? This clears it on the trip itself, not just this row.`)) return;
+                          onUpdateMarketPodEntry(row.trip.id, { receivedAdvance: 0 }).catch(err => triggerNotif(err instanceof Error ? err.message : 'Failed to delete this entry.', 'error'));
+                        }
+                      }} />
                     ) : row.source === 'amount-received' ? (
                       <AmountReceivedCreditRow key={row.key} advance={row.advance} isSuperAdmin={isSuperAdmin} balanceNet={row.balanceNet} onDelete={() => onDeletePettyCashAdvance(row.advance.id)} />
                     ) : (() => { const v = row.voucher;
@@ -2356,14 +2472,11 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         )}
                         <td className="px-3 py-2 whitespace-nowrap text-center">
                           <div className="flex items-center justify-center gap-1.5">
-                            <button
+                            <DocsButtonWithPreview
+                              documents={v.documents}
                               onClick={() => handleOpenDocModal(v)}
                               className="text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer flex items-center gap-1"
-                              title="Manage Attachments"
-                            >
-                              <Paperclip className="w-3 h-3" />
-                              {v.documents && v.documents.length > 0 ? `Docs (${v.documents.length})` : 'Docs'}
-                            </button>
+                            />
                             {v.source === 'fuel-management' ? (
                               <span
                                 className="text-slate-400 bg-slate-50 border border-slate-200 px-2 py-1 rounded-md font-bold text-[10px] cursor-not-allowed"
@@ -2681,6 +2794,53 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
             </button>
           </div>
 
+          {/* Pending Balance quick-glance cards (2026-09-04) - a fast
+              "who owes what, and how much" read at a glance, without
+              scanning down every row of the ledger table below. Scoped to
+              whatever's currently searched/filtered there (same "Matches: N
+              entries" scope), Pending trips only, highest amount first. */}
+          {(() => {
+            const pendingTrips = filteredMarketPodUnsorted
+              .map(entry => {
+                const receivedTotal = (entry.balanceReceipts || []).reduce((s, r) => s + (r.amount || 0), 0);
+                return { entry, originalBalance: entry.balance || 0, pendingBalance: Math.max(0, (entry.balance || 0) - receivedTotal) };
+              })
+              .filter(t => t.entry.status === 'Pending' && t.pendingBalance > 0)
+              .sort((a, b) => b.pendingBalance - a.pendingBalance);
+            if (pendingTrips.length === 0) return null;
+            const totalPending = pendingTrips.reduce((s, t) => s + t.pendingBalance, 0);
+            return (
+              <div className="bg-white p-4 rounded-xl border border-amber-200 shadow-3xs">
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="flex items-center gap-1.5 text-[10px] font-bold text-amber-700 uppercase tracking-wider">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    Pending Balances ({pendingTrips.length} trip{pendingTrips.length !== 1 ? 's' : ''})
+                  </div>
+                  <div className="text-xs font-black text-rose-700 font-mono">Total: ₹{totalPending.toLocaleString('en-IN')}</div>
+                </div>
+                <div className="flex gap-2.5 overflow-x-auto pb-1">
+                  {pendingTrips.map(({ entry, originalBalance, pendingBalance }) => (
+                    <div key={entry.id} className="shrink-0 w-44 bg-gradient-to-br from-amber-50 to-rose-50 border border-amber-200 rounded-lg p-2.5">
+                      <div className="flex items-center justify-between text-[9px] font-mono text-slate-500 mb-1">
+                        <span>{entry.date}</span>
+                        <span className="font-bold text-slate-700">{entry.entryNo}</span>
+                      </div>
+                      <div className="font-mono font-bold text-slate-800 text-xs mb-1.5">{entry.vehicleNumber}</div>
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className="text-slate-500">Amt</span>
+                        <span className="font-mono font-semibold text-slate-700">₹{originalBalance.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className="text-slate-500">Balance</span>
+                        <span className="font-mono font-black text-rose-700">₹{pendingBalance.toLocaleString('en-IN')}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-3xs text-xs space-y-2">
             <div className="flex items-center justify-between pb-1 border-b border-slate-100 font-bold text-slate-700 text-[10px] uppercase tracking-wider">
               <span className="flex items-center gap-1"><Filter className="w-3 h-3 text-teal-600" /> Search</span>
@@ -2710,6 +2870,21 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 <option value="newest">Newest First</option>
                 <option value="oldest">Oldest First</option>
               </select>
+              {/* Entered By filter (2026-09-04) - Super Admin/Principal
+                  only, same Excel-style isolate-one-person's-rows ask as
+                  the Petty Cash Ledger/Fuel Management copies of this. */}
+              {isSuperAdmin && mpUsedEnteredByUsernames.length > 0 && (
+                <select
+                  value={mpSelectedEnteredByFilter}
+                  onChange={(e) => setMpSelectedEnteredByFilter(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-semibold text-slate-700 sm:w-44"
+                >
+                  <option value="All">Entered By: All</option>
+                  {mpUsedEnteredByUsernames.map(username => (
+                    <option key={username} value={username}>{PETTY_CASH_USERS.find(u => u.username === username)?.label || username}</option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 
@@ -2958,14 +3133,11 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           <td className="px-4 py-2.5 text-right font-mono font-black text-rose-700 bg-rose-50/20 whitespace-nowrap">₹{(v.cashPaid || 0).toLocaleString('en-IN')}</td>
                           <td className="px-4 py-2.5 text-center whitespace-nowrap">
                             <div className="flex items-center justify-center gap-1.5">
-                              <button
+                              <DocsButtonWithPreview
+                                documents={v.documents}
                                 onClick={() => handleOpenDocModal(v)}
                                 className="px-2 py-1 text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors font-bold text-[10px] cursor-pointer flex items-center gap-1"
-                                title="Manage Attachments"
-                              >
-                                <Paperclip className="w-3 h-3" />
-                                {v.documents && v.documents.length > 0 ? `Docs (${v.documents.length})` : 'Docs'}
-                              </button>
+                              />
                               {v.source === 'fuel-management' ? (
                                 <span
                                   className="text-slate-400 bg-slate-50 border border-slate-200 px-2 py-1 rounded-md font-bold text-[10px] cursor-not-allowed"

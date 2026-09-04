@@ -8,9 +8,10 @@ import {
   FileText, 
   FileImage, 
   File, 
-  CheckCircle2, 
+  CheckCircle2,
   Loader2,
-  Plus
+  Plus,
+  Eye
 } from 'lucide-react';
 import { VehicleDocument } from '../types';
 
@@ -206,14 +207,31 @@ export default function DocumentAttachment({
 
               <div className="flex items-center space-x-1 ml-3">
                 {doc.filePath || doc.fileData ? (
-                  <a
-                    href={doc.filePath ? `/${doc.filePath}` : doc.fileData}
-                    download={doc.fileName}
-                    title="Download document file"
-                    className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
-                  >
-                    <Download className="w-4 h-4" />
-                  </a>
+                  <>
+                    {/* View (2026-09-04) - images/PDFs render right in a new
+                        tab, no forced download-then-open-manually round
+                        trip; Download stays for an actual save-to-disk or
+                        for file types a browser can't display inline. */}
+                    {(doc.type === 'image' || doc.type === 'pdf') && (
+                      <a
+                        href={doc.filePath ? `/${doc.filePath}` : doc.fileData}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="View document"
+                        className="p-1.5 text-slate-400 hover:text-teal-600 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+                      >
+                        <Eye className="w-4 h-4" />
+                      </a>
+                    )}
+                    <a
+                      href={doc.filePath ? `/${doc.filePath}` : doc.fileData}
+                      download={doc.fileName}
+                      title="Download document file"
+                      className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+                    >
+                      <Download className="w-4 h-4" />
+                    </a>
+                  </>
                 ) : (
                   <span className="text-[9px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded font-mono">No payload</span>
                 )}
