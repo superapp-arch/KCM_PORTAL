@@ -2948,6 +2948,39 @@ async function startServer() {
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
+  // Deletes ONE balance receipt off a trip (2026-09-04, Petty Cash ledger
+  // "delete this Market Trip credit" ask) - distinct from deleting the
+  // whole trip (see DELETE /api/market-pod/:id above). Only ever removes a
+  // balance-settlement receipt, not the trip's own Received Advance figure
+  // (that's core trip data, corrected via the full Edit form instead, not
+  // a standalone appendable event the way a balance receipt is).
+  app.delete('/api/market-pod/:id/balance-receipt/:receiptId', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const existing = (await getMarketPodEntries()).find(e => e.id === req.params.id);
+      if (!canModifyPettyCashRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot modify this entry.' });
+      if (!existing) return res.status(404).json({ error: 'Trip not found.' });
+      const receipt = (existing.balanceReceipts || []).find(r => r.id === req.params.receiptId);
+      if (!receipt) return res.status(404).json({ error: 'Balance receipt not found.' });
+      const updatedEntry: MarketPodEntry = {
+        ...existing,
+        balanceReceipts: (existing.balanceReceipts || []).filter(r => r.id !== req.params.receiptId)
+      };
+      await saveMarketPodEntry(updatedEntry);
+      // Explicitly removed here - syncMarketPodPettyCashLinks only ever
+      // re-saves the float entry for receipts CURRENTLY on the trip, it
+      // never notices (or cleans up after) one that's just been removed.
+      await deletePettyCashAdvance(`mp-bal-${req.params.id}-${req.params.receiptId}`);
+      await createAuditLog({
+        user: sessionUser, action: 'DELETE', module: 'Petty Cash', entityType: 'Market Trip Balance Receipt', entityId: `${req.params.id}-${req.params.receiptId}`,
+        description: `Deleted a balance receipt of Rs. ${receipt.amount} (${receipt.date}) from Market Trip ${existing.entryNo}`,
+        oldData: receipt,
+        ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+      });
+      res.json({ success: true, data: filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser, PETTY_CASH_FULL_VIEW_EMAILS) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
   // Petty Cash "Amount Received" advances - each of the 3 logins' running
   // Balance Net ledger opening/top-up entries. Row-scoped by `username`
   // (whose ledger it belongs to) via filterAdvancesForViewer/canModifyAdvance.

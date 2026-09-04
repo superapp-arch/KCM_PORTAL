@@ -381,6 +381,16 @@ export default function App() {
     }
   };
 
+  const handleDeleteMarketPodBalanceReceipt = async (id: string, receiptId: string) => {
+    const res = await authFetch(`/api/market-pod/${id}/balance-receipt/${receiptId}`, { method: 'DELETE' });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete the balance receipt.');
+    }
+  };
+
   const handleAddPettyCashAdvance = async (advance: Omit<PettyCashAdvance, 'id'>) => {
     const res = await authFetch('/api/petty-cash-advances', {
       method: 'POST',
@@ -1389,6 +1399,7 @@ export default function App() {
         onUpdateMarketPodEntry={handleUpdateMarketPodEntry}
         onDeleteMarketPodEntry={handleDeleteMarketPodEntry}
         onMarketPodBalanceReceipt={handleMarketPodBalanceReceipt}
+        onDeleteMarketPodBalanceReceipt={handleDeleteMarketPodBalanceReceipt}
         pettyCashAdvances={pettyCashAdvances}
         onAddPettyCashAdvance={handleAddPettyCashAdvance}
         onDeletePettyCashAdvance={handleDeletePettyCashAdvance}

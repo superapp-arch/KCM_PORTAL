@@ -126,7 +126,7 @@ function buildReport(
         sections: [
           {
             heading: 'Petty Cash Vouchers', columns: ['Date', 'Entry No', 'Category', 'Vehicle', 'Receiver', 'Cash Paid', 'Entered By'],
-            rows: vouchersInRange.map(v => [v.date, v.entryNo, v.category, v.vehicleNumber || '-', v.receiver, v.cashPaid || 0, v.enteredBy || '-'])
+            rows: vouchersInRange.map(v => [v.date, (v.entryNo || '').replace(/^(ENT)-\d{4}-/, '$1-'), v.category, v.vehicleNumber || '-', v.receiver, v.cashPaid || 0, v.enteredBy || '-'])
           },
           {
             heading: 'Amount Received (Advances)', columns: ['Date', 'Username', 'Amount', 'Remarks'],

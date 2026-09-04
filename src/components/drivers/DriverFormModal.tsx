@@ -301,9 +301,9 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
                   <button type="button" onClick={addLocation} disabled={!locationToAdd} className="px-3 border border-slate-300 rounded-lg bg-slate-50 hover:bg-slate-100 font-bold text-slate-600 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">Add</button>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mt-1.5">
-                  {locations.map((loc, i) => (
+                  {locations.map((loc) => (
                     <span key={loc} className="inline-flex items-center gap-1 bg-teal-50 border border-teal-200 text-teal-800 font-bold text-[11px] px-2 py-1 rounded-full">
-                      {loc}{i === 0 && <span className="text-teal-500 font-semibold">(Primary)</span>}
+                      {loc}
                       {locations.length > 1 && (
                         <button type="button" onClick={() => removeLocation(loc)} title={`Remove ${loc}`} className="hover:text-rose-600 cursor-pointer"><X className="w-3 h-3" /></button>
                       )}

@@ -38,6 +38,19 @@ import { exportReportToExcel, exportReportToPdf, ReportTableSection } from '../u
 import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
 import { PETTY_CASH_USERS } from '../utils/pettyCashUsers';
 
+// 2026-09-04: display-only simplification of the Entry No format (drop the
+// year segment: "ENT-2026-2678" -> "ENT-2678") everywhere it's shown to a
+// user - table, detail view, receipts/exports, alerts. The STORED entryNo
+// (on the voucher/trip record, in the DB, used for sorting/searching/gap
+// detection/stray-format checks) is deliberately left untouched: the
+// per-holder sequence resets its search scope every calendar year, so the
+// same trailing digits can legitimately recur across two different years
+// for the same holder (e.g. ...0500 in 2025 and again in 2026) - stripping
+// the year from the real stored value would risk creating duplicate entry
+// numbers on the same ledger. This helper only affects what's rendered.
+const displayEntryNo = (entryNo: string | undefined): string =>
+  (entryNo || '').replace(/^(ENT)-\d{4}-/, '$1-');
+
 interface PettyCashProps {
   user: User;
   vouchers: PettyCashVoucher[];
@@ -60,6 +73,7 @@ interface PettyCashProps {
   onUpdateMarketPodEntry: (id: string, entry: Partial<MarketPodEntry>) => Promise<void>;
   onDeleteMarketPodEntry: (id: string) => Promise<void>;
   onMarketPodBalanceReceipt: (id: string, amount: number, date: string) => Promise<void>;
+  onDeleteMarketPodBalanceReceipt: (id: string, receiptId: string) => Promise<void>;
   // Amount Received / Balance Net tracking was removed from the UI (see
   // handleSubmit et al below) but these stay in the prop contract so
   // Administration.tsx doesn't need to change what it passes down.
@@ -197,45 +211,55 @@ NIDAGATTA_VEHICLES.forEach(v => { DEDICATED_VEHICLE_LOCATIONS[v] = "Nidagatta"; 
 // deep link: it switches to the Market Trip tab and opens this trip's own
 // edit sidebar. Column order matches the voucher row exactly so cells line
 // up (see the header this shares).
-function MarketTripCreditRow({ trip, date, amount, balanceNet, isSuperAdmin, onViewInMarketTrip }: {
-  trip: MarketPodEntry; date: string; amount: number; balanceNet: number; isSuperAdmin: boolean; onViewInMarketTrip: () => void;
+function MarketTripCreditRow({ trip, date, amount, balanceNet, isSuperAdmin, onViewInMarketTrip, onDelete }: {
+  trip: MarketPodEntry; date: string; amount: number; balanceNet: number; isSuperAdmin: boolean; onViewInMarketTrip: () => void; onDelete?: () => void;
 }) {
   return (
     <tr className="hover:bg-emerald-50/50 transition-colors text-[11px] bg-emerald-50/20 border-l-4 border-emerald-400">
       <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{date}</td>
-      <td className="px-3 py-2 font-mono font-bold text-emerald-700 whitespace-nowrap" title="This trip's own real Market Trip entry number - shared by its advance row and every balance-settlement row it later generates, until the trip's balance reaches 0">{trip.entryNo}</td>
-      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
-      <td className="px-3 py-2 text-slate-600 whitespace-nowrap max-w-[120px] truncate" title={`${trip.from} → ${trip.to}`}>{trip.from} &rarr; {trip.to}</td>
-      <td className="px-3 py-2 text-slate-800 font-semibold whitespace-nowrap">{trip.customer || '-'}</td>
-      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
-      <td className="px-3 py-2 font-mono font-bold text-slate-800 whitespace-nowrap">{trip.vehicleNumber || '-'}</td>
-      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
-      <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{trip.coordinator || '-'}</td>
-      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
+      <td className="px-3 py-2"></td>
+      <td className="px-3 py-2"></td>
+      <td className="px-3 py-2"></td>
+      <td className="px-3 py-2"></td>
+      <td className="px-3 py-2"></td>
+      <td className="px-3 py-2"></td>
+      <td className="px-3 py-2"></td>
+      <td className="px-3 py-2"></td>
+      <td className="px-3 py-2"></td>
+      <td className="px-3 py-2"></td>
       <td className="px-3 py-2 whitespace-nowrap">
         <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-emerald-50 text-emerald-700 border-emerald-200">Credit</span>
       </td>
       <td className="px-3 py-2 whitespace-nowrap">
         <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-emerald-100 text-emerald-800 border-emerald-300">Market trip</span>
       </td>
-      <td className="px-3 py-2 text-right font-mono text-slate-400">&mdash;</td>
       <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700 bg-emerald-50/40">₹{amount.toLocaleString('en-IN')}</td>
+      <td className="px-3 py-2"></td>
       <td className={`px-3 py-2 text-right font-mono font-black ${balanceNet < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`} title="This holder's running balance across the merged, date-sorted Petty Cash + Market Trip + Amount Received credit list">
         {balanceNet < 0 && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
         ₹{balanceNet.toLocaleString('en-IN')}
       </td>
-      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
-      <td className="px-3 py-2 text-slate-500 max-w-[120px] truncate" title={trip.remarks}>{trip.remarks || '-'}</td>
-      {isSuperAdmin && <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">{trip.enteredBy || '-'}</td>}
-      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
+      <td className="px-3 py-2"></td>
+      {isSuperAdmin && <td className="px-3 py-2"></td>}
       <td className="px-3 py-2 whitespace-nowrap text-center">
-        <button
-          onClick={onViewInMarketTrip}
-          className="text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
-          title="Open this trip in the Market Trip Ledger"
-        >
-          View in Market Trip
-        </button>
+        <div className="flex items-center justify-center gap-1.5">
+          <button
+            onClick={onViewInMarketTrip}
+            className="text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+            title="Open this trip in the Market Trip Ledger"
+          >
+            View in Market Trip
+          </button>
+          {onDelete && (
+            <button
+              onClick={onDelete}
+              className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+              title="Delete this balance receipt"
+            >
+              Delete
+            </button>
+          )}
+        </div>
       </td>
     </tr>
   );
@@ -257,9 +281,11 @@ function AmountReceivedCreditRow({ advance, balanceNet, isSuperAdmin, onDelete }
       <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{advance.date}</td>
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
+      <td className="px-3 py-2 text-slate-500 max-w-[120px] truncate" title={advance.remarks}>{advance.remarks || '-'}</td>
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
       <td className="px-3 py-2 text-slate-700 font-semibold whitespace-nowrap capitalize">{advance.account || '-'}</td>
+      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
       <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{receiverLabel}</td>
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
@@ -269,16 +295,14 @@ function AmountReceivedCreditRow({ advance, balanceNet, isSuperAdmin, onDelete }
       <td className="px-3 py-2 whitespace-nowrap">
         <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-amber-100 text-amber-800 border-amber-300">Amount received</span>
       </td>
-      <td className="px-3 py-2 text-right font-mono text-slate-400">&mdash;</td>
       <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700 bg-emerald-50/40">₹{advance.amount.toLocaleString('en-IN')}</td>
+      <td className="px-3 py-2 text-right font-mono text-slate-400">&mdash;</td>
       <td className={`px-3 py-2 text-right font-mono font-black ${balanceNet < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`} title="This holder's running balance across the merged, date-sorted Petty Cash + Market Trip + Amount Received credit list">
         {balanceNet < 0 && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
         ₹{balanceNet.toLocaleString('en-IN')}
       </td>
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
-      <td className="px-3 py-2 text-slate-500 max-w-[120px] truncate" title={advance.remarks}>{advance.remarks || '-'}</td>
-      {isSuperAdmin && <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">{advance.username}</td>}
-      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
+      {isSuperAdmin && <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">{receiverLabel}</td>}
       <td className="px-3 py-2 whitespace-nowrap text-center">
         <button
           onClick={onDelete}
@@ -306,6 +330,7 @@ export default function PettyCash({
   onUpdateMarketPodEntry,
   onDeleteMarketPodEntry,
   onMarketPodBalanceReceipt,
+  onDeleteMarketPodBalanceReceipt,
   pettyCashAdvances,
   onAddPettyCashAdvance,
   onDeletePettyCashAdvance
@@ -1018,7 +1043,7 @@ export default function PettyCash({
       } else {
         await onAddVoucher(voucherData);
       }
-      setSaveConfirmation({ label: 'Entry', identifier: `Entry no. ${voucherData.entryNo}`, key: Date.now() });
+      setSaveConfirmation({ label: 'Entry', identifier: `Entry no. ${displayEntryNo(voucherData.entryNo)}`, key: Date.now() });
 
       resetVoucherForm();
       setShowSidebar(false);
@@ -1458,7 +1483,7 @@ export default function PettyCash({
 
     const voucherRows = rangeFilteredVouchers.map(v => ({
       'Date': v.date,
-      'Entry No': v.entryNo,
+      'Entry No': displayEntryNo(v.entryNo),
       'Category': v.category,
       'Location': v.location,
       'Client Name': v.clientName,
@@ -1647,7 +1672,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
       id: `pc-${v.id}`,
       date: v.date,
       source: 'Petty Cash' as const,
-      entryNo: v.entryNo,
+      entryNo: displayEntryNo(v.entryNo),
       handler: handlerLabel(v.enteredBy),
       description: v.category || '-',
       amount: v.cashPaid || 0
@@ -2194,48 +2219,51 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <th className="px-3 py-2.5">Date</th>
                     <th className="px-3 py-2.5"><SortHeader label="Entry No" sortKey="entryNo" sort={sort} onSort={handleSort} type="numeric" /></th>
                     <th className="px-3 py-2.5">Expense Category</th>
+                    <th className="px-3 py-2.5">Remarks</th>
                     <th className="px-3 py-2.5">Location</th>
                     <th className="px-3 py-2.5">Client</th>
-                    <th className="px-3 py-2.5">Vendor</th>
+                    <th className="px-3 py-2.5">Ownership</th>
                     <th className="px-3 py-2.5"><SortHeader label="Vehicle #" sortKey="vehicleNumber" sort={sort} onSort={handleSort} type="numeric" /></th>
                     <th className="px-3 py-2.5">Vendor Vehicle #</th>
                     <th className="px-3 py-2.5">Receiver</th>
                     <th className="px-3 py-2.5" title="Vendor ID for a vendor-vehicle entry, Driver ID for a KCM-vehicle entry">Vendor ID / Driver ID</th>
                     <th className="px-3 py-2.5"><SortHeader label="Type" sortKey="type" sort={sort} onSort={handleSort} labels={{ asc: 'Credit First', desc: 'Debit First' }} /></th>
                     <th className="px-3 py-2.5">Source</th>
+                    <th className="px-3 py-2.5 text-right">Amount Received</th>
                     <th className="px-3 py-2.5 text-right">Cash Paid</th>
-                    <th className="px-3 py-2.5 text-right">Credit</th>
                     <th className="px-3 py-2.5 text-right">Balance Net</th>
                     <th className="px-3 py-2.5">Trip Sheet</th>
-                    <th className="px-3 py-2.5">Remarks</th>
                     {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
-                    <th className="px-3 py-2.5">Origin</th>
                     <th className="px-3 py-2.5 text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
                   {mergedLedgerRows.length === 0 ? (
                     <tr>
-                      <td colSpan={19 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
+                      <td colSpan={18 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
                         NO RECORDED PETTY CASH VOUCHERS MATCH THE SELECTION.
                         <div className="text-[10px] text-slate-400 font-sans mt-1">Use "Add Petty Cash Entry" above to authorize new cash disbursements.</div>
                       </td>
                     </tr>
                   ) : (
                     mergedLedgerRows.map((row) => row.source === 'market-trip' ? (
-                      <MarketTripCreditRow key={row.key} trip={row.trip} date={row.date} amount={row.amount} isSuperAdmin={isSuperAdmin} balanceNet={row.balanceNet} onViewInMarketTrip={() => { setActiveTab('marketpod'); handleStartEditMarketPod(row.trip); }} />
+                      <MarketTripCreditRow key={row.key} trip={row.trip} date={row.date} amount={row.amount} isSuperAdmin={isSuperAdmin} balanceNet={row.balanceNet} onViewInMarketTrip={() => { setActiveTab('marketpod'); handleStartEditMarketPod(row.trip); }} onDelete={row.key.includes(':bal:') ? () => {
+                        const receiptId = row.key.split(':bal:')[1];
+                        onDeleteMarketPodBalanceReceipt(row.trip.id, receiptId).catch(err => triggerNotif(err instanceof Error ? err.message : 'Failed to delete this entry.', 'error'));
+                      } : undefined} />
                     ) : row.source === 'amount-received' ? (
                       <AmountReceivedCreditRow key={row.key} advance={row.advance} isSuperAdmin={isSuperAdmin} balanceNet={row.balanceNet} onDelete={() => onDeletePettyCashAdvance(row.advance.id)} />
                     ) : (() => { const v = row.voucher;
                       return (
                       <tr key={v.id} className="hover:bg-slate-50/70 transition-colors text-[11px]">
                         <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{v.date}</td>
-                        <td className="px-3 py-2 font-bold font-mono text-slate-900 whitespace-nowrap">{v.entryNo}</td>
+                        <td className="px-3 py-2 font-bold font-mono text-slate-900 whitespace-nowrap">{displayEntryNo(v.entryNo)}</td>
                         <td className="px-3 py-2 whitespace-nowrap">
                           <span className="bg-slate-100 text-slate-800 border border-slate-200 px-2 py-0.5 rounded text-[9px] font-bold uppercase">
                             {v.category}
                           </span>
                         </td>
+                        <td className="px-3 py-2 text-slate-500 max-w-[120px] truncate" title={v.remarks}>{v.remarks || '-'}</td>
                         <td className="px-3 py-2 text-slate-600 whitespace-nowrap max-w-[100px] truncate" title={v.location}>{v.location || '-'}</td>
                         <td className="px-3 py-2 text-slate-800 font-semibold whitespace-nowrap">{v.clientName}</td>
                         <td className="px-3 py-2 whitespace-nowrap">
@@ -2270,10 +2298,10 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                             still can't retroactively change what an earlier
                             row already displayed (only rows from its own
                             date onward pick it up). */}
-                        <td className="px-3 py-2 text-right font-mono font-bold text-red-700 bg-red-50/20">₹{(v.cashPaid || 0).toLocaleString('en-IN')}</td>
                         <td className="px-3 py-2 text-right font-mono text-slate-600" title="The credit (Amount Received or Market Trip) currently active as of this entry - carries forward unchanged until the next credit lands">
                           {amtRecAt(v) > 0 ? `₹${amtRecAt(v).toLocaleString('en-IN')}` : <span className="text-slate-300">&mdash;</span>}
                         </td>
+                        <td className="px-3 py-2 text-right font-mono font-bold text-red-700 bg-red-50/20">₹{(v.cashPaid || 0).toLocaleString('en-IN')}</td>
                         {(() => {
                           const net = balanceNetAt(v);
                           return (
@@ -2284,24 +2312,11 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           );
                         })()}
                         <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{v.tripSheet || '-'}</td>
-                        <td className="px-3 py-2 text-slate-500 max-w-[120px] truncate" title={v.remarks}>{v.remarks || '-'}</td>
                         {isSuperAdmin && (
                           <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">
                             {v.enteredBy || '-'}
                           </td>
                         )}
-                        <td className="px-3 py-2 whitespace-nowrap">
-                          {v.source === 'fuel-management' ? (
-                            <span
-                              className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200"
-                              title={`Auto-generated from Fuel Management's Extra Fuel${v.mileageReportId ? ` (Mileage Report ${v.mileageReportId})` : ''} - edit/delete via the linked Fuel Entry.`}
-                            >
-                              Fuel Management
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">Petty Cash</span>
-                          )}
-                        </td>
                         <td className="px-3 py-2 whitespace-nowrap text-center">
                           <div className="flex items-center justify-center gap-1.5">
                             <button
@@ -2330,9 +2345,9 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                                 </button>
                                 <button
                                   onClick={() => {
-                                    if (window.confirm(`Are you sure you want to delete entry ${v.entryNo}?`)) {
+                                    if (window.confirm(`Are you sure you want to delete entry ${displayEntryNo(v.entryNo)}?`)) {
                                       onDeleteVoucher(v.id);
-                                      setDeleteConfirmation({ label: 'Entry', identifier: `Entry no. ${v.entryNo}`, key: Date.now() });
+                                      setDeleteConfirmation({ label: 'Entry', identifier: `Entry no. ${displayEntryNo(v.entryNo)}`, key: Date.now() });
                                     }
                                   }}
                                   className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
@@ -2889,7 +2904,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       }).map((v) => (
                         <tr key={v.id} className="hover:bg-slate-50 transition-colors text-[11px]">
                           <td className="px-4 py-2.5 font-mono whitespace-nowrap">{v.date}</td>
-                          <td className="px-4 py-2.5 font-mono font-bold whitespace-nowrap">{v.entryNo || '-'}</td>
+                          <td className="px-4 py-2.5 font-mono font-bold whitespace-nowrap">{displayEntryNo(v.entryNo) || '-'}</td>
                           <td className="px-4 py-2.5 capitalize font-semibold whitespace-nowrap">
                             <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
                               v.vendor === 'kcm insta' ? 'bg-pink-50 text-pink-700 border border-pink-100' : 'bg-blue-50 text-blue-700 border border-blue-100'
@@ -2935,10 +2950,10 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                                   </button>
                                   <button
                                     onClick={async () => {
-                                      if (confirm(`Are you sure you want to delete entry ${v.entryNo}?`)) {
+                                      if (confirm(`Are you sure you want to delete entry ${displayEntryNo(v.entryNo)}?`)) {
                                         try {
                                           await onDeleteVoucher(v.id!);
-                                          setDeleteConfirmation({ label: 'Entry', identifier: `Entry no. ${v.entryNo}`, key: Date.now() });
+                                          setDeleteConfirmation({ label: 'Entry', identifier: `Entry no. ${displayEntryNo(v.entryNo)}`, key: Date.now() });
                                         } catch (err) {
                                           console.error(err);
                                           triggerNotif('Failed to delete voucher.', 'error');
@@ -2984,7 +2999,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
               <div>
                 <h3 className="text-sm font-bold flex items-center gap-2">
                   <Paperclip className="w-4 h-4 text-teal-400" />
-                  Voucher Documents: {selectedVoucherForDocs.entryNo}
+                  Voucher Documents: {displayEntryNo(selectedVoucherForDocs.entryNo)}
                 </h3>
                 <p className="text-[10px] text-slate-400 font-mono mt-0.5 uppercase tracking-wider">
                   Category: {selectedVoucherForDocs.category} • Receiver: {selectedVoucherForDocs.receiver}
@@ -3322,7 +3337,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           type="text"
                           readOnly
                           disabled
-                          value={editingId ? entryNo : nextPettyCashEntryNo()}
+                          value={editingId ? displayEntryNo(entryNo) : displayEntryNo(nextPettyCashEntryNo())}
                           className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2 font-mono font-bold tracking-wider text-slate-500 uppercase cursor-not-allowed"
                         />
                         <p className="text-[9px] text-slate-400 font-mono mt-0.5">Auto-generated, not editable</p>
@@ -3369,20 +3384,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         ))}
                       </div>
                     )}
-                  </div>
-
-                  {/* Receiver Name - no longer paired with Vehicle Number
-                      (2026-09-03, that field moved into the mode-switched
-                      block below) and no longer mandatory. */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Receiver Name</label>
-                    <input
-                      type="text"
-                      placeholder="Cash recipient (optional)"
-                      value={receiver}
-                      onChange={(e) => setReceiver(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                    />
                   </div>
 
                   {/* Vehicle / Vendor Identity (2026-09-03) - two mutually
@@ -3486,6 +3487,20 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     )}
                   </div>
 
+                  {/* Receiver Name (2026-09-04: sits right after the Vehicle/
+                      Vendor Identity block and before Location, same field
+                      regardless of which mode is active) - not mandatory. */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Receiver Name</label>
+                    <input
+                      type="text"
+                      placeholder="Cash recipient (optional)"
+                      value={receiver}
+                      onChange={(e) => setReceiver(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    />
+                  </div>
+
                   {/* Location - free text for everyone, but Ramesh and Vinod
                       additionally get a type-to-search suggestion list -
                       purely autocomplete, never restrictive. Ramesh's own 4
@@ -3542,7 +3557,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     </div>
 
                     <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Vendor Entity *</label>
+                      <label className="block font-semibold text-slate-700 mb-1">Ownership *</label>
                       <select
                         value={vendor}
                         onChange={(e) => setVendor(e.target.value as any)}

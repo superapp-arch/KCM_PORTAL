@@ -214,6 +214,7 @@ interface AdministrationProps {
   onUpdateMarketPodEntry: (id: string, entry: Partial<MarketPodEntry>) => Promise<void>;
   onDeleteMarketPodEntry: (id: string) => Promise<void>;
   onMarketPodBalanceReceipt: (id: string, amount: number, date: string) => Promise<void>;
+  onDeleteMarketPodBalanceReceipt: (id: string, receiptId: string) => Promise<void>;
   pettyCashAdvances: PettyCashAdvance[];
   onAddPettyCashAdvance: (advance: Omit<PettyCashAdvance, 'id'>) => Promise<void>;
   onDeletePettyCashAdvance: (id: string) => Promise<void>;
@@ -329,6 +330,7 @@ export default function Administration({
   onUpdateMarketPodEntry,
   onDeleteMarketPodEntry,
   onMarketPodBalanceReceipt,
+  onDeleteMarketPodBalanceReceipt,
   pettyCashAdvances,
   onAddPettyCashAdvance,
   onDeletePettyCashAdvance,
@@ -1013,6 +1015,7 @@ export default function Administration({
               onUpdateMarketPodEntry={onUpdateMarketPodEntry}
               onDeleteMarketPodEntry={onDeleteMarketPodEntry}
               onMarketPodBalanceReceipt={onMarketPodBalanceReceipt}
+              onDeleteMarketPodBalanceReceipt={onDeleteMarketPodBalanceReceipt}
               pettyCashAdvances={pettyCashAdvances}
               onAddPettyCashAdvance={onAddPettyCashAdvance}
               onDeletePettyCashAdvance={onDeletePettyCashAdvance}
