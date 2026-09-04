@@ -214,6 +214,8 @@ import {
   deleteVendor,
   getDriverEmployees,
   saveDriverEmployee,
+  deleteDriverEmployee,
+  cascadeRenameDriverId,
   getDriverAttendance,
   saveDriverAttendanceRecord,
   deleteDriverAttendanceRecord,
@@ -4347,6 +4349,19 @@ async function startServer() {
       if (!existing || !driverAllLocations(existing).some(loc => canWriteDriverLocation(loc, sessionUser))) {
         return res.status(403).json({ error: 'You cannot modify this driver.' });
       }
+      // Driver ID rename (2026-09-04, "Basic Info" tab ask to make Driver ID
+      // editable) - Driver ID is the primary key every other module stamps a
+      // driver by (Attendance, Salary Slips, Petty Cash vouchers, Fuel
+      // Management's Mileage Report, Maintenance's Service Ledger and
+      // Breakdown reports), so a bare id swap here would silently orphan all
+      // of that history under the old id. cascadeRenameDriverId() re-stamps
+      // every one of those records onto the new id first.
+      const oldId = req.params.id;
+      const newId = typeof req.body?.id === 'string' && req.body.id.trim() ? req.body.id.trim().toUpperCase() : oldId;
+      const isRename = newId !== oldId;
+      if (isRename && (await getDriverEmployees()).some(d => d.id === newId)) {
+        return res.status(400).json({ error: `Driver ID ${newId} is already in use by another driver.` });
+      }
       // Merged with `existing` (2026-09-02 data-integrity fix) - saveDriverEmployee
       // overwrites the whole stored record with whatever it's given, so this
       // used to save req.body AS the complete new record. Every caller so far
@@ -4358,11 +4373,17 @@ async function startServer() {
       // salary, bank details...) off the record the next time someone
       // attached a document from that panel. Merging here makes a genuine
       // partial update safe for every current and future caller.
-      const result = await saveDriverEmployee({ ...existing, ...req.body, id: req.params.id });
+      let result = await saveDriverEmployee({ ...existing, ...req.body, id: newId });
+      if (isRename) {
+        result = await deleteDriverEmployee(oldId);
+        await cascadeRenameDriverId(oldId, newId);
+      }
       await createAuditLog({
-        user: sessionUser, action: 'UPDATE', module: 'Driver Details', entityType: 'Driver', entityId: req.params.id,
-        description: `Updated driver ${req.body?.name || existing.name || req.params.id} (${req.params.id})`,
-        oldData: existing, newData: { ...req.body, id: req.params.id },
+        user: sessionUser, action: 'UPDATE', module: 'Driver Details', entityType: 'Driver', entityId: newId,
+        description: isRename
+          ? `Renamed driver ID ${oldId} to ${newId} (${req.body?.name || existing.name || newId}) and updated linked Attendance/Salary/Petty Cash/Fuel/Maintenance records`
+          : `Updated driver ${req.body?.name || existing.name || req.params.id} (${req.params.id})`,
+        oldData: existing, newData: { ...req.body, id: newId },
         ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
       });
       const allowed = getAllowedDriverViewLocations(sessionUser);

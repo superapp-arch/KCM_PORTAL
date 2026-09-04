@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { MileageReport, Vehicle, User, VehicleMileage, StaffEmployee } from '../types';
 import { PETTY_CASH_USERS } from '../utils/pettyCashUsers';
+import { fuelEnteredByLabel } from '../utils/fuelEnteredBy';
 import {
   Gauge,
   Plus,
@@ -98,6 +99,9 @@ export default function MileageReportModule({
   // live `vehicles` prop (Fleet & Vehicles), so it's never a separate list
   // to keep in sync.
   const [selectedVehicleFilter, setSelectedVehicleFilter] = useState('');
+  // Entered By filter (2026-09-04, Super Admin/Principal only) - see its own
+  // comment near the dropdown below.
+  const [selectedEnteredByFilter, setSelectedEnteredByFilter] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
   // Defaults to oldest-first by Date (Mileage Report-specific - unlike the
   // Petty Cash Ledger/Market POD tables, which default newest-first) - still
@@ -469,7 +473,7 @@ export default function MileageReportModule({
       'Authorized Driver': r.driverName,
       'Location': r.location,
       'Remarks': r.remarks || '',
-      ...(isSuperAdmin ? { 'Entered By': r.enteredBy || '' } : {})
+      ...(isSuperAdmin ? { 'Entered By': r.enteredBy ? fuelEnteredByLabel(r.enteredBy) : '' } : {})
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(data);
@@ -484,10 +488,15 @@ export default function MileageReportModule({
   const { start: viewStart, end: viewEnd } = viewPeriod === 'all' ? { start: '', end: '' } : getPeriodDateRange(viewPeriod, viewDate);
 
   // Filtering: by view scope, location, vehicle number, and keyword search.
+  // Entered By filter's own options (2026-09-04) - only usernames that
+  // actually appear in this report data, Excel-column-filter style.
+  const enteredByOptions = Array.from(new Set(reports.map(r => r.enteredBy).filter((x): x is string => !!x))).sort();
+
   const filteredReports = reports.filter(r => {
     const matchesView = viewPeriod === 'all' || (r.date >= viewStart && r.date <= viewEnd);
     const matchesLocation = selectedLocationFilter === 'All' || (r.location || '').toUpperCase() === selectedLocationFilter.toUpperCase();
     const matchesVehicle = !selectedVehicleFilter || (r.vehicleNo || '').trim().toUpperCase() === selectedVehicleFilter.trim().toUpperCase();
+    const matchesEnteredBy = !isSuperAdmin || selectedEnteredByFilter === 'All' || r.enteredBy === selectedEnteredByFilter;
     const matchesKeyword =
       searchTerm === '' ||
       (r.driverName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -495,7 +504,7 @@ export default function MileageReportModule({
       (r.vehicleNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (r.location || '').toLowerCase().includes(searchTerm.toLowerCase());
 
-    return matchesView && matchesLocation && matchesVehicle && matchesKeyword;
+    return matchesView && matchesLocation && matchesVehicle && matchesEnteredBy && matchesKeyword;
   });
 
   const sortedReports = sort
@@ -699,6 +708,26 @@ export default function MileageReportModule({
                 </span>
               </div>
             </div>
+
+            {/* Entered By filter (2026-09-04) - Super Admin/Principal only,
+                Excel-column-filter style: only usernames that actually
+                logged a report here, so isolating just one person's rows is
+                a single pick instead of scrolling/searching for them. */}
+            {isSuperAdmin && enteredByOptions.length > 0 && (
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Entered By</label>
+                <select
+                  value={selectedEnteredByFilter}
+                  onChange={(e) => setSelectedEnteredByFilter(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-bold text-slate-700 text-[11px]"
+                >
+                  <option value="All">All</option>
+                  {enteredByOptions.map(username => (
+                    <option key={username} value={username}>{fuelEnteredByLabel(username)}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         </div>
 
@@ -782,7 +811,7 @@ export default function MileageReportModule({
                     <td className="px-3 py-2 text-slate-500 max-w-xs truncate" title={r.remarks}>{r.remarks || '-'}</td>
                     {isSuperAdmin && (
                       <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">
-                        {r.enteredBy || '-'}
+                        {r.enteredBy ? fuelEnteredByLabel(r.enteredBy) : '-'}
                       </td>
                     )}
                     {!readOnly && (

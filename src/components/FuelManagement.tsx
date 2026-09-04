@@ -32,6 +32,7 @@ import DateInput from './DateInput';
 import { authFetch } from '../authFetch';
 import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
 import { PETTY_CASH_USERS } from '../utils/pettyCashUsers';
+import { fuelEnteredByLabel } from '../utils/fuelEnteredBy';
 
 const LOCATIONS = [
   'AP', 'Nelmangala', 'Belagaum', 'BLR', 'Chennai', 'Goa', 'Hyderabad', 'Hassan',
@@ -231,6 +232,9 @@ export default function FuelManagement({
   // Bunk/Card filter - whichever payment method (Bunk vs Card) an entry was
   // logged under, independent of the Bunk Name filter above.
   const [bunkOrCardFilter, setBunkOrCardFilter] = useState<'All' | 'Bunk' | 'Card'>('All');
+  // Entered By filter (2026-09-04) - Super Admin/Principal only, same
+  // Excel-style "show just this person's rows" ask as Mileage Report below.
+  const [enteredByFilter, setEnteredByFilter] = useState<string>('All');
   // Defaults to Indent No descending (highest/most-recent indent number
   // first), NOT Date - Indent Nos are entered by hand and don't necessarily
   // land in date order, so sorting by Date scrambled them and made it hard
@@ -1161,10 +1165,16 @@ export default function FuelManagement({
   // 'all' skips the date check entirely (start/end unused in that case).
   const { start: viewStart, end: viewEnd } = viewPeriod === 'all' ? { start: '', end: '' } : getPeriodDateRange(viewPeriod, viewDate);
 
+  // Entered By filter's own options (2026-09-04) - only the usernames that
+  // actually appear in this ledger's data, Excel-column-filter style, not a
+  // fixed roster (so it never lists someone who's never logged an entry).
+  const enteredByOptions = Array.from(new Set(logs.map(l => l.enteredBy).filter((x): x is string => !!x))).sort();
+
   const filteredLogsUnsorted = logs.filter(log =>
     (viewPeriod === 'all' || (log.date >= viewStart && log.date <= viewEnd)) &&
     (bunkFilter === 'All' || log.bunkName === bunkFilter) &&
     (bunkOrCardFilter === 'All' || (log.bunkOrCard || 'Bunk') === bunkOrCardFilter) &&
+    (!isSuperAdmin || enteredByFilter === 'All' || log.enteredBy === enteredByFilter) &&
     (
       (log?.vehicleNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (log?.vendorName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -1570,6 +1580,25 @@ export default function FuelManagement({
                 </button>
               ))}
             </div>
+
+            {/* Entered By filter (2026-09-04) - Super Admin/Principal only,
+                same "isolate just this person's rows" ask as Mileage Report's
+                own copy of this filter below. */}
+            {isSuperAdmin && enteredByOptions.length > 0 && (
+              <>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-2">Entered By:</span>
+                <select
+                  value={enteredByFilter}
+                  onChange={(e) => setEnteredByFilter(e.target.value)}
+                  className="bg-slate-100 border-none rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-700 cursor-pointer"
+                >
+                  <option value="All">All</option>
+                  {enteredByOptions.map(username => (
+                    <option key={username} value={username}>{fuelEnteredByLabel(username)}</option>
+                  ))}
+                </select>
+              </>
+            )}
           </div>
 
           {/* Ledger view scope - All (default) / Day / Month Till Date /
@@ -1626,14 +1655,14 @@ export default function FuelManagement({
                   <th className="px-3 py-2.5"><SortHeader label="RQ ID" sortKey="rqId" sort={sort} onSort={handleSort} /></th>
                   <th className="px-3 py-2.5 max-w-xs">Remarks</th>
                   <th className="px-3 py-2.5 text-center">Docs</th>
-                  {(isSuperAdmin || isRqIdOnlyUser) && <th className="px-3 py-2.5">Entered By</th>}
+                  {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
                   <th className="px-3 py-2.5 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {filteredLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={19 + (isSuperAdmin || isRqIdOnlyUser ? 1 : 0)} className="text-center py-10 text-slate-400 font-mono">
+                    <td colSpan={19 + (isSuperAdmin ? 1 : 0)} className="text-center py-10 text-slate-400 font-mono">
                       NO FUEL ENTRIES FOUND IN CURRENT LEDGER.
                     </td>
                   </tr>
@@ -1669,9 +1698,9 @@ export default function FuelManagement({
                           <span className="text-slate-300">-</span>
                         )}
                       </td>
-                      {(isSuperAdmin || isRqIdOnlyUser) && (
+                      {isSuperAdmin && (
                         <td className="px-3 py-2.5 whitespace-nowrap text-slate-500 font-mono text-[10px]">
-                          {log.enteredBy || '-'}
+                          {log.enteredBy ? fuelEnteredByLabel(log.enteredBy) : '-'}
                         </td>
                       )}
                       <td className="px-3 py-2.5 text-right whitespace-nowrap">

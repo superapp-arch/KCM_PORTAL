@@ -195,14 +195,18 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
         workingDays: isEditing ? attendanceSummary.presentDays : undefined
       };
       if (isEditing) {
-        await onUpdateDriver(basic.id, payload);
+        // Always the ORIGINAL id as the URL param - basic.id may now be a
+        // brand-new id the user just typed (Driver ID is editable, see the
+        // Basic Info tab above), and the server needs the old id to find the
+        // record and cascade-rename every linked record onto the new one.
+        await onUpdateDriver(driver!.id, payload);
       } else {
         await onAddDriver(payload as DriverEmployee);
       }
       onSaved({ id: basic.id, name: basic.name });
       onClose();
     } catch (err) {
-      setError('Something went wrong while saving. Please try again.');
+      setError(err instanceof Error ? err.message : 'Something went wrong while saving. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -233,9 +237,12 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-500 mb-1">Driver ID*</label>
-                  <input value={basic.id} onChange={e => setBasic({ ...basic, id: e.target.value.toUpperCase() })} disabled={isEditing}
-                    autoComplete="off" placeholder="KCMDRV19102" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 disabled:bg-slate-100" />
+                  <label className="block font-semibold text-slate-500 mb-1">
+                    Driver ID*
+                    {isEditing && <span className="text-slate-400 font-normal"> (changing this renames it everywhere - Attendance, Salary Slips, Petty Cash, Fuel Management, Maintenance)</span>}
+                  </label>
+                  <input value={basic.id} onChange={e => setBasic({ ...basic, id: e.target.value.toUpperCase() })}
+                    autoComplete="off" placeholder="KCMDRV19102" className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5" />
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-500 mb-1">Driver Name*</label>

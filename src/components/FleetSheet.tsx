@@ -645,6 +645,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                 <th className="px-4 py-4 text-purple-100">Type</th>
                 <th className="px-4 py-4 text-purple-100">Category</th>
                 <th className="px-4 py-4 text-purple-100">Ownership</th>
+                <th className="px-4 py-4 text-purple-100">Registration Date</th>
                 <th className="px-4 py-4 text-center text-purple-100">Status</th>
                 <th className="px-4 py-4 text-purple-100">Insurance Exp</th>
                 <th className="px-4 py-4 text-purple-100">FC Expiry</th>
@@ -656,7 +657,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
               {filteredVehicles.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="text-center py-12 text-slate-400 font-mono">
+                  <td colSpan={12} className="text-center py-12 text-slate-400 font-mono">
                     NO FLEET RECORDS FOUND MATCHING THE SELECTED PARAMETERS.
                   </td>
                 </tr>
@@ -724,6 +725,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                           </span>
                         </td>
                         <td className="px-4 py-3.5 capitalize max-w-[150px] truncate">{ownLabel}</td>
+                        <td className="px-4 py-3.5 font-mono text-slate-500">{v['Reg Date'] || v.regDate || '-'}</td>
                         <td className="px-4 py-3.5 text-center">
                           <button
                             onClick={async (e) => {
@@ -806,7 +808,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                       {/* Row Expansion */}
                       {expandedRegNo === reg && (
                         <tr>
-                          <td colSpan={11} className="bg-slate-50/50 p-6 border-t border-slate-100">
+                          <td colSpan={12} className="bg-slate-50/50 p-6 border-t border-slate-100">
                             <motion.div
                               initial={{ opacity: 0, y: -10 }}
                               animate={{ opacity: 1, y: 0 }}
@@ -821,6 +823,11 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                                 <dl className="grid grid-cols-2 gap-y-2 gap-x-4 text-xs font-sans">
                                   <dt className="text-slate-400">Model Name</dt>
                                   <dd className="font-bold text-slate-800">{v.Model || v.model || '-'}</dd>
+
+                                  <dt className="text-slate-400">Fixed Mileage (KM/L)</dt>
+                                  <dd className="font-mono font-bold text-slate-800">
+                                    {vehicleMileages.find(m => (m.vehicleNo || '').trim().toUpperCase() === reg.trim().toUpperCase())?.mileage ?? '-'}
+                                  </dd>
 
                                   <dt className="text-slate-400">Chassis Number</dt>
                                   <dd className="font-mono text-slate-800 break-all">{v['Chassis No'] || v.chassisNo || '-'}</dd>
@@ -1454,7 +1461,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
 
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
-                        Vehicle OEM Model Name
+                        Model Name
                       </label>
                       <input
                         type="text"

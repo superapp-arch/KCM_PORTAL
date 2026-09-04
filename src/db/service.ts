@@ -2437,6 +2437,49 @@ export async function deleteDriverEmployee(id: string) {
   }
 }
 
+// Renames a Driver ID everywhere it's stamped across the app (2026-09-04,
+// Driver Salary "Basic Info" ask to make Driver ID editable) - the
+// driver_employees row itself is moved by the caller (PUT
+// /api/drivers/employees/:id, which saves under the new id then deletes the
+// old row); this only fixes up every OTHER record that references the old
+// id, so history stays connected under the new one instead of getting
+// silently orphaned:
+//  - Driver Attendance: id is deterministic `${driverId}-${date}`, so each
+//    row is re-saved under a brand-new id (old row deleted after, not
+//    before, to survive a mid-way crash without ever losing a day's mark).
+//  - Driver Salary Slips/Audits: id is independent (slipNumber-based), so
+//    these are just updated in place.
+//  - Petty Cash vouchers, Maintenance (Service Ledger) records, Breakdown
+//    reports and Mileage Report entries only ever stamp driverId as a plain
+//    optional snapshot field (not a table id), so these are likewise
+//    updated in place.
+export async function cascadeRenameDriverId(oldId: string, newId: string) {
+  const attendance = (await getDriverAttendance()).filter(a => a.driverId === oldId);
+  for (const rec of attendance) {
+    const newRecId = `${newId}-${rec.date}`;
+    await saveDriverAttendanceRecord({ ...rec, id: newRecId, driverId: newId });
+    if (newRecId !== rec.id) await deleteDriverAttendanceRecord(rec.id);
+  }
+
+  const slips = (await getDriverSalarySlips()).filter(s => s.driverId === oldId);
+  for (const slip of slips) await saveDriverSalarySlipRecord({ ...slip, driverId: newId });
+
+  const slipAudits = (await getDriverSalarySlipAudits()).filter(a => a.driverId === oldId);
+  for (const audit of slipAudits) await saveDriverSalarySlipAuditRecord({ ...audit, driverId: newId });
+
+  const vouchers = (await getPettyCashVouchers()).filter(v => v.driverId === oldId);
+  for (const v of vouchers) await savePettyCashVoucher({ ...v, driverId: newId });
+
+  const serviceRecords = (await getMaintenanceRecords()).filter(r => r.driverId === oldId);
+  for (const r of serviceRecords) await saveMaintenanceRecord({ ...r, driverId: newId });
+
+  const breakdowns = (await getBreakdownReports()).filter(r => r.driverId === oldId);
+  for (const r of breakdowns) await saveBreakdownReport({ ...r, driverId: newId });
+
+  const mileageReports = (await getMileageReports()).filter(r => r.driverId === oldId);
+  for (const r of mileageReports) await saveMileageReport({ ...r, driverId: newId });
+}
+
 export async function getDriverAttendance(): Promise<DriverAttendance[]> {
   try {
     const rows = await db.select().from(driverAttendance);

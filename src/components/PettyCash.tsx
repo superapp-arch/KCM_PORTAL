@@ -850,14 +850,51 @@ export default function PettyCash({
       setLocation(newLocation);
       applyLocationAutoClient(newLocation, trimmed);
     }
-    const matchedDriverRecord = driverVehicleLookup.find(d => (d.vehicleNo || '').trim().toUpperCase() === trimmed);
-    if (matchedDriverRecord?.name) {
-      setReceiver(matchedDriverRecord.name);
+    // 2026-09-04: a vehicle can legitimately have more than one driver
+    // assigned to it (driver-vehicle-lookup returns one row per pair - see
+    // its own route comment in server.ts) - auto-filling only ever made
+    // sense when there's exactly ONE match; guessing between two would
+    // silently record the wrong driver. With 2+ matches this deliberately
+    // leaves Receiver Name/Driver ID alone so the user picks the actual
+    // driver from the dropdown (see receiverNameOptions below, which lists
+    // this vehicle's own assigned drivers first).
+    const vehicleDriverMatches = driverVehicleLookup.filter(d => (d.vehicleNo || '').trim().toUpperCase() === trimmed);
+    if (vehicleDriverMatches.length === 1) {
+      setReceiver(vehicleDriverMatches[0].name);
+      setDriverId(vehicleDriverMatches[0].id);
+    } else {
+      setDriverId('');
     }
-    setDriverId(matchedDriverRecord ? matchedDriverRecord.id : '');
     const matchedVendorEntity = vendorFromOwnership(vehicleByRegNo(trimmed)?.ownership || vehicleByRegNo(trimmed)?.['Ownership']);
     if (matchedVendorEntity) setVendor(matchedVendorEntity);
   };
+
+  // Receiver Name field's onChange: whether the name came from picking one
+  // of the vehicle's own assigned drivers out of the dropdown below, or was
+  // typed by hand and happens to match a registered driver anywhere in
+  // Driver Details, auto-fill Driver ID off that match the same way Vehicle
+  // Number already does above - never guesses when nothing matches, so a
+  // genuinely unregistered receiver stays free text with no Driver ID.
+  const handleReceiverChange = (raw: string) => {
+    setReceiver(raw);
+    const typed = raw.trim().toLowerCase();
+    if (!typed) { setDriverId(''); return; }
+    const vehicleUpper = vehicleNumber.trim().toUpperCase();
+    const matched = driverVehicleLookup.find(d => (d.vehicleNo || '').trim().toUpperCase() === vehicleUpper && d.name.trim().toLowerCase() === typed)
+      || driverVehicleLookup.find(d => d.name.trim().toLowerCase() === typed);
+    if (matched) setDriverId(matched.id);
+  };
+
+  // Receiver Name dropdown options (2026-09-04) - this vehicle's own
+  // assigned driver(s) first (so the multi-driver-per-vehicle case above
+  // surfaces its candidates right at the top), then every other registered
+  // driver so a manually-typed name still gets type-to-search suggestions.
+  const receiverNameOptions = (() => {
+    const vehicleUpper = vehicleNumber.trim().toUpperCase();
+    const vehicleNames = driverVehicleLookup.filter(d => (d.vehicleNo || '').trim().toUpperCase() === vehicleUpper).map(d => d.name);
+    const allNames = Array.from(new Set(driverVehicleLookup.map(d => d.name))).sort();
+    return Array.from(new Set([...vehicleNames, ...allNames]));
+  })();
 
   // Vendor Vehicle Number field's onChange: auto-fills Vendor ID from
   // Vendor Management (2026-09-04, moved here from its own useEffect for
@@ -3494,11 +3531,16 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <label className="block font-semibold text-slate-700 mb-1">Receiver Name</label>
                     <input
                       type="text"
+                      list="petty-cash-receiver-name-datalist"
                       placeholder="Cash recipient (optional)"
                       value={receiver}
-                      onChange={(e) => setReceiver(e.target.value)}
+                      onChange={(e) => handleReceiverChange(e.target.value)}
+                      autoComplete="off"
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                     />
+                    <datalist id="petty-cash-receiver-name-datalist">
+                      {receiverNameOptions.map(name => <option key={name} value={name} />)}
+                    </datalist>
                   </div>
 
                   {/* Location - free text for everyone, but Ramesh and Vinod
