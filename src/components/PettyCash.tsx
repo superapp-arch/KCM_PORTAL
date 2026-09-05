@@ -274,7 +274,7 @@ function MarketTripCreditRow({ trip, date, amount, balanceNet, isSuperAdmin, onV
 // the existing Amount Received delete handler so it can still be removed
 // from this merged view.
 function AmountReceivedCreditRow({ advance, balanceNet, isSuperAdmin, onDelete }: {
-  advance: PettyCashAdvance; balanceNet: number; isSuperAdmin: boolean; onDelete: () => void;
+  advance: PettyCashAdvance; balanceNet: number; isSuperAdmin: boolean; onDelete?: () => void;
 }) {
   const receiverLabel = PETTY_CASH_USERS.find(u => u.username === advance.username)?.label || advance.username;
   return (
@@ -305,13 +305,17 @@ function AmountReceivedCreditRow({ advance, balanceNet, isSuperAdmin, onDelete }
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
       {isSuperAdmin && <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">{receiverLabel}</td>}
       <td className="px-3 py-2 whitespace-nowrap text-center">
-        <button
-          onClick={onDelete}
-          className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
-          title="Delete this Amount Received entry"
-        >
-          Delete
-        </button>
+        {onDelete ? (
+          <button
+            onClick={onDelete}
+            className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+            title="Delete this Amount Received entry"
+          >
+            Delete
+          </button>
+        ) : (
+          <span className="text-slate-300 text-[10px] uppercase font-bold" title="View only - this is another handler's entry">View only</span>
+        )}
       </td>
     </tr>
   );
@@ -389,15 +393,34 @@ export default function PettyCash({
   onAddPettyCashAdvance,
   onDeletePettyCashAdvance
 }: PettyCashProps) {
-  // Rakshina (Accounts & Finance, finance@kcmlogistics.in) gets the same
-  // full cross-handler visibility + manage rights as Super Admin here - an
-  // oversight/reconciliation role, not one of the 3 Petty Cash handlers who
-  // only ever see their own rows. Every "isSuperAdmin" check in this file is
-  // specifically about that full-view/manage capability (Entered By column,
-  // Per-Handler Breakdown, editing another handler's row, etc.), not general
-  // admin rights, so broadening this one flag is enough - mirrors
-  // server.ts's PETTY_CASH_FULL_VIEW_EMAILS exactly.
-  const isSuperAdmin = user.department === 'super_admin' || user.email === 'finance@kcmlogistics.in';
+  // Cross-handler VIEW tier (2026-09-05) - Rakshina, Pratibha, Divya, and
+  // Praveen see every handler's rows merged together (Entered By column,
+  // Per-Handler Breakdown, etc.) exactly like a Super Admin does, but -
+  // unlike a real Super Admin - can never edit/delete/add anything; only
+  // their own row's absence of `enteredBy` (server strips it from a
+  // regular handler's own rows, never from this tier's view - see
+  // server.ts's filterEntryRowsForViewer) tells editing controls apart, via
+  // canEditPettyCashRow below. Most "isSuperAdmin" checks in this file are
+  // genuinely just about that merged VIEW, so broadening this one flag
+  // covers them; the handful that are actually about editing use
+  // isTrueSuperAdmin/canEditPettyCashRow instead. Mirrors server.ts's
+  // PETTY_CASH_VIEW_ONLY_EMAILS exactly.
+  const isTrueSuperAdmin = user.department === 'super_admin';
+  const isSuperAdmin = isTrueSuperAdmin || ['finance@kcmlogistics.in', 'prathiba@kcmlogistics.in', 'divya@kcmlogistics.in', 'praveenkumar@kcmlogistics.in'].includes(user.email || '');
+  // Whether this specific row's Edit/Delete controls should render -
+  // isTrueSuperAdmin can touch anything; everyone else only ever sees this
+  // (via the merged cross-handler view above) if `enteredBy` is ABSENT,
+  // which only ever happens for a regular handler's OWN row (the server
+  // strips it there) - never for a cross-handler viewer's rows, which
+  // always keep enteredBy intact. So this is implicitly also "am I this
+  // row's own handler" for the 3 real Petty Cash logins.
+  const canEditPettyCashRow = (enteredBy?: string): boolean => isTrueSuperAdmin || !enteredBy;
+  // Whether "Add Entry"/"Add Trip Entry"/"Log Amount Received" etc. should
+  // render at all - true for a regular handler (isSuperAdmin false, they're
+  // only ever adding their own) and a real Super Admin, false for the
+  // cross-handler VIEW-ONLY tier (isSuperAdmin true but isTrueSuperAdmin
+  // false).
+  const canAddPettyCash = isTrueSuperAdmin || !isSuperAdmin;
   // "Vinod Account" payment mode (Market Trip) is selectable only by Vinod
   // himself and Super Admins/Principal - everyone else never sees it as an
   // option, same visibility convention as every other role-gated field here.
@@ -1372,6 +1395,11 @@ export default function PettyCash({
   const usedClientNames = Array.from(new Set(vouchers.map(v => v.clientName).filter(Boolean))).sort();
   const usedVehicleNumbers = Array.from(new Set(vouchers.flatMap(v => [v.vehicleNumber, v.vendorVehicleNumber]).filter((n): n is string => !!n))).sort();
   const usedReceivers = Array.from(new Set(vouchers.map(v => v.receiver).filter(Boolean))).sort();
+  // Market Trip From/To type-to-search suggestions (2026-09-05) - every
+  // From/To value ever typed and saved, so a repeat route no longer needs
+  // retyping the same location by hand every time. Shared between both
+  // fields (a "To" for one trip is very often a "From" for another).
+  const usedMpLocations = Array.from(new Set(marketPodEntries.flatMap(e => [e.from, e.to]).filter(Boolean))).sort();
 
   // Filter vouchers based on search, client, vehicle, receiver, category, year and month
   const filteredVouchersUnsorted = vouchers.filter(v => {
@@ -2036,14 +2064,16 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       <span className="font-sans font-semibold">{u.label}</span>
                       <div className="flex items-center gap-1.5">
                         <span>₹{bal.toLocaleString('en-IN')}</span>
-                        <button
-                          type="button"
-                          onClick={() => { setBalanceUserFilter(u.username); setShowAdvanceModal(true); }}
-                          title={`Log Amount Received for ${u.label}`}
-                          className="p-0.5 bg-white border border-current rounded cursor-pointer opacity-70 hover:opacity-100 transition-opacity"
-                        >
-                          <Plus className="w-2.5 h-2.5" />
-                        </button>
+                        {canAddPettyCash && (
+                          <button
+                            type="button"
+                            onClick={() => { setBalanceUserFilter(u.username); setShowAdvanceModal(true); }}
+                            title={`Log Amount Received for ${u.label}`}
+                            className="p-0.5 bg-white border border-current rounded cursor-pointer opacity-70 hover:opacity-100 transition-opacity"
+                          >
+                            <Plus className="w-2.5 h-2.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -2097,25 +2127,30 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 Ledger Operations:
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                {/* Add Petty Cash Entry - opens the slide-out sidebar, mirrors Fuel Entry's "+ Add Entry" */}
-                <button
-                  type="button"
-                  onClick={handleOpenAddVoucher}
-                  className="bg-gradient-to-r from-teal-600 to-emerald-700 hover:shadow-md text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Add Petty Cash Entry
-                </button>
+                {/* Add Petty Cash Entry - opens the slide-out sidebar, mirrors Fuel Entry's "+ Add Entry".
+                    Hidden for the cross-handler VIEW-ONLY tier (Rakshina/Pratibha/Divya/Praveen) - see canAddPettyCash. */}
+                {canAddPettyCash && (
+                  <button
+                    type="button"
+                    onClick={handleOpenAddVoucher}
+                    className="bg-gradient-to-r from-teal-600 to-emerald-700 hover:shadow-md text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add Petty Cash Entry
+                  </button>
+                )}
 
                 {/* Amount Received - opening/top-up advance for this user's (or, for Super Admin, the selected user's) Balance Net ledger */}
-                <button
-                  type="button"
-                  onClick={() => { setBalanceUserFilter(isSuperAdmin ? balanceUserFilter || PETTY_CASH_USERS[0].username : user.username); setShowAdvanceModal(true); }}
-                  className="bg-amber-600 hover:bg-amber-700 text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs"
-                >
-                  <Wallet className="w-3.5 h-3.5" />
-                  Add Amount Received
-                </button>
+                {canAddPettyCash && (
+                  <button
+                    type="button"
+                    onClick={() => { setBalanceUserFilter(isSuperAdmin ? balanceUserFilter || PETTY_CASH_USERS[0].username : user.username); setShowAdvanceModal(true); }}
+                    className="bg-amber-600 hover:bg-amber-700 text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs"
+                  >
+                    <Wallet className="w-3.5 h-3.5" />
+                    Add Amount Received
+                  </button>
+                )}
 
                 {/* Download - reference date + preset period */}
                 <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 py-1 shadow-2xs">
@@ -2387,7 +2422,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     </tr>
                   ) : (
                     mergedLedgerRows.map((row) => row.source === 'market-trip' ? (
-                      <MarketTripCreditRow key={row.key} trip={row.trip} date={row.date} amount={row.amount} isSuperAdmin={isSuperAdmin} balanceNet={row.balanceNet} onViewInMarketTrip={() => { setActiveTab('marketpod'); handleStartEditMarketPod(row.trip); }} onDelete={() => {
+                      <MarketTripCreditRow key={row.key} trip={row.trip} date={row.date} amount={row.amount} isSuperAdmin={isSuperAdmin} balanceNet={row.balanceNet} onViewInMarketTrip={() => { setActiveTab('marketpod'); handleStartEditMarketPod(row.trip); }} onDelete={!canEditPettyCashRow(row.trip.enteredBy) ? undefined : () => {
                         if (row.key.includes(':bal:')) {
                           const receiptId = row.key.split(':bal:')[1];
                           if (!window.confirm(`Delete this ₹${row.amount.toLocaleString('en-IN')} balance settlement for Trip ${row.trip.entryNo}?`)) return;
@@ -2405,7 +2440,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         }
                       }} />
                     ) : row.source === 'amount-received' ? (
-                      <AmountReceivedCreditRow key={row.key} advance={row.advance} isSuperAdmin={isSuperAdmin} balanceNet={row.balanceNet} onDelete={() => onDeletePettyCashAdvance(row.advance.id)} />
+                      <AmountReceivedCreditRow key={row.key} advance={row.advance} isSuperAdmin={isSuperAdmin} balanceNet={row.balanceNet} onDelete={(!isTrueSuperAdmin && row.advance.username !== user.username) ? undefined : () => onDeletePettyCashAdvance(row.advance.id)} />
                     ) : (() => { const v = row.voucher;
                       return (
                       <tr key={v.id} className="hover:bg-slate-50/70 transition-colors text-[11px]">
@@ -2483,6 +2518,13 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                                 title="This entry was generated from Fuel Management. To edit or remove it, update the linked Fuel Entry instead."
                               >
                                 Locked
+                              </span>
+                            ) : !canEditPettyCashRow(v.enteredBy) ? (
+                              <span
+                                className="text-slate-300 text-[10px] uppercase font-bold px-2 py-1"
+                                title="View only - this is another handler's entry"
+                              >
+                                View only
                               </span>
                             ) : (
                               <>
@@ -2784,14 +2826,16 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
               <Truck className="w-4 h-4 text-emerald-600" />
               Market Trip Ledger:
             </div>
-            <button
-              type="button"
-              onClick={() => { resetMarketPodForm(); setShowMarketPodSidebar(true); }}
-              className="bg-gradient-to-r from-teal-600 to-emerald-700 hover:shadow-md text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Add Trip Entry
-            </button>
+            {canAddPettyCash && (
+              <button
+                type="button"
+                onClick={() => { resetMarketPodForm(); setShowMarketPodSidebar(true); }}
+                className="bg-gradient-to-r from-teal-600 to-emerald-700 hover:shadow-md text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add Trip Entry
+              </button>
+            )}
           </div>
 
           {/* Pending Balance quick-glance cards (2026-09-04) - a fast
@@ -2892,9 +2936,9 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
             <table className="w-full text-left text-xs border-collapse">
               <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
                 <tr>
+                  <th className="px-3 py-2.5">Date</th>
                   <th className="px-3 py-2.5"><SortHeader label="Entry No" sortKey="entryNo" sort={mpSort} onSort={handleMpSort} type="numeric" /></th>
                   <th className="px-3 py-2.5"><SortHeader label="Vehicle Number" sortKey="vehicleNumber" sort={mpSort} onSort={handleMpSort} type="numeric" /></th>
-                  <th className="px-3 py-2.5">Date</th>
                   <th className="px-3 py-2.5">From</th>
                   <th className="px-3 py-2.5">To</th>
                   <th className="px-3 py-2.5"><SortHeader label="Customer" sortKey="customer" sort={mpSort} onSort={handleMpSort} /></th>
@@ -2904,7 +2948,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   <th className="px-3 py-2.5 text-right">Received</th>
                   <th className="px-3 py-2.5 text-right">Balance</th>
                   <th className="px-3 py-2.5">Payment Mode</th>
-                  <th className="px-3 py-2.5 text-right">Extra Trip</th>
                   <th className="px-3 py-2.5">Co-Ordinator</th>
                   <th className="px-3 py-2.5">Status</th>
                   <th className="px-3 py-2.5">Remarks</th>
@@ -2915,7 +2958,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
                 {filteredMarketPod.length === 0 ? (
                   <tr>
-                    <td colSpan={17 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
+                    <td colSpan={16 + (isSuperAdmin ? 1 : 0)} className="text-center py-16 text-slate-400 font-mono text-xs">
                       NO MARKET TRIP ENTRIES MATCH THE SELECTION.
                       <div className="text-[10px] text-slate-400 font-sans mt-1">Use "Add Trip Entry" above to log a new freight trip.</div>
                     </td>
@@ -2935,9 +2978,9 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     const pendingBalance = Math.max(0, (entry.balance || 0) - receivedTotal);
                     return (
                     <tr key={entry.id} className="hover:bg-slate-50/70 transition-colors text-[11px]">
+                      <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{entry.date}</td>
                       <td className="px-3 py-2 font-bold font-mono text-slate-900 whitespace-nowrap">{entry.entryNo}</td>
                       <td className="px-3 py-2 font-mono font-bold text-slate-800 whitespace-nowrap">{entry.vehicleNumber}</td>
-                      <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{entry.date}</td>
                       <td className="px-3 py-2 text-slate-600 whitespace-nowrap max-w-[100px] truncate" title={entry.from}>{entry.from || '-'}</td>
                       <td className="px-3 py-2 text-slate-600 whitespace-nowrap max-w-[100px] truncate" title={entry.to}>{entry.to || '-'}</td>
                       <td className="px-3 py-2 text-slate-800 font-semibold whitespace-nowrap">{entry.customer || '-'}</td>
@@ -2959,7 +3002,6 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           {PAYMENT_MODE_LABELS[entry.paymentMode || 'Petty Cash']}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-right font-mono text-slate-600">{entry.extraTripAmount ? `₹${entry.extraTripAmount.toLocaleString('en-IN')}` : '-'}</td>
                       <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{entry.coordinator || '-'}</td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border ${
@@ -2978,25 +3020,31 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       )}
                       <td className="px-3 py-2 whitespace-nowrap text-center">
                         <div className="flex items-center justify-center gap-1.5">
-                          <button
-                            onClick={() => handleStartEditMarketPod(entry)}
-                            className="text-teal-600 hover:text-teal-800 bg-teal-50 hover:bg-teal-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
-                            title="Edit this entry"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => {
-                              if (window.confirm(`Are you sure you want to delete trip entry ${entry.entryNo}?`)) {
-                                onDeleteMarketPodEntry(entry.id);
-                                setDeleteConfirmation({ label: 'Market trip', identifier: `Entry no. ${entry.entryNo}`, key: Date.now() });
-                              }
-                            }}
-                            className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
-                            title="Delete this entry"
-                          >
-                            Delete
-                          </button>
+                          {canEditPettyCashRow(entry.enteredBy) ? (
+                            <>
+                              <button
+                                onClick={() => handleStartEditMarketPod(entry)}
+                                className="text-teal-600 hover:text-teal-800 bg-teal-50 hover:bg-teal-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+                                title="Edit this entry"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (window.confirm(`Are you sure you want to delete trip entry ${entry.entryNo}?`)) {
+                                    onDeleteMarketPodEntry(entry.id);
+                                    setDeleteConfirmation({ label: 'Market trip', identifier: `Entry no. ${entry.entryNo}`, key: Date.now() });
+                                  }
+                                }}
+                                className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+                                title="Delete this entry"
+                              >
+                                Delete
+                              </button>
+                            </>
+                          ) : (
+                            <span className="text-slate-300 text-[10px] uppercase font-bold" title="View only - this is another handler's entry">View only</span>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -3145,6 +3193,8 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                                 >
                                   Locked (Fuel Mgmt)
                                 </span>
+                              ) : !canEditPettyCashRow(v.enteredBy) ? (
+                                <span className="text-slate-300 text-[10px] uppercase font-bold px-2 py-1" title="View only - this is another handler's entry">View only</span>
                               ) : (
                                 <>
                                   <button
@@ -3240,6 +3290,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   }
                 }}
                 label="Attached Voucher Receipts & Invoices"
+                isReadOnly={!canEditPettyCashRow(selectedVoucherForDocs.enteredBy)}
               />
             </div>
 
@@ -3540,7 +3591,27 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           </p>
                         </>
                       );
-                    })() : (
+                    })() : editingId && isVinod ? (
+                      // 2026-09-05: Vinod gets a plain edit option on an
+                      // existing entry's own Entry No - a stopgap ("give
+                      // edit option for now") rather than the fuller
+                      // auto-resequence-everything-after-it behavior, which
+                      // would need its own careful design. Edits the real
+                      // stored value directly (year segment included, same
+                      // as every entryNo already saved) - displayEntryNo's
+                      // year-stripping is display-only everywhere else, so
+                      // editing the full value here keeps this in sync with
+                      // it rather than trying to re-derive the year back on.
+                      <>
+                        <input
+                          type="text"
+                          value={entryNo}
+                          onChange={(e) => setEntryNo(e.target.value.toUpperCase())}
+                          className="w-full bg-amber-50 border border-amber-300 rounded-lg p-2 font-mono font-bold tracking-wider text-amber-800 uppercase focus:outline-none focus:ring-1 focus:ring-amber-500"
+                        />
+                        <p className="text-[9px] text-amber-700 font-mono mt-0.5">Editable - changing this does not renumber any other entries.</p>
+                      </>
+                    ) : (
                       <>
                         <input
                           type="text"
@@ -3912,6 +3983,25 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
 
               <div className="flex-1 overflow-y-auto p-5 text-xs">
                 <form id="market-pod-entry-form" onSubmit={handleMarketPodSubmit} className="space-y-3">
+                  {/* Date (2026-09-05: moved to sit first, ahead of Entry No/
+                      Vehicle Number, matching the ledger table's own column
+                      order) */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Date *</label>
+                    <div className="relative">
+                      <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400 pointer-events-none">
+                        <Calendar className="w-3.5 h-3.5" />
+                      </span>
+                      <DateInput
+                        required
+                        value={mpDate}
+                        onChange={(e) => setMpDate(e.target.value)}
+                        max={new Date().toISOString().slice(0, 10)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-8 pr-2.5 py-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                  </div>
+
                   {/* Entry No - auto-generated, not editable */}
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Entry No</label>
@@ -3954,32 +4044,17 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     )}
                   </div>
 
-                  {/* Date */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Date *</label>
-                    <div className="relative">
-                      <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400 pointer-events-none">
-                        <Calendar className="w-3.5 h-3.5" />
-                      </span>
-                      <DateInput
-                        required
-                        value={mpDate}
-                        onChange={(e) => setMpDate(e.target.value)}
-                        max={new Date().toISOString().slice(0, 10)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-8 pr-2.5 py-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                      />
-                    </div>
-                  </div>
-
                   {/* From / To */}
                   <div className="grid grid-cols-2 gap-2.5">
                     <div>
                       <label className="block font-semibold text-slate-700 mb-1">From</label>
                       <input
                         type="text"
+                        list="mp-location-datalist"
                         placeholder="Origin location"
                         value={mpFrom}
                         onChange={(e) => setMpFrom(e.target.value)}
+                        autoComplete="off"
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                       />
                     </div>
@@ -3987,12 +4062,17 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       <label className="block font-semibold text-slate-700 mb-1">To</label>
                       <input
                         type="text"
+                        list="mp-location-datalist"
                         placeholder="Destination location"
                         value={mpTo}
                         onChange={(e) => setMpTo(e.target.value)}
+                        autoComplete="off"
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                       />
                     </div>
+                    <datalist id="mp-location-datalist">
+                      {usedMpLocations.map(loc => <option key={loc} value={loc} />)}
+                    </datalist>
                   </div>
 
                   {/* Customer */}

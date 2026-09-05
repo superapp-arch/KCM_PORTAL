@@ -82,6 +82,13 @@ const DRIVER_ACCESS_EMAILS = [
 // explicit email allowlist rather than relying on department alone.
 const PETTY_CASH_ACCESS_EMAILS = ['vinod@kcmlogistics.in', 'ramesh@kcmlogistics.in', 'saneel@kcmlogistics.in'];
 
+// Cross-handler VIEW-ONLY tier (2026-09-05, direct request) - mirrors
+// server.ts's PETTY_CASH_VIEW_ONLY_EMAILS exactly. Grants the tab; the
+// actual "view every handler's rows but can never edit/delete/add anything"
+// behavior is enforced server-side (see server.ts) and by PettyCash.tsx's
+// own read of this same list for its edit-control rendering.
+const PETTY_CASH_VIEW_ONLY_EMAILS = ['finance@kcmlogistics.in', 'prathiba@kcmlogistics.in', 'divya@kcmlogistics.in', 'praveenkumar@kcmlogistics.in'];
+
 // Fuel Management + Mileage Report gate - mirrors server.ts's
 // FUEL_ENTRY_USER_EMAILS exactly.
 const FUEL_ACCESS_EMAILS = ['chandanreddy@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'ramesh@kcmlogistics.in', 'vinod@kcmlogistics.in'];
@@ -363,6 +370,10 @@ export default function Administration({
   
   // Tab Management
   const getInitialTab = (): string => {
+    // Vinod (2026-09-05) - lands on the Dashboard (Super Admin Terminal,
+    // relabeled for him below) rather than Petty Cash like every other
+    // 'petty_cash' department login, per direct request.
+    if (user.email === 'vinod@kcmlogistics.in') return 'admin-overview';
     switch (user.department) {
       case 'vehicle_manager': return 'fleet';
       case 'fuel_management': return 'fuel';
@@ -476,7 +487,7 @@ export default function Administration({
   // Safe tab filter based on department constraint
   const hasAccess = (tabName: string): boolean => {
     if (user.department === 'super_admin') return true;
-    if (tabName === 'warehouse' && (user.email === 'bhagya@kcmlogistics.in' || user.email === 'vinod@kcmlogistics.in')) return true;
+    if (tabName === 'warehouse' && user.email === 'bhagya@kcmlogistics.in') return true;
     if ((tabName === 'fuel' || tabName === 'mileage') && FUEL_ACCESS_EMAILS.includes(user.email || '')) return true;
     if (tabName === 'fuel' && FUEL_RQ_ID_ONLY_EMAILS.includes(user.email || '')) return true;
     if (tabName === 'payments' && PAYMENTS_ACCESS_EMAILS.includes(user.email || '')) return true;
@@ -487,7 +498,7 @@ export default function Administration({
     // role instead (see PettyCash.tsx's own isSuperAdmin, which already
     // treats her the same as Super Admin for full cross-handler visibility
     // + manage rights, and server.ts's PETTY_CASH_FULL_VIEW_EMAILS).
-    if (tabName === 'pettycash' && (user.department === 'petty_cash' || PETTY_CASH_ACCESS_EMAILS.includes(user.email || '') || user.email === 'finance@kcmlogistics.in')) return true;
+    if (tabName === 'pettycash' && (user.department === 'petty_cash' || PETTY_CASH_ACCESS_EMAILS.includes(user.email || '') || PETTY_CASH_VIEW_ONLY_EMAILS.includes(user.email || ''))) return true;
     // Vinod also gets Fleet Maintenance on top of his own department
     // ('petty_cash') - see FLEET_MAINTENANCE_EXTRA_EMAILS.
     if (tabName === 'maintenance' && (user.department === 'maintenance' || FLEET_MAINTENANCE_EXTRA_EMAILS.includes(user.email || ''))) return true;
@@ -547,7 +558,11 @@ export default function Administration({
 
   const PINK_ACTIVE = 'bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border-l-4 border-pink-500';
   const navItems: Array<{ id: string; label: string; icon: React.ComponentType<{ className?: string }>; iconColor: string; active: string; visible: boolean; badge?: number }> = [
-    { id: 'admin-overview', label: 'Super Admin Terminal', icon: ShieldAlert, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: user.department === 'super_admin', badge: unreadCount },
+    // Relabeled "Dashboard" for Vinod specifically (2026-09-05, direct
+    // request) - same tab/content as Super Admin Terminal, just a friendlier
+    // name and his default landing tab (see getInitialTab above); everyone
+    // else still sees it as "Super Admin Terminal".
+    { id: 'admin-overview', label: user.email === 'vinod@kcmlogistics.in' ? 'Dashboard' : 'Super Admin Terminal', icon: ShieldAlert, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: user.department === 'super_admin' || user.email === 'vinod@kcmlogistics.in', badge: unreadCount },
     // Super Admin / Principal only - hasAccess() already grants every tab to
     // department === 'super_admin' unconditionally, and no other branch
     // matches 'reports', so this is never reachable by any other role. This
@@ -771,7 +786,7 @@ export default function Administration({
           )}
 
           {/* Super Admin Tab Overview */}
-          {activeTab === 'admin-overview' && user.department === 'super_admin' && (
+          {activeTab === 'admin-overview' && (user.department === 'super_admin' || user.email === 'vinod@kcmlogistics.in') && (
             <div className="space-y-6" id="super-admin-desk-board">
               {/* Corporate Fleet Showcase Banner */}
               <div className="bg-gradient-to-r from-slate-900 to-slate-950 rounded-2xl border border-slate-800 p-6 flex flex-col md:flex-row items-center gap-6 shadow-xl relative overflow-hidden">

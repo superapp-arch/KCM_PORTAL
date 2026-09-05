@@ -163,6 +163,10 @@ export default function MileageReportModule({
   };
 
   const isSuperAdmin = user.department === 'super_admin';
+  // Entered By is visible to Super Admin/Principal and to Vinod's read-only
+  // view (2026-09-05, direct request - same as Fuel Management's own copy of
+  // this) - everyone else never sees who entered what.
+  const canSeeEnteredBy = isSuperAdmin || user.email === 'vinod@kcmlogistics.in';
 
   // Auto Calculations
   // 1. Fetch Previous Entry Closing KM for selected vehicle
@@ -473,7 +477,7 @@ export default function MileageReportModule({
       'Authorized Driver': r.driverName,
       'Location': r.location,
       'Remarks': r.remarks || '',
-      ...(isSuperAdmin ? { 'Entered By': r.enteredBy ? fuelEnteredByLabel(r.enteredBy) : '' } : {})
+      ...(canSeeEnteredBy ? { 'Entered By': r.enteredBy ? fuelEnteredByLabel(r.enteredBy) : '' } : {})
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(data);
@@ -496,7 +500,7 @@ export default function MileageReportModule({
     const matchesView = viewPeriod === 'all' || (r.date >= viewStart && r.date <= viewEnd);
     const matchesLocation = selectedLocationFilter === 'All' || (r.location || '').toUpperCase() === selectedLocationFilter.toUpperCase();
     const matchesVehicle = !selectedVehicleFilter || (r.vehicleNo || '').trim().toUpperCase() === selectedVehicleFilter.trim().toUpperCase();
-    const matchesEnteredBy = !isSuperAdmin || selectedEnteredByFilter === 'All' || r.enteredBy === selectedEnteredByFilter;
+    const matchesEnteredBy = !canSeeEnteredBy || selectedEnteredByFilter === 'All' || r.enteredBy === selectedEnteredByFilter;
     const matchesKeyword =
       searchTerm === '' ||
       (r.driverName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -713,7 +717,7 @@ export default function MileageReportModule({
                 Excel-column-filter style: only usernames that actually
                 logged a report here, so isolating just one person's rows is
                 a single pick instead of scrolling/searching for them. */}
-            {isSuperAdmin && enteredByOptions.length > 0 && (
+            {canSeeEnteredBy && enteredByOptions.length > 0 && (
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Entered By</label>
                 <select
@@ -756,14 +760,14 @@ export default function MileageReportModule({
                 <th className="px-3 py-2.5"><SortHeader label="Authorized Driver" sortKey="driverName" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5"><SortHeader label="Location" sortKey="location" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5 max-w-xs">Remarks</th>
-                {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
+                {canSeeEnteredBy && <th className="px-3 py-2.5">Entered By</th>}
                 {!readOnly && <th className="px-3 py-2.5 text-center">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
               {filteredReports.length === 0 ? (
                 <tr>
-                  <td colSpan={21 + (isSuperAdmin ? 1 : 0) + (readOnly ? 0 : 1)} className="text-center py-20 text-slate-400 font-mono text-xs">
+                  <td colSpan={21 + (canSeeEnteredBy ? 1 : 0) + (readOnly ? 0 : 1)} className="text-center py-20 text-slate-400 font-mono text-xs">
                     🚫 NO REGISTERED MILEAGE ENTRIES DISCOVERED FOR THIS SEGMENT.
                     <div className="text-[10px] text-slate-400 font-sans mt-1">
                       {readOnly ? 'Entries are logged from the Mileage section of the Fuel Entry form in Fuel Management.' : 'Use the "Add Details" sidebar button to authorize new mileage and fuel log books.'}
@@ -809,7 +813,7 @@ export default function MileageReportModule({
                       </span>
                     </td>
                     <td className="px-3 py-2 text-slate-500 max-w-xs truncate" title={r.remarks}>{r.remarks || '-'}</td>
-                    {isSuperAdmin && (
+                    {canSeeEnteredBy && (
                       <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">
                         {r.enteredBy ? fuelEnteredByLabel(r.enteredBy) : '-'}
                       </td>

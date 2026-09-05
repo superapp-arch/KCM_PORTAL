@@ -456,11 +456,24 @@ const FUEL_ENTRY_USER_EMAILS = ['chandanreddy@kcmlogistics.in', 'praveenkumar@kc
 // existing one via PUT /api/fuel/:id/rq-id below.
 const FUEL_RQ_ID_ONLY_EMAILS = ['divya@kcmlogistics.in'];
 
+// Vinod (2026-09-05, direct request) - pure read-only across Fuel Management
+// AND Mileage Report: sees every entry from every entrant (not just his
+// own), including the Entered By column/filter, same as a Super Admin's
+// view, but can never create/edit/delete anything - no Add Entry button
+// client-side, and blocked server-side too (see POST /api/fuel and
+// POST /api/mileage below; PUT/DELETE already reject him naturally since he
+// never owns a row - see buildFuelLogUpdateForViewer/canModifyEntryRow).
+// Deliberately its own list rather than reusing FUEL_RQ_ID_ONLY_EMAILS -
+// Divya can still edit ONE field (rqId) on any entry; Vinod cannot edit
+// anything at all.
+const FUEL_VIEW_ONLY_EMAILS = ['vinod@kcmlogistics.in'];
+
 // Fuel Management + Mileage Report are restricted to Chandan, Praveen, Ramesh,
-// Divya, and super admins - nobody else may access or see this data at all.
-// Within that, see the row-level enteredBy filtering applied inside the
-// /api/fuel and /api/mileage handlers themselves (this middleware only gates
-// the module as a whole, the same two-layer pattern as requireHrAccess above).
+// Divya, Vinod (view-only), and super admins - nobody else may access or see
+// this data at all. Within that, see the row-level enteredBy filtering
+// applied inside the /api/fuel and /api/mileage handlers themselves (this
+// middleware only gates the module as a whole, the same two-layer pattern as
+// requireHrAccess above).
 async function requireFuelAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
@@ -469,7 +482,8 @@ async function requireFuelAccess(req: express.Request, res: express.Response, ne
   if (
     sessionUser.department !== 'super_admin' &&
     !FUEL_ENTRY_USER_EMAILS.includes(sessionUser.email || '') &&
-    !FUEL_RQ_ID_ONLY_EMAILS.includes(sessionUser.email || '')
+    !FUEL_RQ_ID_ONLY_EMAILS.includes(sessionUser.email || '') &&
+    !FUEL_VIEW_ONLY_EMAILS.includes(sessionUser.email || '')
   ) {
     return res.status(403).json({ error: 'You do not have access to Fuel Management.' });
   }
@@ -484,16 +498,26 @@ async function requireFuelAccess(req: express.Request, res: express.Response, ne
 // the separate, broader tier.
 const PETTY_CASH_ACCESS_EMAILS = ['vinod@kcmlogistics.in', 'ramesh@kcmlogistics.in', 'saneel@kcmlogistics.in'];
 
-// Rakshina (Accounts & Finance) - full cross-handler visibility AND manage
-// rights across the whole Petty Cash module (vouchers, Market POD, Amount
-// Received advances), not just her own rows like the 3 handlers above - an
-// oversight/reconciliation role. Same "opt-in full view" mechanism
-// filterEntryRowsForViewer already supports for Divya on Fuel Management,
-// just also extended to the write/modify side here (canModifyEntryRow etc.)
-// since a finance oversight role needs to fix any handler's entries too.
-// Mirrors PettyCash.tsx's own isSuperAdmin, which treats her the same way
-// client-side.
-const PETTY_CASH_FULL_VIEW_EMAILS = ['finance@kcmlogistics.in'];
+// Full cross-handler EDIT rights across the whole Petty Cash module
+// (vouchers, Market POD, Amount Received advances), on top of Super Admin -
+// deliberately empty (2026-09-05): Rakshina used to be the one member here
+// (an Accounts & Finance reconciliation role) but had that edit access
+// downgraded to view-only by direct request, moved into
+// PETTY_CASH_VIEW_ONLY_EMAILS below instead. Left in place, not deleted, as
+// the one spot to grant a future cross-handler EDIT role again without
+// touching canModifyPettyCashRow/canModifyAdvance's own logic.
+const PETTY_CASH_FULL_VIEW_EMAILS: string[] = [];
+
+// Cross-handler VIEW-ONLY tier (2026-09-05, direct request) - sees every
+// handler's Petty Cash/Market Trip/Amount Received rows with enteredBy
+// intact (same "opt-in full view" mechanism filterEntryRowsForViewer already
+// supports for Divya on Fuel Management), but can never create/edit/delete
+// anything - canModifyPettyCashRow/canModifyAdvance below deliberately never
+// check this list, only PETTY_CASH_FULL_VIEW_EMAILS/ownership/super_admin.
+// Rakshina (Accounts & Finance reconciliation), Pratibha, Divya, and Praveen
+// - Chethan/Anand aren't listed here since they're real Super Admins
+// already and get full view+edit through that, not this tier.
+const PETTY_CASH_VIEW_ONLY_EMAILS = ['finance@kcmlogistics.in', 'prathiba@kcmlogistics.in', 'divya@kcmlogistics.in', 'praveenkumar@kcmlogistics.in'];
 
 function canModifyPettyCashRow(row: { enteredBy?: string } | undefined, sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): boolean {
   if (sessionUser && PETTY_CASH_FULL_VIEW_EMAILS.includes(sessionUser.email || '')) return true;
@@ -501,9 +525,10 @@ function canModifyPettyCashRow(row: { enteredBy?: string } | undefined, sessionU
 }
 
 // Petty Cash (vouchers, Market POD, and the Amount Received advances ledger)
-// is restricted to the 3 Petty Cash logins, Rakshina (full view), and super
-// admins. Within that, each of the 3 handlers only ever sees/modifies their
-// own rows - see filterEntryRowsForViewer/canModifyPettyCashRow and their
+// is restricted to the 3 Petty Cash logins, the cross-handler view-only tier
+// (PETTY_CASH_VIEW_ONLY_EMAILS), and super admins. Within that, each of the
+// 3 handlers only ever sees/modifies their own rows - see
+// filterEntryRowsForViewer/canModifyPettyCashRow and their
 // PettyCashAdvance-specific counterparts below.
 async function requirePettyCashAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
@@ -512,25 +537,25 @@ async function requirePettyCashAccess(req: express.Request, res: express.Respons
   }
   if (
     sessionUser.department !== 'super_admin' && sessionUser.department !== 'petty_cash' &&
-    !PETTY_CASH_ACCESS_EMAILS.includes(sessionUser.email || '') && !PETTY_CASH_FULL_VIEW_EMAILS.includes(sessionUser.email || '')
+    !PETTY_CASH_ACCESS_EMAILS.includes(sessionUser.email || '') && !PETTY_CASH_FULL_VIEW_EMAILS.includes(sessionUser.email || '') &&
+    !PETTY_CASH_VIEW_ONLY_EMAILS.includes(sessionUser.email || '')
   ) {
     return res.status(403).json({ error: 'You do not have access to Petty Cash.' });
   }
   next();
 }
 
-// Warehouse Details is super-admin-only, plus Bhagya and Vinod explicitly
-// (mirrors Administration.tsx's own hasAccess('warehouse') check - this is
-// the one place to widen it further to other roles later). Vinod was added
-// to the client-side gate in an earlier change but missed here - fixed
-// 2026-08-29, since without this he'd see the tab but every actual API call
-// would 403.
+// Warehouse Details is super-admin-only, plus Bhagya explicitly (mirrors
+// Administration.tsx's own hasAccess('warehouse') check - this is the one
+// place to widen it further to other roles later). Vinod was previously
+// included here too but had that access removed 2026-09-05 (direct
+// request), his own Petty Cash/Fleet-focused role no longer needing it.
 async function requireWarehouseAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
-  if (sessionUser.department !== 'super_admin' && sessionUser.email !== 'bhagya@kcmlogistics.in' && sessionUser.email !== 'vinod@kcmlogistics.in') {
+  if (sessionUser.department !== 'super_admin' && sessionUser.email !== 'bhagya@kcmlogistics.in') {
     return res.status(403).json({ error: 'You do not have access to Warehouse Details.' });
   }
   next();
@@ -1156,7 +1181,7 @@ const FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS: Record<string, string[]> = {
 // only the Mileage section as editable (see FuelManagement.tsx).
 function filterFuelLogsForViewer(rows: FuelLog[], sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): FuelLog[] {
   if (!sessionUser) return [];
-  if (sessionUser.department === 'super_admin' || FUEL_RQ_ID_ONLY_EMAILS.includes(sessionUser.email || '')) return rows;
+  if (sessionUser.department === 'super_admin' || FUEL_RQ_ID_ONLY_EMAILS.includes(sessionUser.email || '') || FUEL_VIEW_ONLY_EMAILS.includes(sessionUser.email || '')) return rows;
   const extraUsernames = FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS[sessionUser.username] || [];
   return rows
     .filter(r => r.enteredBy === sessionUser.username || extraUsernames.includes(r.enteredBy || ''))
@@ -1190,7 +1215,7 @@ function buildFuelLogUpdateForViewer(existing: FuelLog, body: any, sessionUser?:
 // advance counts toward.
 function filterAdvancesForViewer(rows: PettyCashAdvance[], sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): PettyCashAdvance[] {
   if (!sessionUser) return [];
-  if (sessionUser.department === 'super_admin' || PETTY_CASH_FULL_VIEW_EMAILS.includes(sessionUser.email || '')) return rows;
+  if (sessionUser.department === 'super_admin' || PETTY_CASH_FULL_VIEW_EMAILS.includes(sessionUser.email || '') || PETTY_CASH_VIEW_ONLY_EMAILS.includes(sessionUser.email || '')) return rows;
   return rows.filter(r => r.username === sessionUser.username);
 }
 
@@ -2601,9 +2626,9 @@ async function startServer() {
   app.post('/api/fuel', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
-      // Divya never creates entries - guard even though the UI never offers
-      // her an Add Entry button.
-      if (sessionUser?.department !== 'super_admin' && FUEL_RQ_ID_ONLY_EMAILS.includes(sessionUser?.email || '')) {
+      // Divya/Vinod never create entries - guard even though the UI never
+      // offers either of them an Add Entry button.
+      if (sessionUser?.department !== 'super_admin' && (FUEL_RQ_ID_ONLY_EMAILS.includes(sessionUser?.email || '') || FUEL_VIEW_ONLY_EMAILS.includes(sessionUser?.email || ''))) {
         return res.status(403).json({ error: 'You cannot add fuel entries.' });
       }
       if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Fuel entry date cannot be in the future.' });
@@ -2760,7 +2785,7 @@ async function startServer() {
   app.get('/api/petty-cash', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
-      res.json(sortEntriesByDate(filterEntryRowsForViewer(await getPettyCashVouchers(), sessionUser, PETTY_CASH_FULL_VIEW_EMAILS)));
+      res.json(sortEntriesByDate(filterEntryRowsForViewer(await getPettyCashVouchers(), sessionUser, [...PETTY_CASH_FULL_VIEW_EMAILS, ...PETTY_CASH_VIEW_ONLY_EMAILS])));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/petty-cash', async (req, res) => {
@@ -2798,7 +2823,7 @@ async function startServer() {
         description: `Created petty cash entry ${entryNo}`, newData: { ...req.body, id: newId, entryNo },
         ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
       });
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, PETTY_CASH_FULL_VIEW_EMAILS) });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, [...PETTY_CASH_FULL_VIEW_EMAILS, ...PETTY_CASH_VIEW_ONLY_EMAILS]) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/petty-cash/:id', async (req, res) => {
@@ -2836,7 +2861,7 @@ async function startServer() {
         oldData: existing, newData: merged,
         ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
       });
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, PETTY_CASH_FULL_VIEW_EMAILS) });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, [...PETTY_CASH_FULL_VIEW_EMAILS, ...PETTY_CASH_VIEW_ONLY_EMAILS]) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/petty-cash/:id', async (req, res) => {
@@ -2855,14 +2880,14 @@ async function startServer() {
         ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
       });
       const result = await getPettyCashVouchers();
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, PETTY_CASH_FULL_VIEW_EMAILS) });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, [...PETTY_CASH_FULL_VIEW_EMAILS, ...PETTY_CASH_VIEW_ONLY_EMAILS]) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.get('/api/market-pod', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
-      res.json(sortEntriesByDate(filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser, PETTY_CASH_FULL_VIEW_EMAILS)));
+      res.json(sortEntriesByDate(filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser, [...PETTY_CASH_FULL_VIEW_EMAILS, ...PETTY_CASH_VIEW_ONLY_EMAILS])));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/market-pod', async (req, res) => {
@@ -2880,7 +2905,7 @@ async function startServer() {
       const newEntry: MarketPodEntry = { ...req.body, id: req.body.id || String(Date.now()), entryNo, enteredBy: sessionUser?.username };
       await saveMarketPodEntry(newEntry);
       await syncMarketPodPettyCashLinks(newEntry, sessionUser?.username || '');
-      res.json({ success: true, data: filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser, PETTY_CASH_FULL_VIEW_EMAILS) });
+      res.json({ success: true, data: filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser, [...PETTY_CASH_FULL_VIEW_EMAILS, ...PETTY_CASH_VIEW_ONLY_EMAILS]) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.put('/api/market-pod/:id', async (req, res) => {
@@ -2907,7 +2932,7 @@ async function startServer() {
       };
       await saveMarketPodEntry(updatedEntry);
       await syncMarketPodPettyCashLinks(updatedEntry, existing?.enteredBy || sessionUser?.username || '');
-      res.json({ success: true, data: filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser, PETTY_CASH_FULL_VIEW_EMAILS) });
+      res.json({ success: true, data: filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser, [...PETTY_CASH_FULL_VIEW_EMAILS, ...PETTY_CASH_VIEW_ONLY_EMAILS]) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.delete('/api/market-pod/:id', async (req, res) => {
@@ -2917,7 +2942,7 @@ async function startServer() {
       if (!canModifyPettyCashRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
       if (existing) await removeMarketPodPettyCashLinks(existing);
       const result = await deleteMarketPodEntry(req.params.id);
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, PETTY_CASH_FULL_VIEW_EMAILS) });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, [...PETTY_CASH_FULL_VIEW_EMAILS, ...PETTY_CASH_VIEW_ONLY_EMAILS]) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
@@ -2962,7 +2987,7 @@ async function startServer() {
       };
       await saveMarketPodEntry(updatedEntry);
       await syncMarketPodPettyCashLinks(updatedEntry, existing.enteredBy || sessionUser?.username || '');
-      res.json({ success: true, data: filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser, PETTY_CASH_FULL_VIEW_EMAILS) });
+      res.json({ success: true, data: filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser, [...PETTY_CASH_FULL_VIEW_EMAILS, ...PETTY_CASH_VIEW_ONLY_EMAILS]) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
@@ -2995,7 +3020,7 @@ async function startServer() {
         oldData: receipt,
         ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
       });
-      res.json({ success: true, data: filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser, PETTY_CASH_FULL_VIEW_EMAILS) });
+      res.json({ success: true, data: filterEntryRowsForViewer(await getMarketPodEntries(), sessionUser, [...PETTY_CASH_FULL_VIEW_EMAILS, ...PETTY_CASH_VIEW_ONLY_EMAILS]) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
@@ -3848,7 +3873,7 @@ async function startServer() {
   app.get('/api/mileage', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
-      res.json(filterEntryRowsForViewer(await getMileageReports(), sessionUser));
+      res.json(filterEntryRowsForViewer(await getMileageReports(), sessionUser, FUEL_VIEW_ONLY_EMAILS));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -3857,6 +3882,11 @@ async function startServer() {
   app.post('/api/mileage', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      // Vinod is view-only here too (see FUEL_VIEW_ONLY_EMAILS) - never
+      // creates or edits a Mileage Report entry.
+      if (sessionUser?.department !== 'super_admin' && FUEL_VIEW_ONLY_EMAILS.includes(sessionUser?.email || '')) {
+        return res.status(403).json({ error: 'You cannot modify Mileage Report entries.' });
+      }
       const entry: MileageReport = req.body;
       if (isFutureDate(entry.date)) return res.status(400).json({ error: 'Mileage entry date cannot be in the future.' });
       if (entry.pettyCashHolderUsername && !PETTY_CASH_USERS.some(u => u.username === entry.pettyCashHolderUsername)) {
@@ -3868,7 +3898,7 @@ async function startServer() {
           return res.status(403).json({ error: 'You cannot modify this entry.' });
         }
         const result = await saveMileageReport({ ...entry, enteredBy: existing?.enteredBy });
-        return res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+        return res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_VIEW_ONLY_EMAILS) });
       }
       // New entry: generate the id here (rather than leaving it to
       // saveMileageReport's own fallback) so it can be returned to the
@@ -3876,7 +3906,7 @@ async function startServer() {
       // link the fuel log it's being saved alongside (see FuelLog.mileageReportId).
       const newId = String(Date.now());
       const result = await saveMileageReport({ ...entry, id: newId, enteredBy: sessionUser?.username });
-      res.json({ success: true, id: newId, data: filterEntryRowsForViewer(result, sessionUser) });
+      res.json({ success: true, id: newId, data: filterEntryRowsForViewer(result, sessionUser, FUEL_VIEW_ONLY_EMAILS) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -3889,7 +3919,7 @@ async function startServer() {
       const existing = (await getMileageReports()).find(r => r.id === id);
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
       const result = await deleteMileageReport(id);
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser) });
+      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_VIEW_ONLY_EMAILS) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

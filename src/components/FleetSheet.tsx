@@ -648,9 +648,9 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                 <th className="px-4 py-4 text-purple-100">Registration Date</th>
                 <th className="px-4 py-4 text-center text-purple-100">Status</th>
                 <th className="px-4 py-4 text-purple-100">Insurance Exp</th>
-                <th className="px-4 py-4 text-purple-100">FC Expiry</th>
-                <th className="px-4 py-4 text-right text-purple-100">EMI Pending</th>
-                <th className="px-4 py-4 text-right text-purple-100">O/S Amount</th>
+                <th className="px-4 py-4 text-purple-100">FC Exp</th>
+                <th className="px-4 py-4 text-purple-100">NP Exp</th>
+                <th className="px-4 py-4 text-purple-100">SP Exp</th>
                 <th className="px-4 py-4 text-right text-purple-100">Actions</th>
               </tr>
             </thead>
@@ -758,8 +758,26 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                           )}
                         </td>
                         <td className="px-4 py-3.5 font-mono text-slate-500">{fcDate || '-'}</td>
-                        <td className="px-4 py-3.5 text-right font-mono font-bold text-slate-700">{vehicleLoansForReg.length > 0 ? emiPendingTotal : '-'}</td>
-                        <td className="px-4 py-3.5 text-right font-mono font-bold text-slate-700">{vehicleLoansForReg.length > 0 ? osAmountTotal.toLocaleString('en-IN') : '-'}</td>
+                        <td className="px-4 py-3.5 font-mono">
+                          {nationalPermitAlert.isAlert ? (
+                            <span className="bg-red-50 text-red-700 border border-red-200 px-2 py-0.5 rounded font-bold flex items-center gap-1 w-fit animate-pulse">
+                              <AlertTriangle className="w-3 h-3 text-red-500" />
+                              {nationalPermitRaw} ({nationalPermitAlert.diffDays}d)
+                            </span>
+                          ) : (
+                            <span className="text-slate-600 font-semibold">{nationalPermitRaw || '-'}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3.5 font-mono">
+                          {statePermitAlert.isAlert ? (
+                            <span className="bg-red-50 text-red-700 border border-red-200 px-2 py-0.5 rounded font-bold flex items-center gap-1 w-fit animate-pulse">
+                              <AlertTriangle className="w-3 h-3 text-red-500" />
+                              {statePermitRaw} ({statePermitAlert.diffDays}d)
+                            </span>
+                          ) : (
+                            <span className="text-slate-600 font-semibold">{statePermitRaw || '-'}</span>
+                          )}
+                        </td>
                         <td className="px-4 py-3.5 text-right whitespace-nowrap">
                           <div className="flex items-center justify-end space-x-2">
                             {canEdit && (
@@ -843,6 +861,17 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
 
                                   <dt className="text-slate-400">Reg Year</dt>
                                   <dd className="font-mono text-slate-800">{v['Reg Year'] || v.regYear || '-'}</dd>
+
+                                  {/* EMI Pending / O/S Amount (2026-09-05) -
+                                      moved off the main list into this detail
+                                      view, keeping the list itself focused on
+                                      document-expiry (FC/NP/SP) at a glance. */}
+                                  <span className="col-span-2 border-t my-1 border-gray-100"></span>
+                                  <dt className="text-slate-400">EMI Pending</dt>
+                                  <dd className="font-mono font-bold text-slate-800">{vehicleLoansForReg.length > 0 ? emiPendingTotal : '-'}</dd>
+
+                                  <dt className="text-slate-400">O/S Amount</dt>
+                                  <dd className="font-mono font-bold text-slate-800">{vehicleLoansForReg.length > 0 ? `₹${osAmountTotal.toLocaleString('en-IN')}` : '-'}</dd>
                                 </dl>
                               </div>
 

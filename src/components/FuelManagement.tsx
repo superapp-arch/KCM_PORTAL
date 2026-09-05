@@ -214,6 +214,15 @@ export default function FuelManagement({
   // edit anything except RQ ID on an existing one - mirrors server.ts's
   // FUEL_RQ_ID_ONLY_EMAILS exactly.
   const isRqIdOnlyUser = user.email === 'divya@kcmlogistics.in';
+  // Vinod (2026-09-05, direct request) - sees every entry from every
+  // entrant, including who entered what (Entered By column/filter), but has
+  // no edit ability at all - no Add Entry, no Edit, no Delete, not even the
+  // Mileage-only exception Chandan gets. Mirrors server.ts's
+  // FUEL_VIEW_ONLY_EMAILS exactly.
+  const isViewOnlyUser = user.email === 'vinod@kcmlogistics.in';
+  // Entered By is visible to Super Admin/Principal and to Vinod's read-only
+  // view - everyone else never sees who entered what.
+  const canSeeEnteredBy = isSuperAdmin || isViewOnlyUser;
   // Chandan's one-way exception: Praveen's own entries are visible to him
   // (server.ts's filterFuelLogsForViewer) so he can fill in the Mileage
   // section on ones Praveen left blank - but nothing else on that row is his
@@ -222,7 +231,7 @@ export default function FuelManagement({
   // enteredBy (for a viewer who isn't a super admin or the RQ-ID-only
   // viewer, who both always get it on every row) is exactly this "not mine"
   // signal - see server.ts's own comment on filterFuelLogsForViewer.
-  const isForeignEntry = (log: FuelLog): boolean => !isSuperAdmin && !isRqIdOnlyUser && !!log.enteredBy;
+  const isForeignEntry = (log: FuelLog): boolean => !isSuperAdmin && !isRqIdOnlyUser && !isViewOnlyUser && !!log.enteredBy;
 
   const [searchTerm, setSearchTerm] = useState('');
   // Bunk Name filter - shared between the on-screen ledger, the Download
@@ -541,13 +550,27 @@ export default function FuelManagement({
   // given day sets the rate; later entries for that same bunk that day
   // auto-fill it. A new date (or backdated entry for a different date)
   // requires fresh manual entry, keyed off whatever date is in the form.
+  // Also keyed off `showSidebar`/`formResetToken` (2026-09-05 fix, same
+  // reasoning as the Indent No. preview effect above) - resetForm(true)'s
+  // back-to-back "add another" flow deliberately leaves Bunk Name/Date
+  // untouched (so the very next entry for the SAME bunk stop doesn't need
+  // retyping either), but it also unconditionally blanks Rate every time.
+  // With bunkName/date genuinely unchanged, this effect's own dependency
+  // check saw nothing to react to except `logs` - which should already
+  // include the just-saved entry once the parent's post-save refresh lands,
+  // but relying on that alone left a real gap in practice (Rate would stay
+  // blank until the sidebar was closed and reopened, forcing a fresh
+  // bunkName/date "change" to kick the effect). formResetToken changes on
+  // every resetForm() call regardless, so this now unconditionally re-fires
+  // right after every save - closed sidebar or not.
   useEffect(() => {
     if (!bunkName || !date || editingId) return;
     const sameBunkDayLogs = logs.filter(l => l.bunkName === bunkName && l.date === date);
     if (sameBunkDayLogs.length > 0) {
       setRate(String(sameBunkDayLogs[sameBunkDayLogs.length - 1].rate));
     }
-  }, [bunkName, date, logs, editingId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bunkName, date, logs, editingId, showSidebar, formResetToken]);
 
   // Indent No auto-continue - Bunk and Card are two completely independent
   // sequences (see utils/fuelIndentNumber.ts's nextBunkFuelIndentNumber/
@@ -1174,7 +1197,7 @@ export default function FuelManagement({
     (viewPeriod === 'all' || (log.date >= viewStart && log.date <= viewEnd)) &&
     (bunkFilter === 'All' || log.bunkName === bunkFilter) &&
     (bunkOrCardFilter === 'All' || (log.bunkOrCard || 'Bunk') === bunkOrCardFilter) &&
-    (!isSuperAdmin || enteredByFilter === 'All' || log.enteredBy === enteredByFilter) &&
+    (!canSeeEnteredBy || enteredByFilter === 'All' || log.enteredBy === enteredByFilter) &&
     (
       (log?.vehicleNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (log?.vendorName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -1549,7 +1572,7 @@ export default function FuelManagement({
                 <option value="All">All Bunks</option>
                 {usedBunks.map((b, i) => <option key={i} value={b}>{b}</option>)}
               </select>
-              {!isRqIdOnlyUser && (
+              {!isRqIdOnlyUser && !isViewOnlyUser && (
                 <button
                   onClick={() => { resetForm(); setShowSidebar(true); }}
                   className="bg-gradient-to-r from-emerald-500 to-blue-600 hover:from-emerald-600 hover:to-blue-700 text-xs text-white font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-md whitespace-nowrap"
@@ -1584,7 +1607,7 @@ export default function FuelManagement({
             {/* Entered By filter (2026-09-04) - Super Admin/Principal only,
                 same "isolate just this person's rows" ask as Mileage Report's
                 own copy of this filter below. */}
-            {isSuperAdmin && enteredByOptions.length > 0 && (
+            {canSeeEnteredBy && enteredByOptions.length > 0 && (
               <>
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-2">Entered By:</span>
                 <select
@@ -1655,14 +1678,14 @@ export default function FuelManagement({
                   <th className="px-3 py-2.5"><SortHeader label="RQ ID" sortKey="rqId" sort={sort} onSort={handleSort} /></th>
                   <th className="px-3 py-2.5 max-w-xs">Remarks</th>
                   <th className="px-3 py-2.5 text-center">Docs</th>
-                  {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
+                  {canSeeEnteredBy && <th className="px-3 py-2.5">Entered By</th>}
                   <th className="px-3 py-2.5 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {filteredLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={19 + (isSuperAdmin ? 1 : 0)} className="text-center py-10 text-slate-400 font-mono">
+                    <td colSpan={19 + (canSeeEnteredBy ? 1 : 0)} className="text-center py-10 text-slate-400 font-mono">
                       NO FUEL ENTRIES FOUND IN CURRENT LEDGER.
                     </td>
                   </tr>
@@ -1698,13 +1721,13 @@ export default function FuelManagement({
                           <span className="text-slate-300">-</span>
                         )}
                       </td>
-                      {isSuperAdmin && (
+                      {canSeeEnteredBy && (
                         <td className="px-3 py-2.5 whitespace-nowrap text-slate-500 font-mono text-[10px]">
                           {log.enteredBy ? fuelEnteredByLabel(log.enteredBy) : '-'}
                         </td>
                       )}
                       <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                        {isRqIdOnlyUser ? (
+                        {isRqIdOnlyUser || isViewOnlyUser ? (
                           <span className="text-slate-300 text-[10px] uppercase font-bold">View only</span>
                         ) : (
                           <div className="flex items-center justify-end gap-1.5">
