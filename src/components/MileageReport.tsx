@@ -764,7 +764,11 @@ export default function MileageReportModule({
                 {!readOnly && <th className="px-3 py-2.5 text-center">Actions</th>}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 font-medium text-slate-700 bg-white">
+            {/* 2026-09-05: divider darkened from divide-slate-100 (barely
+                visible, made rows read as one unbroken block) to
+                divide-slate-300 so each entry is clearly separated from
+                the next. */}
+            <tbody className="divide-y divide-slate-300 font-medium text-slate-700 bg-white">
               {filteredReports.length === 0 ? (
                 <tr>
                   <td colSpan={21 + (canSeeEnteredBy ? 1 : 0) + (readOnly ? 0 : 1)} className="text-center py-20 text-slate-400 font-mono text-xs">

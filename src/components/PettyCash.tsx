@@ -2389,7 +2389,11 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
             {/* Vouchers Table Ledger View */}
             <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-2xs flex-1 min-h-[350px]">
               <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
+                {/* 2026-09-05: header background changed from the flat,
+                    low-visibility bg-[#0f172a] to the same vivid gradient
+                    other modules (e.g. Fleet & Vehicles) already use, so it
+                    actually stands out instead of blending into the page. */}
+                <thead className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 border-b-2 border-purple-500 text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
                   <tr>
                     <th className="px-3 py-2.5">Date</th>
                     <th className="px-3 py-2.5"><SortHeader label="Entry No" sortKey="entryNo" sort={sort} onSort={handleSort} type="numeric" /></th>
@@ -2934,7 +2938,11 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
 
           <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-2xs flex-1 min-h-[300px]">
             <table className="w-full text-left text-xs border-collapse">
-              <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
+              {/* 2026-09-05: header background changed from the flat,
+                  low-visibility bg-[#0f172a] to the same vivid gradient
+                  other modules (e.g. Fleet & Vehicles) already use, so it
+                  actually stands out instead of blending into the page. */}
+              <thead className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 border-b-2 border-purple-500 text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
                 <tr>
                   <th className="px-3 py-2.5">Date</th>
                   <th className="px-3 py-2.5"><SortHeader label="Entry No" sortKey="entryNo" sort={mpSort} onSort={handleMpSort} type="numeric" /></th>
