@@ -3570,10 +3570,16 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       const { prefix: monthlyPrefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
                       const manualPrefix = useMonthlyFormat ? monthlyPrefix : `ENT-${new Date().getFullYear()}-`;
                       const manualWidth = useMonthlyFormat ? 2 : 4;
+                      // Chip shows "ENT-" only, never the year (2026-09-05 -
+                      // matches displayEntryNo's year-stripping convention,
+                      // which applies everywhere an Entry No is shown to
+                      // anyone with Petty Cash access) - manualPrefix itself
+                      // (WITH the year) is unchanged and still what actually
+                      // gets built into the saved entryNo at submit time.
                       return (
                         <>
                           <div className="flex items-center gap-1.5">
-                            <span className="px-2 py-2 bg-slate-100 border border-slate-200 rounded-lg font-mono font-bold text-slate-500 uppercase shrink-0">{manualPrefix}</span>
+                            <span className="px-2 py-2 bg-slate-100 border border-slate-200 rounded-lg font-mono font-bold text-slate-500 uppercase shrink-0">ENT-</span>
                             <input
                               type="text"
                               inputMode="numeric"
@@ -3591,27 +3597,67 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           </p>
                         </>
                       );
-                    })() : editingId && isVinod ? (
+                    })() : editingId && isVinod ? (() => {
                       // 2026-09-05: Vinod gets a plain edit option on an
                       // existing entry's own Entry No - a stopgap ("give
                       // edit option for now") rather than the fuller
                       // auto-resequence-everything-after-it behavior, which
-                      // would need its own careful design. Edits the real
-                      // stored value directly (year segment included, same
-                      // as every entryNo already saved) - displayEntryNo's
-                      // year-stripping is display-only everywhere else, so
-                      // editing the full value here keeps this in sync with
-                      // it rather than trying to re-derive the year back on.
-                      <>
-                        <input
-                          type="text"
-                          value={entryNo}
-                          onChange={(e) => setEntryNo(e.target.value.toUpperCase())}
-                          className="w-full bg-amber-50 border border-amber-300 rounded-lg p-2 font-mono font-bold tracking-wider text-amber-800 uppercase focus:outline-none focus:ring-1 focus:ring-amber-500"
-                        />
-                        <p className="text-[9px] text-amber-700 font-mono mt-0.5">Editable - changing this does not renumber any other entries.</p>
-                      </>
-                    ) : (
+                      // would need its own careful design.
+                      //
+                      // 2026-09-05 fix: this used to be one big free-text
+                      // box editing the raw stored value directly. Vinod, by
+                      // habit from the manual-first-entry box above (which
+                      // only ever asks for the trailing digits, prefix shown
+                      // separately), typed just the digits here too (e.g.
+                      // "2700" instead of "ENT-2026-2700") - a value that
+                      // doesn't start with the expected prefix silently
+                      // drops OUT of nextPettyCashEntryNo()'s max
+                      // calculation entirely, so his sequence stopped
+                      // advancing and kept re-suggesting old, already-used
+                      // numbers on his next "Add Petty Cash Entry". Same
+                      // fixed-prefix-chip + digits-only-box shape as that
+                      // box now prevents a malformed value from ever being
+                      // typed in the first place.
+                      //
+                      // The chip shown to Vinod displays "ENT-" only (never
+                      // the year) - matches displayEntryNo's own year-
+                      // stripping convention, which applies everywhere an
+                      // Entry No is shown to anyone with Petty Cash access,
+                      // this box included. editFixedPrefix (WITH the year)
+                      // is still what actually gets built into entryNo and
+                      // saved - the STORED value has always kept the year
+                      // (nextPettyCashEntryNo's per-year scoping depends on
+                      // it), only the on-screen text is year-free.
+                      const { prefix: editYearPrefix, useMonthlyFormat: editUsesMonthlyFormat } = pettyCashMonthlyPrefix();
+                      const editWidth = editUsesMonthlyFormat ? 2 : 4;
+                      const editFixedPrefix = editUsesMonthlyFormat ? editYearPrefix : `ENT-${new Date().getFullYear()}-`;
+                      const editDisplayPrefix = 'ENT-';
+                      // Pulls the trailing digits out of whatever's actually
+                      // stored so far to seed the box - falls back to any
+                      // trailing digits at all if this entry's prefix
+                      // doesn't match today's (an older entry from a
+                      // previous year/format), so there's always something
+                      // sensible to start editing from.
+                      const currentSuffix = entryNo.toUpperCase().startsWith(editFixedPrefix)
+                        ? entryNo.slice(editFixedPrefix.length)
+                        : (entryNo.match(/(\d+)$/)?.[1] || '');
+                      return (
+                        <>
+                          <div className="flex items-center gap-1.5">
+                            <span className="px-2 py-2 bg-slate-100 border border-slate-200 rounded-lg font-mono font-bold text-slate-500 uppercase shrink-0">{editDisplayPrefix}</span>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={currentSuffix}
+                              onChange={(e) => setEntryNo(`${editFixedPrefix}${e.target.value.replace(/\D/g, '').slice(0, editWidth)}`)}
+                              placeholder={editWidth === 2 ? '01' : '2941'}
+                              className="w-full bg-amber-50 border border-amber-300 rounded-lg p-2 font-mono font-bold tracking-wider text-amber-800 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                            />
+                          </div>
+                          <p className="text-[9px] text-amber-700 font-mono mt-0.5">Editable - changing this does not renumber any other entries.</p>
+                        </>
+                      );
+                    })() : (
                       <>
                         <input
                           type="text"
