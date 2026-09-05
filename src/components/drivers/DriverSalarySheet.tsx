@@ -116,9 +116,23 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
   // driver) via isDriverActiveAtLocation, so a driver active at Vizag but
   // deactivated at Hyderabad shows up correctly in each location's own
   // filtered view.
+  // One row per (driver, location) assignment, unfiltered by status/search -
+  // the base every status tab's own count and the filtered table below both
+  // derive from, so a tab's count always matches exactly what clicking it
+  // reveals.
+  const allLocationRows: LocationDriverRow[] = useMemo(
+    () => drivers.flatMap(driver => driverAllLocations(driver).map(location => ({ driver, location }))),
+    [drivers]
+  );
+  // Active/Inactive tab counts (2026-09-05) - per (driver, location) row,
+  // same granularity the Active/Inactive/All filter itself already works
+  // at (a driver active at Vizag but deactivated at Hyderabad counts once
+  // in each bucket), not a naive per-driver count.
+  const activeRowCount = useMemo(() => allLocationRows.filter(({ driver, location }) => isDriverActiveAtLocation(driver, location)).length, [allLocationRows]);
+  const inactiveRowCount = allLocationRows.length - activeRowCount;
+
   const groupedDrivers = useMemo(() => {
-    const allRows: LocationDriverRow[] = drivers.flatMap(driver => driverAllLocations(driver).map(location => ({ driver, location })));
-    const base = allRows.filter(({ driver, location }) => {
+    const base = allLocationRows.filter(({ driver, location }) => {
       const isInactive = !isDriverActiveAtLocation(driver, location);
       if (statusFilter === 'active' && isInactive) return false;
       if (statusFilter === 'inactive' && !isInactive) return false;
@@ -137,7 +151,7 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
         location: loc,
         rows: [...byLocation.get(loc)!].sort((a, b) => compareTrailingNumber(a.driver.id, b.driver.id) || a.driver.id.localeCompare(b.driver.id))
       }));
-  }, [drivers, searchTerm, statusFilter]);
+  }, [allLocationRows, searchTerm, statusFilter]);
 
   // Flat, grouped-and-sorted order - used for the "no results" check and for
   // Download All, so the exported sheet matches what's on screen.
@@ -292,13 +306,27 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
           <Search className="w-3.5 h-3.5 text-slate-400" />
           <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search by Driver Name, Driver ID, or Vehicle No..." autoComplete="off" className="flex-1 outline-none" />
         </div>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as 'active' | 'inactive' | 'all')}
-          title="A deactivated driver keeps their full Attendance/Salary history - this only filters this working list"
-          className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-bold text-slate-700">
-          <option value="active">Active Drivers</option>
-          <option value="inactive">Inactive Drivers</option>
-          <option value="all">All Drivers</option>
-        </select>
+        {/* Active/Inactive/All tabs (2026-09-05) - counts are per (driver,
+            location) row, same granularity the filter itself works at, so
+            a tab's count always matches exactly what clicking it reveals.
+            Replaces the old plain dropdown with the same underlying
+            statusFilter state/behavior. */}
+        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg text-xs font-bold" title="A deactivated driver keeps their full Attendance/Salary history - this only filters this working list">
+          {([
+            ['active', `Active (${activeRowCount})`],
+            ['inactive', `Inactive (${inactiveRowCount})`],
+            ['all', `All (${allLocationRows.length})`],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setStatusFilter(key)}
+              className={`px-3 py-1.5 rounded-md cursor-pointer transition-colors ${statusFilter === key ? 'bg-white shadow-xs text-purple-700' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">

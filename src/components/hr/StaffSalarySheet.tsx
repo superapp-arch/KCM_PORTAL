@@ -36,6 +36,9 @@ export default function StaffSalarySheet({ user, employees, onAddEmployee, onUpd
   const [searchTerm, setSearchTerm] = useState('');
   const [locationFilter, setLocationFilter] = useState(''); // '' = All Locations
   const [statusFilter, setStatusFilter] = useState<'Active' | 'Inactive' | 'All'>('Active');
+  // On Roll/Contract tabs (2026-09-05) - defaults to All Types, additive on
+  // top of the existing Active/Inactive/Location/search filters.
+  const [employmentTypeFilter, setEmploymentTypeFilter] = useState<'On-Roll' | 'Contract' | 'All'>('All');
   const [modalEmployee, setModalEmployee] = useState<StaffEmployee | null | undefined>(undefined); // undefined = closed
   const [slipView, setSlipView] = useState<{ employee: StaffEmployee; month: string } | null>(null); // name-click entry point
   const [viewMode, setViewMode] = useState<'list' | 'slip'>('list'); // dedicated Salary Slip tab, beside Add Staff
@@ -99,15 +102,24 @@ export default function StaffSalarySheet({ user, employees, onAddEmployee, onUpd
     return distinct.sort();
   }, [employees]);
 
+  // On Roll/Contract tab counts (2026-09-05) - raw counts across every
+  // currently-visible employee record, same "just reflects the existing
+  // field" simplicity as Driver Details' own Active/Inactive tabs; absent
+  // employmentType defaults to On-Roll, matching the table's own display
+  // convention (see the Type column below).
+  const onRollCount = useMemo(() => employees.filter(e => (e.employmentType || 'On-Roll') === 'On-Roll').length, [employees]);
+  const contractCount = useMemo(() => employees.filter(e => e.employmentType === 'Contract').length, [employees]);
+
   const filtered = useMemo(() => employees.filter(e => {
     if (statusFilter !== 'All' && e.status !== statusFilter) return false;
+    if (employmentTypeFilter !== 'All' && (e.employmentType || 'On-Roll') !== employmentTypeFilter) return false;
     if (locationFilter && (e.location || '').toLowerCase() !== locationFilter.toLowerCase()) return false;
     if (searchTerm) {
       const q = searchTerm.toLowerCase();
       if (!e.id.toLowerCase().includes(q) && !e.name.toLowerCase().includes(q)) return false;
     }
     return true;
-  }), [employees, statusFilter, locationFilter, searchTerm]);
+  }), [employees, statusFilter, employmentTypeFilter, locationFilter, searchTerm]);
 
   const handleDelete = async (emp: StaffEmployee) => {
     if (!confirm(`Delete employee ${emp.id} - ${emp.name}? This cannot be undone.`)) return;
@@ -192,6 +204,20 @@ export default function StaffSalarySheet({ user, employees, onAddEmployee, onUpd
             </button>
           ))}
         </div>
+        {/* On Roll/Contract tabs (2026-09-05) - additive filter beside the
+            existing Active/Inactive/All tabs above. */}
+        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
+          {([
+            ['On-Roll', `On Roll (${onRollCount})`],
+            ['Contract', `Contract (${contractCount})`],
+            ['All', `All Types (${employees.length})`],
+          ] as const).map(([key, label]) => (
+            <button key={key} onClick={() => setEmploymentTypeFilter(key)}
+              className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${employmentTypeFilter === key ? 'bg-gradient-to-r from-pink-600 to-purple-700 text-white' : 'text-slate-600 hover:bg-slate-200'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -199,6 +225,7 @@ export default function StaffSalarySheet({ user, employees, onAddEmployee, onUpd
           <table className="w-full text-left text-xs">
             <thead className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 text-purple-100 uppercase text-[10px] tracking-wider">
               <tr>
+                <th className="px-3 py-2.5 text-center w-12">S.No</th>
                 <th className="px-3 py-2.5">Emp ID</th>
                 <th className="px-3 py-2.5">Name</th>
                 <th className="px-3 py-2.5">Designation</th>
@@ -215,14 +242,15 @@ export default function StaffSalarySheet({ user, employees, onAddEmployee, onUpd
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
-                <tr><td colSpan={11} className="text-center py-10 text-slate-400">No staff records found.</td></tr>
-              ) : filtered.map(emp => {
+                <tr><td colSpan={12} className="text-center py-10 text-slate-400">No staff records found.</td></tr>
+              ) : filtered.map((emp, i) => {
                 const detail = salaryDetails.find(d => d.empId === emp.id);
                 const hikeInfo = hikeCounts[emp.id];
                 const pfRecord = pfRecordFor(emp.id);
                 const netSalary = pfRecord?.netSalary ?? null;
                 return (
                   <tr key={emp.id} className="hover:bg-slate-50">
+                    <td className="px-3 py-2.5 text-center font-mono text-slate-400">{i + 1}</td>
                     <td className="px-3 py-2.5 font-mono font-bold text-slate-800">{emp.id}</td>
                     <td className="px-3 py-2.5">
                       {pfRecord ? (
