@@ -58,7 +58,7 @@ import {
   LogOut, ShieldAlert, FileSpreadsheet, Fuel, FileText, Landmark,
   Settings, DollarSign, Contact, Bell, Mail, RefreshCw, CheckCircle, Clock,
   KeyRound, Cpu, Terminal, Copy, Check, Eye, EyeOff, Warehouse, Gauge, X,
-  Truck, Building2, HandCoins, Menu, BarChart3, History, CreditCard
+  Truck, Building2, HandCoins, Menu, BarChart3, History, CreditCard, AlertTriangle
 } from 'lucide-react';
 
 // Driver Details module gate - mirrors server.ts's DRIVER_LOCATION_SCOPES
@@ -404,6 +404,9 @@ export default function Administration({
 
   // Employee-toggled fleet status modal (Fleet Status box "Inactive" count)
   const [showInactiveFleetModal, setShowInactiveFleetModal] = useState(false);
+  // Compliance Alerts cards (2026-09-05, Super Admin Terminal) - clicking
+  // Insurance/FC/NP/SP shows which vehicle numbers are behind it.
+  const [complianceAlertModal, setComplianceAlertModal] = useState<{ label: string; vehicles: { regNo: string; date: string; diffDays: number }[] } | null>(null);
 
   // Sidebar collapse/flyout state. isPinned is the persistent "pinned open"
   // choice from the hamburger, saved across sessions. isHovering is the
@@ -834,6 +837,36 @@ export default function Administration({
                 const statusActiveVehicles = (vehicles || []).filter(v => v.active !== false);
                 const statusInactiveVehicles = (vehicles || []).filter(v => v.active === false);
 
+                // Compliance Alerts (2026-09-05) - vehicles whose Insurance/
+                // FC/National Permit/State Permit expires within the next 7
+                // days (future expiries only, same "diffDays" shape as
+                // Fleet & Vehicles' own expiry alert, just its own 7-day
+                // window here rather than that module's 10-day one).
+                const parseComplianceDate = (dateStr?: string): Date | null => {
+                  if (!dateStr) return null;
+                  const parts = dateStr.split('.');
+                  const d = parts.length === 3 ? new Date(`${parts[2]}-${parts[1]}-${parts[0]}`) : dateStr.includes('-') ? new Date(dateStr) : null;
+                  return d && !isNaN(d.getTime()) ? d : null;
+                };
+                const dueSoon = (getDate: (v: Vehicle) => string | undefined) => {
+                  const today = new Date();
+                  const rows: { regNo: string; date: string; diffDays: number }[] = [];
+                  (vehicles || []).forEach(v => {
+                    const dateStr = getDate(v);
+                    const d = parseComplianceDate(dateStr);
+                    if (!d) return;
+                    const diffDays = Math.ceil((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                    if (diffDays >= 0 && diffDays <= 7) rows.push({ regNo: v.regNo || v['Reg. No.'] || 'Unknown', date: dateStr!, diffDays });
+                  });
+                  return rows.sort((a, b) => a.diffDays - b.diffDays);
+                };
+                const complianceAlerts = [
+                  { key: 'insurance', label: 'Insurance', rows: dueSoon(v => v.Insurance || v.insurance) },
+                  { key: 'fc', label: 'FC', rows: dueSoon(v => v.FC || v.fc) },
+                  { key: 'np', label: 'NP', rows: dueSoon(v => v['All India Permit'] || v.allIndiaPermit) },
+                  { key: 'sp', label: 'SP', rows: dueSoon(v => v['State permit'] || v.statePermit) },
+                ];
+
                 return (
                   <div className="space-y-4">
                     {/* Subsystem KPIs */}
@@ -883,9 +916,85 @@ export default function Administration({
                         <h3 className="text-xl font-black text-cyan-800 mt-1">{categoryCounts.reefer} Vehicles</h3>
                       </div>
                     </div>
+
+                    {/* Compliance Alerts (2026-09-05) - Insurance/FC/NP/SP
+                        expiring within 7 days. Only rendered once there's at
+                        least one alert across all 4, same "don't show an
+                        empty state nobody needs" spirit as Fleet Status'
+                        Inactive count. Click a card to see which vehicles. */}
+                    {complianceAlerts.some(a => a.rows.length > 0) && (
+                      <div>
+                        <p className="text-[10px] font-bold text-rose-500 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3" /> Compliance Alerts (due within 7 days)
+                        </p>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-sans">
+                          {complianceAlerts.filter(a => a.rows.length > 0).map(a => (
+                            <div
+                              key={a.key}
+                              onClick={() => setComplianceAlertModal({ label: a.label, vehicles: a.rows })}
+                              className="bg-rose-50 p-4 rounded-xl border border-rose-200 shadow-sm cursor-pointer hover:bg-rose-100 transition-colors"
+                              title={`Click to see which vehicles - ${a.label}`}
+                            >
+                              <p className="font-bold text-rose-600 uppercase tracking-wider text-[10px]">{a.label}</p>
+                              <h3 className="text-xl font-black text-rose-700 mt-1">{a.rows.length}</h3>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
+
+              {complianceAlertModal && (
+                <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="bg-white rounded-2xl shadow-2xl border border-rose-100 max-w-lg w-full p-6 relative overflow-hidden"
+                  >
+                    <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-rose-500 to-pink-600" />
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h3 className="text-base font-black text-slate-800 flex items-center gap-2">
+                          <AlertTriangle className="w-5 h-5 text-rose-600" />
+                          {complianceAlertModal.label} - Due Within 7 Days
+                        </h3>
+                        <p className="text-xs text-slate-500 font-semibold mt-1">
+                          {complianceAlertModal.vehicles.length} vehicle{complianceAlertModal.vehicles.length !== 1 ? 's' : ''} expiring soon, soonest first.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setComplianceAlertModal(null)}
+                        className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+
+                    <div className="max-h-[350px] overflow-y-auto pr-1 space-y-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {complianceAlertModal.vehicles.map((v, idx) => (
+                          <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex flex-col justify-between hover:bg-slate-100 transition-colors">
+                            <span className="font-mono font-black text-slate-950 text-xs tracking-wider">{v.regNo}</span>
+                            <span className="text-[9px] text-rose-500 font-bold uppercase truncate">{v.date} &middot; {v.diffDays === 0 ? 'Today' : `${v.diffDays}d left`}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end pt-4 border-t border-slate-100 mt-4">
+                      <button
+                        type="button"
+                        onClick={() => setComplianceAlertModal(null)}
+                        className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold cursor-pointer transition-colors"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </motion.div>
+                </div>
+              )}
 
               {/* Active Compliance Warnings & Security Alerts */}
               <div className="grid grid-cols-1 gap-6">

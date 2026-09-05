@@ -599,8 +599,13 @@ async function requireLoanAccess(req: express.Request, res: express.Response, ne
 const VENDOR_MANAGEMENT_EMAILS = ['divya@kcmlogistics.in', 'finance@kcmlogistics.in'];
 // Chandan/Praveen (the Fuel Entry group) get read-only lookup access to
 // vendor records so Fuel Entry's vehicle auto-fill/picker works for them,
-// without letting them into the Vendor Management module itself.
-const VENDOR_READ_ONLY_EMAILS = [...VENDOR_MANAGEMENT_EMAILS, ...FUEL_ENTRY_USER_EMAILS];
+// without letting them into the Vendor Management module itself. Vinod
+// (2026-09-05, direct request) needs full read visibility on every vendor
+// entry, including any added after he's already loaded the module - added
+// here (view-only, matches Administration.tsx's hasAccess('vendors') gate,
+// which already listed him client-side but had nothing matching him
+// server-side, so every actual request was silently 403ing).
+const VENDOR_READ_ONLY_EMAILS = [...VENDOR_MANAGEMENT_EMAILS, ...FUEL_ENTRY_USER_EMAILS, 'vinod@kcmlogistics.in'];
 
 // GET /api/vendors: Divya, Rakshina, Chandan, Praveen, or super admin.
 async function requireVendorReadAccess(req: express.Request, res: express.Response, next: express.NextFunction) {

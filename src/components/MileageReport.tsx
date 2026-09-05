@@ -765,10 +765,11 @@ export default function MileageReportModule({
               </tr>
             </thead>
             {/* 2026-09-05: divider darkened from divide-slate-100 (barely
-                visible, made rows read as one unbroken block) to
-                divide-slate-300 so each entry is clearly separated from
-                the next. */}
-            <tbody className="divide-y divide-slate-300 font-medium text-slate-700 bg-white">
+                visible, made rows read as one unbroken block) - first pass
+                to divide-slate-300 wasn't bold enough either per direct
+                feedback, now divide-y-2 divide-slate-400 for a genuinely
+                bold, unmissable line between entries. */}
+            <tbody className="divide-y-2 divide-slate-400 font-medium text-slate-700 bg-white">
               {filteredReports.length === 0 ? (
                 <tr>
                   <td colSpan={21 + (canSeeEnteredBy ? 1 : 0) + (readOnly ? 0 : 1)} className="text-center py-20 text-slate-400 font-mono text-xs">

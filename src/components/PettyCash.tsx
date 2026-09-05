@@ -222,9 +222,14 @@ function MarketTripCreditRow({ trip, date, amount, balanceNet, isSuperAdmin, onV
       <td className="px-3 py-2"></td>
       <td className="px-3 py-2"></td>
       <td className="px-3 py-2"></td>
+      {/* 2026-09-05: Amount Received/Cash Paid/Balance Net moved to sit
+          right beside Location (column-order only, matches the header). */}
+      <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700 bg-emerald-50/40">₹{amount.toLocaleString('en-IN')}</td>
       <td className="px-3 py-2"></td>
-      <td className="px-3 py-2"></td>
-      <td className="px-3 py-2"></td>
+      <td className={`px-3 py-2 text-right font-mono font-black ${balanceNet < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`} title="This holder's running balance across the merged, date-sorted Petty Cash + Market Trip + Amount Received credit list">
+        {balanceNet < 0 && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
+        ₹{balanceNet.toLocaleString('en-IN')}
+      </td>
       <td className="px-3 py-2"></td>
       <td className="px-3 py-2"></td>
       <td className="px-3 py-2"></td>
@@ -234,12 +239,11 @@ function MarketTripCreditRow({ trip, date, amount, balanceNet, isSuperAdmin, onV
       <td className="px-3 py-2 whitespace-nowrap">
         <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-emerald-100 text-emerald-800 border-emerald-300">Market trip</span>
       </td>
-      <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700 bg-emerald-50/40">₹{amount.toLocaleString('en-IN')}</td>
+      {/* 2026-09-05: Client/Ownership/Vendor Vehicle # moved to sit right
+          beside Source (column-order only, matches the header). */}
       <td className="px-3 py-2"></td>
-      <td className={`px-3 py-2 text-right font-mono font-black ${balanceNet < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`} title="This holder's running balance across the merged, date-sorted Petty Cash + Market Trip + Amount Received credit list">
-        {balanceNet < 0 && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
-        ₹{balanceNet.toLocaleString('en-IN')}
-      </td>
+      <td className="px-3 py-2"></td>
+      <td className="px-3 py-2"></td>
       <td className="px-3 py-2"></td>
       {isSuperAdmin && <td className="px-3 py-2"></td>}
       <td className="px-3 py-2 whitespace-nowrap text-center">
@@ -284,9 +288,14 @@ function AmountReceivedCreditRow({ advance, balanceNet, isSuperAdmin, onDelete }
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
       <td className="px-3 py-2 text-slate-500 max-w-[120px] truncate" title={advance.remarks}>{advance.remarks || '-'}</td>
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
-      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
-      <td className="px-3 py-2 text-slate-700 font-semibold whitespace-nowrap capitalize">{advance.account || '-'}</td>
-      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
+      {/* 2026-09-05: Amount Received/Cash Paid/Balance Net moved to sit
+          right beside Location (column-order only, matches the header). */}
+      <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700 bg-emerald-50/40">₹{advance.amount.toLocaleString('en-IN')}</td>
+      <td className="px-3 py-2 text-right font-mono text-slate-400">&mdash;</td>
+      <td className={`px-3 py-2 text-right font-mono font-black ${balanceNet < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`} title="This holder's running balance across the merged, date-sorted Petty Cash + Market Trip + Amount Received credit list">
+        {balanceNet < 0 && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
+        ₹{balanceNet.toLocaleString('en-IN')}
+      </td>
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
       <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{receiverLabel}</td>
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
@@ -296,12 +305,11 @@ function AmountReceivedCreditRow({ advance, balanceNet, isSuperAdmin, onDelete }
       <td className="px-3 py-2 whitespace-nowrap">
         <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-amber-100 text-amber-800 border-amber-300">Amount received</span>
       </td>
-      <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700 bg-emerald-50/40">₹{advance.amount.toLocaleString('en-IN')}</td>
-      <td className="px-3 py-2 text-right font-mono text-slate-400">&mdash;</td>
-      <td className={`px-3 py-2 text-right font-mono font-black ${balanceNet < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-emerald-700 bg-emerald-50/30'}`} title="This holder's running balance across the merged, date-sorted Petty Cash + Market Trip + Amount Received credit list">
-        {balanceNet < 0 && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
-        ₹{balanceNet.toLocaleString('en-IN')}
-      </td>
+      {/* 2026-09-05: Client/Ownership/Vendor Vehicle # moved to sit right
+          beside Source (column-order only, matches the header). */}
+      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
+      <td className="px-3 py-2 text-slate-700 font-semibold whitespace-nowrap capitalize">{advance.account || '-'}</td>
+      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
       <td className="px-3 py-2 text-slate-300 whitespace-nowrap">-</td>
       {isSuperAdmin && <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">{receiverLabel}</td>}
       <td className="px-3 py-2 whitespace-nowrap text-center">
@@ -2399,18 +2407,25 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     <th className="px-3 py-2.5"><SortHeader label="Entry No" sortKey="entryNo" sort={sort} onSort={handleSort} type="numeric" /></th>
                     <th className="px-3 py-2.5">Expense Category</th>
                     <th className="px-3 py-2.5">Remarks</th>
+                    {/* 2026-09-05: reordered so location-linked financial
+                        figures (Amount Received/Cash Paid/Balance Net) sit
+                        right beside Location, and source-linked identity
+                        details (Client/Ownership/Vendor Vehicle #) sit right
+                        beside Source - column order only, no data change.
+                        Every row type below (voucher, MarketTripCreditRow,
+                        AmountReceivedCreditRow) shares this exact order. */}
                     <th className="px-3 py-2.5">Location</th>
-                    <th className="px-3 py-2.5">Client</th>
-                    <th className="px-3 py-2.5">Ownership</th>
+                    <th className="px-3 py-2.5 text-right">Amount Received</th>
+                    <th className="px-3 py-2.5 text-right">Cash Paid</th>
+                    <th className="px-3 py-2.5 text-right">Balance Net</th>
                     <th className="px-3 py-2.5"><SortHeader label="Vehicle #" sortKey="vehicleNumber" sort={sort} onSort={handleSort} type="numeric" /></th>
-                    <th className="px-3 py-2.5">Vendor Vehicle #</th>
                     <th className="px-3 py-2.5">Receiver</th>
                     <th className="px-3 py-2.5" title="Vendor ID for a vendor-vehicle entry, Driver ID for a KCM-vehicle entry">Vendor ID / Driver ID</th>
                     <th className="px-3 py-2.5"><SortHeader label="Type" sortKey="type" sort={sort} onSort={handleSort} labels={{ asc: 'Credit First', desc: 'Debit First' }} /></th>
                     <th className="px-3 py-2.5">Source</th>
-                    <th className="px-3 py-2.5 text-right">Amount Received</th>
-                    <th className="px-3 py-2.5 text-right">Cash Paid</th>
-                    <th className="px-3 py-2.5 text-right">Balance Net</th>
+                    <th className="px-3 py-2.5">Client</th>
+                    <th className="px-3 py-2.5">Ownership</th>
+                    <th className="px-3 py-2.5">Vendor Vehicle #</th>
                     <th className="px-3 py-2.5">Trip Sheet</th>
                     {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
                     <th className="px-3 py-2.5 text-center">Actions</th>
@@ -2456,31 +2471,10 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           </span>
                         </td>
                         <td className="px-3 py-2 text-slate-500 max-w-[120px] truncate" title={v.remarks}>{v.remarks || '-'}</td>
+                        {/* 2026-09-05: Amount Received/Cash Paid/Balance Net
+                            moved to sit right beside Location (column-order
+                            only, see the header comment above). */}
                         <td className="px-3 py-2 text-slate-600 whitespace-nowrap max-w-[100px] truncate" title={v.location}>{v.location || '-'}</td>
-                        <td className="px-3 py-2 text-slate-800 font-semibold whitespace-nowrap">{v.clientName}</td>
-                        <td className="px-3 py-2 whitespace-nowrap">
-                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
-                            v.vendor === 'kcm insta' ? 'bg-pink-50 text-pink-700 border border-pink-100' : 'bg-blue-50 text-blue-700 border border-blue-100'
-                          }`}>
-                            {v.vendor}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 font-mono font-bold text-slate-800 whitespace-nowrap">{v.vehicleNumber || '-'}</td>
-                        <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">{v.vendorVehicleNumber || '-'}</td>
-                        <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{v.receiver || '-'}</td>
-                        <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{v.vendorId || v.driverId || '-'}</td>
-                        {/* Type is fully determined by Source now - every
-                            Petty Cash-sourced row is a Debit (money paid
-                            out), full stop. Market Trip rows are always
-                            Credit (see MarketTripCreditRow) - the old
-                            per-voucher transactionType toggle no longer
-                            drives this. */}
-                        <td className="px-3 py-2 whitespace-nowrap">
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-rose-50 text-rose-700 border-rose-200">
-                            Debit
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 whitespace-nowrap text-slate-400">Petty cash</td>
                         {/* Amt Rec shows whichever credit is currently
                             "active" as of this row (see amtRecAt/
                             balanceNetMapFor) - it carries forward unchanged
@@ -2503,6 +2497,33 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                             </td>
                           );
                         })()}
+                        <td className="px-3 py-2 font-mono font-bold text-slate-800 whitespace-nowrap">{v.vehicleNumber || '-'}</td>
+                        <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{v.receiver || '-'}</td>
+                        <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{v.vendorId || v.driverId || '-'}</td>
+                        {/* Type is fully determined by Source now - every
+                            Petty Cash-sourced row is a Debit (money paid
+                            out), full stop. Market Trip rows are always
+                            Credit (see MarketTripCreditRow) - the old
+                            per-voucher transactionType toggle no longer
+                            drives this. */}
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border bg-rose-50 text-rose-700 border-rose-200">
+                            Debit
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap text-slate-400">Petty cash</td>
+                        {/* 2026-09-05: Client/Ownership/Vendor Vehicle #
+                            moved to sit right beside Source (column-order
+                            only, see the header comment above). */}
+                        <td className="px-3 py-2 text-slate-800 font-semibold whitespace-nowrap">{v.clientName}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
+                            v.vendor === 'kcm insta' ? 'bg-pink-50 text-pink-700 border border-pink-100' : 'bg-blue-50 text-blue-700 border border-blue-100'
+                          }`}>
+                            {v.vendor}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">{v.vendorVehicleNumber || '-'}</td>
                         <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{v.tripSheet || '-'}</td>
                         {isSuperAdmin && (
                           <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">

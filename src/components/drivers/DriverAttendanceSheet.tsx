@@ -460,8 +460,21 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
   // drivers/days without new layout. markedBy is absent entirely for anyone
   // who isn't a Super Admin (stripped server-side), so this naturally shows
   // nothing extra for regular users.
-  const cellTitle = (record: DriverAttendance | null): string | undefined => {
-    if (!record) return undefined;
+  // 2026-09-05: for a BLANK cell (nothing marked yet), a driver who covers
+  // more than one location (2026-09-03 multi-location support) gets a hint
+  // naming their other location(s) here too - e.g. hovering an empty cell
+  // for a driver who's also under Hyderabad shows "Available for
+  // Hyderabad", so whoever's marking attendance knows this same person is
+  // simultaneously assigned elsewhere before they mark them absent by
+  // mistake. Applies everywhere this sheet renders, for every Driver
+  // Details access level - it's just a display hint over existing
+  // driverAllLocations data, not a new permission or field.
+  const cellTitle = (record: DriverAttendance | null, row?: LocationDriverRow): string | undefined => {
+    if (!record) {
+      if (!row) return undefined;
+      const otherLocations = driverAllLocations(row.driver).filter(loc => loc !== row.location);
+      return otherLocations.length > 0 ? `Available for ${otherLocations.join(', ')}` : undefined;
+    }
     const parts = [record.remarks, record.markedBy ? `Marked by: ${record.markedBy}` : undefined].filter(Boolean);
     return parts.length > 0 ? parts.join(' • ') : undefined;
   };
@@ -627,7 +640,7 @@ export default function DriverAttendanceSheet({ drivers, writableLocations }: Dr
                             <td key={day} className="p-0.5 relative group">
                               <button onClick={() => cellWritable && handleCellClick(row, day)}
                                 disabled={!cellWritable}
-                                title={future ? 'Future date - attendance cannot be marked ahead of today' : (isInactive ? 'View only - this driver is deactivated at this location' : !writable ? 'View only - outside your assigned locations' : cellTitle(record))}
+                                title={future ? 'Future date - attendance cannot be marked ahead of today' : (isInactive ? 'View only - this driver is deactivated at this location' : !writable ? 'View only - outside your assigned locations' : cellTitle(record, row))}
                                 className={`w-9 h-6 rounded text-[9px] font-bold border ${cellWritable ? 'cursor-pointer' : 'cursor-not-allowed'} ${future ? 'bg-slate-100 border-slate-100 text-slate-300' : record ? STATUS_STYLES[record.status] : 'bg-white border-slate-200 text-slate-300 hover:bg-slate-50'}`}>
                                 {record ? STATUS_ABBR[record.status] : '-'}
                               </button>
