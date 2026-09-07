@@ -1192,6 +1192,10 @@ export type DriverLocationCategory =
   | 'Swiggy DHL'
   | 'KCM Service Station'
   | 'ECOM F&V'
+  // 2026-09-08 direct request - two new locations under Driver Details ->
+  // Driver Salary.
+  | 'Chennai'
+  | 'Attibele'
   // Synthetic bucket (2026-09-02, attendance data-integrity fix) - never
   // saved on a real DriverEmployee. Only used by DriverAttendanceSheet to
   // group placeholder rows it synthesizes for driver_attendance records
@@ -1205,7 +1209,8 @@ export const DRIVER_LOCATION_CATEGORIES: DriverLocationCategory[] = [
   'HSK RIL F&V Drivers', 'Market Vehicle Driver Details', 'Belgaum Drivers Details',
   'Vijayawada Drivers Details', 'Swiggy - Vizag Driver', 'Hyd Swiggy',
   'Walkes & Parking Drivers HYD', 'BLR Swiggy', 'Cold Star BLR', 'Goa Vehicle',
-  'Chennai Hybrid', 'Nelmangala Reliance', 'Nidaghatta Reliance', 'Swiggy DHL', 'KCM Service Station', 'ECOM F&V'
+  'Chennai Hybrid', 'Nelmangala Reliance', 'Nidaghatta Reliance', 'Swiggy DHL', 'KCM Service Station', 'ECOM F&V',
+  'Chennai', 'Attibele'
 ];
 
 // Minimal, company-wide vehicle -> driver lookup for modules outside Driver

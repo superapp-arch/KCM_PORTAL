@@ -485,6 +485,16 @@ export default function PettyCash({
   const [sort, setSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
 
+  // Ledger pagination (2026-09-08 direct request) - a busy month can run to
+  // ~800 entries, which used to all render in one unbroken table; paginated
+  // the same "Showing X to Y of Z" + Previous/Next pattern Fleet & Vehicles
+  // already uses, just a bigger page (50, not that module's default) since
+  // this table is scanned in bulk far more than it's browsed one page at a
+  // time. Applies to every login's own Ledger Operations table - not a
+  // Vinod-specific change.
+  const LEDGER_PAGE_SIZE = 50;
+  const [ledgerPage, setLedgerPage] = useState(1);
+
   // Date range filter for staff to access historical data
   const [filterYear, setFilterYear] = useState('2026');
   const [filterMonth, setFilterMonth] = useState('All'); // All, 01, 02... 12
@@ -747,6 +757,31 @@ export default function PettyCash({
       return upper.startsWith(flatPrefix) && !looksLikeStrayMonthlyFormatEntry(upper, flatPrefix);
     });
   })();
+
+  // Live duplicate check for the manually-typed Entry No (2026-09-08 direct
+  // request - "very very important... no repetition of the entry no").
+  // Recomputed on every keystroke so the office sees "This Entry No already
+  // exists" the moment they type a number that collides, not just after a
+  // failed save; handleSubmit blocks on this same flag as a final guard, and
+  // server.ts's own findDuplicateEntryNo check in the POST route is the real
+  // backstop regardless of what the client catches. Scoped to this handler's
+  // own vouchers only (holderVouchersFor), matching Entry No being a
+  // per-holder sequence, and matching the server's own scoping exactly.
+  const { prefix: manualMonthlyPrefix, useMonthlyFormat: manualUsesMonthlyFormat } = pettyCashMonthlyPrefix();
+  const manualEntryPrefix = manualUsesMonthlyFormat ? manualMonthlyPrefix : `ENT-${new Date().getFullYear()}-`;
+  const manualEntryWidth = manualUsesMonthlyFormat ? 2 : 4;
+  const manualEntryCandidate = manualEntryNoSeq.trim()
+    ? `${manualEntryPrefix}${manualEntryNoSeq.trim().padStart(manualEntryWidth, '0')}`
+    : '';
+  const isDuplicateManualEntryNo = canManualFirstEntryNo && manualEntryCandidate !== '' &&
+    holderVouchersFor(user.username).some(v => (v.entryNo || '').trim().toUpperCase() === manualEntryCandidate.toUpperCase());
+
+  // Same live check for Vinod's plain edit-box on an EXISTING entry's own
+  // Entry No (see the editingId && isVinod branch below) - excludes the
+  // voucher currently being edited itself, so resubmitting its own
+  // unchanged value is never flagged as a collision with itself.
+  const isDuplicateEditEntryNo = !!editingId && isVinod && entryNo.trim() !== '' &&
+    holderVouchersFor(user.username).some(v => v.id !== editingId && (v.entryNo || '').trim().toUpperCase() === entryNo.trim().toUpperCase());
 
   const nextPettyCashEntryNo = () => {
     const { year, month, prefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
@@ -1134,6 +1169,15 @@ export default function PettyCash({
           : 'Enter this month\'s first Entry No sequence.',
         'error'
       );
+      return;
+    }
+    // No repeated Entry No, ever (2026-09-08 direct request) - the input
+    // already shows this inline live while typing (isDuplicateManualEntryNo/
+    // isDuplicateEditEntryNo above); this is the final guard right before
+    // save. server.ts's own findDuplicateEntryNo check on the API route is
+    // the real backstop regardless of what the client catches.
+    if (isDuplicateManualEntryNo || isDuplicateEditEntryNo) {
+      triggerNotif(`Entry No. ${isDuplicateEditEntryNo ? entryNo : manualEntryCandidate} already exists - enter a different number.`, 'error');
       return;
     }
     // Cash Paid = 0 isn't a real disbursement - don't let it create an entry
@@ -1607,6 +1651,27 @@ export default function PettyCash({
     ].filter(Boolean);
     return parts.length > 1 ? `${mergedLedgerRows.length} entries (${parts.join(' + ')})` : `${mergedLedgerRows.length} entries`;
   })();
+
+  // Ledger pagination - slices only what's actually rendered in the table
+  // body; every count/total/summary elsewhere (ledgerEntryCountLabel, the
+  // Consolidated Summary, Download/Share, etc.) still reads off the full
+  // mergedLedgerRows / filteredVouchers, unaffected by which page is open.
+  const ledgerTotalPages = Math.max(1, Math.ceil(mergedLedgerRows.length / LEDGER_PAGE_SIZE));
+  // Back to page 1 whenever any filter/search/sort actually changes the
+  // matched set, so a filter tweak never leaves the office staring at
+  // "page 3" of an unrelated new result. Also clamped on render (below) as
+  // a fallback for anything not tracked here, e.g. the underlying voucher
+  // count itself shrinking from a delete while on the last page.
+  useEffect(() => {
+    setLedgerPage(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    searchTerm, filterYear, filterMonth, selectedCategoryFilter, selectedTransactionTypeFilter,
+    selectedSourceFilter, selectedClientFilter, selectedVehicleFilter, selectedReceiverFilter,
+    selectedEnteredByFilter, sort
+  ]);
+  const ledgerPageClamped = Math.min(ledgerPage, ledgerTotalPages);
+  const paginatedLedgerRows = mergedLedgerRows.slice((ledgerPageClamped - 1) * LEDGER_PAGE_SIZE, ledgerPageClamped * LEDGER_PAGE_SIZE);
 
   // Unique years list from existing vouchers to populate filter
   const availableYears = Array.from(new Set(vouchers.map(v => getYearFromDate(v.date)))).filter(Boolean).sort().reverse();
@@ -2461,7 +2526,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       </td>
                     </tr>
                   ) : (
-                    mergedLedgerRows.map((row) => row.source === 'market-trip' ? (
+                    paginatedLedgerRows.map((row) => row.source === 'market-trip' ? (
                       <MarketTripCreditRow key={row.key} trip={row.trip} date={row.date} amount={row.amount} isSuperAdmin={isSuperAdmin} balanceNet={row.balanceNet} onViewInMarketTrip={() => { setActiveTab('marketpod'); handleStartEditMarketPod(row.trip); }} onDelete={!canEditPettyCashRow(row.trip.enteredBy) ? undefined : () => {
                         if (row.key.includes(':bal:')) {
                           const receiptId = row.key.split(':bal:')[1];
@@ -2604,6 +2669,38 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 </tbody>
               </table>
             </div>
+
+            {/* Ledger pagination footer - same "Showing X to Y of Z" +
+                Previous/Next pattern as Fleet & Vehicles, only shown once
+                there's more than one page. */}
+            {ledgerTotalPages > 1 && (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 flex items-center justify-between text-xs font-semibold text-slate-600">
+                <div>
+                  Showing {Math.min(mergedLedgerRows.length, (ledgerPageClamped - 1) * LEDGER_PAGE_SIZE + 1)} to {Math.min(mergedLedgerRows.length, ledgerPageClamped * LEDGER_PAGE_SIZE)} of {mergedLedgerRows.length} entries
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setLedgerPage(p => Math.max(1, p - 1))}
+                    disabled={ledgerPageClamped === 1}
+                    className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer"
+                  >
+                    Previous
+                  </button>
+                  <span className="px-3 py-1.5 font-mono">
+                    Page {ledgerPageClamped} of {ledgerTotalPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setLedgerPage(p => Math.min(ledgerTotalPages, p + 1))}
+                    disabled={ledgerPageClamped === ledgerTotalPages}
+                    className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       ) : activeTab === 'summary' ? (
@@ -3621,15 +3718,15 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Entry Number</label>
                     {canManualFirstEntryNo ? (() => {
-                      const { prefix: monthlyPrefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
-                      const manualPrefix = useMonthlyFormat ? monthlyPrefix : `ENT-${new Date().getFullYear()}-`;
-                      const manualWidth = useMonthlyFormat ? 2 : 4;
                       // Chip shows "ENT-" only, never the year (2026-09-05 -
                       // matches displayEntryNo's year-stripping convention,
                       // which applies everywhere an Entry No is shown to
-                      // anyone with Petty Cash access) - manualPrefix itself
-                      // (WITH the year) is unchanged and still what actually
-                      // gets built into the saved entryNo at submit time.
+                      // anyone with Petty Cash access) - manualEntryPrefix
+                      // itself (WITH the year) is unchanged and still what
+                      // actually gets built into the saved entryNo at submit
+                      // time. manualEntryPrefix/Width/isDuplicateManualEntryNo
+                      // are hoisted above (shared with handleSubmit's own
+                      // duplicate guard) rather than re-derived here.
                       return (
                         <>
                           <div className="flex items-center gap-1.5">
@@ -3638,21 +3735,32 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                               type="text"
                               inputMode="numeric"
                               value={manualEntryNoSeq}
-                              onChange={(e) => setManualEntryNoSeq(e.target.value.replace(/\D/g, '').slice(0, manualWidth))}
-                              placeholder={manualWidth === 2 ? '01' : '2941'}
+                              onChange={(e) => setManualEntryNoSeq(e.target.value.replace(/\D/g, '').slice(0, manualEntryWidth))}
+                              placeholder={manualEntryWidth === 2 ? '01' : '2941'}
                               required
-                              className="w-full bg-amber-50 border border-amber-300 rounded-lg p-2 font-mono font-bold tracking-wider text-amber-800 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                              aria-invalid={isDuplicateManualEntryNo}
+                              className={`w-full rounded-lg p-2 font-mono font-bold tracking-wider focus:outline-none focus:ring-1 ${
+                                isDuplicateManualEntryNo
+                                  ? 'bg-rose-50 border border-rose-400 text-rose-800 focus:ring-rose-500'
+                                  : 'bg-amber-50 border border-amber-300 text-amber-800 focus:ring-amber-500'
+                              }`}
                             />
                           </div>
-                          <p className="text-[9px] text-amber-700 font-mono mt-0.5">
-                            {ALWAYS_MANUAL_ENTRY_USERNAMES.includes(user.username)
-                              ? (useMonthlyFormat
-                                ? 'Type this month\'s sequence number from your own cash-book (e.g. 01). You\'ll type it again every time - this never auto-locks.'
-                                : 'Type this entry\'s own number from your own cash-book (e.g. 2941). You\'ll type it again every time - this never auto-locks.')
-                              : (useMonthlyFormat
-                                ? 'This month\'s first entry - type its sequence number (e.g. 01). Every entry after this one auto-continues and locks again.'
-                                : 'Type this entry\'s own number from your own cash-book (e.g. 2941, not the previous one). Every entry after this one auto-continues from it and locks again.')}
-                          </p>
+                          {isDuplicateManualEntryNo ? (
+                            <p className="text-[9px] text-rose-600 font-bold font-mono mt-0.5">
+                              This Entry No already exists ({manualEntryCandidate}) - enter a different number.
+                            </p>
+                          ) : (
+                            <p className="text-[9px] text-amber-700 font-mono mt-0.5">
+                              {ALWAYS_MANUAL_ENTRY_USERNAMES.includes(user.username)
+                                ? (manualUsesMonthlyFormat
+                                  ? 'Type this month\'s sequence number from your own cash-book (e.g. 01). You\'ll type it again every time - this never auto-locks.'
+                                  : 'Type this entry\'s own number from your own cash-book (e.g. 2941). You\'ll type it again every time - this never auto-locks.')
+                                : (manualUsesMonthlyFormat
+                                  ? 'This month\'s first entry - type its sequence number (e.g. 01). Every entry after this one auto-continues and locks again.'
+                                  : 'Type this entry\'s own number from your own cash-book (e.g. 2941, not the previous one). Every entry after this one auto-continues from it and locks again.')}
+                            </p>
+                          )}
                         </>
                       );
                     })() : editingId && isVinod ? (() => {
@@ -3709,10 +3817,19 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                               value={currentSuffix}
                               onChange={(e) => setEntryNo(`${editFixedPrefix}${e.target.value.replace(/\D/g, '').slice(0, editWidth)}`)}
                               placeholder={editWidth === 2 ? '01' : '2941'}
-                              className="w-full bg-amber-50 border border-amber-300 rounded-lg p-2 font-mono font-bold tracking-wider text-amber-800 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                              aria-invalid={isDuplicateEditEntryNo}
+                              className={`w-full rounded-lg p-2 font-mono font-bold tracking-wider focus:outline-none focus:ring-1 ${
+                                isDuplicateEditEntryNo
+                                  ? 'bg-rose-50 border border-rose-400 text-rose-800 focus:ring-rose-500'
+                                  : 'bg-amber-50 border border-amber-300 text-amber-800 focus:ring-amber-500'
+                              }`}
                             />
                           </div>
-                          <p className="text-[9px] text-amber-700 font-mono mt-0.5">Editable - changing this does not renumber any other entries.</p>
+                          {isDuplicateEditEntryNo ? (
+                            <p className="text-[9px] text-rose-600 font-bold font-mono mt-0.5">This Entry No already exists ({entryNo}) - enter a different number.</p>
+                          ) : (
+                            <p className="text-[9px] text-amber-700 font-mono mt-0.5">Editable - changing this does not renumber any other entries.</p>
+                          )}
                         </>
                       );
                     })() : (
@@ -4037,8 +4154,9 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 <button
                   type="submit"
                   form="petty-cash-entry-form"
-                  disabled={isSubmitting}
-                  className="flex-1 bg-gradient-to-r from-teal-600 to-emerald-700 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md transition-all uppercase text-[10px] flex items-center justify-center gap-1.5 cursor-pointer"
+                  disabled={isSubmitting || isDuplicateManualEntryNo || isDuplicateEditEntryNo}
+                  title={isDuplicateManualEntryNo || isDuplicateEditEntryNo ? 'This Entry No already exists - enter a different number before saving.' : undefined}
+                  className="flex-1 bg-gradient-to-r from-teal-600 to-emerald-700 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md transition-all uppercase text-[10px] flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isSubmitting ? (
                     <>
