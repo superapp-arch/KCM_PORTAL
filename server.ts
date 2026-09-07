@@ -3513,7 +3513,26 @@ async function startServer() {
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
   app.post('/api/staff/provident-fund', async (req, res) => {
-    try { res.json({ success: true, data: await saveStaffProvidentFundRecord(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      // EPF/ESI/F&F don't apply to Contract employees (2026-09 direct
+      // request) - StaffFormModal.tsx's Salary Breakup tab already disables
+      // and zeroes these client-side, this is the server-side backstop so a
+      // Contract employee's record can never end up with a non-zero
+      // epf/esi/fullAndFinal no matter what the request body carries.
+      // Deliberately only guards the write path - never touches/rewrites any
+      // already-saved record on its own, so a Finalized/past payroll run
+      // stays exactly as it was unless this exact record is explicitly
+      // re-saved.
+      const payload = { ...req.body };
+      const employees = await getStaffEmployees();
+      const emp = employees.find((e: any) => e.id === payload.empId);
+      if (emp?.employmentType === 'Contract') {
+        payload.epf = undefined;
+        payload.esi = undefined;
+        payload.fullAndFinal = undefined;
+      }
+      res.json({ success: true, data: await saveStaffProvidentFundRecord(payload) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   // ===== STAFF ATTENDANCE ADJUSTMENTS (manual LOP override) =====
