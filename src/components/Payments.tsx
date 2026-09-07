@@ -42,6 +42,12 @@ const DEFAULT_HIGH_EXPOSURE_THRESHOLD = 50000;
 
 const bunkKey = (bunkName: string, location: string) => `${location}|||${bunkName}`;
 
+// "<Bunk Name> (<Location>)" - the fixed display format wherever a bunk name
+// renders read-only in this module (2026-09-07 direct request), e.g. "Kamala
+// (Nelamangala)". Never used for an input/datalist value - those must stay
+// the bare bunkName since that's what actually gets saved/matched.
+const formatBunkLocation = (bunkName: string, location: string) => `${bunkName} (${location})`;
+
 type StatusLevel = 'High' | 'Pending' | 'Clear';
 
 // One merged row per bunk this module knows about - the union of every
@@ -123,10 +129,19 @@ export default function Payments({
   // FuelLog rows (not a separately-maintained list). (Location, Bunk Name)
   // is the real identity - the same bunk name can exist at more than one
   // location (e.g. HPCL at BLR/Chennai/Goa), each its own running account.
+  //
+  // Bunk-only (2026-09-07 direct request): Diesel Payments tracks running
+  // bunk credit accounts, so a Card-paid fuel entry (which can still carry a
+  // bunkName/location - it's the pump you filled at, not how you paid) must
+  // never make that bunk appear here or count toward its balance. Missing
+  // bunkOrCard (legacy rows predating the field) defaults to 'Bunk', same
+  // fallback FuelManagement's own ledger already uses.
+  const isBunkPaid = (l: FuelLog) => (l.bunkOrCard || 'Bunk') === 'Bunk';
+
   const fuelBunkOptions = useMemo(() => {
     const map = new Map<string, { bunkName: string; location: string }>();
     fuelLogs.forEach(l => {
-      if (!l.bunkName || !l.location) return;
+      if (!l.bunkName || !l.location || !isBunkPaid(l)) return;
       map.set(bunkKey(l.bunkName, l.location), { bunkName: l.bunkName, location: l.location });
     });
     return Array.from(map.values()).sort((a, b) => a.bunkName.localeCompare(b.bunkName) || a.location.localeCompare(b.location));
@@ -145,7 +160,7 @@ export default function Payments({
       // own fuel entries for this bunk, so editing/deleting one there
       // instantly updates this bunk's balance/history here too.
       const purchases = fuelLogs
-        .filter(l => l.bunkName === bunkName && l.location === location)
+        .filter(l => l.bunkName === bunkName && l.location === location && isBunkPaid(l))
         .map(l => ({ date: l.date, amount: l.amount || 0, fuelLog: l }));
       const payments = dieselBunkPayments.filter(p => p.bunkId === (account?.id || key));
       const totalPurchases = purchases.reduce((s, p) => s + p.amount, 0);
@@ -508,10 +523,10 @@ export default function Payments({
                       key={row.key}
                       type="button"
                       onClick={() => setHistoryKey(row.key)}
-                      title={`View ${row.bunkName} (${row.location}) history`}
+                      title={`View ${formatBunkLocation(row.bunkName, row.location)} history`}
                       className={`text-left p-4 rounded-xl border shadow-xs hover:shadow-md transition-all cursor-pointer ${tileBorderClass}`}
                     >
-                      <p className={`font-bold uppercase tracking-wider text-[10px] truncate ${labelColorClass}`}>{row.bunkName}</p>
+                      <p className={`font-bold uppercase tracking-wider text-[10px] truncate ${labelColorClass}`}>{formatBunkLocation(row.bunkName, row.location)}</p>
                       <h3 className={`text-lg font-black mt-1 whitespace-nowrap ${row.balance < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
                         {row.balance < 0 ? '-' : ''}₹{Math.abs(row.balance).toLocaleString('en-IN')}
                       </h3>
