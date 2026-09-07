@@ -1099,7 +1099,19 @@ export default function FuelManagement({
           ratePerLitreNew: rateNew,
           totalAmount: calculatedTotalAmount,
           extraFuelPaymentMode: isPettyCashExtra ? 'petty_cash' as const : 'normal' as const,
-          pettyCashHolderUsername: isPettyCashExtra ? mPettyCashHolder : undefined
+          pettyCashHolderUsername: isPettyCashExtra ? mPettyCashHolder : undefined,
+          // 2026-09-08 bug fix: filling in Mileage on one of Praveen's own
+          // fuel entries (editingIsForeign - see isForeignEntry above) used
+          // to silently attribute the new Mileage Report to whoever's
+          // actually typing it in (Chandan), so it never showed up under
+          // Praveen's own Mileage Report view even though it's really his
+          // entry. Tells the server who this mileage genuinely belongs to;
+          // server.ts's own POST /api/mileage re-validates this against
+          // FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS rather than trusting it
+          // outright. Left undefined on a normal (non-foreign) save, same
+          // as before this fix - the server just attributes it to whoever's
+          // logged in, as always.
+          enteredBy: editingIsForeign ? editingLog!.enteredBy : undefined
         };
 
         if (linkedMileageReportId) {
