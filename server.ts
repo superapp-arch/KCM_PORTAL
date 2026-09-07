@@ -801,8 +801,21 @@ function buildManualPettyCashEntryNo(prefix: string, rawSeq: unknown, width: num
 // into another's; a voucher with no enteredBy at all (pre-dates per-holder
 // numbering entirely) buckets alone under its own empty-string holder key,
 // same "never mixed into a real handler's sequence" treatment.
+//
+// 2026-09-xx bug fix: ALWAYS_MANUAL_ENTRY_USERNAMES (Vinod) types every
+// Entry No himself to match his own physical cash-book, which can - and
+// deliberately does - have real gaps (a voided voucher, a number he never
+// used, ...). Before this exclusion, deleting any one of his vouchers
+// swept his WHOLE bucket through the gap-compaction below and silently
+// squashed his real numbers back into a contiguous run starting at the
+// hardcoded floor (2672) - "all the entry numbers change, and it comes
+// back to [near] the first one" - overwriting the very numbers he'd
+// manually matched to his book. His entries are excluded from bucketing
+// entirely now, so a delete never renumbers anything of his; gaps in his
+// own sequence are expected, not a bug to close.
 interface PettyCashEntryBucket { key: string; prefix: string; width: number; floor: number; seq: number }
 function pettyCashEntryBucket(v: PettyCashVoucher): PettyCashEntryBucket | null {
+  if (ALWAYS_MANUAL_ENTRY_USERNAMES.includes(v.enteredBy || '')) return null;
   const upper = (v.entryNo || '').toUpperCase();
   const m = upper.match(/^ENT-(\d{4})-(\d{4})$/);
   if (!m) return null;

@@ -498,7 +498,7 @@ export default function PettyCash({
   const [combinedTo, setCombinedTo] = useState('');
 
   // Form State
-  const [date, setDate] = useState('2026-07-09');
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [entryNo, setEntryNo] = useState('');
   // Vinod/Saneel's manually-typed sequence for the month's first entry (see
   // canManualFirstEntryNo) - just the trailing digits, the ENT-<year>-<MM>
@@ -1086,6 +1086,11 @@ export default function PettyCash({
 
   const resetVoucherForm = () => {
     setEditingId(null);
+    // Back to today, not whatever date a just-closed edit (handleStartEdit
+    // sets it to that voucher's own date - see setDate(v.date) below) left
+    // behind - otherwise opening "Add Entry" right after editing/canceling
+    // an old voucher pre-fills with that old voucher's date instead of today.
+    setDate(new Date().toISOString().slice(0, 10));
     setEntryNo('');
     setManualEntryNoSeq('');
     setCategoryInput('');
