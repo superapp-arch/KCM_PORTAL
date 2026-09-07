@@ -83,6 +83,16 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
     remarks: employee?.remarks || ''
   });
   const [basicErrors, setBasicErrors] = useState<{ aadharNumber?: boolean; panNumber?: boolean; contactNumber?: boolean }>({});
+  // EPF/ESI/F&F don't apply to Contract employees (2026-09 direct request) -
+  // read straight off the Type field already on the Basic Info tab (no
+  // separate employee-type field). Only the Deductions section is affected;
+  // every other Salary Breakup section (Earnings, Per Day Salary, LOP,
+  // Bank Details, etc.) is unchanged for every employee type. See the
+  // Deductions grid below, applyCtcBreakup, and the pfPayload built in
+  // handleSubmit - all three are guarded by this same flag, and
+  // server.ts's own POST /api/staff/provident-fund re-derives and enforces
+  // it independently as a backstop.
+  const isContractEmployee = basic.employmentType === 'Contract';
   const [aadharDocuments, setAadharDocuments] = useState<VehicleDocument[]>(employee?.aadharDocuments || []);
   const [panDocuments, setPanDocuments] = useState<VehicleDocument[]>(employee?.panDocuments || []);
   const [otherDocuments, setOtherDocuments] = useState<VehicleDocument[]>(employee?.documents || []);
@@ -245,8 +255,13 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
         basic: Number(pfForm.basic) || undefined, hra: Number(pfForm.hra) || undefined, conveyance: Number(pfForm.conveyance) || undefined,
         medicalAllowance: Number(pfForm.medicalAllowance) || undefined, lta: Number(pfForm.lta) || undefined,
         cca: Number(pfForm.cca) || undefined, fuelAllowance: Number(pfForm.fuelAllowance) || undefined, otherAllowances: Number(pfForm.otherAllowances) || undefined,
-        extraDays: Number(pfForm.extraDays) || undefined, professionalTax: Number(pfForm.professionalTax) || undefined, epf: Number(pfForm.epf) || undefined,
-        esi: Number(pfForm.esi) || undefined, fullAndFinal: Number(pfForm.fullAndFinal) || undefined,
+        extraDays: Number(pfForm.extraDays) || undefined, professionalTax: Number(pfForm.professionalTax) || undefined,
+        // Contract employees never save a non-zero EPF/ESI/F&F, regardless
+        // of what's sitting in pfForm - see isContractEmployee's own comment
+        // above (server.ts's POST handler enforces this independently too).
+        epf: isContractEmployee ? undefined : Number(pfForm.epf) || undefined,
+        esi: isContractEmployee ? undefined : Number(pfForm.esi) || undefined,
+        fullAndFinal: isContractEmployee ? undefined : Number(pfForm.fullAndFinal) || undefined,
         otherDeductions: Number(pfForm.otherDeductions) || undefined, advances: Number(pfForm.advances) || undefined, incomeTax: Number(pfForm.incomeTax) || undefined,
         // Always carry the current status forward - the regular Save must
         // never silently revert an already-Finalized month back to Draft by
@@ -349,7 +364,11 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
       ...f,
       basic: String(b.basic), hra: String(b.hra), conveyance: String(b.conveyance),
       medicalAllowance: String(b.medicalAllowance), lta: String(b.lta), cca: String(b.cca),
-      epf: String(b.epf), esi: String(b.esi), professionalTax: String(b.professionalTax)
+      // Contract employees don't get EPF/ESI at all - never populate these
+      // from the CTC formula for them, so a stale non-zero value doesn't
+      // sit hidden in the (disabled, zero-displaying) field.
+      epf: isContractEmployee ? '0' : String(b.epf), esi: isContractEmployee ? '0' : String(b.esi),
+      professionalTax: String(b.professionalTax)
     }));
   };
 
@@ -360,8 +379,15 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
   const pfExtraDaysAmount = num(pfForm.extraDays) * pfPerDaySalary;
   const pfLopAmount = pfAttendance.lopDays * pfPerDaySalary;
   const pfTotalEarnings = pfRecurringEarnings + pfExtraDaysAmount;
-  const pfTotalDeductions = num(pfForm.professionalTax) + num(pfForm.epf) + num(pfForm.esi) + pfLopAmount +
-    num(pfForm.fullAndFinal) + num(pfForm.otherDeductions) + num(pfForm.advances) + num(pfForm.incomeTax);
+  // EPF/ESI/F&F are forced to 0 for Contract employees (not just hidden -
+  // never factored into Total Deductions/Gross/Net Salary), regardless of
+  // whatever's sitting in pfForm (a saved legacy record, a stray CTC-
+  // recalculated value, ...). See isContractEmployee's own comment above.
+  const pfEffectiveEpf = isContractEmployee ? 0 : num(pfForm.epf);
+  const pfEffectiveEsi = isContractEmployee ? 0 : num(pfForm.esi);
+  const pfEffectiveFullAndFinal = isContractEmployee ? 0 : num(pfForm.fullAndFinal);
+  const pfTotalDeductions = num(pfForm.professionalTax) + pfEffectiveEpf + pfEffectiveEsi + pfLopAmount +
+    pfEffectiveFullAndFinal + num(pfForm.otherDeductions) + num(pfForm.advances) + num(pfForm.incomeTax);
   const pfGrossSalary = pfTotalEarnings;
   const pfNetSalary = Math.round(pfGrossSalary - pfTotalDeductions);
 
@@ -647,17 +673,40 @@ export default function StaffFormModal({ employee, onAddEmployee, onUpdateEmploy
 
               <div className="border border-slate-200 rounded-lg p-3">
                 <p className="font-bold text-rose-700 uppercase mb-2">Deductions</p>
-                <p className="text-slate-400 mb-2">Professional Tax/EPF/ESI follow the CTC formula. Income Tax (TDS) is always manual.</p>
+                <p className="text-slate-400 mb-2">
+                  Professional Tax/EPF/ESI follow the CTC formula. Income Tax (TDS) is always manual.
+                  {isContractEmployee && <span className="text-amber-600 font-semibold"> EPF/ESI/F&amp;F don't apply to Contract employees - forced to 0 below.</span>}
+                </p>
                 <div className="grid grid-cols-2 gap-2">
                   {([
                     ['professionalTax', 'Professional Tax', true], ['epf', 'EPF', true], ['esi', 'ESI', true], ['fullAndFinal', 'F&F', false],
                     ['otherDeductions', 'Other Deductions', false], ['advances', 'Advances', false], ['incomeTax', 'Income Tax', false]
-                  ] as const).map(([key, label, fromCtc]) => (
-                    <div key={key}>
-                      <label className="block text-slate-400 mb-0.5">{label}{fromCtc && <span className="text-purple-400 font-semibold"> (from CTC)</span>}</label>
-                      <input type="number" value={pfForm[key]} onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })} autoComplete="off" className="no-spinner w-full border border-slate-300 rounded-lg px-2 py-1.5" />
-                    </div>
-                  ))}
+                  ] as const).map(([key, label, fromCtc]) => {
+                    // EPF/ESI/F&F are disabled and forced to 0 for Contract
+                    // employees (2026-09 direct request) - same greyed-out
+                    // "not applicable" pattern as the Org Unit (auto) field
+                    // on the Basic Info tab. Every other Deductions field
+                    // (Professional Tax, Other Deductions, Advances, Income
+                    // Tax) is unaffected for every employee type.
+                    const isExcludedForContract = isContractEmployee && (key === 'epf' || key === 'esi' || key === 'fullAndFinal');
+                    return (
+                      <div key={key}>
+                        <label className="block text-slate-400 mb-0.5">
+                          {label}{fromCtc && <span className="text-purple-400 font-semibold"> (from CTC)</span>}
+                          {isExcludedForContract && <span className="text-amber-600 font-semibold"> (N/A - Contract)</span>}
+                        </label>
+                        <input
+                          type="number"
+                          value={isExcludedForContract ? '0' : pfForm[key]}
+                          onChange={e => setPfForm({ ...pfForm, [key]: e.target.value })}
+                          disabled={isExcludedForContract}
+                          title={isExcludedForContract ? 'Not applicable for Contract employees' : undefined}
+                          autoComplete="off"
+                          className={`no-spinner w-full border rounded-lg px-2 py-1.5 ${isExcludedForContract ? 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed' : 'border-slate-300'}`}
+                        />
+                      </div>
+                    );
+                  })}
                   <div className="bg-rose-50 border border-rose-200 rounded-lg p-2">
                     <p className="text-rose-600 uppercase text-[9px] font-bold">LOP Amount (auto = LOP Days &times; Per Day Salary)</p>
                     <p className="font-black text-rose-700">Rs. {pfLopAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
