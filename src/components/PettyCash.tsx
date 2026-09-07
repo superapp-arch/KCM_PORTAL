@@ -707,6 +707,15 @@ export default function PettyCash({
     return { year, month, prefix: `ENT-${year}-${String(month).padStart(2, '0')}`, useMonthlyFormat };
   };
   const MANUAL_FIRST_ENTRY_USERNAMES = ['vinoda', 'saneel'];
+  // Vinod's real physical cash-book numbering doesn't reliably match the
+  // auto-sequential scheme (see nextPettyCashEntryNo below) even after his
+  // one-time manual catch-up above - so unlike Saneel, he manually types the
+  // Entry No EVERY time he saves a new entry, indefinitely, not just once
+  // (2026-09-07 direct request - see server.ts's identical
+  // ALWAYS_MANUAL_ENTRY_USERNAMES, which this mirrors exactly and which is
+  // what actually gets enforced on save). Scoped to Vinod only - Saneel
+  // keeps the existing one-time-then-auto behavior.
+  const ALWAYS_MANUAL_ENTRY_USERNAMES = ['vinoda'];
   // A stray monthly-format entry (ENT-<year>-<MM><NN>) briefly created
   // during the now-reverted Sep 1 2026 cutover looks identical in shape to
   // the flat scheme's own ENT-<year>-<NNNN> - both are exactly 4 trailing
@@ -722,6 +731,7 @@ export default function PettyCash({
   };
   const canManualFirstEntryNo = (() => {
     if (editingId || isSuperAdmin) return false; // never applies to an edit, or to a Super Admin who isn't one of the 3 handlers
+    if (ALWAYS_MANUAL_ENTRY_USERNAMES.includes(user.username)) return true;
     if (!MANUAL_FIRST_ENTRY_USERNAMES.includes(user.username)) return false;
     const { prefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
     const holderVouchers = holderVouchersFor(user.username);

@@ -25,6 +25,7 @@ import {
 import { latestOdometerFor, computeKmStatus, computeAlignmentStatus, nextAlignmentDueKm, projectDueDate, daysUntil } from './src/utils/maintenanceDates.ts';
 import { PETTY_CASH_USERS } from './src/utils/pettyCashUsers.ts';
 import { driverAllLocations, isDriverActiveAtLocation, attendanceBelongsToLocation } from './src/utils/driverLocations.ts';
+import { parseFlexibleDate, formatDateDDMMYYYY } from './src/utils/dateFormat.ts';
 import {
   User,
   Vehicle,
@@ -230,26 +231,11 @@ import {
   getAuditLogFilterOptions
 } from './src/db/service.ts';
 
-// Parses "DD.MM.YYYY" or "YYYY-MM-DD" expiry strings used across fleet records.
-function parseFlexibleDate(raw?: string): Date | null {
-  if (!raw) return null;
-  if (raw.includes('.')) {
-    const parts = raw.split('.');
-    if (parts.length === 3) return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-    return null;
-  }
-  if (raw.includes('-')) return new Date(raw);
-  return null;
-}
-
-// Formats a parsed expiry Date as DD-MM-YYYY for display, regardless of
-// whichever format (DD.MM.YYYY, YYYY-MM-DD, ...) the source field was in.
-function formatDateDDMMYYYY(date: Date): string {
-  const d = String(date.getDate()).padStart(2, '0');
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const y = date.getFullYear();
-  return `${d}-${m}-${y}`;
-}
+// parseFlexibleDate/formatDateDDMMYYYY (DD.MM.YYYY / DD-MM-YYYY / YYYY-MM-DD
+// expiry strings used across fleet records, formatted back to DD-MM-YYYY for
+// display) now live in ./src/utils/dateFormat.ts, shared with
+// Administration.tsx and FleetSheet.tsx - see that file's header comment for
+// why the old per-file `new Date(str)` fallback here was silently wrong.
 
 // Compliance fields checked for upcoming expiry, each with its own alert window
 // (days remaining until expiry) and notification id prefix.
@@ -742,35 +728,49 @@ function looksLikeStrayMonthlyFormatEntry(entryNo: string | undefined, flatPrefi
 // the fully-automatic behavior nextPettyCashEntryNo always had.
 const MANUAL_FIRST_ENTRY_USERNAMES = ['vinoda', 'saneel'];
 
+// Vinod's real physical cash-book numbering doesn't reliably match the
+// auto-sequential scheme (see nextPettyCashEntryNo) even after his one-time
+// manual catch-up above - so unlike Saneel, he manually types the Entry No
+// EVERY time he saves a new entry, indefinitely, not just once (2026-09-07
+// direct request: the auto value he was seeing, e.g. "ENT-2678", didn't
+// match his book). Scoped to Vinod only - Saneel keeps the existing
+// one-time-then-auto behavior, since only Vinod's numbering was raised.
+const ALWAYS_MANUAL_ENTRY_USERNAMES = ['vinoda'];
+
 // Whether `username`'s next save is eligible for a manually-typed Entry No,
 // and what shape that manual entry must take - width/max differ between the
 // current flat scheme (4 digits, 1-9999) and the monthly scheme it'll
 // eventually resume being (2 digits, 1-99, once MONTHLY_FORMAT_CUTOVER
-// arrives). Not eligible at all for anyone outside MANUAL_FIRST_ENTRY_
-// USERNAMES, or once that holder already has a real entry under the current
-// scheme (only ever true for their very first save under each scheme).
+// arrives). Always eligible for ALWAYS_MANUAL_ENTRY_USERNAMES; for everyone
+// else in MANUAL_FIRST_ENTRY_USERNAMES it's only their very first save under
+// each scheme; not eligible at all outside both lists.
 function canManualFirstPettyCashEntry(holderVouchers: PettyCashVoucher[], username: string): { can: boolean; prefix: string; width: number; max: number } {
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1;
   const useMonthlyFormat = year > MONTHLY_FORMAT_CUTOVER_YEAR || (year === MONTHLY_FORMAT_CUTOVER_YEAR && month >= MONTHLY_FORMAT_CUTOVER_MONTH);
+  const prefix = useMonthlyFormat ? `ENT-${year}-${String(month).padStart(2, '0')}` : `ENT-${year}-`;
+  const width = useMonthlyFormat ? 2 : 4;
+  const max = useMonthlyFormat ? 99 : 9999;
+
+  if (ALWAYS_MANUAL_ENTRY_USERNAMES.includes(username)) {
+    return { can: true, prefix, width, max };
+  }
   if (!MANUAL_FIRST_ENTRY_USERNAMES.includes(username)) {
-    return { can: false, prefix: useMonthlyFormat ? `ENT-${year}-${String(month).padStart(2, '0')}` : `ENT-${year}-`, width: useMonthlyFormat ? 2 : 4, max: useMonthlyFormat ? 99 : 9999 };
+    return { can: false, prefix, width, max };
   }
   if (useMonthlyFormat) {
-    const prefix = `ENT-${year}-${String(month).padStart(2, '0')}`;
     const can = !holderVouchers.some(v => {
       const upper = (v.entryNo || '').toUpperCase();
       return upper.startsWith(prefix) && upper.length === prefix.length + 2;
     });
-    return { can, prefix, width: 2, max: 99 };
+    return { can, prefix, width, max };
   }
-  const prefix = `ENT-${year}-`;
   const hasRelevant = holderVouchers.some(v => {
     const upper = (v.entryNo || '').toUpperCase();
     return upper.startsWith(prefix) && !looksLikeStrayMonthlyFormatEntry(upper, prefix);
   });
-  return { can: !hasRelevant, prefix, width: 4, max: 9999 };
+  return { can: !hasRelevant, prefix, width, max };
 }
 
 // Normalizes a manually-typed trailing sequence into the full Entry No -

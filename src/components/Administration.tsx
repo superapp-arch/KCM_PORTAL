@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { DriverSalaryAdvanceVoucherSlim } from '../utils/driverPettyCashAdvance';
+import { parseFlexibleDate, formatDateDDMMYYYY } from '../utils/dateFormat';
 import {
   User as UserType,
   Vehicle,
@@ -402,8 +403,13 @@ export default function Administration({
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
   const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
 
-  // Employee-toggled fleet status modal (Fleet Status box "Inactive" count)
-  const [showInactiveFleetModal, setShowInactiveFleetModal] = useState(false);
+  // Generic vehicle-list drill-down modal (2026-09-07) - shared by Fleet
+  // Size, Fleet Status (Active/Inactive), and each Dry/Hybrid/Walkes/Reefer
+  // category card below; each card's onClick hands in its own already-
+  // filtered vehicle list + a title. Replaces the old single-purpose
+  // showInactiveFleetModal (Fleet Status' "Inactive" count was the only
+  // drill-down before this).
+  const [vehicleListModal, setVehicleListModal] = useState<{ title: string; vehicles: Vehicle[] } | null>(null);
   // Compliance Alerts cards (2026-09-05, Super Admin Terminal) - clicking
   // Insurance/FC/NP/SP shows which vehicle numbers are behind it.
   const [complianceAlertModal, setComplianceAlertModal] = useState<{ label: string; vehicles: { regNo: string; date: string; diffDays: number }[] } | null>(null);
@@ -718,8 +724,11 @@ export default function Administration({
             </div>
           )}
 
-          {/* Inactive Vehicles List Modal (employee-toggled status from Fleet & Vehicles) */}
-          {showInactiveFleetModal && (
+          {/* Vehicle List Modal (2026-09-07) - generic drill-down reused by
+              Fleet Size, Fleet Status (Active/Inactive), and every
+              Dry/Hybrid/Walkes/Reefer category card below; each just hands
+              in its own already-filtered vehicle list + a title. */}
+          {vehicleListModal && (
             <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
               <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
@@ -731,14 +740,14 @@ export default function Administration({
                   <div>
                     <h3 className="text-base font-black text-slate-800 flex items-center gap-2">
                       <Settings className="w-5 h-5 text-pink-600" />
-                      Inactive Vehicles
+                      {vehicleListModal.title}
                     </h3>
                     <p className="text-xs text-slate-500 font-semibold mt-1">
-                      Vehicles marked Inactive in the Fleet &amp; Vehicles module.
+                      {vehicleListModal.vehicles.length} vehicle{vehicleListModal.vehicles.length !== 1 ? 's' : ''}, as recorded in Fleet &amp; Vehicles.
                     </p>
                   </div>
                   <button
-                    onClick={() => setShowInactiveFleetModal(false)}
+                    onClick={() => setVehicleListModal(null)}
                     className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 cursor-pointer"
                   >
                     <X className="w-5 h-5" />
@@ -746,39 +755,31 @@ export default function Administration({
                 </div>
 
                 <div className="max-h-[350px] overflow-y-auto pr-1 space-y-2">
-                  {(() => {
-                    const inactiveVehicles = (vehicles || []).filter(v => v.active === false);
-
-                    if (inactiveVehicles.length === 0) {
-                      return (
-                        <p className="text-xs text-center py-10 text-slate-400 font-mono">
-                          🎉 ALL REGISTERED VEHICLES ARE ACTIVE!
-                        </p>
-                      );
-                    }
-
-                    return (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {inactiveVehicles.map((v, idx) => {
-                          const reg = v.regNo || v["Reg. No."] || 'Unknown';
-                          const model = v.model || v["Model"] || '-';
-                          const type = v.type || v.Type || '-';
-                          return (
-                            <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex flex-col justify-between hover:bg-slate-100 transition-colors">
-                              <span className="font-mono font-black text-slate-950 text-xs tracking-wider">{reg}</span>
-                              <span className="text-[9px] text-slate-400 font-bold uppercase truncate">{model} &middot; {type}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
+                  {vehicleListModal.vehicles.length === 0 ? (
+                    <p className="text-xs text-center py-10 text-slate-400 font-mono">
+                      NO VEHICLES IN THIS GROUP.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {vehicleListModal.vehicles.map((v, idx) => {
+                        const reg = v.regNo || v["Reg. No."] || 'Unknown';
+                        const model = v.model || v["Model"] || '-';
+                        const type = v.type || v.Type || '-';
+                        return (
+                          <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex flex-col justify-between hover:bg-slate-100 transition-colors">
+                            <span className="font-mono font-black text-slate-950 text-xs tracking-wider">{reg}</span>
+                            <span className="text-[9px] text-slate-400 font-bold uppercase truncate">{model} &middot; {type}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-end pt-4 border-t border-slate-100 mt-4">
                   <button
                     type="button"
-                    onClick={() => setShowInactiveFleetModal(false)}
+                    onClick={() => setVehicleListModal(null)}
                     className="bg-slate-900 hover:bg-slate-800 text-white font-extrabold px-4 py-2 rounded-xl text-xs uppercase cursor-pointer"
                   >
                     Close
@@ -823,10 +824,13 @@ export default function Administration({
                   if (c === 'walkee') return 'walkes';
                   return c;
                 };
-                const categoryCounts: Record<string, number> = { dry: 0, hybrid: 0, walkes: 0, reefer: 0 };
+                // Grouped by vehicle, not just counted (2026-09-07) - each
+                // category card's click-through needs the actual vehicle
+                // list, not just how many there are.
+                const categorizedVehicles: Record<string, Vehicle[]> = { dry: [], hybrid: [], walkes: [], reefer: [] };
                 (vehicles || []).forEach(v => {
                   const cat = normalizeVehicleCategory(v.Category || v.category);
-                  if (cat in categoryCounts) categoryCounts[cat]++;
+                  if (cat in categorizedVehicles) categorizedVehicles[cat].push(v);
                 });
 
                 const unresolvedNotifications = notifications.filter(n => !n.read);
@@ -841,22 +845,22 @@ export default function Administration({
                 // FC/National Permit/State Permit expires within the next 7
                 // days (future expiries only, same "diffDays" shape as
                 // Fleet & Vehicles' own expiry alert, just its own 7-day
-                // window here rather than that module's 10-day one).
-                const parseComplianceDate = (dateStr?: string): Date | null => {
-                  if (!dateStr) return null;
-                  const parts = dateStr.split('.');
-                  const d = parts.length === 3 ? new Date(`${parts[2]}-${parts[1]}-${parts[0]}`) : dateStr.includes('-') ? new Date(dateStr) : null;
-                  return d && !isNaN(d.getTime()) ? d : null;
-                };
+                // window here rather than that module's 10-day one). Date
+                // parsing/display now goes through the shared
+                // parseFlexibleDate/formatDateDDMMYYYY (see ../utils/dateFormat)
+                // instead of a local `new Date(str)` fallback, which used to
+                // silently misread DD-MM-YYYY dates (see that file's header
+                // comment) and inconsistently display whichever raw format a
+                // vehicle's date happened to be stored in.
                 const dueSoon = (getDate: (v: Vehicle) => string | undefined) => {
                   const today = new Date();
                   const rows: { regNo: string; date: string; diffDays: number }[] = [];
                   (vehicles || []).forEach(v => {
                     const dateStr = getDate(v);
-                    const d = parseComplianceDate(dateStr);
+                    const d = parseFlexibleDate(dateStr);
                     if (!d) return;
                     const diffDays = Math.ceil((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-                    if (diffDays >= 0 && diffDays <= 7) rows.push({ regNo: v.regNo || v['Reg. No.'] || 'Unknown', date: dateStr!, diffDays });
+                    if (diffDays >= 0 && diffDays <= 7) rows.push({ regNo: v.regNo || v['Reg. No.'] || 'Unknown', date: formatDateDDMMYYYY(d), diffDays });
                   });
                   return rows.sort((a, b) => a.diffDays - b.diffDays);
                 };
@@ -871,7 +875,11 @@ export default function Administration({
                   <div className="space-y-4">
                     {/* Subsystem KPIs */}
                     <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-xs font-sans">
-                      <div className="bg-white p-4 rounded-xl border border-pink-100 shadow-sm">
+                      <div
+                        onClick={() => setVehicleListModal({ title: 'Fleet Size - All Vehicles', vehicles: vehicles || [] })}
+                        className="bg-white p-4 rounded-xl border border-pink-100 shadow-sm cursor-pointer hover:bg-slate-50 transition-colors"
+                        title="Click to view every vehicle"
+                      >
                         <p className="font-bold text-purple-400 uppercase tracking-wider text-[10px]">Fleet Size</p>
                         <h3 className="text-xl font-black text-slate-800 mt-1">{vehicles.length} Vehicles</h3>
                       </div>
@@ -879,10 +887,14 @@ export default function Administration({
                       <div className="bg-white p-4 rounded-xl border border-pink-100 shadow-sm">
                         <p className="font-bold text-purple-400 uppercase tracking-wider text-[10px]">Fleet Status</p>
                         <h3 className="text-xl font-black text-emerald-600 mt-1">
-                          {statusActiveVehicles.length} Active
+                          <span
+                            onClick={() => setVehicleListModal({ title: 'Active Vehicles', vehicles: statusActiveVehicles })}
+                            className="cursor-pointer hover:underline"
+                            title="Click to view active vehicle details"
+                          >{statusActiveVehicles.length} Active</span>
                           {statusInactiveVehicles.length > 0 && (
                             <span
-                              onClick={() => setShowInactiveFleetModal(true)}
+                              onClick={() => setVehicleListModal({ title: 'Inactive Vehicles', vehicles: statusInactiveVehicles })}
                               className="text-rose-600 cursor-pointer hover:underline"
                               title="Click to view inactive vehicle details"
                             > / {statusInactiveVehicles.length} Inactive</span>
@@ -896,52 +908,73 @@ export default function Administration({
                         <h3 className="text-xl font-black text-pink-700 mt-1">{unresolvedNotifications.length} Unresolved</h3>
                       </div>
 
-                      <div className="bg-amber-50 p-4 rounded-xl border border-amber-200 shadow-sm">
+                      <div
+                        onClick={() => setVehicleListModal({ title: 'Dry Vehicles', vehicles: categorizedVehicles.dry })}
+                        className="bg-amber-50 p-4 rounded-xl border border-amber-200 shadow-sm cursor-pointer hover:bg-amber-100/60 transition-colors"
+                        title="Click to see which vehicles - Dry"
+                      >
                         <p className="font-bold text-amber-700 uppercase tracking-wider text-[10px]">Dry</p>
-                        <h3 className="text-xl font-black text-amber-800 mt-1">{categoryCounts.dry} Vehicles</h3>
+                        <h3 className="text-xl font-black text-amber-800 mt-1">{categorizedVehicles.dry.length} Vehicles</h3>
                       </div>
 
-                      <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 shadow-sm">
+                      <div
+                        onClick={() => setVehicleListModal({ title: 'Hybrid Vehicles', vehicles: categorizedVehicles.hybrid })}
+                        className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 shadow-sm cursor-pointer hover:bg-emerald-100/60 transition-colors"
+                        title="Click to see which vehicles - Hybrid"
+                      >
                         <p className="font-bold text-emerald-700 uppercase tracking-wider text-[10px]">Hybrid</p>
-                        <h3 className="text-xl font-black text-emerald-800 mt-1">{categoryCounts.hybrid} Vehicles</h3>
+                        <h3 className="text-xl font-black text-emerald-800 mt-1">{categorizedVehicles.hybrid.length} Vehicles</h3>
                       </div>
 
-                      <div className="bg-fuchsia-50 p-4 rounded-xl border border-fuchsia-200 shadow-sm">
+                      <div
+                        onClick={() => setVehicleListModal({ title: 'Walkes Vehicles', vehicles: categorizedVehicles.walkes })}
+                        className="bg-fuchsia-50 p-4 rounded-xl border border-fuchsia-200 shadow-sm cursor-pointer hover:bg-fuchsia-100/60 transition-colors"
+                        title="Click to see which vehicles - Walkes"
+                      >
                         <p className="font-bold text-fuchsia-700 uppercase tracking-wider text-[10px]">Walkes</p>
-                        <h3 className="text-xl font-black text-fuchsia-800 mt-1">{categoryCounts.walkes} Vehicles</h3>
+                        <h3 className="text-xl font-black text-fuchsia-800 mt-1">{categorizedVehicles.walkes.length} Vehicles</h3>
                       </div>
 
-                      <div className="bg-cyan-50 p-4 rounded-xl border border-cyan-200 shadow-sm">
+                      <div
+                        onClick={() => setVehicleListModal({ title: 'Reefer Vehicles', vehicles: categorizedVehicles.reefer })}
+                        className="bg-cyan-50 p-4 rounded-xl border border-cyan-200 shadow-sm cursor-pointer hover:bg-cyan-100/60 transition-colors"
+                        title="Click to see which vehicles - Reefer"
+                      >
                         <p className="font-bold text-cyan-700 uppercase tracking-wider text-[10px]">Reefer</p>
-                        <h3 className="text-xl font-black text-cyan-800 mt-1">{categoryCounts.reefer} Vehicles</h3>
+                        <h3 className="text-xl font-black text-cyan-800 mt-1">{categorizedVehicles.reefer.length} Vehicles</h3>
                       </div>
                     </div>
 
-                    {/* Compliance Alerts (2026-09-05) - Insurance/FC/NP/SP
-                        expiring within 7 days. Only rendered once there's at
-                        least one alert across all 4, same "don't show an
-                        empty state nobody needs" spirit as Fleet Status'
-                        Inactive count. Click a card to see which vehicles. */}
-                    {complianceAlerts.some(a => a.rows.length > 0) && (
-                      <div>
-                        <p className="text-[10px] font-bold text-rose-500 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                          <AlertTriangle className="w-3 h-3" /> Compliance Alerts (due within 7 days)
-                        </p>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-sans">
-                          {complianceAlerts.filter(a => a.rows.length > 0).map(a => (
-                            <div
-                              key={a.key}
-                              onClick={() => setComplianceAlertModal({ label: a.label, vehicles: a.rows })}
-                              className="bg-rose-50 p-4 rounded-xl border border-rose-200 shadow-sm cursor-pointer hover:bg-rose-100 transition-colors"
-                              title={`Click to see which vehicles - ${a.label}`}
-                            >
-                              <p className="font-bold text-rose-600 uppercase tracking-wider text-[10px]">{a.label}</p>
-                              <h3 className="text-xl font-black text-rose-700 mt-1">{a.rows.length}</h3>
-                            </div>
-                          ))}
-                        </div>
+                    {/* Compliance Alerts (2026-09-05, always-visible since
+                        2026-09-07) - Insurance/FC/NP/SP expiring within 7
+                        days. All 4 cards always render, even at 0 - a
+                        vanished card used to read as "nothing to check" when
+                        it actually meant "nothing due right now"; a visible
+                        0 is unambiguous. A 0 card is neutral/non-clickable
+                        (nothing to drill into); only a >0 card is the
+                        alarming rose style and opens the vehicle list. */}
+                    <div>
+                      <p className="text-[10px] font-bold text-rose-500 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3" /> Compliance Alerts (due within 7 days)
+                      </p>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-sans">
+                        {complianceAlerts.map(a => (
+                          <div
+                            key={a.key}
+                            onClick={a.rows.length > 0 ? () => setComplianceAlertModal({ label: a.label, vehicles: a.rows }) : undefined}
+                            className={`p-4 rounded-xl border shadow-sm transition-colors ${
+                              a.rows.length > 0
+                                ? 'bg-rose-50 border-rose-200 cursor-pointer hover:bg-rose-100'
+                                : 'bg-slate-50 border-slate-200'
+                            }`}
+                            title={a.rows.length > 0 ? `Click to see which vehicles - ${a.label}` : `No ${a.label} due within 7 days`}
+                          >
+                            <p className={`font-bold uppercase tracking-wider text-[10px] ${a.rows.length > 0 ? 'text-rose-600' : 'text-slate-400'}`}>{a.label}</p>
+                            <h3 className={`text-xl font-black mt-1 ${a.rows.length > 0 ? 'text-rose-700' : 'text-slate-500'}`}>{a.rows.length}</h3>
+                          </div>
+                        ))}
                       </div>
-                    )}
+                    </div>
                   </div>
                 );
               })()}

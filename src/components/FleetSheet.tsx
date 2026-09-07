@@ -6,6 +6,7 @@ import { Vehicle, VehicleDocument, VehicleMileage, VehicleLoan } from '../types'
 import SortHeader from './SortHeader';
 import { SortState, SortDirection, extractLeadingNumber } from '../utils/sort';
 import { VEHICLE_CATEGORIES, normalizeVehicleCategory, matchVehicleCategoryOption } from '../utils/vehicleCycleDefaults';
+import { parseFlexibleDate, formatDateDDMMYYYY } from '../utils/dateFormat';
 import {
   Search,
   Filter,
@@ -79,18 +80,14 @@ const resolveDocUrl = (doc: VehicleDocument): string | null => {
   return doc.fileData || null;
 };
 
-// Parses "DD.MM.YYYY" or "YYYY-MM-DD" expiry strings and flags whether the
-// date falls within the given alert window (days remaining until expiry).
+// Parses "DD.MM.YYYY"/"DD-MM-YYYY"/"YYYY-MM-DD" expiry strings (via the
+// shared parseFlexibleDate - see ../utils/dateFormat's header comment for why
+// a bare `new Date(str)` fallback here used to silently misread DD-MM-YYYY
+// dates) and flags whether the date falls within the given alert window
+// (days remaining until expiry).
 const getExpiryAlertStatus = (dateStr?: string, minDays = 0, maxDays = 10): { isAlert: boolean; diffDays: number | null } => {
-  if (!dateStr) return { isAlert: false, diffDays: null };
-  let dateObj: Date | null = null;
-  const parts = dateStr.split('.');
-  if (parts.length === 3) {
-    dateObj = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-  } else if (dateStr.includes('-')) {
-    dateObj = new Date(dateStr);
-  }
-  if (!dateObj || isNaN(dateObj.getTime())) return { isAlert: false, diffDays: null };
+  const dateObj = parseFlexibleDate(dateStr);
+  if (!dateObj) return { isAlert: false, diffDays: null };
   const today = new Date();
   const diffDays = Math.ceil((dateObj.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
   return { isAlert: diffDays >= minDays && diffDays <= maxDays, diffDays };
@@ -344,7 +341,15 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
 
   const sortedVehicles = sort
     ? [...filteredVehicles].sort((a, b) => {
-        const cmp = extractLeadingNumber(a['Reg. No.'] || a.regNo) - extractLeadingNumber(b['Reg. No.'] || b.regNo);
+        let cmp = 0;
+        if (sort.key === 'registrationDate') {
+          const da = parseFlexibleDate(a['Reg Date'] || a.regDate);
+          const db = parseFlexibleDate(b['Reg Date'] || b.regDate);
+          cmp = (da?.getTime() ?? 0) - (db?.getTime() ?? 0);
+        } else {
+          // Default/'regNo' - Reg./Vehicle numbers sort by their leading digit run.
+          cmp = extractLeadingNumber(a['Reg. No.'] || a.regNo) - extractLeadingNumber(b['Reg. No.'] || b.regNo);
+        }
         return sort.direction === 'asc' ? cmp : -cmp;
       })
     : filteredVehicles;
@@ -645,7 +650,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                 <th className="px-4 py-4 text-purple-100">Type</th>
                 <th className="px-4 py-4 text-purple-100">Category</th>
                 <th className="px-4 py-4 text-purple-100">Ownership</th>
-                <th className="px-4 py-4 text-purple-100">Registration Date</th>
+                <th className="px-4 py-4 text-purple-100"><SortHeader label="Registration Date" sortKey="registrationDate" sort={sort} onSort={handleSort} type="numeric" /></th>
                 <th className="px-4 py-4 text-center text-purple-100">Status</th>
                 <th className="px-4 py-4 text-purple-100">Insurance Exp</th>
                 <th className="px-4 py-4 text-purple-100">FC Exp</th>
@@ -725,7 +730,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                           </span>
                         </td>
                         <td className="px-4 py-3.5 capitalize max-w-[150px] truncate">{ownLabel}</td>
-                        <td className="px-4 py-3.5 font-mono text-slate-500">{v['Reg Date'] || v.regDate || '-'}</td>
+                        <td className="px-4 py-3.5 font-mono text-slate-500">{formatDateDDMMYYYY(v['Reg Date'] || v.regDate) || v['Reg Date'] || v.regDate || '-'}</td>
                         <td className="px-4 py-3.5 text-center">
                           <button
                             onClick={async (e) => {
@@ -751,31 +756,31 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                           {isNearExpiry ? (
                             <span className="bg-red-50 text-red-700 border border-red-200 px-2 py-0.5 rounded font-bold flex items-center gap-1 w-fit animate-pulse">
                               <AlertTriangle className="w-3 h-3 text-red-500" />
-                              {insExp} (ALERT)
+                              {formatDateDDMMYYYY(insExp) || insExp} (ALERT)
                             </span>
                           ) : (
-                            <span className="text-slate-600 font-semibold">{insExp || '-'}</span>
+                            <span className="text-slate-600 font-semibold">{formatDateDDMMYYYY(insExp) || insExp || '-'}</span>
                           )}
                         </td>
-                        <td className="px-4 py-3.5 font-mono text-slate-500">{fcDate || '-'}</td>
+                        <td className="px-4 py-3.5 font-mono text-slate-500">{formatDateDDMMYYYY(fcDate) || fcDate || '-'}</td>
                         <td className="px-4 py-3.5 font-mono">
                           {nationalPermitAlert.isAlert ? (
                             <span className="bg-red-50 text-red-700 border border-red-200 px-2 py-0.5 rounded font-bold flex items-center gap-1 w-fit animate-pulse">
                               <AlertTriangle className="w-3 h-3 text-red-500" />
-                              {nationalPermitRaw} ({nationalPermitAlert.diffDays}d)
+                              {formatDateDDMMYYYY(nationalPermitRaw) || nationalPermitRaw} ({nationalPermitAlert.diffDays}d)
                             </span>
                           ) : (
-                            <span className="text-slate-600 font-semibold">{nationalPermitRaw || '-'}</span>
+                            <span className="text-slate-600 font-semibold">{formatDateDDMMYYYY(nationalPermitRaw) || nationalPermitRaw || '-'}</span>
                           )}
                         </td>
                         <td className="px-4 py-3.5 font-mono">
                           {statePermitAlert.isAlert ? (
                             <span className="bg-red-50 text-red-700 border border-red-200 px-2 py-0.5 rounded font-bold flex items-center gap-1 w-fit animate-pulse">
                               <AlertTriangle className="w-3 h-3 text-red-500" />
-                              {statePermitRaw} ({statePermitAlert.diffDays}d)
+                              {formatDateDDMMYYYY(statePermitRaw) || statePermitRaw} ({statePermitAlert.diffDays}d)
                             </span>
                           ) : (
-                            <span className="text-slate-600 font-semibold">{statePermitRaw || '-'}</span>
+                            <span className="text-slate-600 font-semibold">{formatDateDDMMYYYY(statePermitRaw) || statePermitRaw || '-'}</span>
                           )}
                         </td>
                         <td className="px-4 py-3.5 text-right whitespace-nowrap">
@@ -883,13 +888,13 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                                 </h3>
                                 <dl className="grid grid-cols-2 gap-y-2 gap-x-4 text-xs font-sans">
                                   <dt className="text-slate-400">Tax Expiry</dt>
-                                  <dd className="font-mono text-slate-800">{v.Tax || v.tax || '-'}</dd>
+                                  <dd className="font-mono text-slate-800">{formatDateDDMMYYYY(v.Tax || v.tax) || v.Tax || v.tax || '-'}</dd>
 
                                   <dt className="text-slate-400">Emission Check</dt>
                                   <dd className="font-mono text-slate-800">{v['Emission Test'] || v.emissionTest || '-'}</dd>
 
                                   <dt className="text-slate-400">FC Expiry</dt>
-                                  <dd className="font-mono font-medium">{v.FC || v.fc || '-'}</dd>
+                                  <dd className="font-mono font-medium">{formatDateDDMMYYYY(v.FC || v.fc) || v.FC || v.fc || '-'}</dd>
 
                                   <span className="col-span-2 border-t my-1 border-gray-100"></span>
 
@@ -897,18 +902,18 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                                   <dd className="font-mono text-xs">
                                     {nationalPermitAlert.isAlert ? (
                                       <span className="inline-flex items-center gap-1 text-red-600 font-bold">
-                                        <AlertTriangle className="w-2.5 h-2.5" /> {nationalPermitRaw} ({nationalPermitAlert.diffDays}d left)
+                                        <AlertTriangle className="w-2.5 h-2.5" /> {formatDateDDMMYYYY(nationalPermitRaw) || nationalPermitRaw} ({nationalPermitAlert.diffDays}d left)
                                       </span>
-                                    ) : (nationalPermitRaw || '-')}
+                                    ) : (formatDateDDMMYYYY(nationalPermitRaw) || nationalPermitRaw || '-')}
                                   </dd>
 
                                   <dt className="text-gray-500 font-medium">State Permit Exp</dt>
                                   <dd className="font-mono text-xs">
                                     {statePermitAlert.isAlert ? (
                                       <span className="inline-flex items-center gap-1 text-red-600 font-bold">
-                                        <AlertTriangle className="w-2.5 h-2.5" /> {statePermitRaw} ({statePermitAlert.diffDays}d left)
+                                        <AlertTriangle className="w-2.5 h-2.5" /> {formatDateDDMMYYYY(statePermitRaw) || statePermitRaw} ({statePermitAlert.diffDays}d left)
                                       </span>
-                                    ) : (statePermitRaw || '-')}
+                                    ) : (formatDateDDMMYYYY(statePermitRaw) || statePermitRaw || '-')}
                                   </dd>
                                 </dl>
                               </div>
