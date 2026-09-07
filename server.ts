@@ -1190,20 +1190,58 @@ const FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS: Record<string, string[]> = {
   chandanreddy: ['praveenkumar'],
 };
 
-// Fuel-specific version of filterEntryRowsForViewer: same rules (super admin
-// sees everything with enteredBy intact; Divya/RQ-ID-only sees everything
-// too), plus the one-way exception above. Unlike the viewer's own rows
-// (enteredBy always stripped, even from themselves), a foreign row visible
-// only via the exception keeps its enteredBy - that's the signal the client
-// uses to know a row isn't theirs and lock its Details section, exposing
-// only the Mileage section as editable (see FuelManagement.tsx).
-function filterFuelLogsForViewer(rows: FuelLog[], sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): FuelLog[] {
+// Generic core of the fuel-specific viewer filter below - same rules (super
+// admin, or anyone in `fullViewEmails`, sees everything with enteredBy
+// intact), plus the FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS one-way exception.
+// Unlike the viewer's own rows (enteredBy always stripped, even from
+// themselves), a foreign row visible only via the exception keeps its
+// enteredBy - that's the signal the client uses to know a row isn't theirs
+// and lock its Details section, exposing only the Mileage section as
+// editable (see FuelManagement.tsx). Generic over T (not just FuelLog) so
+// the exact same one-way relationship applies to a linked Mileage Report
+// too - see filterMileageReportsForViewer below - since a Mileage Report is
+// really just an extension of the fuel entry it's linked to.
+function filterFuelOrMileageRowsForViewer<T extends { enteredBy?: string }>(rows: T[], sessionUser?: Awaited<ReturnType<typeof getSessionUser>>, fullViewEmails: string[] = []): T[] {
   if (!sessionUser) return [];
-  if (sessionUser.department === 'super_admin' || FUEL_RQ_ID_ONLY_EMAILS.includes(sessionUser.email || '') || FUEL_VIEW_ONLY_EMAILS.includes(sessionUser.email || '')) return rows;
+  if (sessionUser.department === 'super_admin' || fullViewEmails.includes(sessionUser.email || '')) return rows;
   const extraUsernames = FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS[sessionUser.username] || [];
   return rows
     .filter(r => r.enteredBy === sessionUser.username || extraUsernames.includes(r.enteredBy || ''))
-    .map(r => r.enteredBy === sessionUser.username ? (({ enteredBy, ...rest }) => rest as FuelLog)(r) : r);
+    .map(r => r.enteredBy === sessionUser.username ? (({ enteredBy, ...rest }) => rest as T)(r) : r);
+}
+
+function filterFuelLogsForViewer(rows: FuelLog[], sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): FuelLog[] {
+  return filterFuelOrMileageRowsForViewer(rows, sessionUser, [...FUEL_RQ_ID_ONLY_EMAILS, ...FUEL_VIEW_ONLY_EMAILS]);
+}
+
+// Mileage Report's own version of the above (2026-09-08 bug fix) - a Mileage
+// Report Chandan fills in on one of Praveen's fuel entries is attributed to
+// Praveen (see the POST /api/mileage create path below), so without this
+// exception it would vanish from Chandan's own /api/mileage GET the instant
+// he saved it (only ever matching HIS OWN enteredBy), even though he can
+// still reach it by re-opening that same fuel entry in Fuel Management -
+// this keeps it visible there too, and keeps the linked-report lookup
+// (FuelLog.mileageReportId) resolvable for him. fullViewEmails stays scoped
+// to exactly what mileage already granted before this fix (FUEL_VIEW_ONLY_
+// EMAILS, i.e. Vinod) - deliberately NOT FUEL_RQ_ID_ONLY_EMAILS too, since
+// Divya never had full Mileage Report visibility and this fix isn't the
+// place to grant it.
+function filterMileageReportsForViewer(rows: MileageReport[], sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): MileageReport[] {
+  return filterFuelOrMileageRowsForViewer(rows, sessionUser, FUEL_VIEW_ONLY_EMAILS);
+}
+
+// Mileage Report equivalent of canModifyEntryRow - a non-super-admin may
+// modify their own row as usual, OR a foreign row reachable via the same
+// FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS exception (Chandan updating/deleting a
+// Mileage Report now correctly attributed to Praveen, from re-opening that
+// same fuel entry in Fuel Management) - without this, attributing new
+// Mileage Reports to the fuel entry's real owner (see the create path below)
+// would leave Chandan unable to ever correct his own entry again.
+function canModifyMileageReport(row: MileageReport | undefined, sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): boolean {
+  if (canModifyEntryRow(row, sessionUser)) return true;
+  if (!row || !sessionUser) return false;
+  const extraUsernames = FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS[sessionUser.username] || [];
+  return extraUsernames.includes(row.enteredBy || '');
 }
 
 // Resolves what a PUT /api/fuel/:id request is actually allowed to write:
@@ -3910,7 +3948,7 @@ async function startServer() {
   app.get('/api/mileage', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
-      res.json(filterEntryRowsForViewer(await getMileageReports(), sessionUser, FUEL_VIEW_ONLY_EMAILS));
+      res.json(filterMileageReportsForViewer(await getMileageReports(), sessionUser));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -3931,19 +3969,37 @@ async function startServer() {
       }
       if (entry.id) {
         const existing = (await getMileageReports()).find(r => r.id === entry.id);
-        if (!canModifyEntryRow(existing, sessionUser)) {
+        if (!canModifyMileageReport(existing, sessionUser)) {
           return res.status(403).json({ error: 'You cannot modify this entry.' });
         }
         const result = await saveMileageReport({ ...entry, enteredBy: existing?.enteredBy });
-        return res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_VIEW_ONLY_EMAILS) });
+        return res.json({ success: true, data: filterMileageReportsForViewer(result, sessionUser) });
       }
+      // 2026-09-08 bug fix: a brand-new Mileage Report used to always be
+      // attributed to whoever's actually submitting the save (sessionUser),
+      // even when that's Chandan filling in Mileage on one of Praveen's own
+      // fuel entries (see FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS) - so it silently
+      // belonged to Chandan instead of Praveen, and never showed up under
+      // Praveen's own Mileage Report view even though it's really his entry.
+      // The client sends the fuel entry's real owner as entry.enteredBy only
+      // when it's genuinely a foreign entry it's eligible to complete (see
+      // FuelManagement.tsx's isForeignEntry); re-validated here (never just
+      // trusted) so a raw API call can't spoof attribution to someone the
+      // caller has no mileage-only relationship with - falls back to the
+      // submitter's own username otherwise, same as before this fix.
+      const requestedOwner = typeof entry.enteredBy === 'string' ? entry.enteredBy : undefined;
+      const ownUsername = sessionUser?.username;
+      const allowedForeignOwners = FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS[ownUsername || ''] || [];
+      const attributedTo = requestedOwner && (requestedOwner === ownUsername || allowedForeignOwners.includes(requestedOwner))
+        ? requestedOwner
+        : ownUsername;
       // New entry: generate the id here (rather than leaving it to
       // saveMileageReport's own fallback) so it can be returned to the
       // caller - Fuel Entry's combined form needs it back immediately to
       // link the fuel log it's being saved alongside (see FuelLog.mileageReportId).
       const newId = String(Date.now());
-      const result = await saveMileageReport({ ...entry, id: newId, enteredBy: sessionUser?.username });
-      res.json({ success: true, id: newId, data: filterEntryRowsForViewer(result, sessionUser, FUEL_VIEW_ONLY_EMAILS) });
+      const result = await saveMileageReport({ ...entry, id: newId, enteredBy: attributedTo });
+      res.json({ success: true, id: newId, data: filterMileageReportsForViewer(result, sessionUser) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -3954,9 +4010,9 @@ async function startServer() {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const { id } = req.params;
       const existing = (await getMileageReports()).find(r => r.id === id);
-      if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
+      if (!canModifyMileageReport(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
       const result = await deleteMileageReport(id);
-      res.json({ success: true, data: filterEntryRowsForViewer(result, sessionUser, FUEL_VIEW_ONLY_EMAILS) });
+      res.json({ success: true, data: filterMileageReportsForViewer(result, sessionUser) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
