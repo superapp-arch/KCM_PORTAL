@@ -1123,7 +1123,12 @@ export default function PettyCash({
       return;
     }
     if (canManualFirstEntryNo && !manualEntryNoSeq.trim()) {
-      triggerNotif('Enter this month\'s first Entry No sequence.', 'error');
+      triggerNotif(
+        ALWAYS_MANUAL_ENTRY_USERNAMES.includes(user.username)
+          ? 'Enter this entry\'s Entry No sequence.'
+          : 'Enter this month\'s first Entry No sequence.',
+        'error'
+      );
       return;
     }
     // Cash Paid = 0 isn't a real disbursement - don't let it create an entry
@@ -1161,8 +1166,9 @@ export default function PettyCash({
         date,
         entryNo: localEntryNo,
         // Only ever read server-side when this exact login is genuinely
-        // eligible for this month's first entry (see server.ts's own
-        // canManualFirstEntry check) - harmless to include otherwise, the
+        // eligible for a manually-typed Entry No right now (see server.ts's
+        // own canManualFirstPettyCashEntry - Saneel's one-time first entry,
+        // or Vinod's every-time entry) - harmless to include otherwise, the
         // server ignores it.
         manualEntryNoSeq: canManualFirstEntryNo ? manualEntryNoSeq.trim() : undefined,
         category: categoryInput.trim(),
@@ -3596,10 +3602,14 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   </div>
 
                   {/* Entry Number - auto-generated, not editable (same
-                      convention as Market POD's Entry No) - except Vinod/
-                      Saneel's very first entry under the current scheme,
-                      which they type themselves to continue their own
-                      physical cash-book numbering (see canManualFirstEntryNo).
+                      convention as Market POD's Entry No) - except: Saneel's
+                      very first entry under the current scheme, which he
+                      types himself to continue his own physical cash-book
+                      numbering, then locks back to auto (see
+                      canManualFirstEntryNo); and Vinod, who types his EVERY
+                      time, indefinitely - his auto-generated numbers never
+                      reliably matched his own book, so this never locks back
+                      for him (see ALWAYS_MANUAL_ENTRY_USERNAMES, 2026-09-07).
                       Width is 4 digits for the current flat scheme, 2 for
                       the monthly scheme (from March 2027) - see
                       pettyCashMonthlyPrefix. */}
@@ -3630,9 +3640,13 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                             />
                           </div>
                           <p className="text-[9px] text-amber-700 font-mono mt-0.5">
-                            {useMonthlyFormat
-                              ? 'This month\'s first entry - type its sequence number (e.g. 01). Every entry after this one auto-continues and locks again.'
-                              : 'Type this entry\'s own number from your own cash-book (e.g. 2941, not the previous one). Every entry after this one auto-continues from it and locks again.'}
+                            {ALWAYS_MANUAL_ENTRY_USERNAMES.includes(user.username)
+                              ? (useMonthlyFormat
+                                ? 'Type this month\'s sequence number from your own cash-book (e.g. 01). You\'ll type it again every time - this never auto-locks.'
+                                : 'Type this entry\'s own number from your own cash-book (e.g. 2941). You\'ll type it again every time - this never auto-locks.')
+                              : (useMonthlyFormat
+                                ? 'This month\'s first entry - type its sequence number (e.g. 01). Every entry after this one auto-continues and locks again.'
+                                : 'Type this entry\'s own number from your own cash-book (e.g. 2941, not the previous one). Every entry after this one auto-continues from it and locks again.')}
                           </p>
                         </>
                       );
