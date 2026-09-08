@@ -338,6 +338,28 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
     return o.replace(/kcm/gi, 'KCM') || 'KCM SUPPLY';
   };
 
+  // Fleet & Vehicles > Incidents & Claims - per-vehicle claimed/not-claimed
+  // counts, computed once from the full vehicleIncidents list (one fetch,
+  // no per-vehicle API calls - GLOBAL UI REQUIREMENT section 20). CLAIMED
+  // is purely "Claim Number is non-blank after trimming" (section 19) -
+  // never claim status. Declared before filteredVehicles below (which calls
+  // incidentSummaryFor inside its .filter() callback, executed immediately)
+  // so it isn't referenced before its own initialization.
+  const incidentSummaryByRegNo = useMemo(() => {
+    const map: Record<string, { total: number; claimed: number; notClaimed: number }> = {};
+    for (const inc of vehicleIncidents) {
+      const key = (inc.regNo || '').trim().toUpperCase();
+      if (!key) continue;
+      if (!map[key]) map[key] = { total: 0, claimed: 0, notClaimed: 0 };
+      map[key].total++;
+      if (inc.claimNumber && inc.claimNumber.trim()) map[key].claimed++;
+      else map[key].notClaimed++;
+    }
+    return map;
+  }, [vehicleIncidents]);
+  const incidentSummaryFor = (regNo: string) =>
+    incidentSummaryByRegNo[String(regNo || '').trim().toUpperCase()] || { total: 0, claimed: 0, notClaimed: 0 };
+
   // Apply filters
   const filteredVehicles = vehicles.filter((v) => {
     const regVal = v['Reg. No.'] || v.regNo || '';
@@ -411,25 +433,6 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
   const findVehicleLoansForRegNo = (regNo: string) =>
     vehicleLoans.filter(l => l.regNo.trim().toUpperCase() === regNo.trim().toUpperCase());
 
-  // Fleet & Vehicles > Incidents & Claims - per-vehicle claimed/not-claimed
-  // counts, computed once from the full vehicleIncidents list (one fetch,
-  // no per-vehicle API calls - GLOBAL UI REQUIREMENT section 20). CLAIMED
-  // is purely "Claim Number is non-blank after trimming" (section 19) -
-  // never claim status, which this app has no field for at all.
-  const incidentSummaryByRegNo = useMemo(() => {
-    const map: Record<string, { total: number; claimed: number; notClaimed: number }> = {};
-    for (const inc of vehicleIncidents) {
-      const key = (inc.regNo || '').trim().toUpperCase();
-      if (!key) continue;
-      if (!map[key]) map[key] = { total: 0, claimed: 0, notClaimed: 0 };
-      map[key].total++;
-      if (inc.claimNumber && inc.claimNumber.trim()) map[key].claimed++;
-      else map[key].notClaimed++;
-    }
-    return map;
-  }, [vehicleIncidents]);
-  const incidentSummaryFor = (regNo: string) =>
-    incidentSummaryByRegNo[String(regNo || '').trim().toUpperCase()] || { total: 0, claimed: 0, notClaimed: 0 };
   const findVehicleIncidentsForRegNo = (regNo: string) =>
     vehicleIncidents.filter(inc => (inc.regNo || '').trim().toUpperCase() === regNo.trim().toUpperCase());
 
