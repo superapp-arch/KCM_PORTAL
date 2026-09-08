@@ -27,8 +27,10 @@ import {
 } from 'lucide-react';
 import DateInput from './DateInput';
 import SortHeader from './SortHeader';
+import ColumnFilterHeader from './ColumnFilterHeader';
 import { SortState, SortDirection, compareText, compareNumber, extractLeadingNumber } from '../utils/sort';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../utils/columnFilter';
 
 // Extra Fuel accepts a sum-of-numbers expression typed directly into the
 // field (e.g. "30+40" for two separate top-ups during one trip - say
@@ -110,6 +112,14 @@ export default function MileageReportModule({
   // component state, not persisted).
   const [sort, setSort] = useState<SortState | null>({ key: 'date', direction: 'asc' });
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing view-scope tabs/Location/Vehicle/Entered By/
+  // Keyword filters above, never replacing them; AND-combined with each
+  // other and with those.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersMap>({});
+  const setColumnFilter = (key: string, f: ColumnFilterState | undefined) => setColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllColumnFilters = () => setColumnFilters({});
+  const activeColumnFilterCount = Object.values(columnFilters).filter(isColumnFilterActive).length;
 
   // Form inputs
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -509,7 +519,30 @@ export default function MileageReportModule({
       (r.vehicleNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (r.location || '').toLowerCase().includes(searchTerm.toLowerCase());
 
-    return matchesView && matchesLocation && matchesVehicle && matchesEnteredBy && matchesKeyword;
+    if (!(matchesView && matchesLocation && matchesVehicle && matchesEnteredBy && matchesKeyword)) return false;
+
+    // Excel-style column filters (AND across every active one) - additive
+    // to the filters above, never replacing them.
+    if (!matchesColumnFilter(r.date, columnFilters.date, 'date')) return false;
+    if (!matchesColumnFilter(r.vehicleNo, columnFilters.vehicleNo, 'text')) return false;
+    if (!matchesColumnFilter(r.openingKm, columnFilters.openingKm, 'number')) return false;
+    if (!matchesColumnFilter(r.closingKm, columnFilters.closingKm, 'number')) return false;
+    if (!matchesColumnFilter(r.totalKm, columnFilters.totalKm, 'number')) return false;
+    if (!matchesColumnFilter(r.ratePerLitre, columnFilters.ratePerLitre, 'number')) return false;
+    if (!matchesColumnFilter(r.litres, columnFilters.litres, 'number')) return false;
+    if (!matchesColumnFilter(r.dieselAmount, columnFilters.dieselAmount, 'number')) return false;
+    if (!matchesColumnFilter(r.mileage, columnFilters.mileage, 'number')) return false;
+    if (!matchesColumnFilter(r.costPerKm, columnFilters.costPerKm, 'number')) return false;
+    if (!matchesColumnFilter(r.actualMileage, columnFilters.actualMileage, 'number')) return false;
+    if (!matchesColumnFilter(r.difference, columnFilters.difference, 'number')) return false;
+    if (!matchesColumnFilter(r.extraFuel, columnFilters.extraFuel, 'number')) return false;
+    if (!matchesColumnFilter(r.ratePerLitreNew, columnFilters.ratePerLitreNew, 'number')) return false;
+    if (!matchesColumnFilter(r.totalLitres, columnFilters.totalLitres, 'number')) return false;
+    if (!matchesColumnFilter(r.totalAmount, columnFilters.totalAmount, 'number')) return false;
+    if (!matchesColumnFilter(r.driverName, columnFilters.driverName, 'text')) return false;
+    if (!matchesColumnFilter(r.location, columnFilters.location, 'text')) return false;
+    if (canSeeEnteredBy && !matchesColumnFilter(r.enteredBy ? fuelEnteredByLabel(r.enteredBy) : '', columnFilters.enteredBy, 'text')) return false;
+    return true;
   });
 
   const sortedReports = sort
@@ -644,7 +677,19 @@ export default function MileageReportModule({
             <span className="flex items-center gap-1">
               <Filter className="w-3 h-3 text-pink-600" /> Segmented Location Filter
             </span>
-            <span>Matches: {filteredReports.length} entries</span>
+            <div className="flex items-center gap-2">
+              <span>Matches: {filteredReports.length} entries</span>
+              {activeColumnFilterCount > 0 && (
+                <button
+                  type="button"
+                  onClick={clearAllColumnFilters}
+                  title="Clear every column filter (the filters above are unaffected)"
+                  className="flex items-center gap-1 text-rose-600 hover:text-rose-800 cursor-pointer normal-case font-bold"
+                >
+                  <X className="w-3 h-3" /> Clear Column Filters ({activeColumnFilterCount})
+                </button>
+              )}
+            </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {/* Sort By - Oldest First (default) / Newest First. Reuses the
@@ -742,26 +787,26 @@ export default function MileageReportModule({
             <thead className="bg-slate-900 text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
               <tr>
                 <th className="px-3 py-2.5">Sl. No</th>
-                <th className="px-3 py-2.5"><SortHeader label="Date" sortKey="date" sort={sort} onSort={handleSort} type="numeric" /></th>
-                <th className="px-3 py-2.5"><SortHeader label="Vehicle No" sortKey="vehicleNo" sort={sort} onSort={handleSort} type="numeric" /></th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="Opening KM" sortKey="openingKm" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="Closing KM" sortKey="closingKm" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right bg-slate-800"><SortHeader label="Total KM" sortKey="totalKm" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="Rate / Litre" sortKey="ratePerLitre" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="Litres" sortKey="litres" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right text-teal-400"><SortHeader label="Diesel Amount" sortKey="dieselAmount" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right text-pink-400"><SortHeader label="Mileage" sortKey="mileage" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right text-amber-400"><SortHeader label="Cost/KM" sortKey="costPerKm" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right text-purple-400"><SortHeader label="Fixed Mileage" sortKey="actualMileage" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="Difference (L)" sortKey="difference" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="Extra Fuel" sortKey="extraFuel" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="Rate/Ltr (new)" sortKey="ratePerLitreNew" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="Total Litres" sortKey="totalLitres" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5 text-right text-teal-400"><SortHeader label="Total Amount" sortKey="totalAmount" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                <th className="px-3 py-2.5"><SortHeader label="Authorized Driver" sortKey="driverName" sort={sort} onSort={handleSort} /></th>
-                <th className="px-3 py-2.5"><SortHeader label="Location" sortKey="location" sort={sort} onSort={handleSort} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Date" type="date" value={columnFilters.date} onChange={f => setColumnFilter('date', f)} sortKey="date" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Vehicle No" type="text" values={reports.map(r => r.vehicleNo)} value={columnFilters.vehicleNo} onChange={f => setColumnFilter('vehicleNo', f)} sortKey="vehicleNo" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Opening KM" type="number" value={columnFilters.openingKm} onChange={f => setColumnFilter('openingKm', f)} sortKey="openingKm" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Closing KM" type="number" value={columnFilters.closingKm} onChange={f => setColumnFilter('closingKm', f)} sortKey="closingKm" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right bg-slate-800"><ColumnFilterHeader label="Total KM" type="number" value={columnFilters.totalKm} onChange={f => setColumnFilter('totalKm', f)} sortKey="totalKm" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Rate / Litre" type="number" value={columnFilters.ratePerLitre} onChange={f => setColumnFilter('ratePerLitre', f)} sortKey="ratePerLitre" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Litres" type="number" value={columnFilters.litres} onChange={f => setColumnFilter('litres', f)} sortKey="litres" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right text-teal-400"><ColumnFilterHeader label="Diesel Amount" type="number" value={columnFilters.dieselAmount} onChange={f => setColumnFilter('dieselAmount', f)} sortKey="dieselAmount" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right text-pink-400"><ColumnFilterHeader label="Mileage" type="number" value={columnFilters.mileage} onChange={f => setColumnFilter('mileage', f)} sortKey="mileage" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right text-amber-400"><ColumnFilterHeader label="Cost/KM" type="number" value={columnFilters.costPerKm} onChange={f => setColumnFilter('costPerKm', f)} sortKey="costPerKm" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right text-purple-400"><ColumnFilterHeader label="Fixed Mileage" type="number" value={columnFilters.actualMileage} onChange={f => setColumnFilter('actualMileage', f)} sortKey="actualMileage" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Difference (L)" type="number" value={columnFilters.difference} onChange={f => setColumnFilter('difference', f)} sortKey="difference" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Extra Fuel" type="number" value={columnFilters.extraFuel} onChange={f => setColumnFilter('extraFuel', f)} sortKey="extraFuel" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Rate/Ltr (new)" type="number" value={columnFilters.ratePerLitreNew} onChange={f => setColumnFilter('ratePerLitreNew', f)} sortKey="ratePerLitreNew" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Total Litres" type="number" value={columnFilters.totalLitres} onChange={f => setColumnFilter('totalLitres', f)} sortKey="totalLitres" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right text-teal-400"><ColumnFilterHeader label="Total Amount" type="number" value={columnFilters.totalAmount} onChange={f => setColumnFilter('totalAmount', f)} sortKey="totalAmount" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Authorized Driver" type="text" values={reports.map(r => r.driverName)} value={columnFilters.driverName} onChange={f => setColumnFilter('driverName', f)} sortKey="driverName" sort={sort} onSort={handleSort} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Location" type="text" values={reports.map(r => r.location)} value={columnFilters.location} onChange={f => setColumnFilter('location', f)} sortKey="location" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5 max-w-xs">Remarks</th>
-                {canSeeEnteredBy && <th className="px-3 py-2.5">Entered By</th>}
+                {canSeeEnteredBy && <th className="px-3 py-2.5"><ColumnFilterHeader label="Entered By" type="text" values={reports.map(r => r.enteredBy ? fuelEnteredByLabel(r.enteredBy) : '')} value={columnFilters.enteredBy} onChange={f => setColumnFilter('enteredBy', f)} /></th>}
                 {!readOnly && <th className="px-3 py-2.5 text-center">Actions</th>}
               </tr>
             </thead>

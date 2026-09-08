@@ -3,9 +3,11 @@ import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { FuelLog, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage, Vendor, StaffEmployee, DriverEmployee } from '../types';
 import SortHeader from './SortHeader';
+import ColumnFilterHeader from './ColumnFilterHeader';
 import { SortState, SortDirection, extractLeadingNumber, compareText, compareNumber } from '../utils/sort';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 import { nextBunkFuelIndentNumber, nextCardFuelIndentNumber } from '../utils/fuelIndentNumber';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../utils/columnFilter';
 import {
   Fuel,
   Plus,
@@ -254,6 +256,14 @@ export default function FuelManagement({
   // headers (Date/Vehicle No).
   const [sort, setSort] = useState<SortState | null>({ key: 'indentNumber', direction: 'desc' });
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing view-scope/Bunk/Bunk-Card/Entered By/Search
+  // filters above, never replacing them; AND-combined with each other and
+  // with those.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersMap>({});
+  const setColumnFilter = (key: string, f: ColumnFilterState | undefined) => setColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllColumnFilters = () => setColumnFilters({});
+  const activeColumnFilterCount = Object.values(columnFilters).filter(isColumnFilterActive).length;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   // Big, centered save/delete confirmation (see ConfirmationModal.tsx) -
@@ -1206,18 +1216,40 @@ export default function FuelManagement({
   // fixed roster (so it never lists someone who's never logged an entry).
   const enteredByOptions = Array.from(new Set(logs.map(l => l.enteredBy).filter((x): x is string => !!x))).sort();
 
-  const filteredLogsUnsorted = logs.filter(log =>
-    (viewPeriod === 'all' || (log.date >= viewStart && log.date <= viewEnd)) &&
-    (bunkFilter === 'All' || log.bunkName === bunkFilter) &&
-    (bunkOrCardFilter === 'All' || (log.bunkOrCard || 'Bunk') === bunkOrCardFilter) &&
-    (!canSeeEnteredBy || enteredByFilter === 'All' || log.enteredBy === enteredByFilter) &&
-    (
-      (log?.vehicleNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (log?.vendorName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (log?.rqId || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (log?.indentNumber || '').toLowerCase().includes(searchTerm.toLowerCase())
-    )
-  );
+  const filteredLogsUnsorted = logs.filter(log => {
+    if (!(
+      (viewPeriod === 'all' || (log.date >= viewStart && log.date <= viewEnd)) &&
+      (bunkFilter === 'All' || log.bunkName === bunkFilter) &&
+      (bunkOrCardFilter === 'All' || (log.bunkOrCard || 'Bunk') === bunkOrCardFilter) &&
+      (!canSeeEnteredBy || enteredByFilter === 'All' || log.enteredBy === enteredByFilter) &&
+      (
+        (log?.vehicleNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (log?.vendorName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (log?.rqId || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (log?.indentNumber || '').toLowerCase().includes(searchTerm.toLowerCase())
+      )
+    )) return false;
+
+    // Excel-style column filters (AND across every active one) - additive
+    // to the filters above, never replacing them.
+    if (!matchesColumnFilter(log.date, columnFilters.date, 'date')) return false;
+    if (!matchesColumnFilter(log.location, columnFilters.location, 'text')) return false;
+    if (!matchesColumnFilter(log.bunkName, columnFilters.bunkName, 'text')) return false;
+    if (!matchesColumnFilter(log.bunkOrCard || 'Bunk', columnFilters.bunkOrCard, 'text')) return false;
+    if (!matchesColumnFilter(log.vehicleNumber, columnFilters.vehicleNumber, 'text')) return false;
+    if (!matchesColumnFilter(log.indentNumber, columnFilters.indentNumber, 'text')) return false;
+    if (!matchesColumnFilter(log.ltrs, columnFilters.ltrs, 'number')) return false;
+    if (!matchesColumnFilter(log.rate, columnFilters.rate, 'number')) return false;
+    if (!matchesColumnFilter(log.amount, columnFilters.amount, 'number')) return false;
+    if (!matchesColumnFilter(log.client, columnFilters.client, 'text')) return false;
+    if (!matchesColumnFilter(log.type, columnFilters.type, 'text')) return false;
+    if (!matchesColumnFilter(log.vendorName, columnFilters.vendorName, 'text')) return false;
+    if (!matchesColumnFilter(log.vendorCode, columnFilters.vendorCode, 'text')) return false;
+    if (!matchesColumnFilter(log.requestedBy, columnFilters.requestedBy, 'text')) return false;
+    if (!matchesColumnFilter(log.rqId, columnFilters.rqId, 'text')) return false;
+    if (canSeeEnteredBy && !matchesColumnFilter(log.enteredBy ? fuelEnteredByLabel(log.enteredBy) : '', columnFilters.enteredBy, 'text')) return false;
+    return true;
+  });
 
   const filteredLogs = sort
     ? [...filteredLogsUnsorted].sort((a, b) => {
@@ -1664,6 +1696,16 @@ export default function FuelManagement({
               </div>
             )}
             <span className="text-[10px] text-slate-400 font-mono">{filteredLogsUnsorted.length} of {logs.length} entries</span>
+            {activeColumnFilterCount > 0 && (
+              <button
+                type="button"
+                onClick={clearAllColumnFilters}
+                title="Clear every column filter (the filters above are unaffected)"
+                className="flex items-center gap-1 text-[10px] text-rose-600 hover:text-rose-800 font-bold cursor-pointer"
+              >
+                <X className="w-3 h-3" /> Clear Column Filters ({activeColumnFilterCount})
+              </button>
+            )}
           </div>
 
           <div className="overflow-x-auto">
@@ -1674,24 +1716,24 @@ export default function FuelManagement({
                   {/* Period column hidden from the listing (per direct
                       instruction) - log.period is still saved/exported, just
                       not shown as its own column here anymore. */}
-                  <th className="px-3 py-2.5"><SortHeader label="Date" sortKey="date" sort={sort} onSort={handleSort} type="numeric" /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="Location" sortKey="location" sort={sort} onSort={handleSort} /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="Bunk Name" sortKey="bunkName" sort={sort} onSort={handleSort} /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="Bunk/Card" sortKey="bunkOrCard" sort={sort} onSort={handleSort} /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="Vehicle No" sortKey="vehicleNumber" sort={sort} onSort={handleSort} type="numeric" /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="Indent No" sortKey="indentNumber" sort={sort} onSort={handleSort} type="numeric" /></th>
-                  <th className="px-3 py-2.5 text-right"><SortHeader label="Ltrs" sortKey="ltrs" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                  <th className="px-3 py-2.5 text-right"><SortHeader label="Rate" sortKey="rate" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                  <th className="px-3 py-2.5 text-right"><SortHeader label="Amount" sortKey="amount" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="Client" sortKey="client" sort={sort} onSort={handleSort} /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="Type" sortKey="type" sort={sort} onSort={handleSort} /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="Vendor Name" sortKey="vendorName" sort={sort} onSort={handleSort} /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="Vendor Code" sortKey="vendorCode" sort={sort} onSort={handleSort} /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="Requested By" sortKey="requestedBy" sort={sort} onSort={handleSort} /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="RQ ID" sortKey="rqId" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Date" type="date" value={columnFilters.date} onChange={f => setColumnFilter('date', f)} sortKey="date" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Location" type="text" values={logs.map(l => l.location)} value={columnFilters.location} onChange={f => setColumnFilter('location', f)} sortKey="location" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Bunk Name" type="text" values={logs.map(l => l.bunkName)} value={columnFilters.bunkName} onChange={f => setColumnFilter('bunkName', f)} sortKey="bunkName" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Bunk/Card" type="text" values={logs.map(l => l.bunkOrCard || 'Bunk')} value={columnFilters.bunkOrCard} onChange={f => setColumnFilter('bunkOrCard', f)} sortKey="bunkOrCard" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Vehicle No" type="text" values={logs.map(l => l.vehicleNumber)} value={columnFilters.vehicleNumber} onChange={f => setColumnFilter('vehicleNumber', f)} sortKey="vehicleNumber" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Indent No" type="text" values={logs.map(l => l.indentNumber)} value={columnFilters.indentNumber} onChange={f => setColumnFilter('indentNumber', f)} sortKey="indentNumber" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                  <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Ltrs" type="number" value={columnFilters.ltrs} onChange={f => setColumnFilter('ltrs', f)} sortKey="ltrs" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                  <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Rate" type="number" value={columnFilters.rate} onChange={f => setColumnFilter('rate', f)} sortKey="rate" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                  <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Amount" type="number" value={columnFilters.amount} onChange={f => setColumnFilter('amount', f)} sortKey="amount" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Client" type="text" values={logs.map(l => l.client)} value={columnFilters.client} onChange={f => setColumnFilter('client', f)} sortKey="client" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Type" type="text" values={logs.map(l => l.type)} value={columnFilters.type} onChange={f => setColumnFilter('type', f)} sortKey="type" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Vendor Name" type="text" values={logs.map(l => l.vendorName)} value={columnFilters.vendorName} onChange={f => setColumnFilter('vendorName', f)} sortKey="vendorName" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Vendor Code" type="text" values={logs.map(l => l.vendorCode)} value={columnFilters.vendorCode} onChange={f => setColumnFilter('vendorCode', f)} sortKey="vendorCode" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Requested By" type="text" values={logs.map(l => l.requestedBy)} value={columnFilters.requestedBy} onChange={f => setColumnFilter('requestedBy', f)} sortKey="requestedBy" sort={sort} onSort={handleSort} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="RQ ID" type="text" values={logs.map(l => l.rqId)} value={columnFilters.rqId} onChange={f => setColumnFilter('rqId', f)} sortKey="rqId" sort={sort} onSort={handleSort} /></th>
                   <th className="px-3 py-2.5 max-w-xs">Remarks</th>
                   <th className="px-3 py-2.5 text-center">Docs</th>
-                  {canSeeEnteredBy && <th className="px-3 py-2.5">Entered By</th>}
+                  {canSeeEnteredBy && <th className="px-3 py-2.5"><ColumnFilterHeader label="Entered By" type="text" values={logs.map(l => l.enteredBy ? fuelEnteredByLabel(l.enteredBy) : '')} value={columnFilters.enteredBy} onChange={f => setColumnFilter('enteredBy', f)} /></th>}
                   <th className="px-3 py-2.5 text-right">Actions</th>
                 </tr>
               </thead>
@@ -2105,20 +2147,41 @@ export default function FuelManagement({
                       <DollarSign className="w-4 h-4 text-pink-300" />
                     </div>
 
-                    {/* Authorized Driver / Driver ID are now entered on the
-                        Fuel Entry Details tab (that's when the vehicle is
-                        actually at the pump, which is when the driver is
-                        physically there) - reflected here read-only so it's
-                        still visible while filling in mileage figures,
-                        without a second place to edit it. */}
-                    <div className="p-2.5 bg-white rounded-lg border border-pink-100 flex items-center justify-between font-mono">
-                      <div className="min-w-0">
-                        <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Authorized Driver (from Fuel Entry Details)</span>
-                        <span className="text-xs font-black text-pink-700 truncate block">
-                          {mDriverName || '-'} {mDriverId && <span className="text-slate-400 font-normal">({mDriverId})</span>}
-                        </span>
-                      </div>
-                      <UserIcon className="w-4 h-4 text-pink-300 shrink-0" />
+                    {/* Authorized Driver - editable here too (2026-09-08
+                        direct request), not read-only anymore. Previously
+                        this only mirrored the Fuel Entry Details tab's own
+                        driver field, which stays locked for a foreign entry
+                        (see the disabled fieldset below) - so completing
+                        just the Mileage section on someone else's entry
+                        (e.g. Chandan on one of Praveen's) had NO way to set
+                        or correct the driver at all. Both fields write the
+                        same mDriverName state, so editing from either tab
+                        keeps them in sync. Driver ID still auto-derives from
+                        whatever's typed here exactly like Details' own field
+                        (see matchedMileageDriver above), so a driver change
+                        here still auto-updates the ID and the Fuel Audit
+                        note (computeFuelAudit already reads mDriverName
+                        live) with no extra wiring needed. */}
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1 flex items-center gap-1">
+                        <UserIcon className="w-3.5 h-3.5 text-pink-600" />
+                        Authorized Driver
+                      </label>
+                      <input
+                        type="text"
+                        list="fuel-driver-names-datalist-mileage"
+                        placeholder="e.g. Suresh / Adhithya"
+                        value={mDriverName}
+                        onChange={(e) => setMDriverName(e.target.value)}
+                        autoComplete="off"
+                        className="w-full bg-white border border-pink-100 rounded-lg p-2 text-slate-800 font-semibold"
+                      />
+                      <datalist id="fuel-driver-names-datalist-mileage">
+                        {driverNameList.map((n, i) => <option key={i} value={n} />)}
+                      </datalist>
+                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                        {mDriverId ? `Driver ID: ${mDriverId} (auto)` : 'Multiple drivers can be entered in one field, separated by "/".'}
+                      </p>
                     </div>
 
                     {/* Mileage Remarks */}

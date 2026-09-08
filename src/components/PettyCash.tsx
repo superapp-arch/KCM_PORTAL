@@ -33,7 +33,9 @@ import {
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
 import SortHeader from './SortHeader';
+import ColumnFilterHeader from './ColumnFilterHeader';
 import { SortState, SortDirection, extractLeadingNumber, extractTrailingNumber, compareText } from '../utils/sort';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../utils/columnFilter';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 import { exportReportToExcel, exportReportToPdf, ReportTableSection } from '../utils/reportExport';
 import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
@@ -495,6 +497,14 @@ export default function PettyCash({
   const LEDGER_PAGE_SIZE = 50;
   const [ledgerPage, setLedgerPage] = useState(1);
 
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing Filters & Historical Lookup console above,
+  // never replacing it; AND-combined with each other and with those.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersMap>({});
+  const setColumnFilter = (key: string, f: ColumnFilterState | undefined) => setColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllColumnFilters = () => setColumnFilters({});
+  const activeColumnFilterCount = Object.values(columnFilters).filter(isColumnFilterActive).length;
+
   // Date range filter for staff to access historical data
   const [filterYear, setFilterYear] = useState('2026');
   const [filterMonth, setFilterMonth] = useState('All'); // All, 01, 02... 12
@@ -584,6 +594,13 @@ export default function PettyCash({
   // above.
   const [mpSort, setMpSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
   const handleMpSort = (key: string, direction: SortDirection) => setMpSort({ key, direction });
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing Search/Sort/Entered By filters above, never
+  // replacing them.
+  const [mpColumnFilters, setMpColumnFilters] = useState<ColumnFiltersMap>({});
+  const setMpColumnFilter = (key: string, f: ColumnFilterState | undefined) => setMpColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllMpColumnFilters = () => setMpColumnFilters({});
+  const activeMpColumnFilterCount = Object.values(mpColumnFilters).filter(isColumnFilterActive).length;
 
   // --- Petty Cash Balance Net / Amount Received state ---
   const [showAdvanceModal, setShowAdvanceModal] = useState(false);
@@ -899,16 +916,45 @@ export default function PettyCash({
     ? Array.from(new Set(marketPodEntries.map(e => e.enteredBy).filter((x): x is string => !!x))).sort()
     : [];
 
+  // Received/Balance aren't stored fields - Received is the running total of
+  // balanceReceipts, Balance is whatever's still pending after that (never
+  // below zero) - same computation the table row itself uses.
+  const mpReceivedTotalOf = (e: MarketPodEntry): number => (e.balanceReceipts || []).reduce((s, r) => s + (r.amount || 0), 0);
+  const mpPendingBalanceOf = (e: MarketPodEntry): number => Math.max(0, (e.balance || 0) - mpReceivedTotalOf(e));
+
   const filteredMarketPodUnsorted = marketPodEntries.filter(e => {
     if (isSuperAdmin && mpSelectedEnteredByFilter !== 'All' && e.enteredBy !== mpSelectedEnteredByFilter) return false;
-    if (!mpSearchTerm) return true;
-    const q = mpSearchTerm.toLowerCase();
-    return (e.entryNo || '').toLowerCase().includes(q) ||
-      (e.vehicleNumber || '').toLowerCase().includes(q) ||
-      (e.from || '').toLowerCase().includes(q) ||
-      (e.to || '').toLowerCase().includes(q) ||
-      (e.customer || '').toLowerCase().includes(q) ||
-      (e.coordinator || '').toLowerCase().includes(q);
+    if (mpSearchTerm) {
+      const q = mpSearchTerm.toLowerCase();
+      if (!(
+        (e.entryNo || '').toLowerCase().includes(q) ||
+        (e.vehicleNumber || '').toLowerCase().includes(q) ||
+        (e.from || '').toLowerCase().includes(q) ||
+        (e.to || '').toLowerCase().includes(q) ||
+        (e.customer || '').toLowerCase().includes(q) ||
+        (e.coordinator || '').toLowerCase().includes(q)
+      )) return false;
+    }
+
+    // Excel-style column filters (AND across every active one) - additive
+    // to the filters above, never replacing them.
+    if (!matchesColumnFilter(e.date, mpColumnFilters.date, 'date')) return false;
+    if (!matchesColumnFilter(e.entryNo, mpColumnFilters.entryNo, 'text')) return false;
+    if (!matchesColumnFilter(e.vehicleNumber, mpColumnFilters.vehicleNumber, 'text')) return false;
+    if (!matchesColumnFilter(e.from, mpColumnFilters.from, 'text')) return false;
+    if (!matchesColumnFilter(e.to, mpColumnFilters.to, 'text')) return false;
+    if (!matchesColumnFilter(e.customer, mpColumnFilters.customer, 'text')) return false;
+    if (!matchesColumnFilter(e.totalFreight, mpColumnFilters.totalFreight, 'number')) return false;
+    if (!matchesColumnFilter(e.receivedAdvance, mpColumnFilters.receivedAdvance, 'number')) return false;
+    if (!matchesColumnFilter(e.otherExpenses, mpColumnFilters.otherExpenses, 'number')) return false;
+    if (!matchesColumnFilter(mpReceivedTotalOf(e), mpColumnFilters.received, 'number')) return false;
+    if (!matchesColumnFilter(mpPendingBalanceOf(e), mpColumnFilters.balance, 'number')) return false;
+    if (!matchesColumnFilter(PAYMENT_MODE_LABELS[e.paymentMode || 'Petty Cash'], mpColumnFilters.paymentMode, 'text')) return false;
+    if (!matchesColumnFilter(e.coordinator, mpColumnFilters.coordinator, 'text')) return false;
+    if (!matchesColumnFilter(e.status, mpColumnFilters.status, 'text')) return false;
+    if (!matchesColumnFilter(e.remarks, mpColumnFilters.remarks, 'text')) return false;
+    if (isSuperAdmin && !matchesColumnFilter(e.enteredBy, mpColumnFilters.enteredBy, 'text')) return false;
+    return true;
   });
 
   const filteredMarketPod = mpSort
@@ -1613,8 +1659,50 @@ export default function PettyCash({
     ? mergedLedgerRowsUnsorted.filter(row => handlerOf(row) === selectedEnteredByFilter)
     : mergedLedgerRowsUnsorted;
 
+  // Excel-style column filters (2026-09-08 GLOBAL UI REQUIREMENT) - a
+  // column that only makes sense for a Petty Cash voucher row (Expense
+  // Category, Location, Cash Paid, Receiver, Vendor/Driver ID, Client,
+  // Ownership, Vendor Vehicle #, Trip Sheet) returns undefined for a Market
+  // Trip/Amount Received credit row, same "this filter simply excludes
+  // every Credit row" rule matchesCreditRowFilters above already follows.
+  const ledgerRowColumnValue = (row: LedgerRow, key: string): unknown => {
+    switch (key) {
+      case 'date': return row.date;
+      case 'entryNo': return displayEntryNo(row.entryNo);
+      case 'vehicleNumber': return row.vehicleNumberSort;
+      case 'type': return row.source === 'petty-cash' ? 'Debit' : 'Credit';
+      case 'source': return row.source === 'petty-cash' ? 'Petty cash' : row.source === 'market-trip' ? 'Market trip' : 'Amount received';
+      case 'category': return row.source === 'petty-cash' ? row.voucher.category : undefined;
+      case 'remarks': return row.source === 'petty-cash' ? row.voucher.remarks : undefined;
+      case 'location': return row.source === 'petty-cash' ? row.voucher.location : undefined;
+      case 'cashPaid': return row.source === 'petty-cash' ? row.voucher.cashPaid : undefined;
+      case 'receiver': return row.source === 'petty-cash' ? row.voucher.receiver : undefined;
+      case 'vendorOrDriverId': return row.source === 'petty-cash' ? (row.voucher.vendorId || row.voucher.driverId) : undefined;
+      case 'client': return row.source === 'petty-cash' ? row.voucher.clientName : undefined;
+      case 'ownership': return row.source === 'petty-cash' ? row.voucher.vendor : undefined;
+      case 'vendorVehicleNumber': return row.source === 'petty-cash' ? row.voucher.vendorVehicleNumber : undefined;
+      case 'tripSheet': return row.source === 'petty-cash' ? row.voucher.tripSheet : undefined;
+      case 'enteredBy': return handlerOf(row);
+      default: return undefined;
+    }
+  };
+  const ledgerRowColumnType: Record<string, 'text' | 'number' | 'date'> = {
+    date: 'date', entryNo: 'text', vehicleNumber: 'text', type: 'text', source: 'text',
+    category: 'text', remarks: 'text', location: 'text', cashPaid: 'number', receiver: 'text',
+    vendorOrDriverId: 'text', client: 'text', ownership: 'text', vendorVehicleNumber: 'text',
+    tripSheet: 'text', enteredBy: 'text'
+  };
+  const mergedLedgerRowsColumnFiltered = mergedLedgerRowsEnteredByFiltered.filter(row => {
+    for (const key of Object.keys(columnFilters)) {
+      const f = columnFilters[key];
+      if (!f || !isColumnFilterActive(f)) continue;
+      if (!matchesColumnFilter(ledgerRowColumnValue(row, key), f, ledgerRowColumnType[key] || 'text')) return false;
+    }
+    return true;
+  });
+
   const mergedLedgerRows = sort
-    ? [...mergedLedgerRowsEnteredByFiltered].sort((a, b) => {
+    ? [...mergedLedgerRowsColumnFiltered].sort((a, b) => {
         // Group by handler first so a Super Admin/Rakshina's merged view
         // never interleaves Vinod/Ramesh/Saneel's entries purely by date
         // (which read as "shuffled") - each handler's own block of rows
@@ -1638,7 +1726,7 @@ export default function PettyCash({
           : extractLeadingNumber(a.vehicleNumberSort) - extractLeadingNumber(b.vehicleNumberSort);
         return sort.direction === 'asc' ? cmp : -cmp;
       })
-    : mergedLedgerRowsEnteredByFiltered;
+    : mergedLedgerRowsColumnFiltered;
 
   // "7 entries (5 petty cash + 1 market trip + 1 amount received)" - the
   // mixed-source breakdown for the entry-count label, so the different kinds
@@ -1668,7 +1756,7 @@ export default function PettyCash({
   }, [
     searchTerm, filterYear, filterMonth, selectedCategoryFilter, selectedTransactionTypeFilter,
     selectedSourceFilter, selectedClientFilter, selectedVehicleFilter, selectedReceiverFilter,
-    selectedEnteredByFilter, sort
+    selectedEnteredByFilter, sort, columnFilters
   ]);
   const ledgerPageClamped = Math.min(ledgerPage, ledgerTotalPages);
   const paginatedLedgerRows = mergedLedgerRows.slice((ledgerPageClamped - 1) * LEDGER_PAGE_SIZE, ledgerPageClamped * LEDGER_PAGE_SIZE);
@@ -2291,7 +2379,19 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-3xs text-xs space-y-3">
               <div className="flex items-center justify-between pb-1 border-b border-slate-100 font-bold text-slate-700 text-[10px] uppercase tracking-wider">
                 <span className="flex items-center gap-1"><Filter className="w-3 h-3 text-teal-600" /> Filters & Historical Lookup</span>
-                <span>Matches: {ledgerEntryCountLabel}</span>
+                <div className="flex items-center gap-3">
+                  <span>Matches: {ledgerEntryCountLabel}</span>
+                  {activeColumnFilterCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={clearAllColumnFilters}
+                      title="Clear every column-header filter (the filters above are unaffected)"
+                      className="flex items-center gap-1 text-rose-600 hover:text-rose-800 cursor-pointer normal-case"
+                    >
+                      <X className="w-3 h-3" /> Clear Column Filters ({activeColumnFilterCount})
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-10 gap-2.5">
                 {/* Sort By - Newest First (default) / Oldest First. Reuses
@@ -2489,10 +2589,10 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     actually stands out instead of blending into the page. */}
                 <thead className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 border-b-2 border-purple-500 text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
                   <tr>
-                    <th className="px-3 py-2.5">Date</th>
-                    <th className="px-3 py-2.5"><SortHeader label="Entry No" sortKey="entryNo" sort={sort} onSort={handleSort} type="numeric" /></th>
-                    <th className="px-3 py-2.5">Expense Category</th>
-                    <th className="px-3 py-2.5">Remarks</th>
+                    <th className="px-3 py-2.5"><ColumnFilterHeader label="Date" type="date" value={columnFilters.date} onChange={f => setColumnFilter('date', f)} /></th>
+                    <th className="px-3 py-2.5"><ColumnFilterHeader label="Entry No" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'entryNo'))} value={columnFilters.entryNo} onChange={f => setColumnFilter('entryNo', f)} sortKey="entryNo" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                    <th className="px-3 py-2.5"><ColumnFilterHeader label="Expense Category" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'category'))} value={columnFilters.category} onChange={f => setColumnFilter('category', f)} /></th>
+                    <th className="px-3 py-2.5"><ColumnFilterHeader label="Remarks" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'remarks'))} value={columnFilters.remarks} onChange={f => setColumnFilter('remarks', f)} /></th>
                     {/* 2026-09-05: reordered so location-linked financial
                         figures (Amount Received/Cash Paid/Balance Net) sit
                         right beside Location, and source-linked identity
@@ -2500,20 +2600,25 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                         beside Source - column order only, no data change.
                         Every row type below (voucher, MarketTripCreditRow,
                         AmountReceivedCreditRow) shares this exact order. */}
-                    <th className="px-3 py-2.5">Location</th>
+                    <th className="px-3 py-2.5"><ColumnFilterHeader label="Location" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'location'))} value={columnFilters.location} onChange={f => setColumnFilter('location', f)} /></th>
+                    {/* Amount Received / Balance Net are running/carry-forward
+                        values (amtRecAt/balanceNetAt), not a simple per-row
+                        field - filtering on those wouldn't mean anything
+                        sensible, so no filter here per the "don't force it
+                        where it doesn't make practical sense" rule. */}
                     <th className="px-3 py-2.5 text-right">Amount Received</th>
-                    <th className="px-3 py-2.5 text-right">Cash Paid</th>
+                    <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Cash Paid" type="number" value={columnFilters.cashPaid} onChange={f => setColumnFilter('cashPaid', f)} align="right" /></th>
                     <th className="px-3 py-2.5 text-right">Balance Net</th>
-                    <th className="px-3 py-2.5"><SortHeader label="Vehicle #" sortKey="vehicleNumber" sort={sort} onSort={handleSort} type="numeric" /></th>
-                    <th className="px-3 py-2.5">Receiver</th>
-                    <th className="px-3 py-2.5" title="Vendor ID for a vendor-vehicle entry, Driver ID for a KCM-vehicle entry">Vendor ID / Driver ID</th>
+                    <th className="px-3 py-2.5"><ColumnFilterHeader label="Vehicle #" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'vehicleNumber'))} value={columnFilters.vehicleNumber} onChange={f => setColumnFilter('vehicleNumber', f)} sortKey="vehicleNumber" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                    <th className="px-3 py-2.5"><ColumnFilterHeader label="Receiver" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'receiver'))} value={columnFilters.receiver} onChange={f => setColumnFilter('receiver', f)} /></th>
+                    <th className="px-3 py-2.5" title="Vendor ID for a vendor-vehicle entry, Driver ID for a KCM-vehicle entry"><ColumnFilterHeader label="Vendor ID / Driver ID" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'vendorOrDriverId'))} value={columnFilters.vendorOrDriverId} onChange={f => setColumnFilter('vendorOrDriverId', f)} /></th>
                     <th className="px-3 py-2.5"><SortHeader label="Type" sortKey="type" sort={sort} onSort={handleSort} labels={{ asc: 'Credit First', desc: 'Debit First' }} /></th>
-                    <th className="px-3 py-2.5">Source</th>
-                    <th className="px-3 py-2.5">Client</th>
-                    <th className="px-3 py-2.5">Ownership</th>
-                    <th className="px-3 py-2.5">Vendor Vehicle #</th>
-                    <th className="px-3 py-2.5">Trip Sheet</th>
-                    {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
+                    <th className="px-3 py-2.5"><ColumnFilterHeader label="Source" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'source'))} value={columnFilters.source} onChange={f => setColumnFilter('source', f)} /></th>
+                    <th className="px-3 py-2.5"><ColumnFilterHeader label="Client" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'client'))} value={columnFilters.client} onChange={f => setColumnFilter('client', f)} /></th>
+                    <th className="px-3 py-2.5"><ColumnFilterHeader label="Ownership" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'ownership'))} value={columnFilters.ownership} onChange={f => setColumnFilter('ownership', f)} /></th>
+                    <th className="px-3 py-2.5"><ColumnFilterHeader label="Vendor Vehicle #" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'vendorVehicleNumber'))} value={columnFilters.vendorVehicleNumber} onChange={f => setColumnFilter('vendorVehicleNumber', f)} /></th>
+                    <th className="px-3 py-2.5"><ColumnFilterHeader label="Trip Sheet" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'tripSheet'))} value={columnFilters.tripSheet} onChange={f => setColumnFilter('tripSheet', f)} /></th>
+                    {isSuperAdmin && <th className="px-3 py-2.5"><ColumnFilterHeader label="Entered By" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'enteredBy'))} value={columnFilters.enteredBy} onChange={f => setColumnFilter('enteredBy', f)} /></th>}
                     <th className="px-3 py-2.5 text-center">Actions</th>
                   </tr>
                 </thead>
@@ -3031,7 +3136,19 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-3xs text-xs space-y-2">
             <div className="flex items-center justify-between pb-1 border-b border-slate-100 font-bold text-slate-700 text-[10px] uppercase tracking-wider">
               <span className="flex items-center gap-1"><Filter className="w-3 h-3 text-teal-600" /> Search</span>
-              <span>Matches: {filteredMarketPod.length} entries</span>
+              <div className="flex items-center gap-3">
+                <span>Matches: {filteredMarketPod.length} entries</span>
+                {activeMpColumnFilterCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearAllMpColumnFilters}
+                    title="Clear every column-header filter (the filters above are unaffected)"
+                    className="flex items-center gap-1 text-rose-600 hover:text-rose-800 cursor-pointer normal-case"
+                  >
+                    <X className="w-3 h-3" /> Clear Column Filters ({activeMpColumnFilterCount})
+                  </button>
+                )}
+              </div>
             </div>
             <div className="flex flex-col sm:flex-row gap-2.5">
               <div className="relative flex-1">
@@ -3083,22 +3200,22 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   actually stands out instead of blending into the page. */}
               <thead className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 border-b-2 border-purple-500 text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
                 <tr>
-                  <th className="px-3 py-2.5">Date</th>
-                  <th className="px-3 py-2.5"><SortHeader label="Entry No" sortKey="entryNo" sort={mpSort} onSort={handleMpSort} type="numeric" /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="Vehicle Number" sortKey="vehicleNumber" sort={mpSort} onSort={handleMpSort} type="numeric" /></th>
-                  <th className="px-3 py-2.5">From</th>
-                  <th className="px-3 py-2.5">To</th>
-                  <th className="px-3 py-2.5"><SortHeader label="Customer" sortKey="customer" sort={mpSort} onSort={handleMpSort} /></th>
-                  <th className="px-3 py-2.5 text-right">Total Freight</th>
-                  <th className="px-3 py-2.5 text-right">Received Advance</th>
-                  <th className="px-3 py-2.5 text-right">Other Expenses</th>
-                  <th className="px-3 py-2.5 text-right">Received</th>
-                  <th className="px-3 py-2.5 text-right">Balance</th>
-                  <th className="px-3 py-2.5">Payment Mode</th>
-                  <th className="px-3 py-2.5">Co-Ordinator</th>
-                  <th className="px-3 py-2.5">Status</th>
-                  <th className="px-3 py-2.5">Remarks</th>
-                  {isSuperAdmin && <th className="px-3 py-2.5">Entered By</th>}
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Date" type="date" value={mpColumnFilters.date} onChange={f => setMpColumnFilter('date', f)} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Entry No" type="text" values={marketPodEntries.map(e => e.entryNo)} value={mpColumnFilters.entryNo} onChange={f => setMpColumnFilter('entryNo', f)} sortKey="entryNo" sort={mpSort} onSort={handleMpSort} sortType="numeric" /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Vehicle Number" type="text" values={marketPodEntries.map(e => e.vehicleNumber)} value={mpColumnFilters.vehicleNumber} onChange={f => setMpColumnFilter('vehicleNumber', f)} sortKey="vehicleNumber" sort={mpSort} onSort={handleMpSort} sortType="numeric" /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="From" type="text" values={marketPodEntries.map(e => e.from)} value={mpColumnFilters.from} onChange={f => setMpColumnFilter('from', f)} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="To" type="text" values={marketPodEntries.map(e => e.to)} value={mpColumnFilters.to} onChange={f => setMpColumnFilter('to', f)} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Customer" type="text" values={marketPodEntries.map(e => e.customer)} value={mpColumnFilters.customer} onChange={f => setMpColumnFilter('customer', f)} sortKey="customer" sort={mpSort} onSort={handleMpSort} /></th>
+                  <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Total Freight" type="number" value={mpColumnFilters.totalFreight} onChange={f => setMpColumnFilter('totalFreight', f)} align="right" /></th>
+                  <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Received Advance" type="number" value={mpColumnFilters.receivedAdvance} onChange={f => setMpColumnFilter('receivedAdvance', f)} align="right" /></th>
+                  <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Other Expenses" type="number" value={mpColumnFilters.otherExpenses} onChange={f => setMpColumnFilter('otherExpenses', f)} align="right" /></th>
+                  <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Received" type="number" value={mpColumnFilters.received} onChange={f => setMpColumnFilter('received', f)} align="right" /></th>
+                  <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Balance" type="number" value={mpColumnFilters.balance} onChange={f => setMpColumnFilter('balance', f)} align="right" /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Payment Mode" type="text" values={marketPodEntries.map(e => PAYMENT_MODE_LABELS[e.paymentMode || 'Petty Cash'])} value={mpColumnFilters.paymentMode} onChange={f => setMpColumnFilter('paymentMode', f)} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Co-Ordinator" type="text" values={marketPodEntries.map(e => e.coordinator)} value={mpColumnFilters.coordinator} onChange={f => setMpColumnFilter('coordinator', f)} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Status" type="text" values={marketPodEntries.map(e => e.status)} value={mpColumnFilters.status} onChange={f => setMpColumnFilter('status', f)} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Remarks" type="text" values={marketPodEntries.map(e => e.remarks)} value={mpColumnFilters.remarks} onChange={f => setMpColumnFilter('remarks', f)} /></th>
+                  {isSuperAdmin && <th className="px-3 py-2.5"><ColumnFilterHeader label="Entered By" type="text" values={marketPodEntries.map(e => e.enteredBy)} value={mpColumnFilters.enteredBy} onChange={f => setMpColumnFilter('enteredBy', f)} /></th>}
                   <th className="px-3 py-2.5 text-center">Actions</th>
                 </tr>
               </thead>

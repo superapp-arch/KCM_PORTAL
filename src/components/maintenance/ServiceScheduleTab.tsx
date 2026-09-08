@@ -14,6 +14,8 @@ import {
 } from '../../utils/vehicleCycleDefaults';
 import { SaveConfirmationModal } from '../ConfirmationModal';
 import { authFetch } from '../../authFetch';
+import ColumnFilterHeader from '../ColumnFilterHeader';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../../utils/columnFilter';
 
 interface ServiceScheduleTabProps {
   readOnly?: boolean;
@@ -188,6 +190,13 @@ export default function ServiceScheduleTab({
   const handleSaved = (label: string, identifier: string) => setSaveConfirmation({ label, identifier, key: Date.now() });
 
   const [searchTerm, setSearchTerm] = useState('');
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing Search/Category/Urgent Only/Warranty filters
+  // above, never replacing them.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersMap>({});
+  const setColumnFilter = (key: string, f: ColumnFilterState | undefined) => setColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllColumnFilters = () => setColumnFilters({});
+  const activeColumnFilterCount = Object.values(columnFilters).filter(isColumnFilterActive).length;
   const [categoryFilter, setCategoryFilter] = useState('All');
   const [warrantyFilter, setWarrantyFilter] = useState<'All' | 'InWarranty' | 'OutOfWarranty'>('All');
   const [urgentOnly, setUrgentOnly] = useState(false);
@@ -257,7 +266,23 @@ export default function ServiceScheduleTab({
     const matchesCategory = categoryFilter === 'All' || matchVehicleCategoryOption(row.category) === categoryFilter;
     const matchesUrgent = !urgentOnly || row.isUrgent;
     const matchesWarranty = warrantyFilter === 'All' || warrantyInfoFor(row)?.status === warrantyFilter;
-    return matchesSearch && matchesCategory && matchesUrgent && matchesWarranty;
+    if (!(matchesSearch && matchesCategory && matchesUrgent && matchesWarranty)) return false;
+
+    // Excel-style column filters (AND across every active one) - additive
+    // to the filters above, never replacing them.
+    if (!matchesColumnFilter(row.regNo, columnFilters.regNo, 'text')) return false;
+    if (!matchesColumnFilter(row.category, columnFilters.category, 'text')) return false;
+    if (!matchesColumnFilter(row.reference?.responsible, columnFilters.responsible, 'text')) return false;
+    if (!matchesColumnFilter(warrantyInfoFor(row)?.status, columnFilters.warrantyStatus, 'text')) return false;
+    if (!matchesColumnFilter(row.reference?.lastServiceDoneKm, columnFilters.lastServiceDoneKm, 'number')) return false;
+    if (!matchesColumnFilter(currentKmFor(row.regNo), columnFilters.currentKm, 'number')) return false;
+    if (!matchesColumnFilter(row.reference?.warrantyPeriod, columnFilters.warrantyPeriod, 'text')) return false;
+    if (!matchesColumnFilter(row.washingApplicable ? row.washingInfo?.nextDueDate : undefined, columnFilters.washingDueDate, 'date')) return false;
+    if (!matchesColumnFilter(row.acApplicable ? row.acInfo?.nextDueDate : undefined, columnFilters.acDueDate, 'date')) return false;
+    if (!matchesColumnFilter(row.reference?.servicePeriod, columnFilters.servicePeriod, 'number')) return false;
+    if (!matchesColumnFilter(row.schedule?.defStatus, columnFilters.defStatus, 'text')) return false;
+    if (!matchesColumnFilter(row.schedule?.serviceStatus, columnFilters.serviceStatus, 'text')) return false;
+    return true;
   });
   const filteredRows = [...filteredUnsorted].sort((a, b) =>
     sortMode === 'urgency' ? (a.urgencyRank - b.urgencyRank || a.regNo.localeCompare(b.regNo)) : a.regNo.localeCompare(b.regNo)
@@ -433,6 +458,16 @@ export default function ServiceScheduleTab({
                 {sendingReminders ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />} Send Reminders Now
               </button>
             )}
+            {activeColumnFilterCount > 0 && (
+              <button
+                type="button"
+                onClick={clearAllColumnFilters}
+                title="Clear every column filter (the filters above are unaffected)"
+                className="flex items-center gap-1.5 border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-2.5 py-1.5 rounded-lg uppercase text-[10px] cursor-pointer transition-all whitespace-nowrap"
+              >
+                <X className="w-3.5 h-3.5" /> Clear Filters ({activeColumnFilterCount})
+              </button>
+            )}
           </div>
         </div>
         <p className="text-[10px] text-slate-400 font-mono mb-3">
@@ -448,18 +483,18 @@ export default function ServiceScheduleTab({
           <table className="w-full text-left text-xs">
             <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
               <tr>
-                <th className="px-3 py-2.5">Reg. No.</th>
-                <th className="px-3 py-2.5">Type</th>
-                <th className="px-3 py-2.5">Responsible</th>
-                <th className="px-3 py-2.5 text-center">Warranty Status</th>
-                <th className="px-3 py-2.5 text-right">Last Service KM</th>
-                <th className="px-3 py-2.5 text-right">Current Odometer</th>
-                <th className="px-3 py-2.5">Warranty Period</th>
-                <th className="px-3 py-2.5">Washing Due Date</th>
-                <th className="px-3 py-2.5">AC Service Due Date</th>
-                <th className="px-3 py-2.5 text-right">Service Period</th>
-                <th className="px-3 py-2.5 text-center">DEF Status</th>
-                <th className="px-3 py-2.5 text-center">Status</th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Reg. No." type="text" values={mergedRows.map(r => r.regNo)} value={columnFilters.regNo} onChange={f => setColumnFilter('regNo', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Type" type="text" values={mergedRows.map(r => r.category)} value={columnFilters.category} onChange={f => setColumnFilter('category', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Responsible" type="text" values={mergedRows.map(r => r.reference?.responsible)} value={columnFilters.responsible} onChange={f => setColumnFilter('responsible', f)} /></th>
+                <th className="px-3 py-2.5 text-center"><ColumnFilterHeader label="Warranty Status" type="text" values={mergedRows.map(r => warrantyInfoFor(r)?.status)} value={columnFilters.warrantyStatus} onChange={f => setColumnFilter('warrantyStatus', f)} /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Last Service KM" type="number" value={columnFilters.lastServiceDoneKm} onChange={f => setColumnFilter('lastServiceDoneKm', f)} align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Current Odometer" type="number" value={columnFilters.currentKm} onChange={f => setColumnFilter('currentKm', f)} align="right" /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Warranty Period" type="text" values={mergedRows.map(r => r.reference?.warrantyPeriod)} value={columnFilters.warrantyPeriod} onChange={f => setColumnFilter('warrantyPeriod', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Washing Due Date" type="date" value={columnFilters.washingDueDate} onChange={f => setColumnFilter('washingDueDate', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="AC Service Due Date" type="date" value={columnFilters.acDueDate} onChange={f => setColumnFilter('acDueDate', f)} /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Service Period" type="number" value={columnFilters.servicePeriod} onChange={f => setColumnFilter('servicePeriod', f)} align="right" /></th>
+                <th className="px-3 py-2.5 text-center"><ColumnFilterHeader label="DEF Status" type="text" values={mergedRows.map(r => r.schedule?.defStatus)} value={columnFilters.defStatus} onChange={f => setColumnFilter('defStatus', f)} /></th>
+                <th className="px-3 py-2.5 text-center"><ColumnFilterHeader label="Status" type="text" values={mergedRows.map(r => r.schedule?.serviceStatus)} value={columnFilters.serviceStatus} onChange={f => setColumnFilter('serviceStatus', f)} /></th>
                 <th className="px-3 py-2.5 text-center">Edit</th>
               </tr>
             </thead>

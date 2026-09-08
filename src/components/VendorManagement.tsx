@@ -4,7 +4,9 @@ import { User, Vendor, VehicleDocument } from '../types';
 import { Building2, Plus, Search, Edit2, Trash2, X, Car, Download, CheckCircle2, AlertCircle } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import SortHeader from './SortHeader';
+import ColumnFilterHeader from './ColumnFilterHeader';
 import { SortState, SortDirection, compareText, extractLeadingNumber } from '../utils/sort';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../utils/columnFilter';
 
 // undefined/missing `active` is treated as active, matching Vehicle's
 // pre-existing active-status convention elsewhere in the app.
@@ -58,6 +60,14 @@ export default function VendorManagement({ user, vendors, onAddVendor, onUpdateV
   const [clientFilter, setClientFilter] = useState(''); // '' = All clients
   const [sort, setSort] = useState<SortState | null>(null);
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing Client dropdown/search above, never replacing
+  // them; AND-combined with each other and with those. See
+  // ../utils/columnFilter for the matching logic.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersMap>({});
+  const setColumnFilter = (key: string, f: ColumnFilterState | undefined) => setColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllColumnFilters = () => setColumnFilters({});
+  const activeColumnFilterCount = Object.values(columnFilters).filter(isColumnFilterActive).length;
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -221,12 +231,27 @@ export default function VendorManagement({ user, vendors, onAddVendor, onUpdateV
   const clientOptions = useMemo(() => Array.from(new Set(vendors.flatMap(getVendorClients))), [vendors]);
 
   const filtered = useMemo(() => {
-    const base = vendors.filter(v =>
-      (!clientFilter || getVendorClients(v).includes(clientFilter)) &&
-      ((v.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (v.code || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (v.vehicleNumbers || []).some(n => n.toLowerCase().includes(searchTerm.toLowerCase())))
-    );
+    const base = vendors.filter(v => {
+      if (!(!clientFilter || getVendorClients(v).includes(clientFilter))) return false;
+      if (!((v.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (v.code || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (v.vehicleNumbers || []).some(n => n.toLowerCase().includes(searchTerm.toLowerCase())))) return false;
+      // Excel-style column filters (AND across every active one). Client and
+      // Vehicle Number(s) are array-valued per vendor, so they're matched
+      // manually (any element in selectedValues) rather than through the
+      // shared single-value matchesColumnFilter.
+      if (!matchesColumnFilter(v.name, columnFilters.name, 'text')) return false;
+      if (!matchesColumnFilter(v.code, columnFilters.code, 'text')) return false;
+      if (isColumnFilterActive(columnFilters.client) && !getVendorClients(v).some(c => columnFilters.client!.selectedValues!.includes(c))) return false;
+      if (isColumnFilterActive(columnFilters.vehicleNumbers) && !(v.vehicleNumbers || []).some(n => columnFilters.vehicleNumbers!.selectedValues!.includes(n))) return false;
+      if (!matchesColumnFilter(v.contactNumber, columnFilters.contactNumber, 'text')) return false;
+      if (!matchesColumnFilter(v.aadharNumber, columnFilters.aadharNumber, 'text')) return false;
+      if (!matchesColumnFilter(v.panNumber, columnFilters.panNumber, 'text')) return false;
+      if (!matchesColumnFilter(v.bankAccountNumber, columnFilters.bankAccountNumber, 'text')) return false;
+      if (!matchesColumnFilter(v.ifscCode, columnFilters.ifscCode, 'text')) return false;
+      if (!matchesColumnFilter(isVendorActive(v) ? 'Yes' : 'No', columnFilters.status, 'boolean')) return false;
+      return true;
+    });
     if (!sort) return base;
     const sorted = [...base].sort((a, b) => {
       const cmp = sort.key === 'vehicleNumbers'
@@ -235,7 +260,7 @@ export default function VendorManagement({ user, vendors, onAddVendor, onUpdateV
       return sort.direction === 'asc' ? cmp : -cmp;
     });
     return sorted;
-  }, [vendors, clientFilter, searchTerm, sort]);
+  }, [vendors, clientFilter, searchTerm, sort, columnFilters]);
 
   const handleDownload = () => {
     if (filtered.length === 0) return;
@@ -306,6 +331,12 @@ export default function VendorManagement({ user, vendors, onAddVendor, onUpdateV
           className="flex items-center gap-1.5 border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold px-3 py-1.5 rounded-lg uppercase text-[10px] cursor-pointer transition-all whitespace-nowrap">
           <Download className="w-3.5 h-3.5 text-indigo-600" /> Download
         </button>
+        {activeColumnFilterCount > 0 && (
+          <button onClick={clearAllColumnFilters} title="Clear every column filter (the Client dropdown/search above are unaffected)"
+            className="flex items-center gap-1.5 border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-3 py-1.5 rounded-lg uppercase text-[10px] cursor-pointer transition-all whitespace-nowrap">
+            <X className="w-3.5 h-3.5" /> Clear Filters ({activeColumnFilterCount})
+          </button>
+        )}
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -313,16 +344,16 @@ export default function VendorManagement({ user, vendors, onAddVendor, onUpdateV
           <table className="w-full text-left text-xs">
             <thead className="bg-gradient-to-r from-indigo-900 via-slate-900 to-sky-900 text-indigo-100 uppercase text-[10px] tracking-wider">
               <tr>
-                <th className="px-3 py-2.5"><SortHeader label="Vendor Name" sortKey="name" sort={sort} onSort={handleSort} /></th>
-                <th className="px-3 py-2.5">Vendor Code</th>
-                <th className="px-3 py-2.5">Client</th>
-                <th className="px-3 py-2.5"><SortHeader label="Vehicle Number(s)" sortKey="vehicleNumbers" sort={sort} onSort={handleSort} type="numeric" /></th>
-                <th className="px-3 py-2.5">Contact</th>
-                <th className="px-3 py-2.5">Aadhar</th>
-                <th className="px-3 py-2.5">PAN</th>
-                <th className="px-3 py-2.5">Bank A/C</th>
-                <th className="px-3 py-2.5">IFSC</th>
-                <th className="px-3 py-2.5">Status</th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Vendor Name" type="text" values={vendors.map(v => v.name)} value={columnFilters.name} onChange={f => setColumnFilter('name', f)} sortKey="name" sort={sort} onSort={handleSort} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Vendor Code" type="text" values={vendors.map(v => v.code)} value={columnFilters.code} onChange={f => setColumnFilter('code', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Client" type="text" values={clientOptions} value={columnFilters.client} onChange={f => setColumnFilter('client', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Vehicle Number(s)" type="text" values={vendors.flatMap(v => v.vehicleNumbers || [])} value={columnFilters.vehicleNumbers} onChange={f => setColumnFilter('vehicleNumbers', f)} sortKey="vehicleNumbers" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Contact" type="text" values={vendors.map(v => v.contactNumber)} value={columnFilters.contactNumber} onChange={f => setColumnFilter('contactNumber', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Aadhar" type="text" values={vendors.map(v => v.aadharNumber)} value={columnFilters.aadharNumber} onChange={f => setColumnFilter('aadharNumber', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="PAN" type="text" values={vendors.map(v => v.panNumber)} value={columnFilters.panNumber} onChange={f => setColumnFilter('panNumber', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Bank A/C" type="text" values={vendors.map(v => v.bankAccountNumber)} value={columnFilters.bankAccountNumber} onChange={f => setColumnFilter('bankAccountNumber', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="IFSC" type="text" values={vendors.map(v => v.ifscCode)} value={columnFilters.ifscCode} onChange={f => setColumnFilter('ifscCode', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Status" type="boolean" value={columnFilters.status} onChange={f => setColumnFilter('status', f)} /></th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>

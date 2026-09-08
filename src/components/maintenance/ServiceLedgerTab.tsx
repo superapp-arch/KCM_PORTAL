@@ -19,10 +19,12 @@ import DocumentAttachment from '../DocumentAttachment';
 import DateInput from '../DateInput';
 import ServiceInvoiceModal from './ServiceInvoiceModal';
 import SortHeader from '../SortHeader';
+import ColumnFilterHeader from '../ColumnFilterHeader';
 import { authFetch } from '../../authFetch';
 import { latestOdometerFor, computeKmStatus, computeWarrantyStatus } from '../../utils/maintenanceDates';
 import { SortState, compareText, compareNumber } from '../../utils/sort';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../../utils/columnFilter';
 
 interface ServiceLedgerTabProps {
   readOnly?: boolean;
@@ -62,6 +64,13 @@ export default function ServiceLedgerTab({
   // Report's "Sort By" dropdown - reuses the shared SortHeader/SortState.
   const [sort, setSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
   const handleSort = (key: string, direction: SortState['direction']) => setSort({ key, direction });
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing Type/Search filters above, never replacing
+  // them.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersMap>({});
+  const setColumnFilter = (key: string, f: ColumnFilterState | undefined) => setColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllColumnFilters = () => setColumnFilters({});
+  const activeColumnFilterCount = Object.values(columnFilters).filter(isColumnFilterActive).length;
 
   // Click-to-expand on the Reg. No. cell (mirrors Fleet & Vehicles' row
   // expand pattern) - keyed by this specific work order's id, not by regNo,
@@ -272,12 +281,27 @@ export default function ServiceLedgerTab({
     }
   };
 
-  const filteredRecordsUnsorted = records.filter(r =>
-    (typeFilter === 'All' || r.serviceType === typeFilter) &&
-    ((r?.regNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (r?.garageName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (r?.driverName || '').toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  const filteredRecordsUnsorted = records.filter(r => {
+    if (!(
+      (typeFilter === 'All' || r.serviceType === typeFilter) &&
+      ((r?.regNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (r?.garageName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (r?.driverName || '').toLowerCase().includes(searchTerm.toLowerCase()))
+    )) return false;
+
+    // Excel-style column filters (AND across every active one) - additive
+    // to the filters above, never replacing them. Status is a composite
+    // computed warranty/due badge (per-vehicle schedule lookup, not a
+    // simple per-record field) - no filter there per the "don't force it
+    // where it doesn't make practical sense" rule.
+    if (!matchesColumnFilter(r.date, columnFilters.date, 'date')) return false;
+    if (!matchesColumnFilter(r.regNo, columnFilters.regNo, 'text')) return false;
+    if (!matchesColumnFilter(r.serviceType, columnFilters.serviceType, 'text')) return false;
+    if (!matchesColumnFilter(r.garageName, columnFilters.garageName, 'text')) return false;
+    if (!matchesColumnFilter(r.driverName, columnFilters.driverName, 'text')) return false;
+    if (!matchesColumnFilter(r.cost, columnFilters.cost, 'number')) return false;
+    return true;
+  });
 
   const filteredRecords = sort
     ? [...filteredRecordsUnsorted].sort((a, b) => {
@@ -386,6 +410,16 @@ export default function ServiceLedgerTab({
               <Plus className="w-4 h-4" /> Add Entry
             </button>
             )}
+            {activeColumnFilterCount > 0 && (
+              <button
+                type="button"
+                onClick={clearAllColumnFilters}
+                title="Clear every column filter (Type/Search above are unaffected)"
+                className="flex items-center gap-1.5 border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-2.5 py-1.5 rounded-lg uppercase text-[10px] cursor-pointer transition-all whitespace-nowrap"
+              >
+                <X className="w-3.5 h-3.5" /> Clear Filters ({activeColumnFilterCount})
+              </button>
+            )}
           </div>
         </div>
 
@@ -393,14 +427,14 @@ export default function ServiceLedgerTab({
           <table className="w-full text-left text-xs">
             <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
               <tr>
-                <th className="px-3 py-2.5"><SortHeader label="Date" sortKey="date" sort={sort} onSort={handleSort} type="numeric" /></th>
-                <th className="px-3 py-2.5"><SortHeader label="Reg. No." sortKey="regNo" sort={sort} onSort={handleSort} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Date" type="date" value={columnFilters.date} onChange={f => setColumnFilter('date', f)} sortKey="date" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Reg. No." type="text" values={records.map(r => r.regNo)} value={columnFilters.regNo} onChange={f => setColumnFilter('regNo', f)} sortKey="regNo" sort={sort} onSort={handleSort} /></th>
                 <th className="px-3 py-2.5">Status</th>
-                <th className="px-3 py-2.5">Type</th>
-                <th className="px-3 py-2.5">Service Station</th>
-                <th className="px-3 py-2.5">Driver</th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Type" type="text" values={records.map(r => r.serviceType)} value={columnFilters.serviceType} onChange={f => setColumnFilter('serviceType', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Service Station" type="text" values={records.map(r => r.garageName)} value={columnFilters.garageName} onChange={f => setColumnFilter('garageName', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Driver" type="text" values={records.map(r => r.driverName)} value={columnFilters.driverName} onChange={f => setColumnFilter('driverName', f)} /></th>
                 <th className="px-3 py-2.5">Work Items</th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="Total Cost" sortKey="cost" sort={sort} onSort={handleSort} type="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Total Cost" type="number" value={columnFilters.cost} onChange={f => setColumnFilter('cost', f)} sortKey="cost" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
                 <th className="px-3 py-2.5 text-center">Docs</th>
                 <th className="px-3 py-2.5">Invoice</th>
                 <th className="px-3 py-2.5 text-right">Actions</th>

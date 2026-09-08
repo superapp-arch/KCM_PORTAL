@@ -2,8 +2,23 @@ import React, { useState, useMemo, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { Landmark, Plus, Search, Edit2, Trash2, X, Download, CheckCircle2, AlertCircle } from 'lucide-react';
 import { BusinessLoan, LoanStatus } from '../../types';
-import { computeMonthsCompleted, computeDueDate, computeLoanStatus, resolveLoanStatus } from '../../utils/loanDates';
+import { computeMonthsCompleted, computeDueDate, computeDueDateRaw, computeLoanStatus, resolveLoanStatus } from '../../utils/loanDates';
 import DateInput from '../DateInput';
+import ColumnFilterHeader from '../ColumnFilterHeader';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../../utils/columnFilter';
+
+// EMI Paid/Pending/O-S Amount/Due Date/Loan Status aren't stored fields -
+// always computed live from emiDate/tenure/emiMonthly, same helpers the row
+// rendering below already uses inline; pulled out here too so the column
+// filters (and `filtered` below) can share the exact same computation.
+const emiPaidOf = (loan: BusinessLoan): number => computeMonthsCompleted(loan.emiDate, loan.tenure);
+const emiPendingOf = (loan: BusinessLoan): number | null => loan.tenure != null ? loan.tenure - emiPaidOf(loan) : null;
+const osAmountOf = (loan: BusinessLoan): number | null => {
+  const bal = emiPendingOf(loan);
+  return bal != null && loan.emiMonthly != null ? bal * loan.emiMonthly : null;
+};
+const displayStatusOf = (loan: BusinessLoan): 'Active' | 'Closed' =>
+  resolveLoanStatus(loan.loanStatus, loan.loanStatusManual, emiPaidOf(loan), loan.tenure);
 
 const toLoanRow = (loan: BusinessLoan, i: number) => {
   const emiPaid = computeMonthsCompleted(loan.emiDate, loan.tenure);
@@ -46,6 +61,12 @@ const emptyForm = {
 
 export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, onUpdateBusinessLoan, onDeleteBusinessLoan }: BusinessLoanSheetProps) {
   const [searchTerm, setSearchTerm] = useState('');
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing Search above, never replacing it.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersMap>({});
+  const setColumnFilter = (key: string, f: ColumnFilterState | undefined) => setColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllColumnFilters = () => setColumnFilters({});
+  const activeColumnFilterCount = Object.values(columnFilters).filter(isColumnFilterActive).length;
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -147,10 +168,26 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
   };
 
   const filtered = useMemo(() => businessLoans.filter(l => {
-    if (!searchTerm) return true;
-    const q = searchTerm.toLowerCase();
-    return l.financer.toLowerCase().includes(q) || l.loanNumber.toLowerCase().includes(q) || l.loanType.toLowerCase().includes(q);
-  }), [businessLoans, searchTerm]);
+    if (searchTerm) {
+      const q = searchTerm.toLowerCase();
+      if (!(l.financer.toLowerCase().includes(q) || l.loanNumber.toLowerCase().includes(q) || l.loanType.toLowerCase().includes(q))) return false;
+    }
+    // Excel-style column filters (AND across every active one) - additive
+    // to Search above, never replacing it.
+    if (!matchesColumnFilter(l.financer, columnFilters.financer, 'text')) return false;
+    if (!matchesColumnFilter(l.loanType, columnFilters.loanType, 'text')) return false;
+    if (!matchesColumnFilter(l.loanNumber, columnFilters.loanNumber, 'text')) return false;
+    if (!matchesColumnFilter(l.sanctionedAmount, columnFilters.sanctionedAmount, 'number')) return false;
+    if (!matchesColumnFilter(l.emiMonthly, columnFilters.emiMonthly, 'number')) return false;
+    if (!matchesColumnFilter(l.tenure, columnFilters.tenure, 'number')) return false;
+    if (!matchesColumnFilter(emiPaidOf(l), columnFilters.emiPaid, 'number')) return false;
+    if (!matchesColumnFilter(emiPendingOf(l), columnFilters.emiPending, 'number')) return false;
+    if (!matchesColumnFilter(osAmountOf(l), columnFilters.osAmount, 'number')) return false;
+    if (!matchesColumnFilter(computeDueDateRaw(l.emiDate, l.tenure), columnFilters.dueDate, 'date')) return false;
+    if (!matchesColumnFilter(displayStatusOf(l), columnFilters.loanStatus, 'text')) return false;
+    if (!matchesColumnFilter(l.remarks, columnFilters.remarks, 'text')) return false;
+    return true;
+  }), [businessLoans, searchTerm, columnFilters]);
 
   return (
     <div className="space-y-4">
@@ -177,6 +214,13 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
           className="bg-gradient-to-r from-indigo-600 to-sky-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all whitespace-nowrap">
           <Plus className="w-3.5 h-3.5" /> Add Business Loan
         </button>
+
+        {activeColumnFilterCount > 0 && (
+          <button onClick={clearAllColumnFilters} title="Clear every column filter (Search above is unaffected)"
+            className="flex items-center gap-1.5 border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-3 py-2 rounded-lg uppercase text-[10px] cursor-pointer transition-all whitespace-nowrap">
+            <X className="w-3.5 h-3.5" /> Clear Filters ({activeColumnFilterCount})
+          </button>
+        )}
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -185,18 +229,18 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
             <thead className="bg-gradient-to-r from-indigo-900 via-slate-900 to-sky-900 text-indigo-100 uppercase text-[10px] tracking-wider">
               <tr>
                 <th className="px-3 py-2.5">SL No</th>
-                <th className="px-3 py-2.5">Financer</th>
-                <th className="px-3 py-2.5">Loan Type</th>
-                <th className="px-3 py-2.5">Loan Number</th>
-                <th className="px-3 py-2.5 text-right">Sanctioned Amount</th>
-                <th className="px-3 py-2.5 text-right">EMI Monthly</th>
-                <th className="px-3 py-2.5 text-right">Tenure</th>
-                <th className="px-3 py-2.5 text-right">EMI Paid</th>
-                <th className="px-3 py-2.5 text-right">EMI Pending</th>
-                <th className="px-3 py-2.5 text-right">O/S Amount</th>
-                <th className="px-3 py-2.5">Due Date</th>
-                <th className="px-3 py-2.5">Loan Status</th>
-                <th className="px-3 py-2.5 max-w-[160px]">Remarks</th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Financer" type="text" values={businessLoans.map(l => l.financer)} value={columnFilters.financer} onChange={f => setColumnFilter('financer', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Loan Type" type="text" values={businessLoans.map(l => l.loanType)} value={columnFilters.loanType} onChange={f => setColumnFilter('loanType', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Loan Number" type="text" values={businessLoans.map(l => l.loanNumber)} value={columnFilters.loanNumber} onChange={f => setColumnFilter('loanNumber', f)} /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Sanctioned Amount" type="number" value={columnFilters.sanctionedAmount} onChange={f => setColumnFilter('sanctionedAmount', f)} align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="EMI Monthly" type="number" value={columnFilters.emiMonthly} onChange={f => setColumnFilter('emiMonthly', f)} align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Tenure" type="number" value={columnFilters.tenure} onChange={f => setColumnFilter('tenure', f)} align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="EMI Paid" type="number" value={columnFilters.emiPaid} onChange={f => setColumnFilter('emiPaid', f)} align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="EMI Pending" type="number" value={columnFilters.emiPending} onChange={f => setColumnFilter('emiPending', f)} align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="O/S Amount" type="number" value={columnFilters.osAmount} onChange={f => setColumnFilter('osAmount', f)} align="right" /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Due Date" type="date" value={columnFilters.dueDate} onChange={f => setColumnFilter('dueDate', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Loan Status" type="text" values={businessLoans.map(l => displayStatusOf(l))} value={columnFilters.loanStatus} onChange={f => setColumnFilter('loanStatus', f)} /></th>
+                <th className="px-3 py-2.5 max-w-[160px]"><ColumnFilterHeader label="Remarks" type="text" values={businessLoans.map(l => l.remarks)} value={columnFilters.remarks} onChange={f => setColumnFilter('remarks', f)} /></th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>

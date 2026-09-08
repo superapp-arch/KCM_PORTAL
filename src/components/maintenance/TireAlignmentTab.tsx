@@ -5,6 +5,8 @@ import { CircleDot, Search, Edit2, Trash2, Plus, X, Gauge, AlertTriangle, Chevro
 import DateInput from '../DateInput';
 import { latestOdometerFor, computeAlignmentStatus, nextAlignmentDueKm, ALIGNMENT_INTERVAL_KM, KmStatus } from '../../utils/maintenanceDates';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
+import ColumnFilterHeader from '../ColumnFilterHeader';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../../utils/columnFilter';
 
 interface TireAlignmentTabProps {
   readOnly?: boolean;
@@ -114,6 +116,14 @@ export default function TireAlignmentTab({
   readOnly, vehicles, mileageReports, tireBrands, onAddTireBrand, tireRecords, onSaveTireRecord, onDeleteTireRecord
 }: TireAlignmentTabProps) {
   const [searchTerm, setSearchTerm] = useState('');
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing Search above, never replacing it. Applied to
+  // the outer per-vehicle summary table (vehicleRows below), matching what
+  // that table itself actually displays.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersMap>({});
+  const setColumnFilter = (key: string, f: ColumnFilterState | undefined) => setColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllColumnFilters = () => setColumnFilters({});
+  const activeColumnFilterCount = Object.values(columnFilters).filter(isColumnFilterActive).length;
   const [notif, setNotif] = useState<string | null>(null);
   const [showAlignmentPopup, setShowAlignmentPopup] = useState(false);
   // Big, centered save/delete confirmation (see ConfirmationModal.tsx).
@@ -165,6 +175,16 @@ export default function TireAlignmentTab({
       return { regNo, tires, worstStatus, currentKm };
     }).sort((a, b) => a.regNo.localeCompare(b.regNo));
   }, [filteredRows]);
+
+  // Excel-style column filters (AND across every active one) - additive to
+  // Search above, never replacing it.
+  const filteredVehicleRows = useMemo(() => vehicleRows.filter(v => {
+    if (!matchesColumnFilter(v.regNo, columnFilters.regNo, 'text')) return false;
+    if (!matchesColumnFilter(v.tires.length, columnFilters.tiresTracked, 'number')) return false;
+    if (!matchesColumnFilter(v.currentKm, columnFilters.currentKm, 'number')) return false;
+    if (!matchesColumnFilter(v.worstStatus, columnFilters.worstStatus, 'text')) return false;
+    return true;
+  }), [vehicleRows, columnFilters]);
 
   const [expandedRegNo, setExpandedRegNo] = useState<string | null>(null);
   const toggleExpand = (regNo: string) => setExpandedRegNo(prev => prev === regNo ? null : regNo);
@@ -360,6 +380,12 @@ export default function TireAlignmentTab({
               <Plus className="w-4 h-4" /> Add / Manage Tires
             </button>
             )}
+            {activeColumnFilterCount > 0 && (
+              <button onClick={clearAllColumnFilters} title="Clear every column filter (Search above is unaffected)"
+                className="flex items-center gap-1.5 border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-2.5 py-1.5 rounded-lg uppercase text-[10px] cursor-pointer transition-all whitespace-nowrap">
+                <X className="w-3.5 h-3.5" /> Clear Filters ({activeColumnFilterCount})
+              </button>
+            )}
           </div>
         </div>
 
@@ -367,17 +393,17 @@ export default function TireAlignmentTab({
           <table className="w-full text-left text-xs">
             <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
               <tr>
-                <th className="px-3 py-2.5">Reg. No.</th>
-                <th className="px-3 py-2.5 text-center">Tires Tracked</th>
-                <th className="px-3 py-2.5 text-right">Current Odometer</th>
-                <th className="px-3 py-2.5">Alignment Status</th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Reg. No." type="text" values={vehicleRows.map(v => v.regNo)} value={columnFilters.regNo} onChange={f => setColumnFilter('regNo', f)} /></th>
+                <th className="px-3 py-2.5 text-center"><ColumnFilterHeader label="Tires Tracked" type="number" value={columnFilters.tiresTracked} onChange={f => setColumnFilter('tiresTracked', f)} /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Current Odometer" type="number" value={columnFilters.currentKm} onChange={f => setColumnFilter('currentKm', f)} align="right" /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Alignment Status" type="text" values={vehicleRows.map(v => v.worstStatus)} value={columnFilters.worstStatus} onChange={f => setColumnFilter('worstStatus', f)} /></th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-              {vehicleRows.length === 0 ? (
+              {filteredVehicleRows.length === 0 ? (
                 <tr><td colSpan={5} className="text-center py-10 text-slate-400 font-mono">NO TIRE RECORDS FOUND.</td></tr>
-              ) : vehicleRows.map(({ regNo, tires, worstStatus, currentKm }) => (
+              ) : filteredVehicleRows.map(({ regNo, tires, worstStatus, currentKm }) => (
                 <React.Fragment key={regNo}>
                   <tr
                     onClick={() => toggleExpand(regNo)}
