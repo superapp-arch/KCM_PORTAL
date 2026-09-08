@@ -414,7 +414,7 @@ export default function PettyCash({
   // isTrueSuperAdmin/canEditPettyCashRow instead. Mirrors server.ts's
   // PETTY_CASH_VIEW_ONLY_EMAILS exactly.
   const isTrueSuperAdmin = user.department === 'super_admin';
-  const isSuperAdmin = isTrueSuperAdmin || ['finance@kcmlogistics.in', 'prathiba@kcmlogistics.in', 'divya@kcmlogistics.in', 'praveenkumar@kcmlogistics.in'].includes(user.email || '');
+  const isSuperAdmin = isTrueSuperAdmin || ['finance@kcmlogistics.in', 'prathiba@kcmlogistics.in', 'divya@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'bhagya@kcmlogistics.in'].includes(user.email || '');
   // Whether this specific row's Edit/Delete controls should render -
   // isTrueSuperAdmin can touch anything; everyone else only ever sees this
   // (via the merged cross-handler view above) if `enteredBy` is ABSENT,

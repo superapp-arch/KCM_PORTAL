@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { AccountsEntry, VehicleDocument } from '../types';
+import { User, AccountsEntry, VehicleDocument } from '../types';
 import { 
   Landmark, 
   Plus, 
@@ -22,13 +22,17 @@ import DateInput from './DateInput';
 import DocumentAttachment from './DocumentAttachment';
 
 interface AccountsProps {
+  user: User;
   entries: AccountsEntry[];
   onAddEntry: (entry: Omit<AccountsEntry, 'id'>) => Promise<void>;
   onUpdateEntry: (id: string, entry: Partial<AccountsEntry>) => Promise<void>;
   onDeleteEntry: (id: string) => Promise<void>;
 }
 
-export default function Accounts({ entries, onAddEntry, onUpdateEntry, onDeleteEntry }: AccountsProps) {
+export default function Accounts({ user, entries, onAddEntry, onUpdateEntry, onDeleteEntry }: AccountsProps) {
+  // Bhagya gets Accounts & Finance view-only (2026-09-08 direct request) -
+  // no Post Financial Ledger Entry form, no Edit/Delete on any row.
+  const isReadOnly = user.email === 'bhagya@kcmlogistics.in';
   const [searchTerm, setSearchTerm] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -228,7 +232,19 @@ export default function Accounts({ entries, onAddEntry, onUpdateEntry, onDeleteE
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Form: Add Transaction */}
+        {/* Left Form: Add Transaction - hidden for view-only (Bhagya), a
+            plain placeholder card takes its place in the same grid slot. */}
+        {isReadOnly ? (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 h-fit text-xs">
+            <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-2 pb-2 border-b border-slate-100 flex items-center gap-1.5">
+              <Landmark className="w-4 h-4 text-slate-400" />
+              View-Only Access
+            </h2>
+            <p className="text-slate-500">
+              You have view-only access to Accounts &amp; Finance - posting, editing, or deleting a ledger entry isn't available.
+            </p>
+          </div>
+        ) : (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 h-fit text-xs">
           <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-4 pb-2 border-b border-slate-100 flex items-center gap-1.5">
             <Plus className="w-4 h-4 text-emerald-600" />
@@ -311,6 +327,7 @@ export default function Accounts({ entries, onAddEntry, onUpdateEntry, onDeleteE
             </button>
           </form>
         </div>
+        )}
 
         {/* Right Panel: Recharts Analytics & Table */}
         <div className="lg:col-span-2 space-y-6">
@@ -401,22 +418,26 @@ export default function Accounts({ entries, onAddEntry, onUpdateEntry, onDeleteE
                           )}
                         </td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                          <div className="flex items-center justify-end space-x-1">
-                            <button
-                              onClick={() => handleOpenManageModal(e)}
-                              className="p-1 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer"
-                              title="Edit details & attachments"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteEntry(e.id, e.reference || 'Ref')}
-                              className="p-1 text-slate-400 hover:text-pink-600 hover:bg-slate-100 rounded cursor-pointer"
-                              title="Delete transaction entry"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                          {isReadOnly ? (
+                            <span className="text-slate-300">-</span>
+                          ) : (
+                            <div className="flex items-center justify-end space-x-1">
+                              <button
+                                onClick={() => handleOpenManageModal(e)}
+                                className="p-1 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer"
+                                title="Edit details & attachments"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteEntry(e.id, e.reference || 'Ref')}
+                                className="p-1 text-slate-400 hover:text-pink-600 hover:bg-slate-100 rounded cursor-pointer"
+                                title="Delete transaction entry"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     ))

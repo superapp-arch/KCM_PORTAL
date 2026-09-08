@@ -28,6 +28,11 @@ import BreakdownsTab from './maintenance/BreakdownsTab';
 interface MaintenanceProps {
   performedBy: string; // current user's username - used for the Service Invoice audit trail (Generated/Regenerated/Downloaded)
   isSuperAdmin: boolean; // gates Service Schedule's bulk "Send Reminder Now" action
+  // Bhagya (2026-09-08 direct request) - full read visibility across every
+  // sub-tab, but no Add/Edit/Delete/Save anywhere in the module. Threaded
+  // down to each of the 7 sub-tabs below. Defaults to false (every other
+  // Fleet Maintenance login keeps full edit rights, unchanged).
+  readOnly?: boolean;
   records: MaintenanceRecord[];
   onAddRecord: (record: Omit<MaintenanceRecord, 'id'>) => Promise<void>;
   onUpdateRecord: (id: string, record: Partial<MaintenanceRecord>) => Promise<void>;
@@ -250,6 +255,7 @@ export default function Maintenance(props: MaintenanceProps) {
 
       {moduleTab === 'ledger' && (
         <ServiceLedgerTab
+          readOnly={props.readOnly}
           performedBy={props.performedBy}
           records={props.records}
           onAddRecord={props.onAddRecord}
@@ -266,6 +272,7 @@ export default function Maintenance(props: MaintenanceProps) {
       )}
       {moduleTab === 'schedule' && (
         <ServiceScheduleTab
+          readOnly={props.readOnly}
           vehicles={props.vehicles}
           mileageReports={props.mileageReports}
           vehicleServiceSchedules={props.vehicleServiceSchedules}
@@ -277,6 +284,7 @@ export default function Maintenance(props: MaintenanceProps) {
       )}
       {moduleTab === 'servicestation' && (
         <ServiceStationTab
+          readOnly={props.readOnly}
           vehicles={props.vehicles}
           spareParts={props.serviceStationSpareParts}
           onSaveSparePart={props.onSaveServiceStationSparePart}
@@ -288,6 +296,7 @@ export default function Maintenance(props: MaintenanceProps) {
       )}
       {moduleTab === 'tires' && (
         <TireAlignmentTab
+          readOnly={props.readOnly}
           vehicles={props.vehicles}
           mileageReports={props.mileageReports}
           tireBrands={props.tireBrands}
@@ -299,6 +308,7 @@ export default function Maintenance(props: MaintenanceProps) {
       )}
       {moduleTab === 'battery' && (
         <BatteryTab
+          readOnly={props.readOnly}
           vehicles={props.vehicles}
           batteryRecords={props.batteryRecords}
           onSaveBatteryRecord={props.onSaveBatteryRecord}
@@ -307,6 +317,7 @@ export default function Maintenance(props: MaintenanceProps) {
       )}
       {moduleTab === 'tools' && (
         <ToolsChecklistTab
+          readOnly={props.readOnly}
           vehicles={props.vehicles}
           toolsChecklistRecords={props.toolsChecklistRecords}
           onSaveToolsChecklistRecord={props.onSaveToolsChecklistRecord}
@@ -315,6 +326,7 @@ export default function Maintenance(props: MaintenanceProps) {
       )}
       {moduleTab === 'breakdowns' && (
         <BreakdownsTab
+          readOnly={props.readOnly}
           breakdownReports={props.breakdownReports}
           onAddBreakdownReport={props.onAddBreakdownReport}
           onUpdateBreakdownReport={props.onUpdateBreakdownReport}

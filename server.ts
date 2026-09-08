@@ -451,8 +451,9 @@ const FUEL_RQ_ID_ONLY_EMAILS = ['divya@kcmlogistics.in'];
 // never owns a row - see buildFuelLogUpdateForViewer/canModifyEntryRow).
 // Deliberately its own list rather than reusing FUEL_RQ_ID_ONLY_EMAILS -
 // Divya can still edit ONE field (rqId) on any entry; Vinod cannot edit
-// anything at all.
-const FUEL_VIEW_ONLY_EMAILS = ['vinod@kcmlogistics.in'];
+// anything at all. Bhagya (2026-09-08 direct request) gets the same
+// full-visibility, zero-edit treatment.
+const FUEL_VIEW_ONLY_EMAILS = ['vinod@kcmlogistics.in', 'bhagya@kcmlogistics.in'];
 
 // Fuel Management + Mileage Report are restricted to Chandan, Praveen, Ramesh,
 // Divya, Vinod (view-only), and super admins - nobody else may access or see
@@ -502,8 +503,9 @@ const PETTY_CASH_FULL_VIEW_EMAILS: string[] = [];
 // check this list, only PETTY_CASH_FULL_VIEW_EMAILS/ownership/super_admin.
 // Rakshina (Accounts & Finance reconciliation), Pratibha, Divya, and Praveen
 // - Chethan/Anand aren't listed here since they're real Super Admins
-// already and get full view+edit through that, not this tier.
-const PETTY_CASH_VIEW_ONLY_EMAILS = ['finance@kcmlogistics.in', 'prathiba@kcmlogistics.in', 'divya@kcmlogistics.in', 'praveenkumar@kcmlogistics.in'];
+// already and get full view+edit through that, not this tier. Bhagya
+// (2026-09-08 direct request) added to the same tier.
+const PETTY_CASH_VIEW_ONLY_EMAILS = ['finance@kcmlogistics.in', 'prathiba@kcmlogistics.in', 'divya@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'bhagya@kcmlogistics.in'];
 
 function canModifyPettyCashRow(row: { enteredBy?: string } | undefined, sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): boolean {
   if (sessionUser && PETTY_CASH_FULL_VIEW_EMAILS.includes(sessionUser.email || '')) return true;
@@ -590,8 +592,9 @@ const VENDOR_MANAGEMENT_EMAILS = ['divya@kcmlogistics.in', 'finance@kcmlogistics
 // entry, including any added after he's already loaded the module - added
 // here (view-only, matches Administration.tsx's hasAccess('vendors') gate,
 // which already listed him client-side but had nothing matching him
-// server-side, so every actual request was silently 403ing).
-const VENDOR_READ_ONLY_EMAILS = [...VENDOR_MANAGEMENT_EMAILS, ...FUEL_ENTRY_USER_EMAILS, 'vinod@kcmlogistics.in'];
+// server-side, so every actual request was silently 403ing). Bhagya
+// (2026-09-08 direct request) gets the same read-only treatment.
+const VENDOR_READ_ONLY_EMAILS = [...VENDOR_MANAGEMENT_EMAILS, ...FUEL_ENTRY_USER_EMAILS, 'vinod@kcmlogistics.in', 'bhagya@kcmlogistics.in'];
 
 // GET /api/vendors: Divya, Rakshina, Chandan, Praveen, or super admin.
 async function requireVendorReadAccess(req: express.Request, res: express.Response, next: express.NextFunction) {

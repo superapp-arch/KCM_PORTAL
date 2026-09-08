@@ -7,6 +7,7 @@ import { latestOdometerFor, computeAlignmentStatus, nextAlignmentDueKm, ALIGNMEN
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
 
 interface TireAlignmentTabProps {
+  readOnly?: boolean;
   vehicles: Vehicle[];
   mileageReports: MileageReport[];
   tireBrands: TireBrand[];
@@ -110,7 +111,7 @@ const emptyRow = (position: string): TireRowForm => ({
 });
 
 export default function TireAlignmentTab({
-  vehicles, mileageReports, tireBrands, onAddTireBrand, tireRecords, onSaveTireRecord, onDeleteTireRecord
+  readOnly, vehicles, mileageReports, tireBrands, onAddTireBrand, tireRecords, onSaveTireRecord, onDeleteTireRecord
 }: TireAlignmentTabProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [notif, setNotif] = useState<string | null>(null);
@@ -354,9 +355,11 @@ export default function TireAlignmentTab({
               <input type="text" placeholder="Search Reg No, position, brand" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off"
                 className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-7 pr-3 py-1.5 focus:outline-none text-slate-800 font-medium" />
             </div>
+            {!readOnly && (
             <button onClick={openAddConfig} className="bg-gradient-to-r from-blue-600 to-slate-800 hover:shadow-md text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap">
               <Plus className="w-4 h-4" /> Add / Manage Tires
             </button>
+            )}
           </div>
         </div>
 
@@ -386,7 +389,9 @@ export default function TireAlignmentTab({
                     <td className="px-3 py-2.5">{statusBadge(worstStatus)}</td>
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
                       <div className="flex items-center justify-end gap-1">
+                        {!readOnly && (
                         <button onClick={(e) => { e.stopPropagation(); openEditConfigForVehicle(regNo); }} className="p-1 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer" title="Edit this vehicle's tires"><Edit2 className="w-3.5 h-3.5" /></button>
+                        )}
                         <button className="p-1 text-slate-400 hover:text-slate-600 rounded" title="Expand tire breakdown">
                           {expandedRegNo === regNo ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                         </button>
@@ -425,7 +430,9 @@ export default function TireAlignmentTab({
                                   <td className="px-3 py-2">{statusBadge(status)}</td>
                                   <td className="px-3 py-2 text-right whitespace-nowrap">
                                     <div className="flex items-center justify-end gap-1">
+                                      {!readOnly && (
                                       <button onClick={() => handleDelete(tire)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                                      )}
                                     </div>
                                   </td>
                                 </tr>

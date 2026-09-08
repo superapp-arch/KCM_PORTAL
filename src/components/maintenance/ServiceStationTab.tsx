@@ -7,6 +7,7 @@ import { SortState, compareText } from '../../utils/sort';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
 
 interface ServiceStationTabProps {
+  readOnly?: boolean;
   vehicles: Vehicle[];
   spareParts: ServiceStationSparePart[];
   onSaveSparePart: (record: ServiceStationSparePart | Omit<ServiceStationSparePart, 'id'>) => Promise<void>;
@@ -55,7 +56,7 @@ const statusBadge = (status: 'Completed' | 'Pending') => (
 
 // ---------------------------------------------------------------------------
 export default function ServiceStationTab({
-  vehicles, spareParts, onSaveSparePart, onDeleteSparePart, inspections, onSaveInspection, onDeleteInspection
+  readOnly, vehicles, spareParts, onSaveSparePart, onDeleteSparePart, inspections, onSaveInspection, onDeleteInspection
 }: ServiceStationTabProps) {
   const [subTab, setSubTab] = useState<SubTab>('spareparts');
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -366,15 +367,19 @@ export default function ServiceStationTab({
                 <option value="newest">Newest First</option>
                 <option value="oldest">Oldest First</option>
               </select>
-              <input ref={spImportInputRef} type="file" accept=".csv" onChange={handleImportSpareParts} className="hidden" />
-              <button onClick={() => spImportInputRef.current?.click()} disabled={spImporting}
-                title="Import spare part entries from a CSV (columns: Date, Vehicle Number, Part Name, Part Number, Qty)"
-                className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold py-2 px-3 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap disabled:opacity-50">
-                <Upload className="w-4 h-4" /> {spImporting ? 'Importing...' : 'Import CSV'}
-              </button>
-              <button onClick={spOpenAdd} className="bg-gradient-to-r from-blue-600 to-slate-800 hover:shadow-md text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap">
-                <Plus className="w-4 h-4" /> Log Spare Part
-              </button>
+              {!readOnly && (
+                <>
+                  <input ref={spImportInputRef} type="file" accept=".csv" onChange={handleImportSpareParts} className="hidden" />
+                  <button onClick={() => spImportInputRef.current?.click()} disabled={spImporting}
+                    title="Import spare part entries from a CSV (columns: Date, Vehicle Number, Part Name, Part Number, Qty)"
+                    className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold py-2 px-3 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap disabled:opacity-50">
+                    <Upload className="w-4 h-4" /> {spImporting ? 'Importing...' : 'Import CSV'}
+                  </button>
+                  <button onClick={spOpenAdd} className="bg-gradient-to-r from-blue-600 to-slate-800 hover:shadow-md text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap">
+                    <Plus className="w-4 h-4" /> Log Spare Part
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -401,8 +406,12 @@ export default function ServiceStationTab({
                     <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{r.partNumber || '-'}</td>
                     <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{r.qty}</td>
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                      <button onClick={() => spOpenEdit(r)} className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer" title="Edit"><Edit2 className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => handleSpDelete(r)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                      {readOnly ? <span className="text-slate-300">-</span> : (
+                        <>
+                          <button onClick={() => spOpenEdit(r)} className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer" title="Edit"><Edit2 className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => handleSpDelete(r)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -432,15 +441,19 @@ export default function ServiceStationTab({
                 <option value="newest">Newest First</option>
                 <option value="oldest">Oldest First</option>
               </select>
-              <input ref={inImportInputRef} type="file" accept=".csv" onChange={handleImportInspections} className="hidden" />
-              <button onClick={() => inImportInputRef.current?.click()} disabled={inImporting}
-                title="Import inspection entries from a CSV (columns: Date, Vehicle, Inspection Details, Status, Inspection By)"
-                className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold py-2 px-3 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap disabled:opacity-50">
-                <Upload className="w-4 h-4" /> {inImporting ? 'Importing...' : 'Import CSV'}
-              </button>
-              <button onClick={inOpenAdd} className="bg-gradient-to-r from-blue-600 to-slate-800 hover:shadow-md text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap">
-                <Plus className="w-4 h-4" /> Log Inspection
-              </button>
+              {!readOnly && (
+                <>
+                  <input ref={inImportInputRef} type="file" accept=".csv" onChange={handleImportInspections} className="hidden" />
+                  <button onClick={() => inImportInputRef.current?.click()} disabled={inImporting}
+                    title="Import inspection entries from a CSV (columns: Date, Vehicle, Inspection Details, Status, Inspection By)"
+                    className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold py-2 px-3 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap disabled:opacity-50">
+                    <Upload className="w-4 h-4" /> {inImporting ? 'Importing...' : 'Import CSV'}
+                  </button>
+                  <button onClick={inOpenAdd} className="bg-gradient-to-r from-blue-600 to-slate-800 hover:shadow-md text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap">
+                    <Plus className="w-4 h-4" /> Log Inspection
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -467,8 +480,12 @@ export default function ServiceStationTab({
                     <td className="px-3 py-2.5 whitespace-nowrap">{statusBadge(r.status)}</td>
                     <td className="px-3 py-2.5 text-slate-600 whitespace-nowrap">{r.inspectedBy || '-'}</td>
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                      <button onClick={() => inOpenEdit(r)} className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer" title="Edit"><Edit2 className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => handleInDelete(r)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                      {readOnly ? <span className="text-slate-300">-</span> : (
+                        <>
+                          <button onClick={() => inOpenEdit(r)} className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer" title="Edit"><Edit2 className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => handleInDelete(r)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}

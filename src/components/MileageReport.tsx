@@ -163,10 +163,11 @@ export default function MileageReportModule({
   };
 
   const isSuperAdmin = user.department === 'super_admin';
-  // Entered By is visible to Super Admin/Principal and to Vinod's read-only
-  // view (2026-09-05, direct request - same as Fuel Management's own copy of
-  // this) - everyone else never sees who entered what.
-  const canSeeEnteredBy = isSuperAdmin || user.email === 'vinod@kcmlogistics.in';
+  // Entered By is visible to Super Admin/Principal and to Vinod's/Bhagya's
+  // read-only view (2026-09-05 and 2026-09-08 direct requests - same as Fuel
+  // Management's own copy of this) - everyone else never sees who entered
+  // what.
+  const canSeeEnteredBy = isSuperAdmin || user.email === 'vinod@kcmlogistics.in' || user.email === 'bhagya@kcmlogistics.in';
 
   // Auto Calculations
   // 1. Fetch Previous Entry Closing KM for selected vehicle

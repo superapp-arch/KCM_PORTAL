@@ -7,6 +7,7 @@ import { SortState, compareText } from '../../utils/sort';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
 
 interface ToolsChecklistTabProps {
+  readOnly?: boolean;
   vehicles: Vehicle[];
   toolsChecklistRecords: ToolsChecklistRecord[];
   onSaveToolsChecklistRecord: (record: Omit<ToolsChecklistRecord, 'id'>) => Promise<void>;
@@ -26,7 +27,7 @@ const emptyForm = (regNo = '') => ({
   checkedBy: '', remarks: ''
 });
 
-export default function ToolsChecklistTab({ vehicles, toolsChecklistRecords, onSaveToolsChecklistRecord, onDeleteToolsChecklistRecord }: ToolsChecklistTabProps) {
+export default function ToolsChecklistTab({ readOnly, vehicles, toolsChecklistRecords, onSaveToolsChecklistRecord, onDeleteToolsChecklistRecord }: ToolsChecklistTabProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm());
@@ -124,9 +125,11 @@ export default function ToolsChecklistTab({ vehicles, toolsChecklistRecords, onS
               <option value="newest">Newest First</option>
               <option value="oldest">Oldest First</option>
             </select>
+            {!readOnly && (
             <button onClick={openAdd} className="bg-gradient-to-r from-blue-600 to-slate-800 hover:shadow-md text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap">
               <Plus className="w-4 h-4" /> Log Check
             </button>
+            )}
           </div>
         </div>
 
@@ -157,7 +160,9 @@ export default function ToolsChecklistTab({ vehicles, toolsChecklistRecords, onS
                   <td className="px-3 py-2.5 text-slate-600 whitespace-nowrap">{r.checkedBy || '-'}</td>
                   <td className="px-3 py-2.5 text-slate-500 max-w-[180px] truncate" title={r.remarks}>{r.remarks || '-'}</td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                    <button onClick={() => handleDelete(r)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                    {readOnly ? <span className="text-slate-300">-</span> : (
+                      <button onClick={() => handleDelete(r)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                    )}
                   </td>
                 </tr>
               ))}
