@@ -16,6 +16,7 @@ import { SaveConfirmationModal } from '../ConfirmationModal';
 import { authFetch } from '../../authFetch';
 
 interface ServiceScheduleTabProps {
+  readOnly?: boolean;
   vehicles: Vehicle[];
   mileageReports: MileageReport[];
   vehicleServiceSchedules: VehicleServiceSchedule[];
@@ -175,7 +176,7 @@ interface MergedRow {
 
 // ---------------------------------------------------------------------------
 export default function ServiceScheduleTab({
-  vehicles, mileageReports, vehicleServiceSchedules, onSaveVehicleServiceSchedule,
+  readOnly, vehicles, mileageReports, vehicleServiceSchedules, onSaveVehicleServiceSchedule,
   vehicleMaintenanceReferences, onSaveVehicleMaintenanceReference, isSuperAdmin
 }: ServiceScheduleTabProps) {
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -506,7 +507,9 @@ export default function ServiceScheduleTab({
                     <td className="px-3 py-2.5 text-center whitespace-nowrap">{defStatusBadge(row.schedule?.defStatus)}</td>
                     <td className="px-3 py-2.5 text-center whitespace-nowrap">{statusBadge(row.schedule?.serviceStatus)}</td>
                     <td className="px-3 py-2.5 text-center">
+                      {!readOnly && (
                       <button onClick={() => openEdit(row.regNo)} title="Edit" className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
+                      )}
                     </td>
                   </tr>
                 );

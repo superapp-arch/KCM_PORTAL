@@ -87,12 +87,15 @@ const PETTY_CASH_ACCESS_EMAILS = ['vinod@kcmlogistics.in', 'ramesh@kcmlogistics.
 // server.ts's PETTY_CASH_VIEW_ONLY_EMAILS exactly. Grants the tab; the
 // actual "view every handler's rows but can never edit/delete/add anything"
 // behavior is enforced server-side (see server.ts) and by PettyCash.tsx's
-// own read of this same list for its edit-control rendering.
-const PETTY_CASH_VIEW_ONLY_EMAILS = ['finance@kcmlogistics.in', 'prathiba@kcmlogistics.in', 'divya@kcmlogistics.in', 'praveenkumar@kcmlogistics.in'];
+// own read of this same list for its edit-control rendering. Bhagya
+// (2026-09-08 direct request) added to the same tier.
+const PETTY_CASH_VIEW_ONLY_EMAILS = ['finance@kcmlogistics.in', 'prathiba@kcmlogistics.in', 'divya@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'bhagya@kcmlogistics.in'];
 
 // Fuel Management + Mileage Report gate - mirrors server.ts's
-// FUEL_ENTRY_USER_EMAILS exactly.
-const FUEL_ACCESS_EMAILS = ['chandanreddy@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'ramesh@kcmlogistics.in', 'vinod@kcmlogistics.in'];
+// FUEL_ENTRY_USER_EMAILS exactly, plus Bhagya (2026-09-08, view-only - see
+// server.ts's FUEL_VIEW_ONLY_EMAILS and FuelManagement.tsx's own
+// isViewOnlyUser for the actual read-only enforcement).
+const FUEL_ACCESS_EMAILS = ['chandanreddy@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'ramesh@kcmlogistics.in', 'vinod@kcmlogistics.in', 'bhagya@kcmlogistics.in'];
 
 // Divya gets Fuel Management too (RQ-ID-only, see server.ts's
 // FUEL_RQ_ID_ONLY_EMAILS), but not Mileage Report - kept separate from
@@ -109,7 +112,16 @@ const PAYMENTS_ACCESS_EMAILS = ['praveenkumar@kcmlogistics.in'];
 // mirrors server.ts's own equivalent grant (Fleet Maintenance's API routes
 // aren't department-gated server-side today, so this is a client-side-only
 // tab gate, same as every other tab visibility check in this function).
-const FLEET_MAINTENANCE_EXTRA_EMAILS = ['vinod@kcmlogistics.in'];
+// Bhagya (2026-09-08 direct request) added view-only - see Maintenance.tsx's
+// own readOnly prop for the actual read-only enforcement.
+const FLEET_MAINTENANCE_EXTRA_EMAILS = ['vinod@kcmlogistics.in', 'bhagya@kcmlogistics.in'];
+
+// Accounts & Finance is normally department-gated ('accounts_finance') -
+// Bhagya (2026-09-08 direct request) gets it too, view-only. Client-side-only
+// gate, same caveat as FLEET_MAINTENANCE_EXTRA_EMAILS above (Accounts &
+// Finance's API routes aren't department-gated server-side today either) -
+// see Accounts.tsx's own readOnly prop for the actual read-only enforcement.
+const ACCOUNTS_VIEW_ONLY_EMAILS = ['bhagya@kcmlogistics.in'];
 
 // HR & Payroll, but Staff Attendance visibility only (no Staff Salary/Salary
 // Slip, and the attendance grid itself is read-only for him) - mirrors
@@ -511,13 +523,13 @@ export default function Administration({
     // Vinod also gets Fleet Maintenance on top of his own department
     // ('petty_cash') - see FLEET_MAINTENANCE_EXTRA_EMAILS.
     if (tabName === 'maintenance' && (user.department === 'maintenance' || FLEET_MAINTENANCE_EXTRA_EMAILS.includes(user.email || ''))) return true;
-    if (tabName === 'accounts' && user.department === 'accounts_finance') return true;
+    if (tabName === 'accounts' && (user.department === 'accounts_finance' || ACCOUNTS_VIEW_ONLY_EMAILS.includes(user.email || ''))) return true;
     // Vinod gets HR & Payroll too, but view-only Staff Attendance only - see
     // HR_ATTENDANCE_VIEW_ONLY_EMAILS and HR.tsx's own restricted rendering
     // for him, and server.ts's requireHrAccess/HR_ATTENDANCE_VIEW_ONLY_EMAILS
     // for the matching server-side restriction.
     if (tabName === 'hr' && (user.email === 'bhagya@kcmlogistics.in' || HR_ATTENDANCE_VIEW_ONLY_EMAILS.includes(user.email || ''))) return true;
-    if (tabName === 'vendors' && (user.email === 'divya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in' || user.email === 'vinod@kcmlogistics.in')) return true;
+    if (tabName === 'vendors' && (user.email === 'divya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in' || user.email === 'vinod@kcmlogistics.in' || user.email === 'bhagya@kcmlogistics.in')) return true;
     // Driver Details is location-scoped (see server.ts: DRIVER_LOCATION_SCOPES)
     // - this just gates the tab/module itself; which drivers each of these
     // people actually sees is filtered server-side.
@@ -1183,6 +1195,10 @@ export default function Administration({
             <Maintenance
               performedBy={user.username}
               isSuperAdmin={user.department === 'super_admin'}
+              // Bhagya gets Fleet Maintenance view-only (2026-09-08 direct
+              // request) - Vinod, the module's other FLEET_MAINTENANCE_
+              // EXTRA_EMAILS member, keeps his existing full edit access.
+              readOnly={user.email === 'bhagya@kcmlogistics.in'}
               records={records}
               onAddRecord={onAddMaintenanceRecord}
               onUpdateRecord={onUpdateMaintenanceRecord}
@@ -1248,9 +1264,10 @@ export default function Administration({
           )}
 
           {activeTab === 'accounts' && hasAccess('accounts') && (
-            <Accounts 
-              entries={entries} 
-              onAddEntry={onAddAccountsEntry} 
+            <Accounts
+              user={user}
+              entries={entries}
+              onAddEntry={onAddAccountsEntry}
               onUpdateEntry={onUpdateAccountsEntry}
               onDeleteEntry={onDeleteAccountsEntry}
             />
@@ -1294,6 +1311,7 @@ export default function Administration({
 
           {activeTab === 'vendors' && hasAccess('vendors') && (
             <VendorManagement
+              user={user}
               vendors={vendors}
               onAddVendor={onAddVendor}
               onUpdateVendor={onUpdateVendor}

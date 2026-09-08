@@ -217,9 +217,10 @@ export default function FuelManagement({
   // Vinod (2026-09-05, direct request) - sees every entry from every
   // entrant, including who entered what (Entered By column/filter), but has
   // no edit ability at all - no Add Entry, no Edit, no Delete, not even the
-  // Mileage-only exception Chandan gets. Mirrors server.ts's
-  // FUEL_VIEW_ONLY_EMAILS exactly.
-  const isViewOnlyUser = user.email === 'vinod@kcmlogistics.in';
+  // Mileage-only exception Chandan gets. Bhagya (2026-09-08, direct request)
+  // gets the same treatment. Mirrors server.ts's FUEL_VIEW_ONLY_EMAILS
+  // exactly.
+  const isViewOnlyUser = user.email === 'vinod@kcmlogistics.in' || user.email === 'bhagya@kcmlogistics.in';
   // Entered By is visible to Super Admin/Principal and to Vinod's read-only
   // view - everyone else never sees who entered what.
   const canSeeEnteredBy = isSuperAdmin || isViewOnlyUser;

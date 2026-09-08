@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import { Vendor, VehicleDocument } from '../types';
+import { User, Vendor, VehicleDocument } from '../types';
 import { Building2, Plus, Search, Edit2, Trash2, X, Car, Download, CheckCircle2, AlertCircle } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import SortHeader from './SortHeader';
@@ -11,6 +11,7 @@ import { SortState, SortDirection, compareText, extractLeadingNumber } from '../
 const isVendorActive = (v: Vendor) => v.active !== false;
 
 interface VendorManagementProps {
+  user: User;
   vendors: Vendor[];
   onAddVendor: (vendor: Omit<Vendor, 'id'>) => Promise<void>;
   onUpdateVendor: (id: string, vendor: Partial<Vendor>) => Promise<void>;
@@ -48,7 +49,11 @@ const getVendorClients = (v: Vendor): string[] => {
   return Array.isArray(v.client) ? v.client : [v.client];
 };
 
-export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor, onDeleteVendor }: VendorManagementProps) {
+export default function VendorManagement({ user, vendors, onAddVendor, onUpdateVendor, onDeleteVendor }: VendorManagementProps) {
+  // Vinod and Bhagya both get read-only visibility into every vendor
+  // (mirrors server.ts's VENDOR_READ_ONLY_EMAILS exactly) - no Add Vendor,
+  // no Edit/Delete, and the Active/Inactive toggle becomes a plain badge.
+  const isReadOnly = user.email === 'vinod@kcmlogistics.in' || user.email === 'bhagya@kcmlogistics.in';
   const [searchTerm, setSearchTerm] = useState('');
   const [clientFilter, setClientFilter] = useState(''); // '' = All clients
   const [sort, setSort] = useState<SortState | null>(null);
@@ -265,12 +270,14 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
             Vendor KYC and bank registry - connected to Fuel Entry's vehicle auto-fill.
           </p>
         </div>
+        {!isReadOnly && (
         <button
           onClick={() => { resetForm(); setShowModal(true); }}
           className="bg-gradient-to-r from-indigo-500 to-sky-600 hover:from-indigo-600 hover:to-sky-700 text-xs text-white font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
         >
           <Plus className="w-4 h-4" /> Add Vendor
         </button>
+        )}
       </div>
 
       {notif && (
@@ -352,19 +359,33 @@ export default function VendorManagement({ vendors, onAddVendor, onUpdateVendor,
                   <td className="px-3 py-2.5 font-mono text-slate-500">{v.bankAccountNumber}</td>
                   <td className="px-3 py-2.5 font-mono text-slate-500">{v.ifscCode}</td>
                   <td className="px-3 py-2.5">
-                    <button
-                      onClick={() => toggleActive(v)}
-                      title="Click to toggle status"
-                      className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] cursor-pointer transition-colors ${
-                        isVendorActive(v) ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100' : 'bg-slate-100 text-slate-500 border-slate-300 hover:bg-slate-200'
-                      }`}
-                    >
-                      {isVendorActive(v) ? 'ACTIVE' : 'INACTIVE'}
-                    </button>
+                    {isReadOnly ? (
+                      <span className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] ${
+                        isVendorActive(v) ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-300'
+                      }`}>
+                        {isVendorActive(v) ? 'ACTIVE' : 'INACTIVE'}
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => toggleActive(v)}
+                        title="Click to toggle status"
+                        className={`inline-block border rounded px-2 py-0.5 font-bold text-[10px] cursor-pointer transition-colors ${
+                          isVendorActive(v) ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100' : 'bg-slate-100 text-slate-500 border-slate-300 hover:bg-slate-200'
+                        }`}
+                      >
+                        {isVendorActive(v) ? 'ACTIVE' : 'INACTIVE'}
+                      </button>
+                    )}
                   </td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                    <button onClick={() => startEdit(v)} className="p-1 text-slate-500 hover:text-indigo-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
-                    <button onClick={() => handleDelete(v)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                    {isReadOnly ? (
+                      <span className="text-slate-300">-</span>
+                    ) : (
+                      <>
+                        <button onClick={() => startEdit(v)} className="p-1 text-slate-500 hover:text-indigo-700 hover:bg-slate-100 rounded cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => handleDelete(v)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}

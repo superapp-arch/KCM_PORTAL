@@ -18,6 +18,7 @@ const BREAKDOWN_TYPES: { value: BreakdownReport['type']; label: string }[] = [
 const PAYMENT_TYPES = ['Cash', 'Credit', 'Company Paid', 'Vendor Paid'];
 
 interface BreakdownsTabProps {
+  readOnly?: boolean;
   breakdownReports: BreakdownReport[];
   onAddBreakdownReport: (report: Omit<BreakdownReport, 'id'>) => Promise<void>;
   onUpdateBreakdownReport: (id: string, report: Partial<BreakdownReport>) => Promise<void>;
@@ -30,7 +31,7 @@ interface BreakdownsTabProps {
 }
 
 export default function BreakdownsTab({
-  breakdownReports, onAddBreakdownReport, onUpdateBreakdownReport, onDeleteBreakdownReport,
+  readOnly, breakdownReports, onAddBreakdownReport, onUpdateBreakdownReport, onDeleteBreakdownReport,
   vehicles, drivers, serviceStations, onAddServiceStation, onAddRecord
 }: BreakdownsTabProps) {
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -208,9 +209,11 @@ export default function BreakdownsTab({
               <option value="newest">Newest First</option>
               <option value="oldest">Oldest First</option>
             </select>
+            {!readOnly && (
             <button onClick={() => setShowReportForm(true)} className="bg-gradient-to-r from-rose-600 to-slate-800 hover:shadow-md text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer">
               <Plus className="w-4 h-4" /> Report Breakdown
             </button>
+            )}
           </div>
         </div>
 
@@ -263,14 +266,16 @@ export default function BreakdownsTab({
                     </span>
                   </td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                    <div className="flex items-center justify-end gap-1.5">
-                      {b.status === 'Open' && (
-                        <button onClick={() => openVisitModal(b)} className="text-teal-600 hover:text-teal-800 bg-teal-50 hover:bg-teal-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer flex items-center gap-1">
-                          <Wrench className="w-3 h-3" /> Log Workshop Visit
-                        </button>
-                      )}
-                      <button onClick={() => handleDeleteReport(b)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
-                    </div>
+                    {readOnly ? <span className="text-slate-300">-</span> : (
+                      <div className="flex items-center justify-end gap-1.5">
+                        {b.status === 'Open' && (
+                          <button onClick={() => openVisitModal(b)} className="text-teal-600 hover:text-teal-800 bg-teal-50 hover:bg-teal-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer flex items-center gap-1">
+                            <Wrench className="w-3 h-3" /> Log Workshop Visit
+                          </button>
+                        )}
+                        <button onClick={() => handleDeleteReport(b)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}

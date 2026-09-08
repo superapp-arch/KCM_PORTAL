@@ -100,7 +100,11 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
   const [selectedOwnership, setSelectedOwnership] = useState<string>('all');
   const [itemsPerPage, setItemsPerPage] = useState<string>('ALL');
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const [sort, setSort] = useState<SortState | null>(null);
+  // Defaults to Registration Date ascending (2026-09-08 direct request) -
+  // still fully overridable via the column's own sort dropdown, same "sets a
+  // sensible default, never locks it" pattern as every other default sort in
+  // this app.
+  const [sort, setSort] = useState<SortState | null>({ key: 'registrationDate', direction: 'asc' });
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
   
   const [expandedRegNo, setExpandedRegNo] = useState<string | null>(null);

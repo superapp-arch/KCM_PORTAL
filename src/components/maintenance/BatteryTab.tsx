@@ -7,6 +7,7 @@ import { SortState, compareText } from '../../utils/sort';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
 
 interface BatteryTabProps {
+  readOnly?: boolean;
   vehicles: Vehicle[];
   batteryRecords: BatteryRecord[];
   onSaveBatteryRecord: (record: BatteryRecord | Omit<BatteryRecord, 'id'>) => Promise<void>;
@@ -17,7 +18,7 @@ const emptyForm = (regNo = ''): Omit<BatteryRecord, 'id'> & { id?: string } => (
   regNo, batteryNumber: '', make: '', installedKm: undefined, installedDate: '', warrantyExpiryDate: '', isCurrent: true
 });
 
-export default function BatteryTab({ vehicles, batteryRecords, onSaveBatteryRecord, onDeleteBatteryRecord }: BatteryTabProps) {
+export default function BatteryTab({ readOnly, vehicles, batteryRecords, onSaveBatteryRecord, onDeleteBatteryRecord }: BatteryTabProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<Omit<BatteryRecord, 'id'> & { id?: string }>(emptyForm());
@@ -126,9 +127,11 @@ export default function BatteryTab({ vehicles, batteryRecords, onSaveBatteryReco
               <input type="text" placeholder="Search Reg No, battery, make" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off"
                 className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-7 pr-3 py-1.5 focus:outline-none text-slate-800 font-medium" />
             </div>
+            {!readOnly && (
             <button onClick={openAdd} className="bg-gradient-to-r from-blue-600 to-slate-800 hover:shadow-md text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap">
               <Plus className="w-4 h-4" /> Add Battery
             </button>
+            )}
           </div>
         </div>
 
@@ -160,15 +163,19 @@ export default function BatteryTab({ vehicles, batteryRecords, onSaveBatteryReco
                   <td className="px-3 py-2.5">
                     {b.isCurrent ? (
                       <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1 w-fit"><CheckCircle2 className="w-3 h-3" /> Current</span>
+                    ) : readOnly ? (
+                      <span className="text-[9px] text-slate-400 uppercase">-</span>
                     ) : (
                       <button onClick={() => handleMarkCurrent(b)} className="text-[9px] font-bold text-blue-600 hover:text-blue-800 cursor-pointer uppercase">Mark Current</button>
                     )}
                   </td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                    <div className="flex items-center justify-end gap-1">
-                      <button onClick={() => openEdit(b)} className="p-1 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer" title="Edit"><Edit2 className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => handleDelete(b)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
-                    </div>
+                    {readOnly ? <span className="text-slate-300">-</span> : (
+                      <div className="flex items-center justify-end gap-1">
+                        <button onClick={() => openEdit(b)} className="p-1 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded cursor-pointer" title="Edit"><Edit2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => handleDelete(b)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
