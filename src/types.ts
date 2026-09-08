@@ -713,6 +713,13 @@ export interface BreakdownReport {
   workshopVisitId?: string; // the MaintenanceRecord.id that resolved this breakdown
 }
 
+// Fixed Claim Status options for VehicleIncident.claimStatus below (2026-09-08
+// direct follow-up request) - belongs to each individual incident, purely
+// informational: it is NEVER read by the CLAIMED/NOT CLAIMED indicator logic
+// (that stays based solely on whether Claim Number is non-blank).
+export const VEHICLE_INCIDENT_CLAIM_STATUSES = ['Open', 'Pending', 'Approved', 'Settled', 'Rejected', 'Closed'] as const;
+export type VehicleIncidentClaimStatus = typeof VEHICLE_INCIDENT_CLAIM_STATUSES[number];
+
 // Fleet & Vehicles > Incidents & Claims - one row per accident/incident
 // recorded against a vehicle (2026-09-08 incident history + claimed/
 // not-claimed indicator). A vehicle can have unlimited incident history;
@@ -723,7 +730,8 @@ export interface BreakdownReport {
 // table). "Claim Number" is the field previously labelled "Insurance Claim
 // Voucher Code" in the Incidents & Claims tab - CLAIMED/NOT CLAIMED is
 // derived purely from whether this field holds a non-blank value, never
-// from a separate claim-status field (this app has none today).
+// from claimStatus below (that's an independent, purely informational
+// lifecycle field per incident - see VEHICLE_INCIDENT_CLAIM_STATUSES).
 export interface VehicleIncident {
   id: string;
   regNo: string;
@@ -733,6 +741,7 @@ export interface VehicleIncident {
   driverName?: string;
   driverLicenseNo?: string;
   claimNumber?: string; // CLAIMED when non-blank (after trimming), NOT CLAIMED when blank/whitespace-only
+  claimStatus?: VehicleIncidentClaimStatus | string; // never drives CLAIMED/NOT CLAIMED - see above
   policeFirNo?: string;
   firDate?: string;
   policeStationAddress?: string;

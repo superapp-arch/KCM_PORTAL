@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { CheckCircle2, XCircle, Plus, Pencil, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
-import { VehicleIncident } from '../types';
+import { VehicleIncident, VEHICLE_INCIDENT_CLAIM_STATUSES } from '../types';
 import { parseFlexibleDate, formatDateDDMMYYYY } from '../utils/dateFormat';
 import DateInput from './DateInput';
 
@@ -15,8 +15,10 @@ import DateInput from './DateInput';
 // #1 or #3 (see the GLOBAL UI REQUIREMENT test scenarios 9 & 10).
 //
 // CLAIMED/NOT CLAIMED is derived purely from whether claimNumber holds a
-// non-blank (post-trim) value - never from a claim-status field (this app
-// has none today - see VehicleIncident's own header comment in types.ts).
+// non-blank (post-trim) value - never from claimStatus (added 2026-09-08
+// follow-up) - that's a separate, purely informational per-incident field,
+// same spirit as BreakdownReport's own status but with no bearing at all on
+// the Fleet list's green/red indicator (see types.ts's own comment).
 
 type IncidentFormState = {
   accidentDate: string;
@@ -25,6 +27,7 @@ type IncidentFormState = {
   driverName: string;
   driverLicenseNo: string;
   claimNumber: string;
+  claimStatus: string;
   policeFirNo: string;
   firDate: string;
   policeStationAddress: string;
@@ -34,7 +37,7 @@ type IncidentFormState = {
 
 const BLANK_FORM: IncidentFormState = {
   accidentDate: '', accidentTime: '', accidentPlace: '', driverName: '', driverLicenseNo: '',
-  claimNumber: '', policeFirNo: '', firDate: '', policeStationAddress: '', accidentIncidentDetails: '', claimAmount: ''
+  claimNumber: '', claimStatus: '', policeFirNo: '', firDate: '', policeStationAddress: '', accidentIncidentDetails: '', claimAmount: ''
 };
 
 const isClaimed = (inc: VehicleIncident) => !!(inc.claimNumber && inc.claimNumber.trim());
@@ -92,6 +95,7 @@ export default function VehicleIncidentHistory({ regNo, incidents, readOnly, onA
       driverName: inc.driverName || '',
       driverLicenseNo: inc.driverLicenseNo || '',
       claimNumber: inc.claimNumber || '',
+      claimStatus: inc.claimStatus || '',
       policeFirNo: inc.policeFirNo || '',
       firDate: inc.firDate || '',
       policeStationAddress: inc.policeStationAddress || '',
@@ -231,6 +235,17 @@ export default function VehicleIncidentHistory({ regNo, incidents, readOnly, onA
               />
             </div>
             <div>
+              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Claim Status</label>
+              <select
+                value={form.claimStatus}
+                onChange={(e) => field('claimStatus', e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800"
+              >
+                <option value="">Not set</option>
+                {VEHICLE_INCIDENT_CLAIM_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div>
               <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Police FIR Case Number</label>
               <input
                 type="text"
@@ -332,10 +347,17 @@ export default function VehicleIncidentHistory({ regNo, incidents, readOnly, onA
                 <p className="text-[11px] text-slate-600 mt-2">
                   <span className="text-slate-400">Claim Number: </span>
                   <span className="font-mono font-semibold">{inc.claimNumber?.trim() || 'Not entered'}</span>
+                  {inc.claimStatus && (
+                    <span className="ml-2 text-slate-400">
+                      · Claim Status: <span className="font-semibold text-slate-700">{inc.claimStatus}</span>
+                    </span>
+                  )}
                 </p>
 
                 {expanded && (
                   <dl className="grid grid-cols-2 gap-y-1.5 gap-x-4 text-[11px] mt-3 pt-3 border-t border-slate-100">
+                    <dt className="text-slate-400">Claim Status</dt>
+                    <dd className="text-slate-800 font-semibold">{inc.claimStatus || '-'}</dd>
                     <dt className="text-slate-400">Accident Time</dt>
                     <dd className="text-slate-800 font-mono">{inc.accidentTime || '-'}</dd>
                     <dt className="text-slate-400">Driver Name</dt>
