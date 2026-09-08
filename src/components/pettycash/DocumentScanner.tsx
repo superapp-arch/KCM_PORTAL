@@ -1,0 +1,479 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import {
+  Camera, Image as ImageIcon, Loader2, CheckCircle2, AlertTriangle, XCircle,
+  X, RotateCw, Crop, FileImage, ArrowLeft
+} from 'lucide-react';
+import { VehicleDocument } from '../../types';
+import { runScanPipeline, processWithQuad } from '../../utils/scanner/scanPipeline';
+import { loadOpenCV } from '../../utils/scanner/cvLoader';
+import { canvasToMat, matToCanvas, canvasToBlob, rotateCanvas90 } from '../../utils/scanner/imageIo';
+import { toGrayscaleRgba } from '../../utils/scanner/enhance';
+import { Quad } from '../../utils/scanner/geometry';
+import { DetectionConfidence } from '../../utils/scanner/documentDetector';
+import { QualityCheckResult } from '../../utils/scanner/qualityCheck';
+import ManualCropEditor from './ManualCropEditor';
+
+// Petty Cash > Actions > Docs > "Scan Invoice" (2026-09-08 direct request) -
+// full SELECT -> AUTO DETECT -> AUTO CROP -> PERSPECTIVE CORRECT -> QUALITY
+// CHECK -> PREVIEW -> EMPLOYEE CONFIRMS -> SAVE workflow. Nothing is ever
+// uploaded/persisted before the employee clicks the real SAVE button below -
+// closing/cancelling at any earlier point (browser back, [X], choosing
+// another photo) simply discards in-memory canvases, so there is never an
+// orphaned server-side file or document record to clean up (spec section 4/
+// 24). On SAVE, the final canvas is uploaded through the EXACT SAME generic
+// upload endpoint (/api/upload/:module) DocumentAttachment.tsx already uses
+// for every other module's document uploads, and the resulting
+// VehicleDocument is handed back via onSaved for the caller to attach to
+// the voucher through the existing onUpdateVoucher path - no new document
+// API, no new storage system, no new DB schema (spec section 1/36).
+type ScannerPhase = 'idle' | 'processing' | 'preview' | 'adjusting' | 'saving' | 'success' | 'error';
+
+interface ScanData {
+  file: File;
+  originalCanvas: HTMLCanvasElement;
+  workingCanvas: HTMLCanvasElement;
+  quad: Quad | null; // working-copy coordinates - only used to seed the manual editor's starting position
+  quadFullRes: Quad | null;
+  confidence: DetectionConfidence;
+  processedCanvas: HTMLCanvasElement | null;
+  quality: QualityCheckResult | null;
+  partiallyOutOfFrame: boolean;
+  selectedVersion: 'processed' | 'original';
+  grayscale: boolean;
+}
+
+interface Props {
+  onClose: () => void;
+  // Awaited before the scanner shows its own "Invoice saved successfully"
+  // state (spec section 45/42) - if attaching the document to the voucher
+  // fails, that failure surfaces in THIS modal's own recoverable error
+  // state instead of a false success screen.
+  onSaved: (doc: VehicleDocument) => Promise<void>;
+}
+
+export default function DocumentScanner({ onClose, onSaved }: Props) {
+  const [phase, setPhase] = useState<ScannerPhase>('idle');
+  const [progressMessage, setProgressMessage] = useState('Detecting document...');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [scanData, setScanData] = useState<ScanData | null>(null);
+  const [activeCanvas, setActiveCanvas] = useState<HTMLCanvasElement | null>(null);
+  const savingRef = useRef(false); // hard guard against double-click/duplicate save independent of React state timing
+
+  const galleryInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+
+  // Recompute the canvas actually shown/saved whenever the employee changes
+  // which version (Processed/Original) or display mode (colour/grayscale)
+  // they've selected - grayscale is an explicit opt-in per scan, colour
+  // stays the default (spec section 14).
+  useEffect(() => {
+    let cancelled = false;
+    if (!scanData) { setActiveCanvas(null); return; }
+    const base = scanData.selectedVersion === 'original'
+      ? scanData.originalCanvas
+      : (scanData.processedCanvas || scanData.originalCanvas);
+
+    if (scanData.selectedVersion === 'original' || !scanData.grayscale) {
+      setActiveCanvas(base);
+      return;
+    }
+
+    (async () => {
+      try {
+        const cv = await loadOpenCV();
+        const mat = canvasToMat(cv, base);
+        const gray = toGrayscaleRgba(cv, mat);
+        const canvas = matToCanvas(cv, gray);
+        mat.delete();
+        gray.delete();
+        if (!cancelled) setActiveCanvas(canvas);
+      } catch {
+        if (!cancelled) setActiveCanvas(base);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [scanData]);
+
+  const resetToIdle = () => {
+    setScanData(null);
+    setActiveCanvas(null);
+    setErrorMessage('');
+    setPhase('idle');
+  };
+
+  const handleFileSelected = async (file: File | undefined | null) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      // Non-image files (PDF, Word, Excel) never go through the scanner -
+      // the existing plain Docs upload already handles those correctly
+      // (spec section 30) and this component only exists for photos.
+      setErrorMessage('The scanner only works with photos (JPG/PNG). For PDF or other file types, use the regular "Add Files" option in Docs instead.');
+      setPhase('error');
+      return;
+    }
+
+    setPhase('processing');
+    setProgressMessage('Detecting document...');
+    try {
+      const result = await runScanPipeline(file, (msg) => setProgressMessage(msg));
+      setScanData({
+        file,
+        originalCanvas: result.originalCanvas,
+        workingCanvas: result.workingCanvas,
+        quad: result.quad,
+        quadFullRes: result.quadFullRes,
+        confidence: result.confidence,
+        processedCanvas: result.processedCanvas,
+        quality: result.quality,
+        partiallyOutOfFrame: result.partiallyOutOfFrame,
+        selectedVersion: result.processedCanvas ? 'processed' : 'original',
+        grayscale: false
+      });
+      setPhase('preview');
+    } catch (err) {
+      console.error('Document scan failed:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Unable to process this image.');
+      setPhase('error');
+    }
+  };
+
+  const handleRotate = () => {
+    if (!scanData) return;
+    const rotatedOriginal = rotateCanvas90(scanData.originalCanvas, true);
+    const rotatedProcessed = scanData.processedCanvas ? rotateCanvas90(scanData.processedCanvas, true) : null;
+    setScanData({ ...scanData, originalCanvas: rotatedOriginal, processedCanvas: rotatedProcessed });
+  };
+
+  const handleUseOriginal = () => {
+    if (!scanData) return;
+    setScanData({ ...scanData, selectedVersion: 'original', grayscale: false });
+  };
+
+  const handleUseProcessed = () => {
+    if (!scanData || !scanData.processedCanvas) return;
+    setScanData({ ...scanData, selectedVersion: 'processed' });
+  };
+
+  const handleApplyManualCrop = async (quad: Quad) => {
+    if (!scanData) return;
+    setPhase('processing');
+    setProgressMessage('Correcting perspective...');
+    try {
+      const cv = await loadOpenCV();
+      const { processedCanvas, quality } = processWithQuad(cv, scanData.originalCanvas, quad);
+      setScanData({
+        ...scanData,
+        quadFullRes: quad,
+        processedCanvas,
+        quality,
+        selectedVersion: 'processed',
+        partiallyOutOfFrame: false
+      });
+      setPhase('preview');
+    } catch (err) {
+      console.error('Manual crop failed:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Unable to apply this crop.');
+      setPhase('error');
+    }
+  };
+
+  const handleSave = async () => {
+    if (savingRef.current) return; // double-click / duplicate-submit guard
+    if (!scanData || !activeCanvas) return;
+    savingRef.current = true;
+    setPhase('saving');
+    try {
+      const blob = await canvasToBlob(activeCanvas, 'image/jpeg', 0.92);
+      const baseName = (scanData.file.name.substring(0, scanData.file.name.lastIndexOf('.')) || scanData.file.name).trim() || 'invoice';
+      const uploadName = `${baseName}_scan.jpg`;
+      const formData = new FormData();
+      formData.append('file', new File([blob], uploadName, { type: 'image/jpeg' }));
+
+      const response = await fetch('/api/upload/pettycash', { method: 'POST', body: formData });
+      const result = await response.json().catch(() => ({ success: false }));
+      if (!response.ok || !result.success) {
+        throw new Error(result.message || 'Failed to upload the invoice. Please check your connection and try again.');
+      }
+
+      const doc: VehicleDocument = {
+        id: Math.random().toString(36).substring(2, 11),
+        name: baseName,
+        type: 'image',
+        fileName: uploadName,
+        fileSize: (blob.size / 1024).toFixed(1) + ' KB',
+        uploadDate: new Date().toISOString().substring(0, 10),
+        filePath: result.path
+      };
+
+      await onSaved(doc);
+      setPhase('success');
+      // Auto-close shortly after a successful save so the employee doesn't
+      // have to manually dismiss the confirmation (spec section 3/53's
+      // "Invoice saved successfully" -> back to the existing Docs list) -
+      // the header [X] and this still both work immediately if they'd
+      // rather close it right away.
+      window.setTimeout(() => onClose(), 1400);
+    } catch (err) {
+      console.error('Invoice save failed:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to save the invoice. Please try again.');
+      setPhase('error');
+    } finally {
+      savingRef.current = false;
+    }
+  };
+
+  const confidenceLabel: Record<DetectionConfidence, { label: string; className: string }> = {
+    high: { label: 'High confidence', className: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
+    medium: { label: 'Medium confidence - please double-check the crop', className: 'bg-amber-100 text-amber-800 border-amber-300' },
+    low: { label: 'Boundary could not be detected confidently', className: 'bg-red-100 text-red-800 border-red-300' }
+  };
+
+  return createPortal(
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 font-sans">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-xl w-full max-h-[92vh] flex flex-col overflow-hidden text-xs">
+        <div className="bg-[#0f172a] text-white p-4 flex items-center justify-between shrink-0">
+          <div>
+            <h3 className="text-sm font-bold flex items-center gap-2">
+              <FileImage className="w-4 h-4 text-teal-400" />
+              Invoice Document Scanner
+            </h3>
+            <p className="text-[10px] text-slate-400 font-mono mt-0.5 uppercase tracking-wider">
+              Petty Cash · Docs · Auto-Crop &amp; Perspective Correction
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            title="Close"
+            className="text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 p-1.5 rounded-lg transition-colors cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-6 overflow-y-auto flex-1 space-y-4">
+          {phase === 'idle' && (
+            <div className="space-y-4">
+              <p className="text-slate-500 text-center">
+                Select a receipt/invoice photo received from a driver, vendor, WhatsApp, or email - the portal will automatically detect and crop the document.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => cameraInputRef.current?.click()}
+                  className="flex flex-col items-center gap-2 border-2 border-dashed border-slate-300 hover:border-teal-500 hover:bg-teal-50/50 rounded-xl py-6 cursor-pointer transition-colors"
+                >
+                  <Camera className="w-7 h-7 text-teal-600" />
+                  <span className="font-bold text-slate-700 uppercase text-[11px]">Take Photo</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => galleryInputRef.current?.click()}
+                  className="flex flex-col items-center gap-2 border-2 border-dashed border-slate-300 hover:border-teal-500 hover:bg-teal-50/50 rounded-xl py-6 cursor-pointer transition-colors"
+                >
+                  <ImageIcon className="w-7 h-7 text-teal-600" />
+                  <span className="font-bold text-slate-700 uppercase text-[11px]">Choose From Gallery</span>
+                </button>
+              </div>
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={(e) => { handleFileSelected(e.target.files?.[0]); e.target.value = ''; }}
+              />
+              <input
+                ref={galleryInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => { handleFileSelected(e.target.files?.[0]); e.target.value = ''; }}
+              />
+            </div>
+          )}
+
+          {phase === 'processing' && (
+            <div className="flex flex-col items-center justify-center gap-3 py-16">
+              <Loader2 className="w-8 h-8 text-teal-600 animate-spin" />
+              <p className="text-slate-600 font-semibold">{progressMessage}</p>
+            </div>
+          )}
+
+          {phase === 'error' && (
+            <div className="flex flex-col items-center gap-3 py-10">
+              <XCircle className="w-10 h-10 text-red-500" />
+              <p className="text-slate-700 font-semibold text-center">{errorMessage || 'Unable to process this image.'}</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={resetToIdle}
+                  className="px-4 py-2 rounded-lg text-xs font-bold uppercase border border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer"
+                >
+                  Try Again
+                </button>
+                {scanData && (
+                  <button
+                    type="button"
+                    onClick={() => { handleUseOriginal(); setPhase('preview'); }}
+                    className="px-4 py-2 rounded-lg text-xs font-bold uppercase bg-teal-600 hover:bg-teal-700 text-white cursor-pointer"
+                  >
+                    Use Original
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {phase === 'adjusting' && scanData && (
+            <ManualCropEditor
+              imageWidth={scanData.originalCanvas.width}
+              imageHeight={scanData.originalCanvas.height}
+              imageSrc={scanData.originalCanvas.toDataURL('image/jpeg', 0.85)}
+              initialQuad={
+                scanData.quadFullRes ?? [
+                  { x: scanData.originalCanvas.width * 0.05, y: scanData.originalCanvas.height * 0.05 },
+                  { x: scanData.originalCanvas.width * 0.95, y: scanData.originalCanvas.height * 0.05 },
+                  { x: scanData.originalCanvas.width * 0.95, y: scanData.originalCanvas.height * 0.95 },
+                  { x: scanData.originalCanvas.width * 0.05, y: scanData.originalCanvas.height * 0.95 }
+                ]
+              }
+              onApply={handleApplyManualCrop}
+              onCancel={() => setPhase('preview')}
+            />
+          )}
+
+          {(phase === 'preview' || phase === 'saving' || phase === 'success') && scanData && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-center bg-slate-50 border border-slate-200 rounded-xl p-3">
+                {activeCanvas && (
+                  <img
+                    src={activeCanvas.toDataURL('image/jpeg', 0.85)}
+                    alt="Invoice preview"
+                    className="max-h-80 rounded-lg shadow-sm border border-slate-200 object-contain"
+                  />
+                )}
+              </div>
+
+              {scanData.selectedVersion === 'processed' && (
+                <div className="flex items-center justify-center gap-2">
+                  <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-extrabold uppercase border ${confidenceLabel[scanData.confidence].className}`}>
+                    {scanData.confidence === 'low' ? <AlertTriangle className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
+                    {confidenceLabel[scanData.confidence].label}
+                  </span>
+                </div>
+              )}
+
+              {scanData.partiallyOutOfFrame && scanData.selectedVersion === 'processed' && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-center">
+                  Document appears to be partially outside the photo. Please check that no financial information (amount, date, invoice number) is cut off before saving.
+                </p>
+              )}
+
+              {scanData.quality && scanData.quality.warnings.length > 0 && (
+                <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-0.5">
+                  {scanData.quality.warnings.map((w, i) => <p key={i}>⚠ {w}</p>)}
+                </div>
+              )}
+
+              {!scanData.processedCanvas && scanData.selectedVersion === 'processed' && (
+                <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-center">
+                  Document boundary could not be detected confidently. Adjust the crop manually or use the original photo as-is.
+                </p>
+              )}
+
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPhase('adjusting')}
+                  disabled={phase !== 'preview'}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase border border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer disabled:opacity-40"
+                >
+                  <Crop className="w-3.5 h-3.5" /> Adjust Crop
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRotate}
+                  disabled={phase !== 'preview'}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase border border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer disabled:opacity-40"
+                >
+                  <RotateCw className="w-3.5 h-3.5" /> Rotate
+                </button>
+                {scanData.selectedVersion === 'processed' ? (
+                  <button
+                    type="button"
+                    onClick={handleUseOriginal}
+                    disabled={phase !== 'preview'}
+                    className="px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase border border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer disabled:opacity-40"
+                  >
+                    Use Original
+                  </button>
+                ) : (
+                  scanData.processedCanvas && (
+                    <button
+                      type="button"
+                      onClick={handleUseProcessed}
+                      disabled={phase !== 'preview'}
+                      className="px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase border border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer disabled:opacity-40"
+                    >
+                      Use Processed
+                    </button>
+                  )
+                )}
+                {scanData.selectedVersion === 'processed' && scanData.processedCanvas && (
+                  <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase border border-slate-200 text-slate-600 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={scanData.grayscale}
+                      disabled={phase !== 'preview'}
+                      onChange={(e) => setScanData({ ...scanData, grayscale: e.target.checked })}
+                    />
+                    Grayscale
+                  </label>
+                )}
+                <button
+                  type="button"
+                  onClick={resetToIdle}
+                  disabled={phase !== 'preview'}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase text-slate-500 hover:text-slate-700 cursor-pointer disabled:opacity-40"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" /> Choose Another
+                </button>
+              </div>
+
+              {phase === 'success' ? (
+                <div className="flex flex-col items-center gap-2 py-2">
+                  <CheckCircle2 className="w-8 h-8 text-emerald-500" />
+                  <p className="text-emerald-700 font-bold">Invoice saved successfully.</p>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={phase === 'saving'}
+                  className="w-full py-3 rounded-lg text-sm font-extrabold uppercase bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white cursor-pointer transition-colors flex items-center justify-center gap-2"
+                >
+                  {phase === 'saving' ? (<><Loader2 className="w-4 h-4 animate-spin" /> Saving...</>) : 'Save'}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {phase !== 'success' && (
+          <div className="bg-slate-50 border-t border-slate-100 p-3 flex justify-end shrink-0">
+            <button
+              onClick={onClose}
+              disabled={phase === 'saving'}
+              className="px-4 py-2 bg-slate-200 hover:bg-slate-300 disabled:opacity-50 text-slate-800 text-xs font-bold rounded-lg transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body
+  );
+}

@@ -28,9 +28,11 @@ import {
   Trash2,
   Clock,
   ArrowRightLeft,
-  FileText
+  FileText,
+  Camera
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
+import DocumentScanner from './pettycash/DocumentScanner';
 import DateInput from './DateInput';
 import SortHeader from './SortHeader';
 import ColumnFilterHeader from './ColumnFilterHeader';
@@ -555,6 +557,12 @@ export default function PettyCash({
 
   // Document management states for Petty Cash entries
   const [selectedVoucherForDocs, setSelectedVoucherForDocs] = useState<PettyCashVoucher | null>(null);
+  // Invoice Document Scanner (2026-09-08 direct request) - a second, opt-in
+  // entry point alongside DocumentAttachment's plain "Add Files" inside the
+  // same Voucher Documents modal below. Only ever touches the voucher's
+  // documents array through the exact same onUpdateVoucher call
+  // DocumentAttachment's own onChange already uses - no new document API.
+  const [scannerOpen, setScannerOpen] = useState(false);
 
   const handleOpenDocModal = (v: PettyCashVoucher) => {
     setSelectedVoucherForDocs(v);
@@ -3538,6 +3546,22 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
 
             {/* Body */}
             <div className="p-6 overflow-y-auto max-h-[60vh] space-y-4">
+              {/* Invoice Document Scanner (2026-09-08 direct request) - an
+                  additional, opt-in entry point for photos specifically:
+                  auto-detects the document, corrects perspective, and lets
+                  the employee preview/adjust before it's ever saved. Plain
+                  file uploads (PDF/Word/Excel, or any photo an employee
+                  would rather attach as-is) keep working exactly as before
+                  via "Add Files" below - this doesn't replace it. */}
+              {!canEditPettyCashRow(selectedVoucherForDocs.enteredBy) ? null : (
+                <button
+                  type="button"
+                  onClick={() => setScannerOpen(true)}
+                  className="w-full flex items-center justify-center gap-2 border-2 border-dashed border-teal-300 hover:border-teal-500 bg-teal-50/50 hover:bg-teal-50 text-teal-700 font-bold text-xs uppercase py-3 rounded-xl cursor-pointer transition-colors"
+                >
+                  <Camera className="w-4 h-4" /> Scan Invoice (Auto-Crop &amp; Perspective Correction)
+                </button>
+              )}
               <DocumentAttachment
                 documents={selectedVoucherForDocs.documents || []}
                 onChange={async (updatedDocs) => {
@@ -3569,6 +3593,28 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
             </div>
           </div>
         </div>
+      )}
+
+      {/* Invoice Document Scanner modal (2026-09-08 direct request) - see
+          the "Scan Invoice" button above. Nothing is saved until the
+          employee clicks SAVE inside it; onSaved below is the ONLY point
+          that appends to the voucher's documents, through the exact same
+          onUpdateVoucher call DocumentAttachment's own onChange uses. */}
+      {scannerOpen && selectedVoucherForDocs && (
+        <DocumentScanner
+          onClose={() => setScannerOpen(false)}
+          onSaved={async (doc) => {
+            // Awaited by DocumentScanner itself before it shows its own
+            // "Invoice saved successfully" state - if this throws, the
+            // scanner shows its own recoverable error state instead (so no
+            // separate error toast here; a success toast still fires below
+            // once the attach genuinely succeeds).
+            const updatedDocs = [...(selectedVoucherForDocs.documents || []), doc];
+            await onUpdateVoucher(selectedVoucherForDocs.id, { documents: updatedDocs });
+            setSelectedVoucherForDocs({ ...selectedVoucherForDocs, documents: updatedDocs });
+            triggerNotif('📎 Invoice saved successfully.', 'success');
+          }}
+        />
       )}
 
       {/* Amount Received modal - opening/top-up entries for a Petty Cash
