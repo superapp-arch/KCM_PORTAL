@@ -52,6 +52,7 @@ import {
   toolsChecklistRecords,
   serviceStationSpareParts,
   serviceStationInspections,
+  vehicleIncidents,
   auditLogs
 } from './schema.ts';
 import { eq, ne, and, or, ilike, gte, lte, asc, desc, sql } from 'drizzle-orm';
@@ -111,6 +112,7 @@ import {
   ToolsChecklistRecord,
   ServiceStationSparePart,
   ServiceStationInspection,
+  VehicleIncident,
   AuditLog,
   AuditAction
 } from '../types.ts';
@@ -1506,6 +1508,115 @@ export async function migrateLegacyMaintenanceProfiles() {
     console.log(`[MIGRATION] Converted ${legacyProfiles.length} legacy vehicle maintenance profile(s) into the new Service Schedule / Tire / Battery / Tools Checklist tables.`);
   } catch (error) {
     console.error("Migration failed in migrateLegacyMaintenanceProfiles:", error);
+  }
+}
+
+// --- VEHICLE INCIDENT OPERATIONS ---
+// Fleet & Vehicles > Incidents & Claims (2026-09-08 incident history +
+// claimed/not-claimed indicator) - one row per accident/incident, unlimited
+// per vehicle, never overwritten by a later one. Same id+regNo+data-JSON-
+// blob shape as tireRecords/batteryRecords/toolsChecklistRecords.
+export async function getVehicleIncidents(): Promise<VehicleIncident[]> {
+  try {
+    const rows = await db.select().from(vehicleIncidents);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getVehicleIncidents:", error);
+    throw new Error("Failed to retrieve vehicle incidents.", { cause: error });
+  }
+}
+
+export async function saveVehicleIncident(incident: VehicleIncident) {
+  try {
+    const id = incident.id || `inc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const complete: VehicleIncident = { ...incident, id, createdAt: incident.createdAt || new Date().toISOString() };
+    const dataString = JSON.stringify(complete);
+
+    const existing = await db.select().from(vehicleIncidents).where(eq(vehicleIncidents.id, id));
+    if (existing.length > 0) {
+      await db.update(vehicleIncidents).set({ data: dataString, regNo: complete.regNo }).where(eq(vehicleIncidents.id, id));
+    } else {
+      await db.insert(vehicleIncidents).values({ id, regNo: complete.regNo, data: dataString });
+    }
+    return await getVehicleIncidents();
+  } catch (error) {
+    console.error("Database action failed in saveVehicleIncident:", error);
+    throw new Error("Failed to save vehicle incident.", { cause: error });
+  }
+}
+
+export async function deleteVehicleIncident(id: string) {
+  try {
+    await db.delete(vehicleIncidents).where(eq(vehicleIncidents.id, id));
+    return await getVehicleIncidents();
+  } catch (error) {
+    console.error("Database action failed in deleteVehicleIncident:", error);
+    throw new Error("Failed to delete vehicle incident.", { cause: error });
+  }
+}
+
+// One-time conversion of the old single-incident fields that used to live
+// directly on the Vehicle record (accidentDate/accidentPlace/claimNumber/
+// etc, still present on Vehicle for backward compatibility - see types.ts)
+// into this new incident-history table, so nothing already entered gets
+// silently dropped. Safe to call on every boot - it's a no-op once the new
+// table has any data at all (never overwrites/re-runs after that point,
+// even if more vehicles are added later - those start with a clean, empty
+// incident history and only ever gain records through the new Add New
+// Incident UI going forward).
+export async function migrateLegacyVehicleIncidents() {
+  try {
+    const existingIncidents = await getVehicleIncidents();
+    if (existingIncidents.length > 0) return;
+
+    const allVehicles = await getVehicles();
+    let migrated = 0;
+    for (const v of allVehicles as any[]) {
+      const regNo = (v['Reg. No.'] || v.regNo || v.id || '').toString().trim();
+      if (!regNo) continue;
+
+      const field = (mixedCaseKey: string, camelKey: string) => (v[mixedCaseKey] || v[camelKey] || '').toString().trim();
+      const accidentDate = field('Accident Date', 'accidentDate');
+      const accidentTime = field('Accident Time', 'accidentTime');
+      const accidentPlace = field('Accident Place', 'accidentPlace');
+      const driverName = field('Driver Name', 'driverName');
+      const driverLicenseNo = field('Driver License No', 'driverLicenseNo');
+      const claimNumber = field('Claim Number', 'claimNumber');
+      const policeFirNo = field('Police FIR No.', 'policeFirNo');
+      const firDate = field('FIR Date', 'firDate');
+      const policeStationAddress = field('Police Station Address', 'policeStationAddress');
+      const accidentIncidentDetails = field('Accident Incident Details', 'accidentIncidentDetails');
+      const claimAmount = field('Claim Amount', 'claimAmount');
+
+      const hasIncidentData = !!(accidentDate || accidentTime || accidentPlace || driverName ||
+        driverLicenseNo || claimNumber || policeFirNo || firDate || policeStationAddress ||
+        accidentIncidentDetails || claimAmount);
+      if (!hasIncidentData) continue;
+
+      await saveVehicleIncident({
+        id: `${regNo}-legacy-incident`,
+        regNo,
+        accidentDate: accidentDate || undefined,
+        accidentTime: accidentTime || undefined,
+        accidentPlace: accidentPlace || undefined,
+        driverName: driverName || undefined,
+        driverLicenseNo: driverLicenseNo || undefined,
+        claimNumber: claimNumber || undefined,
+        policeFirNo: policeFirNo || undefined,
+        firDate: firDate || undefined,
+        policeStationAddress: policeStationAddress || undefined,
+        accidentIncidentDetails: accidentIncidentDetails || undefined,
+        claimAmount: claimAmount || undefined,
+        createdAt: new Date().toISOString()
+      });
+      migrated++;
+    }
+
+    if (migrated > 0) {
+      console.log(`[MIGRATION] Converted ${migrated} legacy vehicle-level accident/incident record(s) into the new Incidents & Claims history table.`);
+    }
+  } catch (error) {
+    console.error("Migration failed in migrateLegacyVehicleIncidents:", error);
   }
 }
 

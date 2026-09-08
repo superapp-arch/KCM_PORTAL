@@ -21,6 +21,7 @@ import {
   DriverEmployee,
   DriverVehicleLookup,
   VehicleLoan,
+  VehicleIncident,
   BusinessLoan,
   MarketPodEntry,
   PettyCashAdvance,
@@ -255,6 +256,10 @@ interface AdministrationProps {
   onUpdateDriver: (id: string, driver: Partial<DriverEmployee>) => Promise<void>;
   onDeleteDriver: (id: string) => Promise<void>;
   driverPettyCashAdvanceVouchers: DriverSalaryAdvanceVoucherSlim[];
+  vehicleIncidents: VehicleIncident[];
+  onAddVehicleIncident: (incident: Omit<VehicleIncident, 'id' | 'createdAt'>) => Promise<void>;
+  onUpdateVehicleIncident: (id: string, incident: Partial<VehicleIncident>) => Promise<void>;
+  onDeleteVehicleIncident: (id: string) => Promise<void>;
   vehicleLoans: VehicleLoan[];
   onAddVehicleLoan: (loan: Omit<VehicleLoan, 'id'> & { id: string }) => Promise<void>;
   onUpdateVehicleLoan: (id: string, loan: Partial<VehicleLoan>) => Promise<void>;
@@ -371,6 +376,10 @@ export default function Administration({
   onUpdateDriver,
   onDeleteDriver,
   driverPettyCashAdvanceVouchers,
+  vehicleIncidents,
+  onAddVehicleIncident,
+  onUpdateVehicleIncident,
+  onDeleteVehicleIncident,
   vehicleLoans,
   onAddVehicleLoan,
   onUpdateVehicleLoan,
@@ -1134,6 +1143,10 @@ export default function Administration({
               onAddVehicleMileage={onAddVehicleMileage}
               onUpdateVehicleMileage={onUpdateVehicleMileage}
               vehicleLoans={vehicleLoans}
+              vehicleIncidents={vehicleIncidents}
+              onAddVehicleIncident={onAddVehicleIncident}
+              onUpdateVehicleIncident={onUpdateVehicleIncident}
+              onDeleteVehicleIncident={onDeleteVehicleIncident}
             />
           )}
 

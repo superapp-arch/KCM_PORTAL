@@ -713,6 +713,34 @@ export interface BreakdownReport {
   workshopVisitId?: string; // the MaintenanceRecord.id that resolved this breakdown
 }
 
+// Fleet & Vehicles > Incidents & Claims - one row per accident/incident
+// recorded against a vehicle (2026-09-08 incident history + claimed/
+// not-claimed indicator). A vehicle can have unlimited incident history;
+// each incident is its own record and is never overwritten by a later one
+// (see migrateLegacyVehicleIncidents in service.ts for the one-time
+// conversion of the old single-incident fields that used to live directly
+// on the Vehicle record - accidentDate/claimNumber/etc above - into this
+// table). "Claim Number" is the field previously labelled "Insurance Claim
+// Voucher Code" in the Incidents & Claims tab - CLAIMED/NOT CLAIMED is
+// derived purely from whether this field holds a non-blank value, never
+// from a separate claim-status field (this app has none today).
+export interface VehicleIncident {
+  id: string;
+  regNo: string;
+  accidentDate?: string;
+  accidentTime?: string;
+  accidentPlace?: string;
+  driverName?: string;
+  driverLicenseNo?: string;
+  claimNumber?: string; // CLAIMED when non-blank (after trimming), NOT CLAIMED when blank/whitespace-only
+  policeFirNo?: string;
+  firDate?: string;
+  policeStationAddress?: string;
+  accidentIncidentDetails?: string;
+  claimAmount?: string;
+  createdAt: string; // ISO timestamp - tiebreaker for "newest first" ordering when accidentDate is blank/tied
+}
+
 export interface AccountsEntry {
   id: string;
   date: string;

@@ -12,10 +12,17 @@
 // DD-MM-YYYY dates.
 import { parseFlexibleDate } from './dateFormat';
 
-export type ColumnFilterType = 'text' | 'number' | 'date' | 'boolean';
+// 'incidentStatus' (2026-09-08 Fleet & Vehicles incident history + claimed/
+// not-claimed indicator) is a Fleet & Vehicles-specific single-select
+// classification filter (All/With Incidents/Without Incidents/Claimed/Not
+// Claimed/Has Not Claimed Incident) - unlike 'text', the row's "value" for
+// this type is a precomputed { total, claimed, notClaimed } summary object,
+// not a raw cell value - see matchesIncidentStatus below.
+export type ColumnFilterType = 'text' | 'number' | 'date' | 'boolean' | 'incidentStatus';
 
 export type NumberFilterOp = 'eq' | 'gt' | 'lt' | 'gte' | 'lte' | 'between';
 export type DateFilterOp = 'before' | 'after' | 'between' | 'currentMonth';
+export type IncidentFilterValue = 'with' | 'without' | 'claimed' | 'notClaimed' | 'hasNotClaimed';
 
 // One column's currently-applied filter, however it was built (checkbox
 // multi-select for text/category, an operator+value(s) for number/date, a
@@ -38,6 +45,8 @@ export interface ColumnFilterState {
   dateValue2?: string; // only for 'between'
   // boolean
   boolValue?: 'yes' | 'no';
+  // incidentStatus (Fleet & Vehicles INCIDENT column only)
+  incidentValue?: IncidentFilterValue;
 }
 
 export type ColumnFiltersMap = Record<string, ColumnFilterState | undefined>;
@@ -48,6 +57,7 @@ export function isColumnFilterActive(f?: ColumnFilterState): boolean {
   if (f.numberOp && f.numberValue != null) return true;
   if (f.dateOp && (f.dateOp === 'currentMonth' || f.dateValue)) return true;
   if (f.boolValue) return true;
+  if (f.incidentValue) return true;
   return false;
 }
 
@@ -112,6 +122,30 @@ function matchesBoolean(value: unknown, f: ColumnFilterState): boolean {
   return f.boolValue === 'yes' ? truthy : !truthy;
 }
 
+// `value` is a per-vehicle { total, claimed, notClaimed } incident summary
+// (see FleetSheet.tsx's incidentSummaryFor) - "Claimed"/"Not Claimed" match
+// ANY vehicle with at least one incident in that state (a vehicle can be
+// both a "Claimed" and a "Not Claimed" match at once when it has a mixed
+// incident history - see the GLOBAL UI REQUIREMENT's section 12).
+// "Has Not Claimed Incident" is a deliberate synonym of "Not Claimed" - the
+// spec lists both as separate checkbox options with identical business
+// meaning, so both map to the same predicate.
+function matchesIncidentStatus(value: unknown, f: ColumnFilterState): boolean {
+  if (!f.incidentValue) return true;
+  const summary = (value || {}) as { total?: number; claimed?: number; notClaimed?: number };
+  const total = summary.total ?? 0;
+  const claimed = summary.claimed ?? 0;
+  const notClaimed = summary.notClaimed ?? 0;
+  switch (f.incidentValue) {
+    case 'with': return total > 0;
+    case 'without': return total === 0;
+    case 'claimed': return claimed > 0;
+    case 'notClaimed': return notClaimed > 0;
+    case 'hasNotClaimed': return notClaimed > 0;
+    default: return true;
+  }
+}
+
 // The single predicate every module's own row-filter calls, one column at a
 // time - `value` is that row's raw (unformatted) value for this column.
 export function matchesColumnFilter(value: unknown, f: ColumnFilterState | undefined, type: ColumnFilterType): boolean {
@@ -119,6 +153,7 @@ export function matchesColumnFilter(value: unknown, f: ColumnFilterState | undef
   if (type === 'number') return matchesNumber(value, f);
   if (type === 'date') return matchesDate(value, f);
   if (type === 'boolean') return matchesBoolean(value, f);
+  if (type === 'incidentStatus') return matchesIncidentStatus(value, f);
   // text/category
   if (!f.selectedValues || f.selectedValues.length === 0) return true;
   return f.selectedValues.includes(rawValueKey(value));

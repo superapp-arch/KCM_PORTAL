@@ -71,6 +71,7 @@ import {
   ToolsChecklistRecord,
   ServiceStationSparePart,
   ServiceStationInspection,
+  VehicleIncident,
   AuditAction,
   BunkPaymentPeriod,
   BunkPayment,
@@ -140,6 +141,10 @@ import {
   getServiceStationInspections,
   saveServiceStationInspection,
   deleteServiceStationInspection,
+  getVehicleIncidents,
+  saveVehicleIncident,
+  deleteVehicleIncident,
+  migrateLegacyVehicleIncidents,
   getBunkPaymentPeriods,
   saveBunkPaymentPeriod,
   deleteBunkPaymentPeriod,
@@ -1413,6 +1418,11 @@ async function startServer() {
   // combined Vehicle Maintenance Profiles into the new Service Schedule /
   // Tire / Battery / Tools Checklist tables (no-op once already migrated).
   await migrateLegacyMaintenanceProfiles();
+  // Fleet & Vehicles Incidents & Claims rebuild: one-time conversion of the
+  // old single-incident fields that used to live directly on the Vehicle
+  // record into the new one-to-many Incident History table (no-op once
+  // already migrated - see migrateLegacyVehicleIncidents's own comment).
+  await migrateLegacyVehicleIncidents();
   // Mileage Report gained a Total Ltrs (Litres + Extra Fuel) field that
   // Mileage/Cost-per-KM now compute from - backfill it onto every
   // pre-existing row (no-op once every row has it).
@@ -2473,6 +2483,28 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // Fleet & Vehicles > Incidents & Claims (2026-09-08 incident history +
+  // claimed/not-claimed indicator) - one row per accident/incident, unlimited
+  // per vehicle. GET returns the whole table in one query (same pattern as
+  // every other maintenance sub-table - the Fleet list's per-vehicle
+  // claimed/not-claimed counts are then computed client-side from this one
+  // fetch, avoiding N+1 per-vehicle requests). No server-side auth gating
+  // here, matching Fleet & Vehicles' own /api/fleet routes above (access
+  // control for this module is client-side only, same existing app
+  // behavior - see FleetSheet.tsx's canEdit).
+  app.get('/api/vehicle-incidents', async (req, res) => {
+    try { res.json(await getVehicleIncidents()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/vehicle-incidents', async (req, res) => {
+    try { res.json({ success: true, data: await saveVehicleIncident(req.body as VehicleIncident) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.put('/api/vehicle-incidents/:id', async (req, res) => {
+    try { res.json({ success: true, data: await saveVehicleIncident({ ...req.body, id: req.params.id } as VehicleIncident) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/vehicle-incidents/:id', async (req, res) => {
+    try { res.json({ success: true, data: await deleteVehicleIncident(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.delete('/api/fleet/:id', async (req, res) => {

@@ -393,6 +393,18 @@ export const serviceStationInspections = pgTable('service_station_inspections', 
   data: text('data').notNull(), // JSON string representing the full ServiceStationInspection object
 });
 
+// Fleet & Vehicles > Incidents & Claims - one row per accident/incident
+// recorded against a vehicle (see VehicleIncident in types.ts). Multiple
+// incidents per vehicle are supported: each incident is its own historical
+// record, never overwritten by a later one (2026-09-08 incident history +
+// claimed/not-claimed indicator). regNo follows the same convention as
+// tireRecords/batteryRecords/toolsChecklistRecords above.
+export const vehicleIncidents = pgTable('vehicle_incidents', {
+  id: text('id').primaryKey(),
+  regNo: text('reg_no'),
+  data: text('data').notNull(), // JSON string representing the full VehicleIncident object
+});
+
 // Audit Trail - security/business event log (see AuditLog in types.ts).
 // Deliberately NOT the id+data-JSON-blob shape every other table above uses:
 // audit logs need real server-side filtering/sorting/pagination (date range,

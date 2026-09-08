@@ -1,10 +1,11 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx';
 import { motion } from 'motion/react';
-import { Vehicle, VehicleDocument, VehicleMileage, VehicleLoan } from '../types';
+import { Vehicle, VehicleDocument, VehicleMileage, VehicleLoan, VehicleIncident } from '../types';
 import SortHeader from './SortHeader';
 import ColumnFilterHeader from './ColumnFilterHeader';
+import VehicleIncidentHistory from './VehicleIncidentHistory';
 import { SortState, SortDirection, extractLeadingNumber } from '../utils/sort';
 import { VEHICLE_CATEGORIES, normalizeVehicleCategory, matchVehicleCategoryOption } from '../utils/vehicleCycleDefaults';
 import { parseFlexibleDate, formatDateDDMMYYYY } from '../utils/dateFormat';
@@ -64,6 +65,14 @@ interface FleetSheetProps {
   // requireLoanAccess in server.ts), so vehicleLoans may arrive empty for
   // non-super-admin Fleet users even when a record exists.
   vehicleLoans: VehicleLoan[];
+  // Fleet & Vehicles > Incidents & Claims (2026-09-08 incident history +
+  // claimed/not-claimed indicator) - full table, same "fetch once, compute
+  // client-side" pattern as vehicleMileages/vehicleLoans above (avoids
+  // N+1 per-vehicle requests just to render the INCIDENT column).
+  vehicleIncidents: VehicleIncident[];
+  onAddVehicleIncident: (incident: Omit<VehicleIncident, 'id' | 'createdAt'>) => Promise<void>;
+  onUpdateVehicleIncident: (id: string, incident: Partial<VehicleIncident>) => Promise<void>;
+  onDeleteVehicleIncident: (id: string) => Promise<void>;
 }
 
 const VEHICLE_TYPES = [
@@ -95,7 +104,7 @@ const getExpiryAlertStatus = (dateStr?: string, minDays = 0, maxDays = 10): { is
   return { isAlert: diffDays >= minDays && diffDays <= maxDays, diffDays };
 };
 
-export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehicle, onDeleteVehicle, vehicleMileages, onAddVehicleMileage, onUpdateVehicleMileage, vehicleLoans }: FleetSheetProps) {
+export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehicle, onDeleteVehicle, vehicleMileages, onAddVehicleMileage, onUpdateVehicleMileage, vehicleLoans, vehicleIncidents, onAddVehicleIncident, onUpdateVehicleIncident, onDeleteVehicleIncident }: FleetSheetProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedType, setSelectedType] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -363,6 +372,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
     if (!matchesColumnFilter(v.FC || v.fc, columnFilters.fcExp, 'date')) return false;
     if (!matchesColumnFilter(v['All India Permit'] || v.allIndiaPermit, columnFilters.npExp, 'date')) return false;
     if (!matchesColumnFilter(v['State permit'] || v.statePermit, columnFilters.spExp, 'date')) return false;
+    if (!matchesColumnFilter(incidentSummaryFor(String(regVal)), columnFilters.incident, 'incidentStatus')) return false;
     return true;
   });
 
@@ -401,10 +411,32 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
   const findVehicleLoansForRegNo = (regNo: string) =>
     vehicleLoans.filter(l => l.regNo.trim().toUpperCase() === regNo.trim().toUpperCase());
 
-  const startEdit = (vehicle: Vehicle) => {
+  // Fleet & Vehicles > Incidents & Claims - per-vehicle claimed/not-claimed
+  // counts, computed once from the full vehicleIncidents list (one fetch,
+  // no per-vehicle API calls - GLOBAL UI REQUIREMENT section 20). CLAIMED
+  // is purely "Claim Number is non-blank after trimming" (section 19) -
+  // never claim status, which this app has no field for at all.
+  const incidentSummaryByRegNo = useMemo(() => {
+    const map: Record<string, { total: number; claimed: number; notClaimed: number }> = {};
+    for (const inc of vehicleIncidents) {
+      const key = (inc.regNo || '').trim().toUpperCase();
+      if (!key) continue;
+      if (!map[key]) map[key] = { total: 0, claimed: 0, notClaimed: 0 };
+      map[key].total++;
+      if (inc.claimNumber && inc.claimNumber.trim()) map[key].claimed++;
+      else map[key].notClaimed++;
+    }
+    return map;
+  }, [vehicleIncidents]);
+  const incidentSummaryFor = (regNo: string) =>
+    incidentSummaryByRegNo[String(regNo || '').trim().toUpperCase()] || { total: 0, claimed: 0, notClaimed: 0 };
+  const findVehicleIncidentsForRegNo = (regNo: string) =>
+    vehicleIncidents.filter(inc => (inc.regNo || '').trim().toUpperCase() === regNo.trim().toUpperCase());
+
+  const startEdit = (vehicle: Vehicle, initialTab: typeof activeTab = 'general') => {
     setEditForm({ ...vehicle });
     setIsNewVehicle(false);
-    setActiveTab('general');
+    setActiveTab(initialTab);
     const regNo = vehicle['Reg. No.'] || vehicle.regNo || '';
     const existing = findVehicleMileage(regNo);
     setActualMileageInput(existing ? String(existing.mileage) : '');
@@ -694,13 +726,14 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                 <th className="px-4 py-4 text-purple-100"><ColumnFilterHeader label="FC Exp" type="date" value={columnFilters.fcExp} onChange={f => setColumnFilter('fcExp', f)} /></th>
                 <th className="px-4 py-4 text-purple-100"><ColumnFilterHeader label="NP Exp" type="date" value={columnFilters.npExp} onChange={f => setColumnFilter('npExp', f)} /></th>
                 <th className="px-4 py-4 text-purple-100"><ColumnFilterHeader label="SP Exp" type="date" value={columnFilters.spExp} onChange={f => setColumnFilter('spExp', f)} /></th>
+                <th className="px-4 py-4 text-center text-purple-100"><ColumnFilterHeader label="Incident" type="incidentStatus" value={columnFilters.incident} onChange={f => setColumnFilter('incident', f)} /></th>
                 <th className="px-4 py-4 text-right text-purple-100">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
               {filteredVehicles.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="text-center py-12 text-slate-400 font-mono">
+                  <td colSpan={13} className="text-center py-12 text-slate-400 font-mono">
                     NO FLEET RECORDS FOUND MATCHING THE SELECTED PARAMETERS.
                   </td>
                 </tr>
@@ -820,6 +853,39 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                           ) : (
                             <span className="text-slate-600 font-semibold">{formatDateDDMMYYYY(statePermitRaw) || statePermitRaw || '-'}</span>
                           )}
+                        </td>
+                        <td className="px-4 py-3.5 text-center">
+                          {(() => {
+                            const summary = incidentSummaryFor(reg);
+                            if (summary.total === 0) return <span className="text-slate-300">—</span>;
+                            const allClaimed = summary.notClaimed === 0;
+                            const badgeClasses = `inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-extrabold uppercase border shadow-sm ${
+                              allClaimed ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-red-100 text-red-800 border-red-300'
+                            }`;
+                            const badgeContent = (
+                              <>
+                                {summary.notClaimed > 0 && (
+                                  <span className="flex items-center gap-0.5 text-red-700"><AlertCircle className="w-3 h-3" />{summary.notClaimed}</span>
+                                )}
+                                {summary.claimed > 0 && (
+                                  <span className="flex items-center gap-0.5 text-emerald-700"><CheckCircle className="w-3 h-3" />{summary.claimed}</span>
+                                )}
+                              </>
+                            );
+                            const title = `${summary.total} incident${summary.total === 1 ? '' : 's'} · ${summary.claimed} claimed · ${summary.notClaimed} not claimed`;
+                            return canEdit ? (
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); startEdit(v, 'accident'); }}
+                                title={`${title} · Click to view Incidents & Claims`}
+                                className={`${badgeClasses} cursor-pointer hover:opacity-80`}
+                              >
+                                {badgeContent}
+                              </button>
+                            ) : (
+                              <span title={title} className={badgeClasses}>{badgeContent}</span>
+                            );
+                          })()}
                         </td>
                         <td className="px-4 py-3.5 text-right whitespace-nowrap">
                           <div className="flex items-center justify-end space-x-2">
@@ -986,22 +1052,27 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                                   <dt className="text-slate-400">License No</dt>
                                   <dd className="font-mono text-slate-800 break-all">{v['Driver License No'] || v.driverLicenseNo || '-'}</dd>
 
-                                  {v['Accident Date'] && (
-                                    <>
-                                      <dt className="text-red-500 font-bold col-span-2 border-t pt-1 border-red-50 mt-1 uppercase text-[9px] tracking-widest flex items-center gap-1">
-                                        <AlertTriangle className="w-2.5 h-2.5" />
-                                        Accident Incident Recorded
-                                      </dt>
-                                      <dt className="text-slate-400">Incident Date</dt>
-                                      <dd className="font-mono font-bold text-red-600">{v['Accident Date']}</dd>
-
-                                      <dt className="text-slate-400">Claim Code</dt>
-                                      <dd className="font-mono text-slate-800">{v['Claim Number'] || v.claimNumber || '-'}</dd>
-
-                                      <dt className="text-slate-400">Police Station</dt>
-                                      <dd className="font-mono text-slate-800 break-words">{v['Police Station Address'] || v.policeStationAddress || '-'}</dd>
-                                    </>
-                                  )}
+                                  {/* Incident History summary (2026-09-08 direct request) - sourced
+                                      from the new Incident History table, not the legacy single
+                                      accident fields above. Full per-incident detail lives in
+                                      Edit Vehicle -> Incidents & Claims (click the INCIDENT badge
+                                      in the main table, or the summary below when editable). */}
+                                  {(() => {
+                                    const summary = incidentSummaryFor(reg);
+                                    if (summary.total === 0) return null;
+                                    return (
+                                      <>
+                                        <dt className="text-red-500 font-bold col-span-2 border-t pt-1 border-red-50 mt-1 uppercase text-[9px] tracking-widest flex items-center gap-1">
+                                          <AlertTriangle className="w-2.5 h-2.5" />
+                                          Incident History ({summary.total})
+                                        </dt>
+                                        <dt className="text-slate-400">Claimed</dt>
+                                        <dd className="font-mono font-bold text-emerald-600">{summary.claimed}</dd>
+                                        <dt className="text-slate-400">Not Claimed</dt>
+                                        <dd className="font-mono font-bold text-red-600">{summary.notClaimed}</dd>
+                                      </>
+                                    );
+                                  })()}
                                 </dl>
                               </div>
 
@@ -1804,127 +1875,23 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                   </div>
                 )}
 
-                {/* TAB 5: INCIDENTS & CLAIMS */}
+                {/* TAB 5: INCIDENTS & CLAIMS - full incident history (2026-09-08
+                    direct request). Each incident is its own record, saved/
+                    edited/deleted independently via its own API call - see
+                    VehicleIncidentHistory.tsx. The old single-incident fields
+                    (editForm.accidentDate/claimNumber/etc) are no longer read
+                    or written here; they stay on the Vehicle type only for
+                    backward compatibility with already-migrated legacy data
+                    (see migrateLegacyVehicleIncidents in service.ts). */}
                 {activeTab === 'accident' && (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
-                          Accident Incident Date
-                        </label>
-                        <DateInput
-                          value={editForm['Accident Date'] || editForm.accidentDate || ''}
-                          onChange={(e) => setEditForm({ ...editForm, 'Accident Date': e.target.value, accidentDate: e.target.value })}
-                          className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
-                          Accident Time
-                        </label>
-                        <input
-                          type="text"
-                          value={editForm['Accident Time'] || editForm.accidentTime || ''}
-                          onChange={(e) => setEditForm({ ...editForm, 'Accident Time': e.target.value, accidentTime: e.target.value })}
-                          className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800"
-                          placeholder="e.g. 11.30 pm"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
-                          Accident Location / Place
-                        </label>
-                        <input
-                          type="text"
-                          value={editForm['Accident Place'] || editForm.accidentPlace || ''}
-                          onChange={(e) => setEditForm({ ...editForm, 'Accident Place': e.target.value, accidentPlace: e.target.value })}
-                          className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800"
-                          placeholder="Highway location"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
-                          Assign Driver Name at Incident
-                        </label>
-                        <input
-                          type="text"
-                          value={editForm['Driver Name'] || editForm.driverName || ''}
-                          onChange={(e) => setEditForm({ ...editForm, 'Driver Name': e.target.value, driverName: e.target.value })}
-                          className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800"
-                          placeholder="Driver Name"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
-                          Driver License Number
-                        </label>
-                        <input
-                          type="text"
-                          value={editForm['Driver License No'] || editForm.driverLicenseNo || ''}
-                          onChange={(e) => setEditForm({ ...editForm, 'Driver License No': e.target.value, driverLicenseNo: e.target.value })}
-                          className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono"
-                          placeholder="TN68..."
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
-                          Insurance Claim Voucher Code
-                        </label>
-                        <input
-                          type="text"
-                          value={editForm['Claim Number'] || editForm.claimNumber || ''}
-                          onChange={(e) => setEditForm({ ...editForm, 'Claim Number': e.target.value, claimNumber: e.target.value })}
-                          className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono"
-                          placeholder="e.g. C23002..."
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
-                          Police FIR Case Number
-                        </label>
-                        <input
-                          type="text"
-                          value={editForm['Police FIR No.'] || editForm.policeFirNo || ''}
-                          onChange={(e) => setEditForm({ ...editForm, 'Police FIR No.': e.target.value, policeFirNo: e.target.value })}
-                          className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono"
-                          placeholder="0186/2024"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
-                        Police Station Address
-                      </label>
-                      <input
-                        type="text"
-                        value={editForm['Police Station Address'] || editForm.policeStationAddress || ''}
-                        onChange={(e) => setEditForm({ ...editForm, 'Police Station Address': e.target.value, policeStationAddress: e.target.value })}
-                        className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800"
-                        placeholder="e.g. Walayar Police Station, Palakkad, Kerala"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
-                        Accident Event Incident Details / Garage Report
-                      </label>
-                      <textarea
-                        value={editForm['Accident Incident Details'] || editForm.accidentIncidentDetails || ''}
-                        onChange={(e) => setEditForm({ ...editForm, 'Accident Incident Details': e.target.value, accidentIncidentDetails: e.target.value })}
-                        className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 h-20 focus:ring-1 focus:ring-teal-500"
-                        placeholder="Describe chronological event details, damage metrics, and towing status..."
-                      />
-                    </div>
-                  </div>
+                  <VehicleIncidentHistory
+                    regNo={String(editForm['Reg. No.'] || editForm.regNo || '')}
+                    incidents={findVehicleIncidentsForRegNo(String(editForm['Reg. No.'] || editForm.regNo || ''))}
+                    readOnly={!canEdit}
+                    onAdd={onAddVehicleIncident}
+                    onUpdate={onUpdateVehicleIncident}
+                    onDelete={onDeleteVehicleIncident}
+                  />
                 )}
 
                 {/* TAB 6: EMI DETAILS - read-only display of the same

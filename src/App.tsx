@@ -25,6 +25,7 @@ import {
   DriverEmployee,
   DriverVehicleLookup,
   VehicleLoan,
+  VehicleIncident,
   BusinessLoan,
   MarketPodEntry,
   PettyCashAdvance,
@@ -86,6 +87,7 @@ export default function App() {
   const [drivers, setDrivers] = useState<DriverEmployee[]>([]);
   const [driverVehicleLookup, setDriverVehicleLookup] = useState<DriverVehicleLookup[]>([]);
   const [vehicleLoans, setVehicleLoans] = useState<VehicleLoan[]>([]);
+  const [vehicleIncidents, setVehicleIncidents] = useState<VehicleIncident[]>([]);
   const [businessLoans, setBusinessLoans] = useState<BusinessLoan[]>([]);
   const [dieselBunkAccounts, setDieselBunkAccounts] = useState<DieselBunkAccount[]>([]);
   const [dieselBunkPayments, setDieselBunkPayments] = useState<DieselBunkPayment[]>([]);
@@ -159,6 +161,7 @@ export default function App() {
         driversRes,
         driverVehicleLookupRes,
         vehicleLoansRes,
+        vehicleIncidentsRes,
         businessLoansRes,
         dieselBunkAccountsRes,
         dieselBunkPaymentsRes
@@ -193,6 +196,7 @@ export default function App() {
         authFetch('/api/drivers/employees'),
         authFetch('/api/drivers/vehicle-lookup'),
         authFetch('/api/vehicle-loans'),
+        fetch('/api/vehicle-incidents'),
         authFetch('/api/business-loans'),
         authFetch('/api/diesel-bunk-accounts'),
         authFetch('/api/diesel-bunk-payments')
@@ -228,6 +232,7 @@ export default function App() {
       if (driversRes.ok) setDrivers(await driversRes.json());
       if (driverVehicleLookupRes.ok) setDriverVehicleLookup(await driverVehicleLookupRes.json());
       if (vehicleLoansRes.ok) setVehicleLoans(await vehicleLoansRes.json());
+      if (vehicleIncidentsRes.ok) setVehicleIncidents(await vehicleIncidentsRes.json());
       if (businessLoansRes.ok) setBusinessLoans(await businessLoansRes.json());
       if (dieselBunkAccountsRes.ok) setDieselBunkAccounts(await dieselBunkAccountsRes.json());
       if (dieselBunkPaymentsRes.ok) setDieselBunkPayments(await dieselBunkPaymentsRes.json());
@@ -678,6 +683,47 @@ export default function App() {
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to delete breakdown report.');
+    }
+  };
+
+  // Fleet & Vehicles > Incidents & Claims (2026-09-08 incident history +
+  // claimed/not-claimed indicator) - same POST(create)/PUT(update)/DELETE
+  // pattern as breakdown reports above.
+  const handleAddVehicleIncident = async (incident: Omit<VehicleIncident, 'id' | 'createdAt'>) => {
+    const res = await fetch('/api/vehicle-incidents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(incident)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to save the incident.');
+    }
+  };
+
+  const handleUpdateVehicleIncident = async (id: string, incident: Partial<VehicleIncident>) => {
+    const res = await fetch(`/api/vehicle-incidents/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(incident)
+    });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update the incident.');
+    }
+  };
+
+  const handleDeleteVehicleIncident = async (id: string) => {
+    const res = await fetch(`/api/vehicle-incidents/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      await fetchAllData();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to delete the incident.');
     }
   };
 
@@ -1465,6 +1511,10 @@ export default function App() {
         onUpdateDriver={handleUpdateDriver}
         onDeleteDriver={handleDeleteDriver}
         driverPettyCashAdvanceVouchers={driverPettyCashAdvanceVouchers}
+        vehicleIncidents={vehicleIncidents}
+        onAddVehicleIncident={handleAddVehicleIncident}
+        onUpdateVehicleIncident={handleUpdateVehicleIncident}
+        onDeleteVehicleIncident={handleDeleteVehicleIncident}
         vehicleLoans={vehicleLoans}
         onAddVehicleLoan={handleAddVehicleLoan}
         onUpdateVehicleLoan={handleUpdateVehicleLoan}

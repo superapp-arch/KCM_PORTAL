@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronUp, ChevronDown, Check, Filter as FilterIcon, X } from 'lucide-react';
 import { SortState, SortDirection } from '../utils/sort';
-import { ColumnFilterState, ColumnFilterType, NumberFilterOp, DateFilterOp, isColumnFilterActive, rawValueKey } from '../utils/columnFilter';
+import { ColumnFilterState, ColumnFilterType, NumberFilterOp, DateFilterOp, IncidentFilterValue, isColumnFilterActive, rawValueKey } from '../utils/columnFilter';
 
 // Reusable Excel-style column-header filter (2026-09-08 direct request,
 // GLOBAL UI REQUIREMENT) - a superset of SortHeader.tsx (same shell:
@@ -74,6 +74,7 @@ export default function ColumnFilterHeader({
   const [draftDateValue, setDraftDateValue] = useState('');
   const [draftDateValue2, setDraftDateValue2] = useState('');
   const [draftBool, setDraftBool] = useState<'yes' | 'no' | undefined>(undefined);
+  const [draftIncident, setDraftIncident] = useState<IncidentFilterValue | undefined>(undefined);
 
   const openPanel = () => {
     setDraftSelected(new Set(value?.selectedValues || []));
@@ -85,6 +86,7 @@ export default function ColumnFilterHeader({
     setDraftDateValue(value?.dateValue || '');
     setDraftDateValue2(value?.dateValue2 || '');
     setDraftBool(value?.boolValue);
+    setDraftIncident(value?.incidentValue);
     setOpen(true);
   };
 
@@ -112,7 +114,7 @@ export default function ColumnFilterHeader({
   // Unique values for text/category, sorted with "Blank" (the '' sentinel)
   // always last so it doesn't scatter alphabetically among real values.
   const uniqueValues = useMemo(() => {
-    if (type === 'number' || type === 'date' || type === 'boolean') return [];
+    if (type === 'number' || type === 'date' || type === 'boolean' || type === 'incidentStatus') return [];
     const set = new Set<string>();
     (values || []).forEach(v => set.add(rawValueKey(v)));
     const arr = Array.from(set);
@@ -161,6 +163,11 @@ export default function ColumnFilterHeader({
   const applyBool = (v: 'yes' | 'no' | undefined) => {
     setDraftBool(v);
     onChange(v ? { boolValue: v } : undefined);
+    setOpen(false);
+  };
+  const applyIncident = (v: IncidentFilterValue | undefined) => {
+    setDraftIncident(v);
+    onChange(v ? { incidentValue: v } : undefined);
     setOpen(false);
   };
   const clearFilter = () => {
@@ -328,6 +335,29 @@ export default function ColumnFilterHeader({
                 >
                   {l}
                   {draftBool === v && <Check className="w-3 h-3 shrink-0" />}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {type === 'incidentStatus' && (
+            <div className="px-3 space-y-1">
+              {([
+                [undefined, 'All'],
+                ['with', 'With Incidents'],
+                ['without', 'Without Incidents'],
+                ['claimed', 'Claimed'],
+                ['notClaimed', 'Not Claimed'],
+                ['hasNotClaimed', 'Has Not Claimed Incident'],
+              ] as const).map(([v, l]) => (
+                <button
+                  key={l}
+                  type="button"
+                  onClick={() => applyIncident(v)}
+                  className={`w-full text-left px-2 py-1 rounded hover:bg-slate-100 cursor-pointer flex items-center justify-between ${draftIncident === v ? 'text-pink-600 font-black' : ''}`}
+                >
+                  {l}
+                  {draftIncident === v && <Check className="w-3 h-3 shrink-0" />}
                 </button>
               ))}
             </div>
