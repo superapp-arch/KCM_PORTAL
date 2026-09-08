@@ -6,8 +6,10 @@ import { AlertTriangle, Plus, X, Wrench, CheckCircle2, AlertCircle, Trash2, Zap,
 import DateInput from '../DateInput';
 import DocumentAttachment from '../DocumentAttachment';
 import SortHeader from '../SortHeader';
+import ColumnFilterHeader from '../ColumnFilterHeader';
 import { SortState } from '../../utils/sort';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../../utils/columnFilter';
 
 const BREAKDOWN_TYPES: { value: BreakdownReport['type']; label: string }[] = [
   { value: 'EnRouteBreakdown', label: 'En-Route Breakdown' },
@@ -178,12 +180,34 @@ export default function BreakdownsTab({
   // dropdown convention used elsewhere.
   const [sort, setSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
   const handleSort = (key: string, direction: SortState['direction']) => setSort({ key, direction });
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) - this
+  // table had no filters of its own before this.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersMap>({});
+  const setColumnFilter = (key: string, f: ColumnFilterState | undefined) => setColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllColumnFilters = () => setColumnFilters({});
+  const activeColumnFilterCount = Object.values(columnFilters).filter(isColumnFilterActive).length;
   const dateCmp = (a: BreakdownReport, b: BreakdownReport) => {
     const cmp = a.date === b.date ? 0 : (a.date < b.date ? -1 : 1);
     return sort && sort.direction === 'asc' ? cmp : -cmp;
   };
-  const openReports = breakdownReports.filter(b => b.status === 'Open').sort(dateCmp);
-  const resolvedReports = breakdownReports.filter(b => b.status === 'Resolved').sort(dateCmp);
+  // Excel-style column filters (2026-09-08 GLOBAL UI REQUIREMENT) - this
+  // table had no search/filter of its own before this, so these are the
+  // first ones, applied ahead of the Open/Resolved status split (that
+  // grouping stays intact regardless of what's filtered).
+  const columnFilteredReports = breakdownReports.filter(b => {
+    if (!matchesColumnFilter(b.date, columnFilters.date, 'date')) return false;
+    if (!matchesColumnFilter(b.regNo, columnFilters.regNo, 'text')) return false;
+    if (!matchesColumnFilter(b.type || 'EnRouteBreakdown', columnFilters.type, 'text')) return false;
+    if (!matchesColumnFilter(b.location, columnFilters.location, 'text')) return false;
+    if (!matchesColumnFilter(b.description, columnFilters.description, 'text')) return false;
+    if (!matchesColumnFilter(b.driverName, columnFilters.driverName, 'text')) return false;
+    if (!matchesColumnFilter(b.paymentType, columnFilters.paymentType, 'text')) return false;
+    if (!matchesColumnFilter(b.amount, columnFilters.amount, 'number')) return false;
+    if (!matchesColumnFilter(b.status, columnFilters.status, 'text')) return false;
+    return true;
+  });
+  const openReports = columnFilteredReports.filter(b => b.status === 'Open').sort(dateCmp);
+  const resolvedReports = columnFilteredReports.filter(b => b.status === 'Resolved').sort(dateCmp);
 
   return (
     <div className="space-y-4">
@@ -214,6 +238,12 @@ export default function BreakdownsTab({
               <Plus className="w-4 h-4" /> Report Breakdown
             </button>
             )}
+            {activeColumnFilterCount > 0 && (
+              <button onClick={clearAllColumnFilters} title="Clear every column filter"
+                className="flex items-center gap-1.5 border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-2.5 py-1.5 rounded-lg uppercase text-[10px] cursor-pointer transition-all whitespace-nowrap">
+                <X className="w-3.5 h-3.5" /> Clear Filters ({activeColumnFilterCount})
+              </button>
+            )}
           </div>
         </div>
 
@@ -221,21 +251,21 @@ export default function BreakdownsTab({
           <table className="w-full text-left text-xs">
             <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
               <tr>
-                <th className="px-3 py-2.5"><SortHeader label="Date" sortKey="date" sort={sort} onSort={handleSort} type="numeric" /></th>
-                <th className="px-3 py-2.5">Reg. No.</th>
-                <th className="px-3 py-2.5">Type</th>
-                <th className="px-3 py-2.5">Location</th>
-                <th className="px-3 py-2.5">Description</th>
-                <th className="px-3 py-2.5">Driver</th>
-                <th className="px-3 py-2.5">Payment</th>
-                <th className="px-3 py-2.5 text-right">Amount</th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Date" type="date" value={columnFilters.date} onChange={f => setColumnFilter('date', f)} sortKey="date" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Reg. No." type="text" values={breakdownReports.map(b => b.regNo)} value={columnFilters.regNo} onChange={f => setColumnFilter('regNo', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Type" type="text" values={breakdownReports.map(b => b.type || 'EnRouteBreakdown')} value={columnFilters.type} onChange={f => setColumnFilter('type', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Location" type="text" values={breakdownReports.map(b => b.location)} value={columnFilters.location} onChange={f => setColumnFilter('location', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Description" type="text" values={breakdownReports.map(b => b.description)} value={columnFilters.description} onChange={f => setColumnFilter('description', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Driver" type="text" values={breakdownReports.map(b => b.driverName)} value={columnFilters.driverName} onChange={f => setColumnFilter('driverName', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Payment" type="text" values={breakdownReports.map(b => b.paymentType)} value={columnFilters.paymentType} onChange={f => setColumnFilter('paymentType', f)} /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Amount" type="number" value={columnFilters.amount} onChange={f => setColumnFilter('amount', f)} align="right" /></th>
                 <th className="px-3 py-2.5 text-center">Docs</th>
-                <th className="px-3 py-2.5">Status</th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Status" type="text" values={breakdownReports.map(b => b.status)} value={columnFilters.status} onChange={f => setColumnFilter('status', f)} /></th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-              {breakdownReports.length === 0 ? (
+              {columnFilteredReports.length === 0 ? (
                 <tr><td colSpan={11} className="text-center py-10 text-slate-400 font-mono">NO BREAKDOWN REPORTS LOGGED.</td></tr>
               ) : [...openReports, ...resolvedReports].map(b => (
                 <tr key={b.id} className="hover:bg-slate-50/50 transition-colors">

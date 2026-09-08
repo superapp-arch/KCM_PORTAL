@@ -28,6 +28,8 @@ import {
   supplyEntityOptions, BILLING_MODE_OPTIONS
 } from '../utils/billingInvoiceCalc';
 import { filterToCurrentFinancialYear, exportBillingInvoicesToExcel, exportBillingInvoicesToPdf } from '../utils/billingImportExport';
+import ColumnFilterHeader from './ColumnFilterHeader';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../utils/columnFilter';
 
 interface BillingProps {
   invoices: BillingInvoice[];
@@ -500,6 +502,13 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
   const showModeColumn = activeCompany === 'KCM Supply';
 
   const [searchTerm, setSearchTerm] = useState('');
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing Search/Status/Date-range filters above, never
+  // replacing them.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersMap>({});
+  const setColumnFilter = (key: string, f: ColumnFilterState | undefined) => setColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllColumnFilters = () => setColumnFilters({});
+  const activeColumnFilterCount = Object.values(columnFilters).filter(isColumnFilterActive).length;
   // Filters the Import/Export buttons respect too (see filteredInvoices
   // below) - client/invoice-no search, Payment Status, and an Issue Date
   // range. All optional/empty by default (no filtering).
@@ -676,7 +685,20 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
     const matchesStatus = statusFilter === 'All' || effectiveInvoiceStatus(inv) === statusFilter;
     const matchesFrom = !fromDate || (inv.date || '') >= fromDate;
     const matchesTo = !toDate || (inv.date || '') <= toDate;
-    return matchesSearch && matchesStatus && matchesFrom && matchesTo;
+    if (!(matchesSearch && matchesStatus && matchesFrom && matchesTo)) return false;
+
+    // Excel-style column filters (AND across every active one) - additive
+    // to the filters above, never replacing them.
+    if (!matchesColumnFilter(inv.date, columnFilters.date, 'date')) return false;
+    if (!matchesColumnFilter(inv.invoiceNo, columnFilters.invoiceNo, 'text')) return false;
+    if (!matchesColumnFilter(inv.customerName, columnFilters.customerName, 'text')) return false;
+    if (!matchesColumnFilter(inv.entity, columnFilters.entity, 'text')) return false;
+    if (showModeColumn && !matchesColumnFilter(inv.mode, columnFilters.mode, 'text')) return false;
+    if (!matchesColumnFilter(effectiveInvoiceAmount(inv), columnFilters.totalAmt, 'number')) return false;
+    if (!matchesColumnFilter(inv.amountReceivable, columnFilters.amountReceivable, 'number')) return false;
+    if (!matchesColumnFilter(inv.dueDate, columnFilters.dueDate, 'date')) return false;
+    if (!matchesColumnFilter(effectiveInvoiceStatus(inv), columnFilters.status, 'text')) return false;
+    return true;
   });
 
   // Export always respects the same 3 filters as the list above; with none
@@ -821,6 +843,11 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
               {hasActiveFilters && (
                 <button type="button" onClick={() => { setSearchTerm(''); setStatusFilter('All'); setFromDate(''); setToDate(''); }} className="text-slate-400 hover:text-slate-700 font-bold underline cursor-pointer">Clear</button>
               )}
+              {activeColumnFilterCount > 0 && (
+                <button type="button" onClick={clearAllColumnFilters} title="Clear every column-header filter (the filters above are unaffected)" className="flex items-center gap-1 text-rose-600 hover:text-rose-800 font-bold cursor-pointer">
+                  <X className="w-3.5 h-3.5" /> Clear Column Filters ({activeColumnFilterCount})
+                </button>
+              )}
             </div>
 
             {/* KCM Insta / KCM Supply company tabs (2026-09-02) - filters
@@ -847,18 +874,18 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
               <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
                 <tr>
                   <th className="px-3 py-2.5">Sl. No.</th>
-                  <th className="px-3 py-2.5">Date</th>
-                  <th className="px-3 py-2.5">Invoice No</th>
-                  <th className="px-3 py-2.5">Customer Name</th>
-                  <th className="px-3 py-2.5">Entity</th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Date" type="date" value={columnFilters.date} onChange={f => setColumnFilter('date', f)} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Invoice No" type="text" values={companyInvoices.map(i => i.invoiceNo)} value={columnFilters.invoiceNo} onChange={f => setColumnFilter('invoiceNo', f)} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Customer Name" type="text" values={companyInvoices.map(i => i.customerName)} value={columnFilters.customerName} onChange={f => setColumnFilter('customerName', f)} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Entity" type="text" values={companyInvoices.map(i => i.entity)} value={columnFilters.entity} onChange={f => setColumnFilter('entity', f)} /></th>
                   {/* Mode - KCM Supply tab only, positioned right beside
                       Entity - the KCM Insta tab's table never renders this
                       column at all. */}
-                  {showModeColumn && <th className="px-3 py-2.5">Mode</th>}
-                  <th className="px-3 py-2.5 text-right">Total Amt</th>
-                  <th className="px-3 py-2.5 text-right">Amt Receivable</th>
-                  <th className="px-3 py-2.5">Due Date</th>
-                  <th className="px-3 py-2.5 text-center">Status</th>
+                  {showModeColumn && <th className="px-3 py-2.5"><ColumnFilterHeader label="Mode" type="text" values={companyInvoices.map(i => i.mode)} value={columnFilters.mode} onChange={f => setColumnFilter('mode', f)} /></th>}
+                  <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Total Amt" type="number" value={columnFilters.totalAmt} onChange={f => setColumnFilter('totalAmt', f)} align="right" /></th>
+                  <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Amt Receivable" type="number" value={columnFilters.amountReceivable} onChange={f => setColumnFilter('amountReceivable', f)} align="right" /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Due Date" type="date" value={columnFilters.dueDate} onChange={f => setColumnFilter('dueDate', f)} /></th>
+                  <th className="px-3 py-2.5 text-center"><ColumnFilterHeader label="Status" type="text" values={companyInvoices.map(i => effectiveInvoiceStatus(i))} value={columnFilters.status} onChange={f => setColumnFilter('status', f)} align="right" /></th>
                   <th className="px-3 py-2.5 text-center">Docs</th>
                   <th className="px-3 py-2.5 text-right">Actions</th>
                 </tr>

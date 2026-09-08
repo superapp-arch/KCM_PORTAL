@@ -8,7 +8,9 @@ import DocumentAttachment from '../DocumentAttachment';
 import VehicleDetailsPopover from './VehicleDetailsPopover';
 import LoanDetailsPopover from './LoanDetailsPopover';
 import SortHeader from '../SortHeader';
+import ColumnFilterHeader from '../ColumnFilterHeader';
 import { SortState, SortDirection, compareText, compareNumber, extractLeadingNumber } from '../../utils/sort';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../../utils/columnFilter';
 
 interface VehicleLoanSheetProps {
   vehicles: Vehicle[];
@@ -72,6 +74,14 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
   const [dueDateFilter, setDueDateFilter] = useState(''); // '' = no date filter
   const [sort, setSort] = useState<SortState | null>(null);
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing Financer/Ownership/Due Date/Search filters
+  // above, never replacing them; AND-combined with each other and with
+  // those.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersMap>({});
+  const setColumnFilter = (key: string, f: ColumnFilterState | undefined) => setColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllColumnFilters = () => setColumnFilters({});
+  const activeColumnFilterCount = Object.values(columnFilters).filter(isColumnFilterActive).length;
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -255,8 +265,27 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
   const displayStatusOf = (loan: VehicleLoan): 'Active' | 'Closed' =>
     resolveLoanStatus(loan.loanStatus, loan.loanStatusManual, computeMonthsCompleted(loan.emiStartDate, loan.tenure), loan.tenure);
 
+  // Excel-style column filters (AND across every active one) - additive to
+  // the filters above, never replacing them. EMI Paid/Pending/O-S Amount/Due
+  // Date are computed, not stored, so they're resolved through the same
+  // helpers the table/sort already use.
+  const columnFiltered = useMemo(() => filtered.filter(l => {
+    if (!matchesColumnFilter(l.regNo, columnFilters.regNo, 'text')) return false;
+    if (!matchesColumnFilter(l.financer, columnFilters.financer, 'text')) return false;
+    if (!matchesColumnFilter(l.financeNumber, columnFilters.financeNumber, 'text')) return false;
+    if (!matchesColumnFilter(l.loanAmount, columnFilters.loanAmount, 'number')) return false;
+    if (!matchesColumnFilter(l.monthlyEmi, columnFilters.monthlyEmi, 'number')) return false;
+    if (!matchesColumnFilter(l.tenure, columnFilters.tenure, 'number')) return false;
+    if (!matchesColumnFilter(emiPaidOf(l), columnFilters.emiPaid, 'number')) return false;
+    if (!matchesColumnFilter(emiPendingOf(l), columnFilters.emiPending, 'number')) return false;
+    if (!matchesColumnFilter(osAmountOf(l), columnFilters.osAmount, 'number')) return false;
+    if (!matchesColumnFilter(computeDueDateRaw(l.emiStartDate, l.tenure), columnFilters.dueDate, 'date')) return false;
+    if (!matchesColumnFilter(displayStatusOf(l), columnFilters.loanStatus, 'text')) return false;
+    return true;
+  }), [filtered, columnFilters]);
+
   const sorted = useMemo(() => {
-    const arr = [...filtered];
+    const arr = [...columnFiltered];
     arr.sort((a, b) => {
       // Active always sits above Closed, regardless of whatever column sort
       // is active - a closed loan doesn't need daily attention, so it's
@@ -277,7 +306,7 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
       return sort.direction === 'asc' ? cmp : -cmp;
     });
     return arr;
-  }, [filtered, sort]);
+  }, [columnFiltered, sort]);
 
   const suggestedClosing = form.emiStartDate && form.tenure ? monthYearFromStart(form.emiStartDate, parseInt(form.tenure) || 0) : '';
 
@@ -365,6 +394,13 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
           className="bg-gradient-to-r from-teal-600 to-emerald-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all whitespace-nowrap">
           <Plus className="w-3.5 h-3.5" /> Add Vehicle Loan
         </button>
+
+        {activeColumnFilterCount > 0 && (
+          <button onClick={clearAllColumnFilters} title="Clear every column filter (the filters above are unaffected)"
+            className="flex items-center gap-1.5 border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-3 py-2 rounded-lg uppercase text-[10px] cursor-pointer transition-all whitespace-nowrap">
+            <X className="w-3.5 h-3.5" /> Clear Filters ({activeColumnFilterCount})
+          </button>
+        )}
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -373,17 +409,17 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
             <thead className="bg-gradient-to-r from-teal-900 via-slate-900 to-emerald-900 text-teal-100 uppercase text-[10px] tracking-wider">
               <tr>
                 <th className="px-3 py-2.5">SL No</th>
-                <th className="px-3 py-2.5"><SortHeader label="Reg. No" sortKey="regNo" sort={sort} onSort={handleSort} type="numeric" /></th>
-                <th className="px-3 py-2.5"><SortHeader label="Financer" sortKey="financer" sort={sort} onSort={handleSort} /></th>
-                <th className="px-3 py-2.5">Loan Number</th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="Loan Amount" sortKey="loanAmount" sort={sort} onSort={handleSort} align="right" type="numeric" /></th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="Monthly EMI" sortKey="monthlyEmi" sort={sort} onSort={handleSort} align="right" type="numeric" /></th>
-                <th className="px-3 py-2.5 text-right">Tenure</th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="EMI Paid" sortKey="emiPaid" sort={sort} onSort={handleSort} align="right" type="numeric" /></th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="EMI Pending" sortKey="emiPending" sort={sort} onSort={handleSort} align="right" type="numeric" /></th>
-                <th className="px-3 py-2.5 text-right"><SortHeader label="O/S Amount" sortKey="osAmount" sort={sort} onSort={handleSort} align="right" type="numeric" /></th>
-                <th className="px-3 py-2.5">Due Date</th>
-                <th className="px-3 py-2.5">Loan Status</th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Reg. No" type="text" values={vehicleLoans.map(l => l.regNo)} value={columnFilters.regNo} onChange={f => setColumnFilter('regNo', f)} sortKey="regNo" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Financer" type="text" values={vehicleLoans.map(l => l.financer)} value={columnFilters.financer} onChange={f => setColumnFilter('financer', f)} sortKey="financer" sort={sort} onSort={handleSort} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Loan Number" type="text" values={vehicleLoans.map(l => l.financeNumber)} value={columnFilters.financeNumber} onChange={f => setColumnFilter('financeNumber', f)} /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Loan Amount" type="number" value={columnFilters.loanAmount} onChange={f => setColumnFilter('loanAmount', f)} sortKey="loanAmount" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Monthly EMI" type="number" value={columnFilters.monthlyEmi} onChange={f => setColumnFilter('monthlyEmi', f)} sortKey="monthlyEmi" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Tenure" type="number" value={columnFilters.tenure} onChange={f => setColumnFilter('tenure', f)} align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="EMI Paid" type="number" value={columnFilters.emiPaid} onChange={f => setColumnFilter('emiPaid', f)} sortKey="emiPaid" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="EMI Pending" type="number" value={columnFilters.emiPending} onChange={f => setColumnFilter('emiPending', f)} sortKey="emiPending" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="O/S Amount" type="number" value={columnFilters.osAmount} onChange={f => setColumnFilter('osAmount', f)} sortKey="osAmount" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Due Date" type="date" value={columnFilters.dueDate} onChange={f => setColumnFilter('dueDate', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Loan Status" type="text" values={vehicleLoans.map(l => displayStatusOf(l))} value={columnFilters.loanStatus} onChange={f => setColumnFilter('loanStatus', f)} /></th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>

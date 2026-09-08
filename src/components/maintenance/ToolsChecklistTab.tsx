@@ -3,8 +3,10 @@ import { Vehicle, ToolsChecklistRecord } from '../../types';
 import { Wrench, Search, Trash2, Plus, X, Check, CheckCircle2, AlertCircle } from 'lucide-react';
 import DateInput from '../DateInput';
 import SortHeader from '../SortHeader';
+import ColumnFilterHeader from '../ColumnFilterHeader';
 import { SortState, compareText } from '../../utils/sort';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../../utils/columnFilter';
 
 interface ToolsChecklistTabProps {
   readOnly?: boolean;
@@ -39,6 +41,12 @@ export default function ToolsChecklistTab({ readOnly, vehicles, toolsChecklistRe
   // Newest-first by Check Date was already this table's default - now
   // exposed as the same Sort By dropdown convention used elsewhere.
   const [sort, setSort] = useState<SortState | null>({ key: 'checkDate', direction: 'desc' });
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing Search above, never replacing it.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersMap>({});
+  const setColumnFilter = (key: string, f: ColumnFilterState | undefined) => setColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllColumnFilters = () => setColumnFilters({});
+  const activeColumnFilterCount = Object.values(columnFilters).filter(isColumnFilterActive).length;
   const handleSort = (key: string, direction: SortState['direction']) => setSort({ key, direction });
 
   const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
@@ -57,10 +65,23 @@ export default function ToolsChecklistTab({ readOnly, vehicles, toolsChecklistRe
         return sort.direction === 'asc' ? cmp : -cmp;
       })
     : [...toolsChecklistRecords].sort((a, b) => (b.checkDate || '').localeCompare(a.checkDate || '') || a.regNo.localeCompare(b.regNo));
-  const filteredRows = rows.filter(r =>
-    r.regNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (r.checkedBy || '').toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredRows = rows.filter(r => {
+    if (!(
+      r.regNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (r.checkedBy || '').toLowerCase().includes(searchTerm.toLowerCase())
+    )) return false;
+
+    // Excel-style column filters (AND across every active one) - additive
+    // to Search above, never replacing it.
+    if (!matchesColumnFilter(r.checkDate, columnFilters.checkDate, 'date')) return false;
+    if (!matchesColumnFilter(r.regNo, columnFilters.regNo, 'text')) return false;
+    for (const t of TOOL_FIELDS) {
+      if (!matchesColumnFilter(r[t.key] ? 'Yes' : 'No', columnFilters[t.key], 'boolean')) return false;
+    }
+    if (!matchesColumnFilter(r.checkedBy, columnFilters.checkedBy, 'text')) return false;
+    if (!matchesColumnFilter(r.remarks, columnFilters.remarks, 'text')) return false;
+    return true;
+  });
 
   const resetForm = () => { setForm(emptyForm()); setShowForm(false); };
   const openAdd = () => { setForm(emptyForm()); setShowForm(true); };
@@ -130,6 +151,12 @@ export default function ToolsChecklistTab({ readOnly, vehicles, toolsChecklistRe
               <Plus className="w-4 h-4" /> Log Check
             </button>
             )}
+            {activeColumnFilterCount > 0 && (
+              <button onClick={clearAllColumnFilters} title="Clear every column filter (Search above is unaffected)"
+                className="flex items-center gap-1.5 border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-2.5 py-1.5 rounded-lg uppercase text-[10px] cursor-pointer transition-all whitespace-nowrap">
+                <X className="w-3.5 h-3.5" /> Clear Filters ({activeColumnFilterCount})
+              </button>
+            )}
           </div>
         </div>
 
@@ -137,11 +164,11 @@ export default function ToolsChecklistTab({ readOnly, vehicles, toolsChecklistRe
           <table className="w-full text-left text-xs">
             <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
               <tr>
-                <th className="px-3 py-2.5"><SortHeader label="Check Date" sortKey="checkDate" sort={sort} onSort={handleSort} type="numeric" /></th>
-                <th className="px-3 py-2.5"><SortHeader label="Reg. No." sortKey="regNo" sort={sort} onSort={handleSort} /></th>
-                {TOOL_FIELDS.map(t => <th key={t.key} className="px-3 py-2.5 text-center">{t.label}</th>)}
-                <th className="px-3 py-2.5">Checked By</th>
-                <th className="px-3 py-2.5">Remarks</th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Check Date" type="date" value={columnFilters.checkDate} onChange={f => setColumnFilter('checkDate', f)} sortKey="checkDate" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Reg. No." type="text" values={toolsChecklistRecords.map(r => r.regNo)} value={columnFilters.regNo} onChange={f => setColumnFilter('regNo', f)} sortKey="regNo" sort={sort} onSort={handleSort} /></th>
+                {TOOL_FIELDS.map(t => <th key={t.key} className="px-3 py-2.5 text-center"><ColumnFilterHeader label={t.label} type="boolean" value={columnFilters[t.key]} onChange={f => setColumnFilter(t.key, f)} /></th>)}
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Checked By" type="text" values={toolsChecklistRecords.map(r => r.checkedBy)} value={columnFilters.checkedBy} onChange={f => setColumnFilter('checkedBy', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Remarks" type="text" values={toolsChecklistRecords.map(r => r.remarks)} value={columnFilters.remarks} onChange={f => setColumnFilter('remarks', f)} /></th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>

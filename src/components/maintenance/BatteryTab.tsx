@@ -3,8 +3,10 @@ import { Vehicle, BatteryRecord } from '../../types';
 import { Battery, Search, Edit2, Trash2, Plus, X, CheckCircle2, AlertCircle } from 'lucide-react';
 import DateInput from '../DateInput';
 import SortHeader from '../SortHeader';
+import ColumnFilterHeader from '../ColumnFilterHeader';
 import { SortState, compareText } from '../../utils/sort';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../../utils/columnFilter';
 
 interface BatteryTabProps {
   readOnly?: boolean;
@@ -31,6 +33,12 @@ export default function BatteryTab({ readOnly, vehicles, batteryRecords, onSaveB
   // most-recently-installed compound order until the user actively picks a
   // sort, same convention as Service Schedule.
   const [sort, setSort] = useState<SortState | null>(null);
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing Search above, never replacing it.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersMap>({});
+  const setColumnFilter = (key: string, f: ColumnFilterState | undefined) => setColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllColumnFilters = () => setColumnFilters({});
+  const activeColumnFilterCount = Object.values(columnFilters).filter(isColumnFilterActive).length;
   const handleSort = (key: string, direction: SortState['direction']) => setSort({ key, direction });
 
   const triggerNotif = (message: string, type: 'success' | 'error' = 'success') => { setNotif({ message, type }); setTimeout(() => setNotif(null), 4000); };
@@ -54,11 +62,23 @@ export default function BatteryTab({ readOnly, vehicles, batteryRecords, onSaveB
         return (b.installedDate || '').localeCompare(a.installedDate || '');
       });
 
-  const filteredRows = rows.filter(r =>
-    r.regNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    r.batteryNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (r.make || '').toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredRows = rows.filter(r => {
+    if (!(
+      r.regNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      r.batteryNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (r.make || '').toLowerCase().includes(searchTerm.toLowerCase())
+    )) return false;
+
+    // Excel-style column filters (AND across every active one) - additive
+    // to Search above, never replacing it.
+    if (!matchesColumnFilter(r.regNo, columnFilters.regNo, 'text')) return false;
+    if (!matchesColumnFilter(r.batteryNumber, columnFilters.batteryNumber, 'text')) return false;
+    if (!matchesColumnFilter(r.make, columnFilters.make, 'text')) return false;
+    if (!matchesColumnFilter(r.installedDate, columnFilters.installedDate, 'date')) return false;
+    if (!matchesColumnFilter(r.warrantyExpiryDate, columnFilters.warrantyExpiryDate, 'date')) return false;
+    if (!matchesColumnFilter(r.isCurrent ? 'Yes' : 'No', columnFilters.isCurrent, 'boolean')) return false;
+    return true;
+  });
 
   const resetForm = () => { setForm(emptyForm()); setShowForm(false); };
   const openEdit = (b: BatteryRecord) => { setForm(b); setShowForm(true); };
@@ -132,6 +152,12 @@ export default function BatteryTab({ readOnly, vehicles, batteryRecords, onSaveB
               <Plus className="w-4 h-4" /> Add Battery
             </button>
             )}
+            {activeColumnFilterCount > 0 && (
+              <button onClick={clearAllColumnFilters} title="Clear every column filter (Search above is unaffected)"
+                className="flex items-center gap-1.5 border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-2.5 py-1.5 rounded-lg uppercase text-[10px] cursor-pointer transition-all whitespace-nowrap">
+                <X className="w-3.5 h-3.5" /> Clear Filters ({activeColumnFilterCount})
+              </button>
+            )}
           </div>
         </div>
 
@@ -139,12 +165,12 @@ export default function BatteryTab({ readOnly, vehicles, batteryRecords, onSaveB
           <table className="w-full text-left text-xs">
             <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
               <tr>
-                <th className="px-3 py-2.5"><SortHeader label="Reg. No." sortKey="regNo" sort={sort} onSort={handleSort} /></th>
-                <th className="px-3 py-2.5">Battery Number</th>
-                <th className="px-3 py-2.5">Make</th>
-                <th className="px-3 py-2.5"><SortHeader label="Installed" sortKey="installedDate" sort={sort} onSort={handleSort} type="numeric" /></th>
-                <th className="px-3 py-2.5">Warranty Expiry</th>
-                <th className="px-3 py-2.5">Current</th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Reg. No." type="text" values={batteryRecords.map(b => b.regNo)} value={columnFilters.regNo} onChange={f => setColumnFilter('regNo', f)} sortKey="regNo" sort={sort} onSort={handleSort} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Battery Number" type="text" values={batteryRecords.map(b => b.batteryNumber)} value={columnFilters.batteryNumber} onChange={f => setColumnFilter('batteryNumber', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Make" type="text" values={batteryRecords.map(b => b.make)} value={columnFilters.make} onChange={f => setColumnFilter('make', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Installed" type="date" value={columnFilters.installedDate} onChange={f => setColumnFilter('installedDate', f)} sortKey="installedDate" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Warranty Expiry" type="date" value={columnFilters.warrantyExpiryDate} onChange={f => setColumnFilter('warrantyExpiryDate', f)} /></th>
+                <th className="px-3 py-2.5"><ColumnFilterHeader label="Current" type="boolean" value={columnFilters.isCurrent} onChange={f => setColumnFilter('isCurrent', f)} /></th>
                 <th className="px-3 py-2.5 text-right">Actions</th>
               </tr>
             </thead>

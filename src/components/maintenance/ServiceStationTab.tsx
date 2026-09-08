@@ -3,8 +3,10 @@ import { Vehicle, ServiceStationSparePart, ServiceStationInspection } from '../.
 import { Boxes, ClipboardCheck, Search, Trash2, Plus, X, CheckCircle2, AlertCircle, Edit2, Upload } from 'lucide-react';
 import DateInput from '../DateInput';
 import SortHeader from '../SortHeader';
+import ColumnFilterHeader from '../ColumnFilterHeader';
 import { SortState, compareText } from '../../utils/sort';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../../utils/columnFilter';
 
 interface ServiceStationTabProps {
   readOnly?: boolean;
@@ -76,6 +78,12 @@ export default function ServiceStationTab({
   const [spForm, setSpForm] = useState(emptySparePartForm());
   const [spSubmitting, setSpSubmitting] = useState(false);
   const [spSort, setSpSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing Search above, never replacing it.
+  const [spColumnFilters, setSpColumnFilters] = useState<ColumnFiltersMap>({});
+  const setSpColumnFilter = (key: string, f: ColumnFilterState | undefined) => setSpColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllSpColumnFilters = () => setSpColumnFilters({});
+  const activeSpColumnFilterCount = Object.values(spColumnFilters).filter(isColumnFilterActive).length;
   const [spImporting, setSpImporting] = useState(false);
   const spImportInputRef = useRef<HTMLInputElement>(null);
 
@@ -91,11 +99,22 @@ export default function ServiceStationTab({
         return spSort.direction === 'asc' ? cmp : -cmp;
       })
     : [...spareParts].sort((a, b) => (b.date || '').localeCompare(a.date || '') || a.regNo.localeCompare(b.regNo));
-  const spFilteredRows = spRows.filter(r =>
-    r.regNo.toLowerCase().includes(spSearchTerm.toLowerCase()) ||
-    (r.partName || '').toLowerCase().includes(spSearchTerm.toLowerCase()) ||
-    (r.partNumber || '').toLowerCase().includes(spSearchTerm.toLowerCase())
-  );
+  const spFilteredRows = spRows.filter(r => {
+    if (!(
+      r.regNo.toLowerCase().includes(spSearchTerm.toLowerCase()) ||
+      (r.partName || '').toLowerCase().includes(spSearchTerm.toLowerCase()) ||
+      (r.partNumber || '').toLowerCase().includes(spSearchTerm.toLowerCase())
+    )) return false;
+
+    // Excel-style column filters (AND across every active one) - additive
+    // to Search above, never replacing it.
+    if (!matchesColumnFilter(r.date, spColumnFilters.date, 'date')) return false;
+    if (!matchesColumnFilter(r.regNo, spColumnFilters.regNo, 'text')) return false;
+    if (!matchesColumnFilter(r.partName, spColumnFilters.partName, 'text')) return false;
+    if (!matchesColumnFilter(r.partNumber, spColumnFilters.partNumber, 'text')) return false;
+    if (!matchesColumnFilter(r.qty, spColumnFilters.qty, 'number')) return false;
+    return true;
+  });
 
   const spResetForm = () => { setSpForm(emptySparePartForm()); setSpEditingId(null); setSpShowForm(false); };
   const spOpenAdd = () => { setSpForm(emptySparePartForm()); setSpEditingId(null); setSpShowForm(true); };
@@ -203,6 +222,12 @@ export default function ServiceStationTab({
   const [inForm, setInForm] = useState(emptyInspectionForm());
   const [inSubmitting, setInSubmitting] = useState(false);
   const [inSort, setInSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing Search above, never replacing it.
+  const [inColumnFilters, setInColumnFilters] = useState<ColumnFiltersMap>({});
+  const setInColumnFilter = (key: string, f: ColumnFilterState | undefined) => setInColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllInColumnFilters = () => setInColumnFilters({});
+  const activeInColumnFilterCount = Object.values(inColumnFilters).filter(isColumnFilterActive).length;
   const [inImporting, setInImporting] = useState(false);
   const inImportInputRef = useRef<HTMLInputElement>(null);
 
@@ -218,11 +243,22 @@ export default function ServiceStationTab({
         return inSort.direction === 'asc' ? cmp : -cmp;
       })
     : [...inspections].sort((a, b) => (b.date || '').localeCompare(a.date || '') || a.regNo.localeCompare(b.regNo));
-  const inFilteredRows = inRows.filter(r =>
-    r.regNo.toLowerCase().includes(inSearchTerm.toLowerCase()) ||
-    (r.details || '').toLowerCase().includes(inSearchTerm.toLowerCase()) ||
-    (r.inspectedBy || '').toLowerCase().includes(inSearchTerm.toLowerCase())
-  );
+  const inFilteredRows = inRows.filter(r => {
+    if (!(
+      r.regNo.toLowerCase().includes(inSearchTerm.toLowerCase()) ||
+      (r.details || '').toLowerCase().includes(inSearchTerm.toLowerCase()) ||
+      (r.inspectedBy || '').toLowerCase().includes(inSearchTerm.toLowerCase())
+    )) return false;
+
+    // Excel-style column filters (AND across every active one) - additive
+    // to Search above, never replacing it.
+    if (!matchesColumnFilter(r.date, inColumnFilters.date, 'date')) return false;
+    if (!matchesColumnFilter(r.regNo, inColumnFilters.regNo, 'text')) return false;
+    if (!matchesColumnFilter(r.details, inColumnFilters.details, 'text')) return false;
+    if (!matchesColumnFilter(r.status, inColumnFilters.status, 'text')) return false;
+    if (!matchesColumnFilter(r.inspectedBy, inColumnFilters.inspectedBy, 'text')) return false;
+    return true;
+  });
 
   const inResetForm = () => { setInForm(emptyInspectionForm()); setInEditingId(null); setInShowForm(false); };
   const inOpenAdd = () => { setInForm(emptyInspectionForm()); setInEditingId(null); setInShowForm(true); };
@@ -380,6 +416,12 @@ export default function ServiceStationTab({
                   </button>
                 </>
               )}
+              {activeSpColumnFilterCount > 0 && (
+                <button onClick={clearAllSpColumnFilters} title="Clear every column filter (Search above is unaffected)"
+                  className="flex items-center gap-1.5 border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-2.5 py-1.5 rounded-lg uppercase text-[10px] cursor-pointer transition-all whitespace-nowrap">
+                  <X className="w-3.5 h-3.5" /> Clear Filters ({activeSpColumnFilterCount})
+                </button>
+              )}
             </div>
           </div>
 
@@ -387,11 +429,11 @@ export default function ServiceStationTab({
             <table className="w-full text-left text-xs">
               <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
                 <tr>
-                  <th className="px-3 py-2.5"><SortHeader label="Date" sortKey="date" sort={spSort} onSort={(k, d) => setSpSort({ key: k, direction: d })} type="numeric" /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="Vehicle Number" sortKey="regNo" sort={spSort} onSort={(k, d) => setSpSort({ key: k, direction: d })} /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="Part Name" sortKey="partName" sort={spSort} onSort={(k, d) => setSpSort({ key: k, direction: d })} /></th>
-                  <th className="px-3 py-2.5">Part Number</th>
-                  <th className="px-3 py-2.5 text-right">Qty</th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Date" type="date" value={spColumnFilters.date} onChange={f => setSpColumnFilter('date', f)} sortKey="date" sort={spSort} onSort={(k, d) => setSpSort({ key: k, direction: d })} sortType="numeric" /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Vehicle Number" type="text" values={spareParts.map(r => r.regNo)} value={spColumnFilters.regNo} onChange={f => setSpColumnFilter('regNo', f)} sortKey="regNo" sort={spSort} onSort={(k, d) => setSpSort({ key: k, direction: d })} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Part Name" type="text" values={spareParts.map(r => r.partName)} value={spColumnFilters.partName} onChange={f => setSpColumnFilter('partName', f)} sortKey="partName" sort={spSort} onSort={(k, d) => setSpSort({ key: k, direction: d })} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Part Number" type="text" values={spareParts.map(r => r.partNumber)} value={spColumnFilters.partNumber} onChange={f => setSpColumnFilter('partNumber', f)} /></th>
+                  <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Qty" type="number" value={spColumnFilters.qty} onChange={f => setSpColumnFilter('qty', f)} align="right" /></th>
                   <th className="px-3 py-2.5 text-right">Actions</th>
                 </tr>
               </thead>
@@ -454,6 +496,12 @@ export default function ServiceStationTab({
                   </button>
                 </>
               )}
+              {activeInColumnFilterCount > 0 && (
+                <button onClick={clearAllInColumnFilters} title="Clear every column filter (Search above is unaffected)"
+                  className="flex items-center gap-1.5 border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-2.5 py-1.5 rounded-lg uppercase text-[10px] cursor-pointer transition-all whitespace-nowrap">
+                  <X className="w-3.5 h-3.5" /> Clear Filters ({activeInColumnFilterCount})
+                </button>
+              )}
             </div>
           </div>
 
@@ -461,11 +509,11 @@ export default function ServiceStationTab({
             <table className="w-full text-left text-xs">
               <thead className="bg-[#0f172a] text-slate-200 font-sans tracking-wide uppercase text-[9px]">
                 <tr>
-                  <th className="px-3 py-2.5"><SortHeader label="Date" sortKey="date" sort={inSort} onSort={(k, d) => setInSort({ key: k, direction: d })} type="numeric" /></th>
-                  <th className="px-3 py-2.5"><SortHeader label="Vehicle" sortKey="regNo" sort={inSort} onSort={(k, d) => setInSort({ key: k, direction: d })} /></th>
-                  <th className="px-3 py-2.5">Inspection Details</th>
-                  <th className="px-3 py-2.5"><SortHeader label="Status" sortKey="status" sort={inSort} onSort={(k, d) => setInSort({ key: k, direction: d })} /></th>
-                  <th className="px-3 py-2.5">Inspection By</th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Date" type="date" value={inColumnFilters.date} onChange={f => setInColumnFilter('date', f)} sortKey="date" sort={inSort} onSort={(k, d) => setInSort({ key: k, direction: d })} sortType="numeric" /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Vehicle" type="text" values={inspections.map(r => r.regNo)} value={inColumnFilters.regNo} onChange={f => setInColumnFilter('regNo', f)} sortKey="regNo" sort={inSort} onSort={(k, d) => setInSort({ key: k, direction: d })} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Inspection Details" type="text" values={inspections.map(r => r.details)} value={inColumnFilters.details} onChange={f => setInColumnFilter('details', f)} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Status" type="text" values={inspections.map(r => r.status)} value={inColumnFilters.status} onChange={f => setInColumnFilter('status', f)} sortKey="status" sort={inSort} onSort={(k, d) => setInSort({ key: k, direction: d })} /></th>
+                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Inspection By" type="text" values={inspections.map(r => r.inspectedBy)} value={inColumnFilters.inspectedBy} onChange={f => setInColumnFilter('inspectedBy', f)} /></th>
                   <th className="px-3 py-2.5 text-right">Actions</th>
                 </tr>
               </thead>

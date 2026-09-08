@@ -1247,6 +1247,38 @@ function canModifyMileageReport(row: MileageReport | undefined, sessionUser?: Aw
   return extraUsernames.includes(row.enteredBy || '');
 }
 
+// One-time repair sweep (2026-09-08 bug fix) for Mileage Reports that were
+// mis-attributed BEFORE the POST /api/mileage create-path fix above existed:
+// a Mileage Report Chandan filled in on one of Praveen's own fuel entries
+// used to always be stamped with Chandan's own username, not the fuel
+// entry's real owner - so it silently belonged to Chandan and never showed
+// up under Praveen's Mileage Report view, and once his own GET /api/mileage
+// visibility exception (filterMileageReportsForViewer) started correctly
+// scoping non-super-admins to just their own rows, Chandan himself could
+// also lose track of it depending on exactly when he last touched it -
+// "saved, but neither of them can find it". Corrects any already-saved
+// Mileage Report whose enteredBy doesn't match its LINKED fuel entry's own
+// enteredBy (the fuel entry is always the real source of truth for "whose
+// entry is this") - idempotent, a no-op once every report already matches
+// its fuel entry, so safe to run on every server startup.
+async function repairMismatchedMileageReportAttribution(): Promise<void> {
+  try {
+    const [fuelLogs, mileageReports] = await Promise.all([getFuelLogs(), getMileageReports()]);
+    const trueOwnerByMileageId = new Map<string, string | undefined>();
+    fuelLogs.forEach(log => {
+      if (log.mileageReportId) trueOwnerByMileageId.set(log.mileageReportId, log.enteredBy);
+    });
+    for (const report of mileageReports) {
+      const trueOwner = trueOwnerByMileageId.get(report.id);
+      if (trueOwner && trueOwner !== report.enteredBy) {
+        await saveMileageReport({ ...report, enteredBy: trueOwner });
+      }
+    }
+  } catch (error) {
+    console.error('Failed to repair mismatched Mileage Report attribution:', error);
+  }
+}
+
 // Resolves what a PUT /api/fuel/:id request is actually allowed to write:
 // the requester's own row (or any row, for a super admin) saves the request
 // body as-is; a foreign row reachable only via the mileage-only exception
@@ -1385,6 +1417,11 @@ async function startServer() {
   // Mileage/Cost-per-KM now compute from - backfill it onto every
   // pre-existing row (no-op once every row has it).
   await migrateMileageReportTotalLitres();
+  // One-time repair for Mileage Reports mis-attributed before the create-
+  // path attribution fix existed (see repairMismatchedMileageReportAttribution's
+  // own comment) - no-op once every report's enteredBy already matches its
+  // linked fuel entry's.
+  await repairMismatchedMileageReportAttribution();
   // One-time sweep to close any Petty Cash Entry No gaps that already
   // existed before renumberPettyCashSequence started running on every
   // delete - no-op once the sequence is already gap-free.

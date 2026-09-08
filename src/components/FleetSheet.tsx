@@ -4,9 +4,11 @@ import * as XLSX from 'xlsx';
 import { motion } from 'motion/react';
 import { Vehicle, VehicleDocument, VehicleMileage, VehicleLoan } from '../types';
 import SortHeader from './SortHeader';
+import ColumnFilterHeader from './ColumnFilterHeader';
 import { SortState, SortDirection, extractLeadingNumber } from '../utils/sort';
 import { VEHICLE_CATEGORIES, normalizeVehicleCategory, matchVehicleCategoryOption } from '../utils/vehicleCycleDefaults';
 import { parseFlexibleDate, formatDateDDMMYYYY } from '../utils/dateFormat';
+import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../utils/columnFilter';
 import {
   Search,
   Filter,
@@ -106,7 +108,14 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
   // this app.
   const [sort, setSort] = useState<SortState | null>({ key: 'registrationDate', direction: 'asc' });
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
-  
+  // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
+  // additive to the existing Type/Category/Ownership/Search filters above,
+  // never replacing them; AND-combined with each other and with those.
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersMap>({});
+  const setColumnFilter = (key: string, f: ColumnFilterState | undefined) => setColumnFilters(prev => ({ ...prev, [key]: f }));
+  const clearAllColumnFilters = () => setColumnFilters({});
+  const activeColumnFilterCount = Object.values(columnFilters).filter(isColumnFilterActive).length;
+
   const [expandedRegNo, setExpandedRegNo] = useState<string | null>(null);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [isNewVehicle, setIsNewVehicle] = useState(false);
@@ -340,7 +349,21 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
       selectedOwnership === 'all' ||
       normalize(v.Ownership || v.ownership || '').includes(normalize(selectedOwnership));
 
-    return matchesSearch && matchesType && matchesCategory && matchesOwnership;
+    if (!(matchesSearch && matchesType && matchesCategory && matchesOwnership)) return false;
+
+    // Excel-style column filters (AND across every active one) - additive
+    // to the filters above, never replacing them.
+    if (!matchesColumnFilter(regVal, columnFilters.regNo, 'text')) return false;
+    if (!matchesColumnFilter(v.Type || v.type, columnFilters.type, 'text')) return false;
+    if (!matchesColumnFilter(normalizeCategory(v.Category || v.category), columnFilters.category, 'text')) return false;
+    if (!matchesColumnFilter(normalizeOwnership(v.Ownership || v.ownership), columnFilters.ownership, 'text')) return false;
+    if (!matchesColumnFilter(v['Reg Date'] || v.regDate, columnFilters.registrationDate, 'date')) return false;
+    if (!matchesColumnFilter(v.active !== false ? 'Yes' : 'No', columnFilters.status, 'boolean')) return false;
+    if (!matchesColumnFilter(v.Insurance || v.insurance, columnFilters.insuranceExp, 'date')) return false;
+    if (!matchesColumnFilter(v.FC || v.fc, columnFilters.fcExp, 'date')) return false;
+    if (!matchesColumnFilter(v['All India Permit'] || v.allIndiaPermit, columnFilters.npExp, 'date')) return false;
+    if (!matchesColumnFilter(v['State permit'] || v.statePermit, columnFilters.spExp, 'date')) return false;
+    return true;
   });
 
   const sortedVehicles = sort
@@ -640,6 +663,17 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
               <option value="100">100</option>
             </select>
           </div>
+
+          {activeColumnFilterCount > 0 && (
+            <button
+              type="button"
+              onClick={clearAllColumnFilters}
+              title="Clear every column filter (Type/Category/Ownership/Search above are unaffected)"
+              className="flex items-center justify-center gap-1.5 border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-3 py-2 rounded-lg uppercase text-[10px] cursor-pointer transition-all whitespace-nowrap"
+            >
+              <X className="w-3.5 h-3.5" /> Clear Column Filters ({activeColumnFilterCount})
+            </button>
+          )}
         </div>
       </div>
 
@@ -650,16 +684,16 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
             <thead className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 border-b-2 border-purple-500 font-bold text-white uppercase text-[10px] tracking-wider font-mono">
               <tr>
                 <th className="px-4 py-4 text-center w-12 text-purple-200 font-extrabold">SI No</th>
-                <th className="px-4 py-4 text-purple-100"><SortHeader label="Reg. No." sortKey="regNo" sort={sort} onSort={handleSort} type="numeric" /></th>
-                <th className="px-4 py-4 text-purple-100">Type</th>
-                <th className="px-4 py-4 text-purple-100">Category</th>
-                <th className="px-4 py-4 text-purple-100">Ownership</th>
-                <th className="px-4 py-4 text-purple-100"><SortHeader label="Registration Date" sortKey="registrationDate" sort={sort} onSort={handleSort} type="numeric" /></th>
-                <th className="px-4 py-4 text-center text-purple-100">Status</th>
-                <th className="px-4 py-4 text-purple-100">Insurance Exp</th>
-                <th className="px-4 py-4 text-purple-100">FC Exp</th>
-                <th className="px-4 py-4 text-purple-100">NP Exp</th>
-                <th className="px-4 py-4 text-purple-100">SP Exp</th>
+                <th className="px-4 py-4 text-purple-100"><ColumnFilterHeader label="Reg. No." type="text" values={vehicles.map(v => v['Reg. No.'] || v.regNo)} value={columnFilters.regNo} onChange={f => setColumnFilter('regNo', f)} sortKey="regNo" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                <th className="px-4 py-4 text-purple-100"><ColumnFilterHeader label="Type" type="text" values={vehicles.map(v => v.Type || v.type)} value={columnFilters.type} onChange={f => setColumnFilter('type', f)} /></th>
+                <th className="px-4 py-4 text-purple-100"><ColumnFilterHeader label="Category" type="text" values={vehicles.map(v => normalizeCategory(v.Category || v.category))} value={columnFilters.category} onChange={f => setColumnFilter('category', f)} /></th>
+                <th className="px-4 py-4 text-purple-100"><ColumnFilterHeader label="Ownership" type="text" values={vehicles.map(v => normalizeOwnership(v.Ownership || v.ownership))} value={columnFilters.ownership} onChange={f => setColumnFilter('ownership', f)} /></th>
+                <th className="px-4 py-4 text-purple-100"><ColumnFilterHeader label="Registration Date" type="date" value={columnFilters.registrationDate} onChange={f => setColumnFilter('registrationDate', f)} sortKey="registrationDate" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                <th className="px-4 py-4 text-center text-purple-100"><ColumnFilterHeader label="Status" type="boolean" value={columnFilters.status} onChange={f => setColumnFilter('status', f)} /></th>
+                <th className="px-4 py-4 text-purple-100"><ColumnFilterHeader label="Insurance Exp" type="date" value={columnFilters.insuranceExp} onChange={f => setColumnFilter('insuranceExp', f)} /></th>
+                <th className="px-4 py-4 text-purple-100"><ColumnFilterHeader label="FC Exp" type="date" value={columnFilters.fcExp} onChange={f => setColumnFilter('fcExp', f)} /></th>
+                <th className="px-4 py-4 text-purple-100"><ColumnFilterHeader label="NP Exp" type="date" value={columnFilters.npExp} onChange={f => setColumnFilter('npExp', f)} /></th>
+                <th className="px-4 py-4 text-purple-100"><ColumnFilterHeader label="SP Exp" type="date" value={columnFilters.spExp} onChange={f => setColumnFilter('spExp', f)} /></th>
                 <th className="px-4 py-4 text-right text-purple-100">Actions</th>
               </tr>
             </thead>
@@ -1078,6 +1112,8 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                                             <option value="License">Driver License</option>
                                             <option value="Insurance">Insurance Copy</option>
                                             <option value="FC">FC (Fitness Certificate)</option>
+                                            <option value="NP Certificate">NP Certificate (National Permit)</option>
+                                            <option value="SP Certificate">SP Certificate (State Permit)</option>
                                             <option value="Tax Invoice">Tax Invoice</option>
                                             <option value="Other">Other Certificate</option>
                                           </select>
