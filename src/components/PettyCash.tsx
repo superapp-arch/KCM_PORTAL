@@ -714,16 +714,20 @@ export default function PettyCash({
   // actually gets saved).
   //
   // Numbering scheme (per direct instruction, effective 2026-08-13,
-  // corrected 2026-09-01):
+  // corrected 2026-09-01, format simplified 2026-09-09):
   // - Each of the 3 handlers (Ramesh, Vinod, Saneel) keeps their own
-  //   independent flat sequence ENT-<year>-<4-digit-seq>, mirroring a real
+  //   independent flat sequence ENT-<4-digit-seq>, mirroring a real
   //   physical cash-book each of them keeps - PER-HOLDER (see
   //   holderVouchersFor), not one sequence shared across all three. This
-  //   briefly grew a per-calendar-month reset (ENT-<year>-<MM><NN>) for a
-  //   Sep 1 2026 cutover, but that's now deferred to
-  //   MONTHLY_FORMAT_CUTOVER_YEAR/MONTH below.
+  //   briefly grew a year (ENT-<year>-<seq>) and, even more briefly, a
+  //   per-calendar-month reset (ENT-<year>-<MM><NN>) for a Sep 1 2026
+  //   cutover - both are now abandoned entirely by direct instruction:
+  //   "forget ENT-<year>-<seq>, now only ENT-<seq>". Nothing already saved
+  //   under either older format gets rewritten - only new entries use the
+  //   new format; the regex below (matching both) is what lets a holder's
+  //   sequence keep continuing correctly across the format change.
   // - Ramesh already has a real, reliable continuous history in this flat
-  //   format (e.g. his real last entry is ENT-2026-2941) - this just keeps
+  //   format (e.g. his real last entry is ENT-2941) - this just keeps
   //   continuing from his own highest number automatically, same as always.
   // - Vinod and Saneel's own historical Entry Nos (from when this was one
   //   sequence shared across all 3 handlers) don't reliably reflect where
@@ -732,55 +736,22 @@ export default function PettyCash({
   //   canManualFirstEntryNo below) - every entry after that is
   //   auto-sequential again, indefinitely, with no need to ever retype it.
   const holderVouchersFor = (username: string) => vouchers.filter(v => (v.enteredBy || user.username) === username);
-  const MONTHLY_FORMAT_CUTOVER_YEAR = 2027;
-  const MONTHLY_FORMAT_CUTOVER_MONTH = 3; // March
-  const pettyCashMonthlyPrefix = () => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth() + 1; // 1-12
-    const useMonthlyFormat = year > MONTHLY_FORMAT_CUTOVER_YEAR || (year === MONTHLY_FORMAT_CUTOVER_YEAR && month >= MONTHLY_FORMAT_CUTOVER_MONTH);
-    return { year, month, prefix: `ENT-${year}-${String(month).padStart(2, '0')}`, useMonthlyFormat };
-  };
   const MANUAL_FIRST_ENTRY_USERNAMES = ['vinoda', 'saneel'];
   // [2026-09-07 to 2026-09-09] Vinod used to manually type his Entry No
   // every save, indefinitely, because his auto-generated numbers didn't
   // match his physical cash-book. Reverted by direct request now that his
   // book has caught up to the app's own sequence (his real last entry is
-  // ENT-<year>-4183) - his Entry No is fully automatic and NOT editable
-  // again, exactly like every other handler, same as server.ts's identical
-  // revert (see NO_GAP_COMPACTION_USERNAMES there). He falls through to the
-  // same MANUAL_FIRST_ENTRY_USERNAMES one-time-only check below as Saneel,
-  // which evaluates to false for him since he already has entries under the
-  // current prefix.
-  // A stray monthly-format entry (ENT-<year>-<MM><NN>) briefly created
-  // during the now-reverted Sep 1 2026 cutover looks identical in shape to
-  // the flat scheme's own ENT-<year>-<NNNN> - both are exactly 4 trailing
-  // digits. Value is what tells them apart: MMNN maxes out at 1299 (month
-  // 01-12, seq 00-99), while every genuine flat number in this dataset has
-  // been >= 2672 since the 2026-08-13 floor - see server.ts's own identical
-  // looksLikeStrayMonthlyFormatEntry, which this mirrors exactly.
-  const looksLikeStrayMonthlyFormatEntry = (entryNo: string | undefined, flatPrefix: string) => {
-    const upper = (entryNo || '').toUpperCase();
-    if (!upper.startsWith(flatPrefix) || upper.length !== flatPrefix.length + 4) return false;
-    const n = parseInt(upper.slice(flatPrefix.length), 10);
-    return !isNaN(n) && n <= 1299;
-  };
+  // ENT-4183) - his Entry No is fully automatic and NOT editable again,
+  // exactly like every other handler, same as server.ts's identical revert
+  // (see NO_GAP_COMPACTION_USERNAMES there). He falls through to the same
+  // MANUAL_FIRST_ENTRY_USERNAMES one-time-only check below as Saneel, which
+  // evaluates to false for him since he already has entries under the
+  // current pattern.
   const canManualFirstEntryNo = (() => {
     if (editingId || isSuperAdmin) return false; // never applies to an edit, or to a Super Admin who isn't one of the 3 handlers
     if (!MANUAL_FIRST_ENTRY_USERNAMES.includes(user.username)) return false;
-    const { prefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
     const holderVouchers = holderVouchersFor(user.username);
-    if (useMonthlyFormat) {
-      return !holderVouchers.some(v => {
-        const upper = (v.entryNo || '').toUpperCase();
-        return upper.startsWith(prefix) && upper.length === prefix.length + 2;
-      });
-    }
-    const flatPrefix = `ENT-${new Date().getFullYear()}-`;
-    return !holderVouchers.some(v => {
-      const upper = (v.entryNo || '').toUpperCase();
-      return upper.startsWith(flatPrefix) && !looksLikeStrayMonthlyFormatEntry(upper, flatPrefix);
-    });
+    return !holderVouchers.some(v => /^ENT-(?:\d{4}-)?\d{4}$/.test((v.entryNo || '').toUpperCase()));
   })();
 
   // Live duplicate check for the manually-typed Entry No (2026-09-08 direct
@@ -792,9 +763,8 @@ export default function PettyCash({
   // backstop regardless of what the client catches. Scoped to this handler's
   // own vouchers only (holderVouchersFor), matching Entry No being a
   // per-holder sequence, and matching the server's own scoping exactly.
-  const { prefix: manualMonthlyPrefix, useMonthlyFormat: manualUsesMonthlyFormat } = pettyCashMonthlyPrefix();
-  const manualEntryPrefix = manualUsesMonthlyFormat ? manualMonthlyPrefix : `ENT-${new Date().getFullYear()}-`;
-  const manualEntryWidth = manualUsesMonthlyFormat ? 2 : 4;
+  const manualEntryPrefix = 'ENT-';
+  const manualEntryWidth = 4;
   const manualEntryCandidate = manualEntryNoSeq.trim()
     ? `${manualEntryPrefix}${manualEntryNoSeq.trim().padStart(manualEntryWidth, '0')}`
     : '';
@@ -802,29 +772,17 @@ export default function PettyCash({
     holderVouchersFor(user.username).some(v => (v.entryNo || '').trim().toUpperCase() === manualEntryCandidate.toUpperCase());
 
   const nextPettyCashEntryNo = () => {
-    const { year, month, prefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
+    const prefix = 'ENT-';
     const holderVouchers = holderVouchersFor(user.username);
-
-    if (useMonthlyFormat) {
-      const maxNum = holderVouchers.reduce((max, v) => {
-        const upper = (v.entryNo || '').toUpperCase();
-        if (!upper.startsWith(prefix) || upper.length !== prefix.length + 2) return max;
-        const n = parseInt(upper.slice(prefix.length), 10);
-        return !isNaN(n) && n > max ? n : max;
-      }, 0);
-      return `${prefix}${String(maxNum + 1).padStart(2, '0')}`;
-    }
-
-    // Flat, per-holder (current scheme through the cutover above).
-    const flatPrefix = `ENT-${year}-`;
+    // Matches both the current bare "ENT-NNNN" format and the older
+    // year-embedded "ENT-<year>-NNNN" format still sitting in history - see
+    // server.ts's identical nextPettyCashEntryNo for why.
     const maxNum = holderVouchers.reduce((max, v) => {
-      const upper = (v.entryNo || '').toUpperCase();
-      if (!upper.startsWith(flatPrefix) || looksLikeStrayMonthlyFormatEntry(upper, flatPrefix)) return max;
-      const match = upper.match(/(\d+)$/);
-      const n = match ? parseInt(match[1], 10) : 0;
+      const m = (v.entryNo || '').toUpperCase().match(/^ENT-(?:\d{4}-)?(\d{4})$/);
+      const n = m ? parseInt(m[1], 10) : 0;
       return n > max ? n : max;
     }, 0);
-    return `${flatPrefix}${String(maxNum + 1).padStart(4, '0')}`;
+    return `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
   };
 
   const resetMarketPodForm = () => {
@@ -1242,16 +1200,11 @@ export default function PettyCash({
       const finalClient = clientName === 'Other' ? customClientName || 'Other' : clientName;
       // A manually-typed first entry previews as what it'll actually become
       // (prefix + the typed sequence) rather than the auto-generated
-      // preview, which the server would otherwise ignore. Width matches
-      // whichever scheme is currently active (4 digits flat, 2 digits
-      // monthly - see pettyCashMonthlyPrefix).
-      const { prefix: monthlyPrefix, useMonthlyFormat: manualUsesMonthlyFormat } = pettyCashMonthlyPrefix();
-      const manualPrefix = manualUsesMonthlyFormat ? monthlyPrefix : `ENT-${new Date().getFullYear()}-`;
-      const manualWidth = manualUsesMonthlyFormat ? 2 : 4;
+      // preview, which the server would otherwise ignore.
       const localEntryNo = editingId
         ? entryNo
         : canManualFirstEntryNo && manualEntryNoSeq.trim()
-        ? `${manualPrefix}${manualEntryNoSeq.trim().padStart(manualWidth, '0')}`
+        ? `${manualEntryPrefix}${manualEntryNoSeq.trim().padStart(manualEntryWidth, '0')}`
         : nextPettyCashEntryNo();
       const voucherData = {
         date,
@@ -3866,9 +3819,9 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       stopgap (2026-09-05) were both reverted 2026-09-09 -
                       his book has caught up to the app's own sequence, so
                       his Entry No is fully automatic and locked again too,
-                      for both new AND existing entries. Width is 4 digits
-                      for the current flat scheme, 2 for the monthly scheme
-                      (from March 2027) - see pettyCashMonthlyPrefix. */}
+                      for both new AND existing entries. Format is a flat
+                      "ENT-NNNN" (4-digit sequence, no year) - the year was
+                      dropped entirely by direct instruction 2026-09-09. */}
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Entry Number</label>
                     {canManualFirstEntryNo ? (() => {
@@ -3890,7 +3843,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                               inputMode="numeric"
                               value={manualEntryNoSeq}
                               onChange={(e) => setManualEntryNoSeq(e.target.value.replace(/\D/g, '').slice(0, manualEntryWidth))}
-                              placeholder={manualEntryWidth === 2 ? '01' : '2941'}
+                              placeholder="2941"
                               required
                               aria-invalid={isDuplicateManualEntryNo}
                               className={`w-full rounded-lg p-2 font-mono font-bold tracking-wider focus:outline-none focus:ring-1 ${
@@ -3906,9 +3859,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                             </p>
                           ) : (
                             <p className="text-[9px] text-amber-700 font-mono mt-0.5">
-                              {manualUsesMonthlyFormat
-                                ? 'This month\'s first entry - type its sequence number (e.g. 01). Every entry after this one auto-continues and locks again.'
-                                : 'Type this entry\'s own number from your own cash-book (e.g. 2941, not the previous one). Every entry after this one auto-continues from it and locks again.'}
+                              Type this entry's own number from your own cash-book (e.g. 2941, not the previous one). Every entry after this one auto-continues from it and locks again.
                             </p>
                           )}
                         </>

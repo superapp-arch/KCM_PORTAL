@@ -637,20 +637,24 @@ async function requireVendorManagementAccess(req: express.Request, res: express.
 // smaller) remaining chance of two inserts landing back-to-back.
 //
 // Numbering scheme (per direct instruction, effective 2026-08-13, corrected
-// 2026-09-01):
+// 2026-09-01, format simplified 2026-09-09):
 // - Each of the 3 handlers (Ramesh, Vinod, Saneel) keeps their own
-//   independent flat sequence ENT-<year>-<4-digit-seq>, mirroring a real
-//   physical cash-book each of them keeps - PER-HOLDER, not one sequence
-//   shared across all three (two different holders legitimately having the
+//   independent flat sequence ENT-<4-digit-seq>, mirroring a real physical
+//   cash-book each of them keeps - PER-HOLDER, not one sequence shared
+//   across all three (two different holders legitimately having the
 //   same-looking Entry No is expected - it's scoped to "this handler's own
 //   book", not a ledger-wide unique reference; the voucher's own `id` still
-//   is). This briefly grew a per-calendar-month reset (ENT-<year>-<MM><NN>)
-//   for a Sep 1 2026 cutover, but that's now deferred to
-//   MONTHLY_FORMAT_CUTOVER below - nothing already saved under the brief
-//   monthly format gets touched/renumbered, this only changes how new
-//   entries are numbered going forward.
+//   is). This briefly grew a year (ENT-<year>-<seq>) and, even more
+//   briefly, a per-calendar-month reset (ENT-<year>-<MM><NN>) for a Sep 1
+//   2026 cutover - both are now abandoned entirely by direct instruction:
+//   "forget ENT-<year>-<seq>, now only ENT-<seq>". Nothing already saved
+//   under either older format gets touched/rewritten - this only changes
+//   the format NEW entries get going forward. The regex below (matching
+//   both the bare new format and the year-embedded old one) is what lets a
+//   holder's sequence keep continuing correctly across the format change
+//   instead of restarting.
 // - Ramesh already has a real, reliable continuous history in this flat
-//   format (e.g. his real last entry is ENT-2026-2941) - this just keeps
+//   format (e.g. his real last entry is ENT-2941) - this just keeps
 //   continuing from his own highest number automatically, same as always.
 // - Vinod and Saneel's own historical Entry Nos (from when this was one
 //   sequence shared across all 3 handlers) don't reliably reflect where
@@ -658,49 +662,21 @@ async function requireVendorManagementAccess(req: express.Request, res: express.
 //   types their own next Entry No exactly ONCE (see
 //   canManualFirstPettyCashEntry below) to continue their own physical
 //   numbering into the app - every entry after that is auto-sequential
-//   again, indefinitely, with no need to ever retype it (no monthly reset
-//   applies until the cutover below).
-const MONTHLY_FORMAT_CUTOVER_YEAR = 2027;
-const MONTHLY_FORMAT_CUTOVER_MONTH = 3; // March
-
+//   again, indefinitely, with no need to ever retype it.
 function nextPettyCashEntryNo(holderVouchers: PettyCashVoucher[]): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1; // 1-12
-  const useMonthlyFormat = year > MONTHLY_FORMAT_CUTOVER_YEAR || (year === MONTHLY_FORMAT_CUTOVER_YEAR && month >= MONTHLY_FORMAT_CUTOVER_MONTH);
+  const prefix = 'ENT-';
   const existing = new Set(holderVouchers.map(v => (v.entryNo || '').toUpperCase()));
-
-  if (useMonthlyFormat) {
-    const prefix = `ENT-${year}-${String(month).padStart(2, '0')}`;
-    let maxNum = 0;
-    for (const v of holderVouchers) {
-      const upper = (v.entryNo || '').toUpperCase();
-      // Length check matters here - an old flat-format entry can share the
-      // same "ENT-<year>-<MM>" characters as a coincidental substring
-      // (e.g. old #0950 vs new month "09") without actually being one.
-      if (!upper.startsWith(prefix) || upper.length !== prefix.length + 2) continue;
-      const n = parseInt(upper.slice(prefix.length), 10);
-      if (!isNaN(n) && n > maxNum) maxNum = n;
-    }
-    let candidate = `${prefix}${String(maxNum + 1).padStart(2, '0')}`;
-    while (existing.has(candidate)) {
-      maxNum++;
-      candidate = `${prefix}${String(maxNum + 1).padStart(2, '0')}`;
-    }
-    return candidate;
-  }
-
-  // Flat, per-holder (current scheme through the cutover above). Excludes
-  // any stray monthly-shaped value that might already exist from the
-  // briefly-live Sep 1 2026 cutover (see looksLikeStrayMonthlyFormatEntry)
-  // so it never gets miscounted as a real flat sequence number.
-  const prefix = `ENT-${year}-`;
   let maxNum = 0;
   for (const v of holderVouchers) {
     const upper = (v.entryNo || '').toUpperCase();
-    if (!upper.startsWith(prefix) || looksLikeStrayMonthlyFormatEntry(upper, prefix)) continue;
-    const match = upper.match(/(\d+)$/);
-    const n = match ? parseInt(match[1], 10) : 0;
+    // Matches both the current bare "ENT-NNNN" format and the older
+    // year-embedded "ENT-<year>-NNNN" format still sitting in history -
+    // both represent the same physical sequence, only the trailing 4
+    // digits matter for continuing it correctly without ever regressing
+    // below, or duplicating, an already-used number.
+    const m = upper.match(/^ENT-(?:\d{4}-)?(\d{4})$/);
+    if (!m) continue;
+    const n = parseInt(m[1], 10);
     if (n > maxNum) maxNum = n;
   }
   let candidate = `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
@@ -709,22 +685,6 @@ function nextPettyCashEntryNo(holderVouchers: PettyCashVoucher[]): string {
     candidate = `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
   }
   return candidate;
-}
-
-// A stray monthly-format entry (ENT-<year>-<MM><NN>) briefly created during
-// the now-reverted Sep 1 2026 cutover looks identical in shape to the flat
-// scheme's own ENT-<year>-<NNNN> - both are exactly 4 trailing digits. Value
-// is what tells them apart: MMNN maxes out at 1299 (month 01-12, seq 00-99),
-// while every genuine flat number in this dataset has been >= 2672 since the
-// 2026-08-13 floor. Excluding a stray <=1299 value here only means offering
-// the one-time manual entry (see canManualFirstPettyCashEntry) a little
-// longer than strictly needed - it can never cause a wrong AUTOMATIC number,
-// so it's a safe, one-directional bias.
-function looksLikeStrayMonthlyFormatEntry(entryNo: string | undefined, flatPrefix: string): boolean {
-  const upper = (entryNo || '').toUpperCase();
-  if (!upper.startsWith(flatPrefix) || upper.length !== flatPrefix.length + 4) return false;
-  const n = parseInt(upper.slice(flatPrefix.length), 10);
-  return !isNaN(n) && n <= 1299;
 }
 
 // Petty Cash change request (2026-08-26, corrected 2026-09-01): Vinod and
@@ -760,45 +720,29 @@ const MANUAL_FIRST_ENTRY_USERNAMES = ['vinoda', 'saneel'];
 // for his future entries either - only for not disturbing his past ones.
 const NO_GAP_COMPACTION_USERNAMES = ['vinoda'];
 
-// Whether `username`'s next save is eligible for a manually-typed Entry No,
-// and what shape that manual entry must take - width/max differ between the
-// current flat scheme (4 digits, 1-9999) and the monthly scheme it'll
-// eventually resume being (2 digits, 1-99, once MONTHLY_FORMAT_CUTOVER
-// arrives). Only ever true for MANUAL_FIRST_ENTRY_USERNAMES, and only for
-// their very first save under each scheme - not eligible at all otherwise
-// (see NO_GAP_COMPACTION_USERNAMES's own comment for why Vinod isn't
-// special-cased here anymore).
+// Whether `username`'s next save is eligible for a manually-typed Entry No -
+// only ever true for MANUAL_FIRST_ENTRY_USERNAMES, and only for their very
+// first save (i.e. they have no prior entry in either the current bare
+// "ENT-NNNN" format or the older year-embedded one) - not eligible at all
+// otherwise (see NO_GAP_COMPACTION_USERNAMES's own comment for why Vinod
+// isn't special-cased here anymore).
 function canManualFirstPettyCashEntry(holderVouchers: PettyCashVoucher[], username: string): { can: boolean; prefix: string; width: number; max: number } {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
-  const useMonthlyFormat = year > MONTHLY_FORMAT_CUTOVER_YEAR || (year === MONTHLY_FORMAT_CUTOVER_YEAR && month >= MONTHLY_FORMAT_CUTOVER_MONTH);
-  const prefix = useMonthlyFormat ? `ENT-${year}-${String(month).padStart(2, '0')}` : `ENT-${year}-`;
-  const width = useMonthlyFormat ? 2 : 4;
-  const max = useMonthlyFormat ? 99 : 9999;
+  const prefix = 'ENT-';
+  const width = 4;
+  const max = 9999;
 
   if (!MANUAL_FIRST_ENTRY_USERNAMES.includes(username)) {
     return { can: false, prefix, width, max };
   }
-  if (useMonthlyFormat) {
-    const can = !holderVouchers.some(v => {
-      const upper = (v.entryNo || '').toUpperCase();
-      return upper.startsWith(prefix) && upper.length === prefix.length + 2;
-    });
-    return { can, prefix, width, max };
-  }
-  const hasRelevant = holderVouchers.some(v => {
-    const upper = (v.entryNo || '').toUpperCase();
-    return upper.startsWith(prefix) && !looksLikeStrayMonthlyFormatEntry(upper, prefix);
-  });
+  const hasRelevant = holderVouchers.some(v => /^ENT-(?:\d{4}-)?\d{4}$/.test((v.entryNo || '').toUpperCase()));
   return { can: !hasRelevant, prefix, width, max };
 }
 
 // Normalizes a manually-typed trailing sequence into the full Entry No -
-// only the number itself is ever user-supplied, the ENT-<year>-<...> prefix
-// is fixed/known and never part of what they type. Returns null for
-// anything outside 1-`max` so the route can reject it with a clear error
-// instead of silently coercing garbage input.
+// only the number itself is ever user-supplied, the "ENT-" prefix is
+// fixed/known and never part of what they type. Returns null for anything
+// outside 1-`max` so the route can reject it with a clear error instead of
+// silently coercing garbage input.
 function buildManualPettyCashEntryNo(prefix: string, rawSeq: unknown, width: number, max: number): string | null {
   const digits = String(rawSeq ?? '').trim().replace(/\D/g, '');
   if (!digits) return null;
@@ -808,47 +752,43 @@ function buildManualPettyCashEntryNo(prefix: string, rawSeq: unknown, width: num
 }
 
 // Which Entry No numbering "bucket" a voucher belongs to for renumbering
-// purposes (see renumberPettyCashSequence below) - currently only recognizes
-// the flat-2026 format (ENT-2026-<4-digit-seq>), and only from the
+// purposes (see renumberPettyCashSequence below) - only recognizes the
+// current bare "ENT-NNNN" format (2026-09-09 onward), and only from the
 // 2026-08-13 floor (2672) onward - anything below that is the deliberately-
 // untouched messy legacy zone (duplicate/out-of-order numbers, see
-// nextPettyCashEntryNo's own comment), OR a stray monthly-format entry (see
-// looksLikeStrayMonthlyFormatEntry - always <=1299, so the >= 2672 floor
-// already excludes it too), and must never be swept into a renumbering pass.
+// nextPettyCashEntryNo's own comment). An older, still-present year-embedded
+// "ENT-<year>-NNNN" entry is deliberately NOT matched here - only its own
+// already-saved value is left exactly as it is; the format change only
+// applies going forward (see nextPettyCashEntryNo), never retroactively.
 //
-// Bucketed PER-HOLDER (2026-09-01 correction) - Entry No is now each
-// handler's own independent book (see nextPettyCashEntryNo's own header
-// comment), so gap-compaction must never cross from one holder's sequence
-// into another's; a voucher with no enteredBy at all (pre-dates per-holder
-// numbering entirely) buckets alone under its own empty-string holder key,
-// same "never mixed into a real handler's sequence" treatment.
+// Bucketed PER-HOLDER (2026-09-01 correction) - Entry No is each handler's
+// own independent book (see nextPettyCashEntryNo's own header comment), so
+// gap-compaction must never cross from one holder's sequence into another's;
+// a voucher with no enteredBy at all (pre-dates per-holder numbering
+// entirely) buckets alone under its own empty-string holder key, same
+// "never mixed into a real handler's sequence" treatment.
 //
-// 2026-09-xx bug fix, still in effect after the 2026-09-09 revert above:
-// NO_GAP_COMPACTION_USERNAMES (Vinod) manually typed every Entry No himself
-// for a while to match his own physical cash-book, which can - and
-// deliberately does - have real gaps (a voided voucher, a number he never
-// used, ...). Before this exclusion, deleting any one of his vouchers swept
-// his WHOLE bucket through the gap-compaction below and silently squashed
-// his real numbers back into a contiguous run starting at the hardcoded
-// floor (2672) - "all the entry numbers change, and it comes back to [near]
-// the first one" - overwriting the very numbers he'd manually matched to
-// his book. His entries stay excluded from bucketing, so a delete never
-// renumbers anything of his - his already-saved entries (including the
-// gaps) stay exactly as they are, locked, even though new entries are once
-// again fully automatic.
+// 2026-09-xx bug fix, still in effect: NO_GAP_COMPACTION_USERNAMES (Vinod)
+// manually typed every Entry No himself for a while to match his own
+// physical cash-book, which can - and deliberately does - have real gaps (a
+// voided voucher, a number he never used, ...). Before this exclusion,
+// deleting any one of his vouchers swept his WHOLE bucket through the
+// gap-compaction below and silently squashed his real numbers back into a
+// contiguous run starting at the hardcoded floor (2672) - overwriting the
+// very numbers he'd manually matched to his book. His entries stay excluded
+// from bucketing, so a delete never renumbers anything of his.
 interface PettyCashEntryBucket { key: string; prefix: string; width: number; floor: number; seq: number }
 function pettyCashEntryBucket(v: PettyCashVoucher): PettyCashEntryBucket | null {
   if (NO_GAP_COMPACTION_USERNAMES.includes(v.enteredBy || '')) return null;
   const upper = (v.entryNo || '').toUpperCase();
-  const m = upper.match(/^ENT-(\d{4})-(\d{4})$/);
+  const m = upper.match(/^ENT-(\d{4})$/);
   if (!m) return null;
-  const year = parseInt(m[1], 10);
-  const value = parseInt(m[2], 10);
-  if (isNaN(value) || year !== 2026 || value < 2672) return null;
-  return { key: `${v.enteredBy || ''}||${year}-flat`, prefix: `ENT-${year}-`, width: 4, floor: 2672, seq: value };
+  const value = parseInt(m[1], 10);
+  if (isNaN(value) || value < 2672) return null;
+  return { key: `${v.enteredBy || ''}||flat`, prefix: 'ENT-', width: 4, floor: 2672, seq: value };
 }
 
-// Closes any gap left in the Entry No sequence - e.g. deleting ENT-2026-2713
+// Closes any gap left in the Entry No sequence - e.g. deleting ENT-2713
 // out of .../2712, 2713, 2714 shifts 2714 down to become the new 2713, and
 // so on, so the office never sees "2712, 2714" with 2713 missing. Renumbers
 // within each bucket independently (see pettyCashEntryBucket), sorted by
