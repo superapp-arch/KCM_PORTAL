@@ -859,29 +859,33 @@ function findDuplicateEntryNo<T extends { id?: string; entryNo?: string }>(rows:
 // under '' - isolated from every real login's own sequence, never blended
 // into one of them by accident.
 
-// Duplicate guard for both sequences - scoped to match how each is
+// Duplicate guard for all three sequences - scoped to match how each is
 // generated: Bunk within the same (bunk name, calendar month, enteredBy)
 // bucket (2026-09-04: bunk name added to match nextBunkFuelIndentNumber's
 // own scoping - the same number can legitimately recur across different
 // bunks, different months, or different people), Card across its whole
 // per-person sequence (never resets, so no two Card entries by the SAME
 // person should ever share a number - two different people's Card
-// sequences may coincide freely). Only ever rejects a genuinely
-// new-to-this-id value - resubmitting a record's own unchanged Indent No
-// (a normal edit that didn't touch it) always passes.
+// sequences may coincide freely). Petty Cash (2026-09-09) has no
+// auto-generated sequence at all (typed manually every time - see
+// nextPettyCashEntryNo's own "Petty Cash" pattern for the equivalent Petty
+// Cash module concept) - scoped the same way as Card, one continuous
+// per-person space, entirely separate from both Bunk and Card. Only ever
+// rejects a genuinely new-to-this-id value - resubmitting a record's own
+// unchanged Indent No (a normal edit that didn't touch it) always passes.
 function findDuplicateFuelIndentNumber(logs: FuelLog[], indentNumber: string | undefined, candidate: { bunkOrCard?: string; bunkName?: string; date?: string; enteredBy?: string }, excludeId?: string): boolean {
   const target = (indentNumber || '').trim().toUpperCase();
   if (!target) return false;
-  const isCard = candidate.bunkOrCard === 'Card';
+  const classify = (v: string | undefined) => (v === 'Card' ? 'Card' : v === 'Petty Cash' ? 'Petty Cash' : 'Bunk');
+  const candidateClass = classify(candidate.bunkOrCard);
   const monthKey = (candidate.date || '').slice(0, 7);
   const bunkNameKey = (candidate.bunkName || '').trim().toLowerCase();
   return logs.some(l => {
     if (l.id === excludeId) return false;
     if ((l.indentNumber || '').trim().toUpperCase() !== target) return false;
     if ((l.enteredBy || '') !== (candidate.enteredBy || '')) return false; // separate sequence per person
-    const lIsCard = l.bunkOrCard === 'Card';
-    if (isCard !== lIsCard) return false;
-    if (isCard) return true; // Card: one sequence per person, no month/bunk scoping
+    if (classify(l.bunkOrCard) !== candidateClass) return false;
+    if (candidateClass !== 'Bunk') return true; // Card/Petty Cash: one sequence per person, no month/bunk scoping
     if ((l.bunkName || '').trim().toLowerCase() !== bunkNameKey) return false; // separate sequence per bunk
     return (l.date || '').slice(0, 7) === monthKey;
   });
@@ -2698,6 +2702,10 @@ async function startServer() {
   app.get('/api/fuel/next-indent-number', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      // Petty Cash (2026-09-09) has no auto-generated sequence at all - the
+      // client never calls this route for it (typed manually every time),
+      // but return blank defensively rather than misreading it as Bunk.
+      if (req.query.bunkOrCard === 'Petty Cash') return res.json({ indentNumber: null });
       const bunkOrCard = req.query.bunkOrCard === 'Card' ? 'Card' : 'Bunk';
       const date = typeof req.query.date === 'string' ? req.query.date : '';
       const bunkName = typeof req.query.bunkName === 'string' ? req.query.bunkName : '';
@@ -2717,7 +2725,7 @@ async function startServer() {
       if (isFutureDate(req.body?.date)) return res.status(400).json({ error: 'Fuel entry date cannot be in the future.' });
       const allLogs = await getFuelLogs();
       if (findDuplicateFuelIndentNumber(allLogs, req.body?.indentNumber, { ...req.body, enteredBy: sessionUser?.username })) {
-        return res.status(409).json({ error: `Indent No. ${req.body.indentNumber} already exists in your ${req.body?.bunkOrCard === 'Card' ? 'Card' : 'Bunk'} sequence.` });
+        return res.status(409).json({ error: `Indent No. ${req.body.indentNumber} already exists in your ${req.body?.bunkOrCard === 'Card' ? 'Card' : req.body?.bunkOrCard === 'Petty Cash' ? 'Petty Cash' : 'Bunk'} sequence.` });
       }
       // Pre-generated here (same fallback saveFuelLog itself would apply) just
       // so the id is known for the audit record below - no behavior change.
@@ -2752,7 +2760,7 @@ async function startServer() {
       if (isFutureDate(resolved.data?.date)) return res.status(400).json({ error: 'Fuel entry date cannot be in the future.' });
       const allLogs = await getFuelLogs();
       if (findDuplicateFuelIndentNumber(allLogs, resolved.data?.indentNumber, resolved.data || {}, req.params.id)) {
-        return res.status(409).json({ error: `Indent No. ${resolved.data.indentNumber} already exists in the ${resolved.data?.bunkOrCard === 'Card' ? 'Card' : 'Bunk'} sequence.` });
+        return res.status(409).json({ error: `Indent No. ${resolved.data.indentNumber} already exists in the ${resolved.data?.bunkOrCard === 'Card' ? 'Card' : resolved.data?.bunkOrCard === 'Petty Cash' ? 'Petty Cash' : 'Bunk'} sequence.` });
       }
       const result = await saveFuelLog(resolved.data);
       await createAuditLog({

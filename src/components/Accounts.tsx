@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { User, AccountsEntry, VehicleDocument } from '../types';
 import { 
   Landmark, 
@@ -20,6 +20,7 @@ import {
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import DateInput from './DateInput';
 import DocumentAttachment from './DocumentAttachment';
+import PaginationFooter, { paginateRows } from './PaginationFooter';
 
 interface AccountsProps {
   user: User;
@@ -161,6 +162,15 @@ export default function Accounts({ user, entries, onAddEntry, onUpdateEntry, onD
     (e?.category || '').toLowerCase().includes((searchTerm || '').toLowerCase()) ||
     (e?.reference || '').toLowerCase().includes((searchTerm || '').toLowerCase())
   );
+
+  // Pagination footer (2026-09-09 direct request) - same component/copy/
+  // behavior as Petty Cash's own Ledger pagination, see PaginationFooter.tsx.
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(1);
+  useEffect(() => {
+    setPage(1);
+  }, [searchTerm]);
+  const paginatedEntries = paginateRows(filteredEntries, page, PAGE_SIZE);
 
   const totalIncome = entries.filter(e => e.type === 'Income').reduce((sum, e) => sum + (e.amount || 0), 0);
   const totalExpense = entries.filter(e => e.type === 'Expense').reduce((sum, e) => sum + (e.amount || 0), 0);
@@ -390,7 +400,7 @@ export default function Accounts({ user, entries, onAddEntry, onUpdateEntry, onD
                       </td>
                     </tr>
                   ) : (
-                    filteredEntries.map((e) => (
+                    paginatedEntries.map((e) => (
                       <tr key={e.id} className="hover:bg-slate-50/50 transition-colors">
                         <td className="px-3 py-2.5 font-mono text-slate-500">{e.date}</td>
                         <td className="px-3 py-2.5 font-bold text-slate-800 uppercase tracking-wide">{e.category}</td>
@@ -445,6 +455,7 @@ export default function Accounts({ user, entries, onAddEntry, onUpdateEntry, onD
                 </tbody>
               </table>
             </div>
+            <PaginationFooter page={page} totalCount={filteredEntries.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
           </div>
         </div>
       </div>

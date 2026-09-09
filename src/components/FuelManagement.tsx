@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { FuelLog, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage, Vendor, StaffEmployee, DriverVehicleLookup } from '../types';
 import SortHeader from './SortHeader';
 import ColumnFilterHeader from './ColumnFilterHeader';
+import PaginationFooter, { paginateRows } from './PaginationFooter';
 import { SortState, SortDirection, extractLeadingNumber, compareText, compareNumber } from '../utils/sort';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 import { nextBunkFuelIndentNumber, nextCardFuelIndentNumber } from '../utils/fuelIndentNumber';
@@ -232,9 +233,14 @@ export default function FuelManagement({
   // gets the same treatment. Mirrors server.ts's FUEL_VIEW_ONLY_EMAILS
   // exactly.
   const isViewOnlyUser = user.email === 'vinod@kcmlogistics.in' || user.email === 'bhagya@kcmlogistics.in';
-  // Entered By is visible to Super Admin/Principal and to Vinod's read-only
-  // view - everyone else never sees who entered what.
-  const canSeeEnteredBy = isSuperAdmin || isViewOnlyUser;
+  // Entered By is visible to Super Admin/Principal, Vinod's read-only view,
+  // and Chandan (2026-09-09 direct request - he already sees Praveen's own
+  // entries via the mileage-only exception below, so being able to filter
+  // "mine vs Praveen's" is a natural extension, not new visibility - his own
+  // rows still arrive with enteredBy stripped, same as before, so they show
+  // blank/"you" rather than his own name). Praveen doesn't get this - he has
+  // no cross-visibility of anyone else's entries to begin with.
+  const canSeeEnteredBy = isSuperAdmin || isViewOnlyUser || user.email === 'chandanreddy@kcmlogistics.in';
   // Chandan's one-way exception: Praveen's own entries are visible to him
   // (server.ts's filterFuelLogsForViewer) so he can fill in the Mileage
   // section on ones Praveen left blank - but nothing else on that row is his
@@ -252,7 +258,7 @@ export default function FuelManagement({
   const [bunkFilter, setBunkFilter] = useState('All');
   // Bunk/Card filter - whichever payment method (Bunk vs Card) an entry was
   // logged under, independent of the Bunk Name filter above.
-  const [bunkOrCardFilter, setBunkOrCardFilter] = useState<'All' | 'Bunk' | 'Card'>('All');
+  const [bunkOrCardFilter, setBunkOrCardFilter] = useState<'All' | 'Bunk' | 'Card' | 'Petty Cash'>('All');
   // Entered By filter (2026-09-04) - Super Admin/Principal only, same
   // Excel-style "show just this person's rows" ask as Mileage Report below.
   const [enteredByFilter, setEnteredByFilter] = useState<string>('All');
@@ -263,7 +269,14 @@ export default function FuelManagement({
   // Indent No descending keeps that number visible right at the top instead.
   // Still fully overridable via the Sort By dropdown or the column sort
   // headers (Date/Vehicle No).
-  const [sort, setSort] = useState<SortState | null>({ key: 'indentNumber', direction: 'desc' });
+  // Default sort: Date, newest first (2026-09-09 direct request) - groups
+  // every bunk's entries by date instead of interleaving them (previously
+  // defaulted to Indent Number, which mixed different bunks/dates together
+  // since each bunk has its own Indent No sequence). Ties within the same
+  // date break on Entry Number descending - the most recently ADDED entry
+  // (whoever just saved it, Chandan or Praveen) sorts to the top of that
+  // date's group, not just whichever vehicle number happens to sort first.
+  const [sort, setSort] = useState<SortState | null>({ key: 'date', direction: 'desc' });
   const handleSort = (key: string, direction: SortDirection) => setSort({ key, direction });
   // Excel-style per-column filters (2026-09-08 GLOBAL UI REQUIREMENT) -
   // additive to the existing view-scope/Bunk/Bunk-Card/Entered By/Search
@@ -318,7 +331,10 @@ export default function FuelManagement({
   // to start typing doesn't immediately snap back to the dropdown view.
   const [locationIsOther, setLocationIsOther] = useState(false);
   const [bunkName, setBunkName] = useState('');
-  const [bunkOrCard, setBunkOrCard] = useState<'Bunk' | 'Card'>('Bunk');
+  const [bunkOrCard, setBunkOrCard] = useState<'Bunk' | 'Card' | 'Petty Cash'>('Bunk');
+  // Only meaningful when bunkOrCard === 'Petty Cash' - which handler's Petty
+  // Cash book this whole fuel amount is attributed to (2026-09-09).
+  const [fuelPettyCashHolder, setFuelPettyCashHolder] = useState('');
   const [vehicleNumber, setVehicleNumber] = useState('');
   const [indentNumber, setIndentNumber] = useState('');
   // True only when the live server preview (GET /api/fuel/next-indent-number)
@@ -643,6 +659,11 @@ export default function FuelManagement({
   useEffect(() => {
     if (!showSidebar || editingId) { setIndentNumberLoading(false); return; }
     if (bunkOrCard === 'Bunk' && !date) { setIndentNumberLoading(false); return; }
+    // Petty Cash (2026-09-09) has no auto-generated sequence at all - one
+    // Indent No, typed in manually every time, completely separate from
+    // Bunk/Card's own auto-continuing sequences. Left blank here for the
+    // office to fill in themselves.
+    if (bunkOrCard === 'Petty Cash') { setIndentNumberLoading(false); return; }
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const params = new URLSearchParams({ bunkOrCard });
@@ -697,7 +718,7 @@ export default function FuelManagement({
   // when this by-design blank is expected to show up for the very first
   // entry.
   const indentNumberFirstOfPeriod = !editingId && !indentNumberLoading && !indentNumberIsLocalEstimate && !indentNumber
-    && (bunkOrCard === 'Card' || !!date);
+    && bunkOrCard !== 'Petty Cash' && (bunkOrCard === 'Card' || !!date);
   const indentNumberPeriodLabel = bunkOrCard === 'Bunk' && date
     ? new Date(`${date}T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
     : '';
@@ -948,6 +969,7 @@ export default function FuelManagement({
     setMRatePerLitreNew('');
     setMExtraFuelPaymentMode('normal');
     setMPettyCashHolder('');
+    setFuelPettyCashHolder('');
     setShowMileageManager(false);
     setMileageFormVehicleNo('');
     setMileageFormValue('');
@@ -970,6 +992,7 @@ export default function FuelManagement({
     setLocationIsOther(!!log.location && !LOCATIONS.includes(log.location));
     setBunkName(log.bunkName);
     setBunkOrCard(log.bunkOrCard || 'Bunk'); // pre-existing record saved before this field existed - see item 8 backward-compat note above
+    setFuelPettyCashHolder(log.pettyCashHolderUsername || '');
     setVehicleNumber(log.vehicleNumber);
     setIndentNumber(log.indentNumber);
     setIndentNumberIsLocalEstimate(false);
@@ -1021,6 +1044,10 @@ export default function FuelManagement({
     e.preventDefault();
     if (!period || !date || !location || !bunkName || !vehicleNumber || !ltrs || !rate || !client) {
       triggerNotif('Please complete all required fields (*)');
+      return;
+    }
+    if (bunkOrCard === 'Petty Cash' && !fuelPettyCashHolder.trim()) {
+      triggerNotif('Petty Cash Paid By is required when Bunk/Card is Petty Cash.');
       return;
     }
     // Rate per Ltr (new) is only mandatory once Extra Fuel actually has a
@@ -1172,6 +1199,7 @@ export default function FuelManagement({
         location: location.trim(),
         bunkName: bunkName.trim(),
         bunkOrCard,
+        pettyCashHolderUsername: bunkOrCard === 'Petty Cash' ? fuelPettyCashHolder : undefined,
         vehicleNumber: vehicleNumber.trim().toUpperCase(),
         indentNumber: indentNumber.trim(),
         ltrs: l,
@@ -1298,12 +1326,22 @@ export default function FuelManagement({
           case 'requestedBy': cmp = compareText(a.requestedBy, b.requestedBy); break;
           case 'rqId': cmp = compareText(a.rqId, b.rqId); break;
           default:
-            // Ties (same date) break on Vehicle No so the order stays stable.
-            cmp = a.date === b.date ? extractLeadingNumber(a.vehicleNumber) - extractLeadingNumber(b.vehicleNumber) : (a.date < b.date ? -1 : 1);
+            // 'date' (also the fallback for any unrecognized sort.key) -
+            // ties (same date) break on Entry Number so the most recently
+            // ADDED entry that day sorts to the top of its date group,
+            // regardless of who entered it.
+            cmp = a.date === b.date ? (a.entryNumber || 0) - (b.entryNumber || 0) : (a.date < b.date ? -1 : 1);
         }
         return sort.direction === 'asc' ? cmp : -cmp;
       })
     : filteredLogsUnsorted;
+
+  // Pagination footer (2026-09-09 direct request) - same component/copy/
+  // behavior as Petty Cash's own Ledger pagination, see PaginationFooter.tsx.
+  const LEDGER_PAGE_SIZE = 50;
+  const [ledgerPage, setLedgerPage] = useState(1);
+  useEffect(() => { setLedgerPage(1); }, [viewPeriod, viewDate, bunkFilter, bunkOrCardFilter, enteredByFilter, searchTerm, columnFilters]);
+  const paginatedLogs = paginateRows(filteredLogs, ledgerPage, LEDGER_PAGE_SIZE);
 
   // Groups entries by their (Location, Bunk Name) pair - the same bunk name
   // can exist at multiple locations (e.g. HPCL at BLR/Chennai/Goa), and each
@@ -1664,7 +1702,7 @@ export default function FuelManagement({
           <div className="flex flex-wrap items-center gap-2 mb-3">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Ledger:</span>
             <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-bold">
-              {([['All', 'All'], ['Bunk', 'Bunk'], ['Card', 'Card']] as const).map(([key, label]) => (
+              {([['All', 'All'], ['Bunk', 'Bunk'], ['Card', 'Card'], ['Petty Cash', 'Petty Cash']] as const).map(([key, label]) => (
                 <button
                   key={key}
                   type="button"
@@ -1772,9 +1810,9 @@ export default function FuelManagement({
                     </td>
                   </tr>
                 ) : (
-                  filteredLogs.map((log, i) => (
+                  paginatedLogs.map((log, i) => (
                     <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{i + 1}</td>
+                      <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{(ledgerPage - 1) * LEDGER_PAGE_SIZE + i + 1}</td>
                       <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{log.date}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.location}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.bunkName}</td>
@@ -1843,6 +1881,7 @@ export default function FuelManagement({
               </tbody>
             </table>
           </div>
+          <PaginationFooter page={ledgerPage} totalCount={filteredLogs.length} pageSize={LEDGER_PAGE_SIZE} onPageChange={setLedgerPage} />
         </div>
 
       {/* Slide-out Sidebar for Add/Edit Fuel Entry */}
@@ -2317,12 +2356,18 @@ export default function FuelManagement({
                       <select
                         required
                         value={bunkOrCard}
-                        onChange={(e) => setBunkOrCard(e.target.value as 'Bunk' | 'Card')}
+                        onChange={(e) => setBunkOrCard(e.target.value as 'Bunk' | 'Card' | 'Petty Cash')}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
                       >
                         <option value="Bunk">Bunk</option>
                         <option value="Card">Card</option>
+                        <option value="Petty Cash">Petty Cash</option>
                       </select>
+                      {bunkOrCard === 'Petty Cash' && (
+                        <p className="text-[9px] text-indigo-500 font-mono mt-0.5">
+                          Whole amount paid from Petty Cash - excluded from this bunk's own total in Diesel Payments.
+                        </p>
+                      )}
                     </div>
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1">Vehicle Number *</label>
@@ -2359,6 +2404,26 @@ export default function FuelManagement({
                       )}
                     </div>
                   </div>
+
+                  {bunkOrCard === 'Petty Cash' && (
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1">
+                        Petty Cash Paid By <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        required
+                        value={fuelPettyCashHolder}
+                        onChange={(e) => setFuelPettyCashHolder(e.target.value)}
+                        className="w-full bg-indigo-50 border border-indigo-200 rounded-lg p-2 font-mono font-bold text-slate-800"
+                      >
+                        <option value="">Select...</option>
+                        {PETTY_CASH_USERS.map(u => <option key={u.username} value={u.username}>{u.label}</option>)}
+                      </select>
+                      {!fuelPettyCashHolder && (
+                        <p className="text-[9px] text-rose-500 font-mono mt-0.5">Required when Bunk/Card is Petty Cash.</p>
+                      )}
+                    </div>
+                  )}
 
                   {/* Authorized Driver / Driver ID - captured here (Fuel
                       Entry Details) since that's the moment the vehicle is
@@ -2415,7 +2480,9 @@ export default function FuelManagement({
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
                     />
                     <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                      {bunkOrCard === 'Card'
+                      {bunkOrCard === 'Petty Cash'
+                        ? 'Petty Cash has its own separate sequence - type the Indent No yourself, it never auto-fills.'
+                        : bunkOrCard === 'Card'
                         ? 'Card has its own sequence (00001, 00002...), completely separate from Bunk.'
                         : 'Auto-continues within this month for Bunk - blank means this is the first entry of a new month; type the starting number.'}
                       {' '}Still fully editable - correcting an existing entry never renumbers others.

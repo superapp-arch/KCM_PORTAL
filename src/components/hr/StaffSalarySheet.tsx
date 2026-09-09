@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, FileText, List } from 'lucide-react';
+import { Coins, Plus, Search, Edit2, Trash2, CheckCircle2, AlertCircle, FileText, List, ChevronUp, ChevronDown } from 'lucide-react';
 import { StaffEmployee, StaffSalaryDetail, StaffBankDetail, SalarySlipRecord, User } from '../../types';
 import StaffFormModal from './StaffFormModal';
 import SalarySlipModal from './SalarySlipModal';
 import SalarySlipTabView from './SalarySlipTabView';
 import { EnrichedPfRecord } from '../../utils/salarySlipGenerate';
 import { authFetch } from '../../authFetch';
+import { compareText, compareLeadingNumber } from '../../utils/sort';
 
 interface StaffSalarySheetProps {
   user: User;
@@ -121,6 +122,28 @@ export default function StaffSalarySheet({ user, employees, onAddEmployee, onUpd
     return true;
   }), [employees, statusFilter, employmentTypeFilter, locationFilter, searchTerm]);
 
+  // Employee list sort (2026-09-09 direct request) - defaults to Employee ID
+  // in sequential/numeric order (EMP001, EMP002, ... - compareLeadingNumber,
+  // not plain text, so EMP002 doesn't sort after EMP10). Clicking the Name
+  // column toggles A-Z/Z-A and takes over as the active sort until the
+  // office clicks back to the Emp ID column - only one column ever drives
+  // the order at a time.
+  const [sortColumn, setSortColumn] = useState<'id' | 'name'>('id');
+  const [nameSortDir, setNameSortDir] = useState<'asc' | 'desc'>('asc');
+  const toggleNameSort = () => {
+    if (sortColumn !== 'name') { setSortColumn('name'); setNameSortDir('asc'); }
+    else setNameSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+  };
+  const sorted = useMemo(() => {
+    const rows = [...filtered];
+    if (sortColumn === 'name') {
+      rows.sort((a, b) => (nameSortDir === 'asc' ? compareText(a.name, b.name) : compareText(b.name, a.name)));
+    } else {
+      rows.sort((a, b) => compareLeadingNumber(a.id, b.id));
+    }
+    return rows;
+  }, [filtered, sortColumn, nameSortDir]);
+
   const handleDelete = async (emp: StaffEmployee) => {
     if (!confirm(`Delete employee ${emp.id} - ${emp.name}? This cannot be undone.`)) return;
     try {
@@ -226,8 +249,28 @@ export default function StaffSalarySheet({ user, employees, onAddEmployee, onUpd
             <thead className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 text-purple-100 uppercase text-[10px] tracking-wider">
               <tr>
                 <th className="px-3 py-2.5 text-center w-12">S.No</th>
-                <th className="px-3 py-2.5">Emp ID</th>
-                <th className="px-3 py-2.5">Name</th>
+                <th className="px-3 py-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setSortColumn('id')}
+                    title="Sort by Employee ID"
+                    className={`inline-flex items-center gap-1 cursor-pointer hover:text-white transition-colors uppercase text-[10px] tracking-wider font-bold ${sortColumn === 'id' ? 'text-white' : ''}`}
+                  >
+                    Emp ID
+                    {sortColumn === 'id' && <ChevronUp className="w-3 h-3" />}
+                  </button>
+                </th>
+                <th className="px-3 py-2.5">
+                  <button
+                    type="button"
+                    onClick={toggleNameSort}
+                    title="Sort by Name"
+                    className={`inline-flex items-center gap-1 cursor-pointer hover:text-white transition-colors uppercase text-[10px] tracking-wider font-bold ${sortColumn === 'name' ? 'text-white' : ''}`}
+                  >
+                    Name
+                    {sortColumn === 'name' && (nameSortDir === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                  </button>
+                </th>
                 <th className="px-3 py-2.5">Designation</th>
                 <th className="px-3 py-2.5">Location</th>
                 <th className="px-3 py-2.5">Status</th>
@@ -241,9 +284,9 @@ export default function StaffSalarySheet({ user, employees, onAddEmployee, onUpd
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.length === 0 ? (
+              {sorted.length === 0 ? (
                 <tr><td colSpan={12} className="text-center py-10 text-slate-400">No staff records found.</td></tr>
-              ) : filtered.map((emp, i) => {
+              ) : sorted.map((emp, i) => {
                 const detail = salaryDetails.find(d => d.empId === emp.id);
                 const hikeInfo = hikeCounts[emp.id];
                 const pfRecord = pfRecordFor(emp.id);

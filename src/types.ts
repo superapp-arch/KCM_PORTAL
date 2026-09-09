@@ -106,7 +106,19 @@ export interface FuelLog {
   date: string; // YYYY-MM-DD - exact fill-up day
   location: string;
   bunkName: string;
-  bunkOrCard: 'Bunk' | 'Card';
+  // 'Petty Cash' (2026-09-09 direct request) - the WHOLE fuel amount (not
+  // just the Mileage tab's own separate Extra Fuel sub-amount, which already
+  // had its own petty-cash option) paid entirely out of a handler's Petty
+  // Cash instead of the company Bunk/Card account. Excluded from that bunk's
+  // own purchase total in Diesel Payments the same way Card already is
+  // (isBunkPaid there checks === 'Bunk' - a 'Petty Cash' row fails that
+  // check exactly like 'Card' does, no extra code needed) - it's tracked
+  // under pettyCashHolderUsername instead, purely for display/reference.
+  bunkOrCard: 'Bunk' | 'Card' | 'Petty Cash';
+  // Which Petty Cash login's book this entry's amount is attributed to -
+  // only meaningful when bunkOrCard is 'Petty Cash' (mirrors MileageReport's
+  // own pettyCashHolderUsername for the Extra Fuel sub-case).
+  pettyCashHolderUsername?: string;
   vehicleNumber: string; // autofetched from Fleet, manual entry allowed if not found
   indentNumber: string;
   ltrs: number;

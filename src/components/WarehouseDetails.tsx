@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { WarehouseEntry, VehicleDocument, Vehicle, User, Vendor, WarehouseRateOverride } from '../types';
 import { VEHICLE_CATEGORIES } from '../utils/vehicleCycleDefaults';
+import PaginationFooter, { paginateRows } from './PaginationFooter';
 import { 
   Warehouse, 
   Plus, 
@@ -757,6 +758,15 @@ export default function WarehouseDetails({
 
     return matchesSearch && matchesWarehouse && matchesVehicleType && matchesVehicleCategory && matchesDeploymentType && matchesDate;
   }).sort((a, b) => b.slNo - a.slNo); // Newest first
+
+  // Pagination footer (2026-09-09 direct request) - same component/copy/
+  // behavior as Petty Cash's own Ledger pagination, see PaginationFooter.tsx.
+  const WAREHOUSE_PAGE_SIZE = 50;
+  const [warehousePage, setWarehousePage] = useState(1);
+  useEffect(() => {
+    setWarehousePage(1);
+  }, [searchTerm, filterWarehouse, filterVehicleType, filterVehicleCategory, filterDeploymentType, filterStartDate, filterEndDate]);
+  const paginatedEntries = paginateRows(filteredEntries, warehousePage, WAREHOUSE_PAGE_SIZE);
 
   // Unique lists for filters
   const uniqueWarehouses = Array.from(new Set(entries.map(e => e.warehouseName).filter(Boolean)));
@@ -1836,6 +1846,7 @@ export default function WarehouseDetails({
                 📭 NO WAREHOUSE DEPLOYMENT LOGS MATCHING FILTER CONDITIONS.
               </div>
             ) : (
+              <>
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
@@ -1854,7 +1865,9 @@ export default function WarehouseDetails({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-purple-50/50">
-                    {filteredEntries.map((e, idx) => (
+                    {paginatedEntries.map((e, idxOnPage) => {
+                      const idx = (warehousePage - 1) * WAREHOUSE_PAGE_SIZE + idxOnPage;
+                      return (
                       <tr key={e.id || `wh-entry-${e.slNo || idx}`} className="hover:bg-slate-50/50 transition-colors">
                         <td className="py-3.5 px-4 font-mono font-bold text-slate-400">{idx + 1}</td>
                         <td className="py-3.5 px-3 font-medium whitespace-nowrap text-purple-950">{e.date}</td>
@@ -1934,10 +1947,13 @@ export default function WarehouseDetails({
                           </div>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
+              <PaginationFooter page={warehousePage} totalCount={filteredEntries.length} pageSize={WAREHOUSE_PAGE_SIZE} onPageChange={setWarehousePage} />
+              </>
             )}
 
           </div>

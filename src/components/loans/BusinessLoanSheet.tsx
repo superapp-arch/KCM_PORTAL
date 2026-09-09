@@ -5,6 +5,7 @@ import { BusinessLoan, LoanStatus } from '../../types';
 import { computeMonthsCompleted, computeDueDate, computeDueDateRaw, computeLoanStatus, resolveLoanStatus } from '../../utils/loanDates';
 import DateInput from '../DateInput';
 import ColumnFilterHeader from '../ColumnFilterHeader';
+import PaginationFooter, { paginateRows } from '../PaginationFooter';
 import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../../utils/columnFilter';
 
 // EMI Paid/Pending/O-S Amount/Due Date/Loan Status aren't stored fields -
@@ -189,6 +190,15 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
     return true;
   }), [businessLoans, searchTerm, columnFilters]);
 
+  // Pagination footer (2026-09-09 direct request) - same component/copy/
+  // behavior as Petty Cash's own Ledger pagination, see PaginationFooter.tsx.
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(1);
+  useEffect(() => {
+    setPage(1);
+  }, [searchTerm, columnFilters]);
+  const paginated = paginateRows(filtered, page, PAGE_SIZE);
+
   return (
     <div className="space-y-4">
       {notif && (
@@ -247,7 +257,7 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
                 <tr><td colSpan={14} className="text-center py-10 text-slate-400">No business loan records found.</td></tr>
-              ) : filtered.map((loan, i) => {
+              ) : paginated.map((loan, i) => {
                 const emiPaid = computeMonthsCompleted(loan.emiDate, loan.tenure);
                 const bal = loan.tenure != null ? loan.tenure - emiPaid : null;
                 const osAmount = bal != null && loan.emiMonthly != null ? bal * loan.emiMonthly : null;
@@ -255,7 +265,7 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
                 const displayStatus = resolveLoanStatus(loan.loanStatus, loan.loanStatusManual, emiPaid, loan.tenure);
                 return (
                   <tr key={loan.id} className="hover:bg-slate-50">
-                    <td className="px-3 py-2.5 font-mono text-slate-500">{i + 1}</td>
+                    <td className="px-3 py-2.5 font-mono text-slate-500">{(page - 1) * PAGE_SIZE + i + 1}</td>
                     <td className="px-3 py-2.5 font-semibold text-slate-700 whitespace-nowrap">{loan.financer}</td>
                     <td className="px-3 py-2.5 text-slate-600 whitespace-nowrap">{loan.loanType || '-'}</td>
                     <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{loan.loanNumber}</td>
@@ -286,6 +296,7 @@ export default function BusinessLoanSheet({ businessLoans, onAddBusinessLoan, on
             </tbody>
           </table>
         </div>
+        <PaginationFooter page={page} totalCount={filtered.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
       </div>
 
       {showModal && (

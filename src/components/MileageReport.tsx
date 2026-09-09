@@ -28,6 +28,7 @@ import {
 import DateInput from './DateInput';
 import SortHeader from './SortHeader';
 import ColumnFilterHeader from './ColumnFilterHeader';
+import PaginationFooter, { paginateRows } from './PaginationFooter';
 import { SortState, SortDirection, compareText, compareNumber, extractLeadingNumber } from '../utils/sort';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../utils/columnFilter';
@@ -574,6 +575,15 @@ export default function MileageReportModule({
       })
     : filteredReports;
 
+  // Pagination footer (2026-09-09 direct request) - same component/copy/
+  // behavior as Petty Cash's own Ledger pagination, see PaginationFooter.tsx.
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(1);
+  useEffect(() => {
+    setPage(1);
+  }, [viewPeriod, viewDate, selectedLocationFilter, selectedVehicleFilter, selectedEnteredByFilter, searchTerm, columnFilters]);
+  const paginatedReports = paginateRows(sortedReports, page, PAGE_SIZE);
+
   return (
     <div className="space-y-6 text-xs text-slate-800 relative min-h-screen">
       {/* Top Banner & Header */}
@@ -826,9 +836,9 @@ export default function MileageReportModule({
                   </td>
                 </tr>
               ) : (
-                sortedReports.map((r, i) => (
+                paginatedReports.map((r, i) => (
                   <tr key={r.id} className="hover:bg-slate-50/70 transition-colors text-[11px]">
-                    <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{i + 1}</td>
+                    <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{(page - 1) * PAGE_SIZE + i + 1}</td>
                     <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">{r.date}</td>
                     <td className="px-3 py-2 font-bold font-mono text-slate-900 whitespace-nowrap">{r.vehicleNo}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.openingKm != null ? `${r.openingKm.toLocaleString('en-IN')} KM` : '-'}</td>
@@ -904,6 +914,7 @@ export default function MileageReportModule({
             </tbody>
           </table>
         </div>
+        <PaginationFooter page={page} totalCount={sortedReports.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
 
         {/* Calculated Totals Mini Grid - deliberately compact (small
             padding/text) since these get screenshotted on their own a lot -

@@ -29,6 +29,7 @@ import {
 } from '../utils/billingInvoiceCalc';
 import { filterToCurrentFinancialYear, exportBillingInvoicesToExcel, exportBillingInvoicesToPdf } from '../utils/billingImportExport';
 import ColumnFilterHeader from './ColumnFilterHeader';
+import PaginationFooter, { paginateRows } from './PaginationFooter';
 import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../utils/columnFilter';
 
 interface BillingProps {
@@ -701,6 +702,15 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
     return true;
   });
 
+  // Pagination footer (2026-09-09 direct request) - same component/copy/
+  // behavior as Petty Cash's own Ledger pagination, see PaginationFooter.tsx.
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(1);
+  useEffect(() => {
+    setPage(1);
+  }, [activeCompany, searchTerm, statusFilter, fromDate, toDate, columnFilters]);
+  const paginatedInvoices = paginateRows(filteredInvoices, page, PAGE_SIZE);
+
   // Export always respects the same 3 filters as the list above; with none
   // active it defaults to the current financial year (see
   // filterToCurrentFinancialYear) rather than the entire historical ledger,
@@ -898,12 +908,12 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
                     </td>
                   </tr>
                 ) : (
-                  filteredInvoices.map((inv, idx) => {
+                  paginatedInvoices.map((inv, idx) => {
                     const status = effectiveInvoiceStatus(inv);
                     const StatusIcon = PAYMENT_STATUS_ICON[status];
                     return (
                       <tr key={inv.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{idx + 1}</td>
+                        <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{(page - 1) * PAGE_SIZE + idx + 1}</td>
                         <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{inv.date}</td>
                         <td className="px-3 py-2.5 font-bold font-mono text-slate-900 tracking-wider whitespace-nowrap">{inv.invoiceNo}</td>
                         <td className="px-3 py-2.5 font-semibold text-slate-800">{inv.customerName}</td>
@@ -963,6 +973,7 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
               </tbody>
             </table>
           </div>
+          <PaginationFooter page={page} totalCount={filteredInvoices.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
       </div>
 
       {/* Issue New Freight Invoice - right-side slide-out, opened by the

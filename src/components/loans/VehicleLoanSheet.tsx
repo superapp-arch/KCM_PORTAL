@@ -9,6 +9,7 @@ import VehicleDetailsPopover from './VehicleDetailsPopover';
 import LoanDetailsPopover from './LoanDetailsPopover';
 import SortHeader from '../SortHeader';
 import ColumnFilterHeader from '../ColumnFilterHeader';
+import PaginationFooter, { paginateRows } from '../PaginationFooter';
 import { SortState, SortDirection, compareText, compareNumber, extractLeadingNumber } from '../../utils/sort';
 import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../../utils/columnFilter';
 
@@ -308,6 +309,15 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
     return arr;
   }, [columnFiltered, sort]);
 
+  // Pagination footer (2026-09-09 direct request) - same component/copy/
+  // behavior as Petty Cash's own Ledger pagination, see PaginationFooter.tsx.
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(1);
+  useEffect(() => {
+    setPage(1);
+  }, [financerFilter, ownershipFilter, dueDateFilter, searchTerm, columnFilters]);
+  const paginated = paginateRows(sorted, page, PAGE_SIZE);
+
   const suggestedClosing = form.emiStartDate && form.tenure ? monthYearFromStart(form.emiStartDate, parseInt(form.tenure) || 0) : '';
 
   return (
@@ -426,7 +436,7 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
             <tbody className="divide-y divide-slate-100">
               {sorted.length === 0 ? (
                 <tr><td colSpan={13} className="text-center py-10 text-slate-400">No vehicle loan records found.</td></tr>
-              ) : sorted.map((loan, i) => {
+              ) : paginated.map((loan, i) => {
                 const monthsCompleted = computeMonthsCompleted(loan.emiStartDate, loan.tenure);
                 const bal = loan.tenure != null ? loan.tenure - monthsCompleted : null;
                 const osAmount = bal != null && loan.monthlyEmi != null ? bal * loan.monthlyEmi : null;
@@ -435,7 +445,7 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
                 const nearing = isNearingCompletion(monthsCompleted, loan.tenure, displayStatus);
                 return (
                   <tr key={loan.id} className={`hover:bg-slate-50 ${nearing ? 'bg-amber-50/60' : ''}`}>
-                    <td className="px-3 py-2.5 font-mono text-slate-500">{i + 1}</td>
+                    <td className="px-3 py-2.5 font-mono text-slate-500">{(page - 1) * PAGE_SIZE + i + 1}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap">
                       <button onClick={() => setViewVehicleRegNo(loan.regNo)} className="font-mono font-bold text-teal-700 hover:underline cursor-pointer">
                         {loan.regNo}
@@ -479,6 +489,7 @@ export default function VehicleLoanSheet({ vehicles, vehicleLoans, onAddVehicleL
             </tbody>
           </table>
         </div>
+        <PaginationFooter page={page} totalCount={sorted.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
       </div>
 
       {viewVehicleRegNo && (
