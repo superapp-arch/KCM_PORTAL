@@ -28,40 +28,67 @@ export interface ScanPipelineResult {
 }
 
 export async function runScanPipeline(file: File, onProgress?: (message: string) => void): Promise<ScanPipelineResult> {
-  onProgress?.('Detecting document...');
-  const cv = await loadOpenCV();
+  onProgress?.('Loading image...');
+  // Decoding the selected photo doesn't need OpenCV at all - do this first
+  // so the employee's original photo is always available for "Use
+  // Original" even if the OpenCV engine below fails to load/initialize
+  // (2026-09-09: graceful degradation - a scanner-engine failure must never
+  // take away the ability to just save the original photo, and must never
+  // crash the scanner itself).
   const img = await loadImageFile(file);
   const originalCanvas = drawToCanvas(img);
   const workingCanvas = drawToCanvas(img, WORKING_MAX_DIM);
-  const scaleUp = originalCanvas.width / workingCanvas.width;
 
-  const workingMat = canvasToMat(cv, workingCanvas);
-  let detection;
-  try {
-    detection = detectDocument(cv, workingMat);
-  } finally {
-    workingMat.delete();
-  }
-
+  let quad: Quad | null = null;
   let quadFullRes: Quad | null = null;
+  let confidence: DetectionConfidence = 'low';
   let partiallyOutOfFrame = false;
   let processedCanvas: HTMLCanvasElement | null = null;
   let quality: QualityCheckResult | null = null;
 
-  if (detection.quad) {
-    quadFullRes = detection.quad.map(p => ({ x: p.x * scaleUp, y: p.y * scaleUp })) as Quad;
-    partiallyOutOfFrame = quadTouchesImageBorder(detection.quad, workingCanvas.width, workingCanvas.height);
+  try {
+    onProgress?.('Detecting document...');
+    const cv = await loadOpenCV();
+    const scaleUp = originalCanvas.width / workingCanvas.width;
 
-    // Low confidence never auto-produces a final crop (spec section 19) -
-    // the employee is routed to manual adjustment / Use Original instead;
-    // the detected quad is still returned so the manual editor can start
-    // from it rather than a blind full-frame guess.
-    if (detection.confidence !== 'low') {
-      onProgress?.('Correcting perspective...');
-      const result = processWithQuad(cv, originalCanvas, quadFullRes);
-      processedCanvas = result.processedCanvas;
-      quality = result.quality;
+    const workingMat = canvasToMat(cv, workingCanvas);
+    let detection;
+    try {
+      detection = detectDocument(cv, workingMat);
+    } finally {
+      workingMat.delete();
     }
+    quad = detection.quad;
+    confidence = detection.confidence;
+
+    if (detection.quad) {
+      quadFullRes = detection.quad.map(p => ({ x: p.x * scaleUp, y: p.y * scaleUp })) as Quad;
+      partiallyOutOfFrame = quadTouchesImageBorder(detection.quad, workingCanvas.width, workingCanvas.height);
+
+      // Low confidence never auto-produces a final crop (spec section 19) -
+      // the employee is routed to manual adjustment / Use Original instead;
+      // the detected quad is still returned so the manual editor can start
+      // from it rather than a blind full-frame guess.
+      if (detection.confidence !== 'low') {
+        onProgress?.('Correcting perspective...');
+        const result = processWithQuad(cv, originalCanvas, quadFullRes);
+        processedCanvas = result.processedCanvas;
+        quality = result.quality;
+      }
+    }
+  } catch (cvError) {
+    // The OpenCV engine failed to load or a CV step threw (e.g. blocked
+    // network request, unsupported browser) - degrade to "no automatic
+    // detection" rather than rejecting the whole pipeline. The employee
+    // still gets a preview and can use Manual Crop or Use Original; only a
+    // genuinely undecodable image (loadImageFile above) should still fail
+    // outright, since there's no usable original in that case either.
+    console.error('Document detection unavailable, falling back to manual/original crop:', cvError);
+    quad = null;
+    quadFullRes = null;
+    confidence = 'low';
+    processedCanvas = null;
+    quality = null;
   }
 
   onProgress?.('Preparing preview...');
@@ -69,9 +96,9 @@ export async function runScanPipeline(file: File, onProgress?: (message: string)
   return {
     originalCanvas,
     workingCanvas,
-    quad: detection.quad,
+    quad,
     quadFullRes,
-    confidence: detection.confidence,
+    confidence,
     processedCanvas,
     quality,
     partiallyOutOfFrame
