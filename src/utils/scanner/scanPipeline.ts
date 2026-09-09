@@ -1,11 +1,18 @@
-// Orchestrates the full Petty Cash Document Scanner pipeline (2026-09-08
-// direct request, spec section 8/53): load -> working copy -> detect ->
-// (if confident) warp + enhance the FULL-resolution original -> quality
-// check. Detection runs on a small downscaled "working copy" for speed
-// (spec section 8 step 2/34 performance), but the actual perspective warp
-// and enhancement always run against the full-resolution original so the
-// saved document isn't limited to the working copy's reduced resolution -
-// the detected quad is scaled back up to full-resolution coordinates first.
+// Orchestrates the Petty Cash Document Scanner pipeline. Split into two
+// stages (2026-09-09 direct request - ~100 invoices/day, the scanner must
+// never block a normal "just upload the photo" flow behind CV detection):
+//
+//   1. loadPhotoCanvases - decode the photo + build the original/working
+//      canvases. No OpenCV involved at all, near-instant. The employee sees
+//      the real photo and can hit Save immediately, exactly like the plain
+//      file-upload flow they're used to elsewhere in the app.
+//   2. detectAndProcess - the OpenCV-dependent boundary detection +
+//      perspective correction + enhancement. Called separately, in the
+//      background, while the preview from step 1 is already visible and
+//      already saveable - see DocumentScanner.tsx. If it finds a confident
+//      crop, the employee can opt into it; if it's slow, fails, or times
+//      out (see cvLoader.ts's LOAD_TIMEOUT_MS), the employee was never
+//      blocked on it in the first place.
 import { loadOpenCV } from './cvLoader';
 import { loadImageFile, drawToCanvas, canvasToMat, matToCanvas } from './imageIo';
 import { detectDocument, DetectionConfidence } from './documentDetector';
@@ -16,9 +23,12 @@ import { Quad, quadTouchesImageBorder } from './geometry';
 
 const WORKING_MAX_DIM = 1000;
 
-export interface ScanPipelineResult {
-  originalCanvas: HTMLCanvasElement; // full resolution, untouched - always available as the "Use Original" fallback
-  workingCanvas: HTMLCanvasElement; // downscaled copy detection ran on - only used to size the manual-adjust overlay
+export interface PhotoCanvases {
+  originalCanvas: HTMLCanvasElement; // full resolution, untouched - always available as the "Use Original"/fast-upload fallback
+  workingCanvas: HTMLCanvasElement; // downscaled copy detection runs on
+}
+
+export interface DetectionOutcome {
   quad: Quad | null; // in workingCanvas coordinates
   quadFullRes: Quad | null; // the same quad, scaled to originalCanvas coordinates
   confidence: DetectionConfidence;
@@ -27,18 +37,26 @@ export interface ScanPipelineResult {
   partiallyOutOfFrame: boolean;
 }
 
-export async function runScanPipeline(file: File, onProgress?: (message: string) => void): Promise<ScanPipelineResult> {
-  onProgress?.('Loading image...');
-  // Decoding the selected photo doesn't need OpenCV at all - do this first
-  // so the employee's original photo is always available for "Use
-  // Original" even if the OpenCV engine below fails to load/initialize
-  // (2026-09-09: graceful degradation - a scanner-engine failure must never
-  // take away the ability to just save the original photo, and must never
-  // crash the scanner itself).
+// Stage 1 - fast, no OpenCV. Just decodes the file into the two canvases
+// the rest of the scanner (and a plain "upload as-is" save) needs.
+export async function loadPhotoCanvases(file: File): Promise<PhotoCanvases> {
   const img = await loadImageFile(file);
   const originalCanvas = drawToCanvas(img);
   const workingCanvas = drawToCanvas(img, WORKING_MAX_DIM);
+  return { originalCanvas, workingCanvas };
+}
 
+// Stage 2 - the OpenCV-dependent part, called separately (and, in
+// DocumentScanner.tsx, in the background) so it never blocks the fast
+// preview-and-save path above. Never throws - a failed/slow/unavailable
+// OpenCV engine degrades to "no automatic detection" (quad: null,
+// confidence: 'low') rather than rejecting, since Manual Crop / Use
+// Original must always remain usable regardless of what happens here.
+export async function detectAndProcess(
+  originalCanvas: HTMLCanvasElement,
+  workingCanvas: HTMLCanvasElement,
+  onProgress?: (message: string) => void
+): Promise<DetectionOutcome> {
   let quad: Quad | null = null;
   let quadFullRes: Quad | null = null;
   let confidence: DetectionConfidence = 'low';
@@ -47,7 +65,7 @@ export async function runScanPipeline(file: File, onProgress?: (message: string)
   let quality: QualityCheckResult | null = null;
 
   try {
-    onProgress?.('Detecting document...');
+    onProgress?.('Detecting document edges...');
     const cv = await loadOpenCV();
     const scaleUp = originalCanvas.width / workingCanvas.width;
 
@@ -66,9 +84,9 @@ export async function runScanPipeline(file: File, onProgress?: (message: string)
       partiallyOutOfFrame = quadTouchesImageBorder(detection.quad, workingCanvas.width, workingCanvas.height);
 
       // Low confidence never auto-produces a final crop (spec section 19) -
-      // the employee is routed to manual adjustment / Use Original instead;
-      // the detected quad is still returned so the manual editor can start
-      // from it rather than a blind full-frame guess.
+      // the employee can still opt into Manual Crop; the detected quad is
+      // returned so that editor can start from it rather than a blind
+      // full-frame guess.
       if (detection.confidence !== 'low') {
         onProgress?.('Correcting perspective...');
         const result = processWithQuad(cv, originalCanvas, quadFullRes);
@@ -77,12 +95,9 @@ export async function runScanPipeline(file: File, onProgress?: (message: string)
       }
     }
   } catch (cvError) {
-    // The OpenCV engine failed to load or a CV step threw (e.g. blocked
-    // network request, unsupported browser) - degrade to "no automatic
-    // detection" rather than rejecting the whole pipeline. The employee
-    // still gets a preview and can use Manual Crop or Use Original; only a
-    // genuinely undecodable image (loadImageFile above) should still fail
-    // outright, since there's no usable original in that case either.
+    // The OpenCV engine failed to load, timed out, or a CV step threw -
+    // degrade quietly. The original photo (already visible/saveable via
+    // stage 1) is completely unaffected.
     console.error('Document detection unavailable, falling back to manual/original crop:', cvError);
     quad = null;
     quadFullRes = null;
@@ -91,24 +106,13 @@ export async function runScanPipeline(file: File, onProgress?: (message: string)
     quality = null;
   }
 
-  onProgress?.('Preparing preview...');
-
-  return {
-    originalCanvas,
-    workingCanvas,
-    quad,
-    quadFullRes,
-    confidence,
-    processedCanvas,
-    quality,
-    partiallyOutOfFrame
-  };
+  return { quad, quadFullRes, confidence, processedCanvas, quality, partiallyOutOfFrame };
 }
 
 // Re-runs perspective correction + enhancement against a specific quad on
-// the full-resolution original - shared by the initial pipeline above and
-// by "Apply Crop" after a manual four-corner adjustment (spec section 20),
-// so both paths produce an identical-quality result.
+// the full-resolution original - shared by detectAndProcess above and by
+// "Apply Crop" after a manual four-corner adjustment (spec section 20), so
+// both paths produce an identical-quality result.
 export function processWithQuad(
   cv: any,
   originalCanvas: HTMLCanvasElement,

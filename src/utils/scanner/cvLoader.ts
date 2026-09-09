@@ -27,12 +27,19 @@
 // warpPerspective, CLAHE, etc.) and treats `cv` as an untyped WASM module,
 // same as OpenCV.js's own official usage examples in plain JS.
 const OPENCV_SCRIPT_SRC = '/vendor/opencv.js';
+// 2026-09-09 direct request (100+ invoices/day, a stuck spinner is a real
+// throughput problem) - loading+parsing+WASM-compiling a 13MB file can
+// occasionally stall (slow/flaky network, a proxy that buffers large
+// responses, etc). This hard-caps how long anything ever waits on OpenCV
+// before giving up and falling back to manual/original - the scanner must
+// never sit on "Detecting document..." indefinitely.
+const LOAD_TIMEOUT_MS = 10000;
 
 let cvPromise: Promise<any> | null = null;
 
 export function loadOpenCV(): Promise<any> {
   if (!cvPromise) {
-    cvPromise = new Promise<any>((resolve, reject) => {
+    const loadPromise = new Promise<any>((resolve, reject) => {
       const w = window as any;
 
       // Already loaded and fully initialized from an earlier call in this
@@ -76,10 +83,19 @@ export function loadOpenCV(): Promise<any> {
       script.onload = waitForRuntime;
       script.onerror = onScriptError;
       document.head.appendChild(script);
-    }).catch((err) => {
-      // Don't cache a failed load - a transient network hiccup on the first
-      // attempt shouldn't permanently break the scanner for the rest of the
-      // session; the next call to loadOpenCV() retries from scratch.
+    });
+
+    const timeoutPromise = new Promise<any>((_, reject) => {
+      window.setTimeout(() => reject(new Error('The document scanner engine took too long to load. You can still use Manual Crop or save the original photo.')), LOAD_TIMEOUT_MS);
+    });
+
+    cvPromise = Promise.race([loadPromise, timeoutPromise]).catch((err) => {
+      // Don't cache a failed/timed-out load - a transient network hiccup or
+      // a one-off slow load shouldn't permanently break the scanner for the
+      // rest of the session; the next call to loadOpenCV() retries from
+      // scratch (the <script> tag itself, if it does eventually finish
+      // loading after the timeout, is harmlessly picked up as "already
+      // loaded" by the w.cv.Mat check above on that retry).
       cvPromise = null;
       throw err;
     });

@@ -5,7 +5,7 @@ import {
   X, RotateCw, Crop, FileImage, ArrowLeft
 } from 'lucide-react';
 import { VehicleDocument } from '../../types';
-import { runScanPipeline, processWithQuad } from '../../utils/scanner/scanPipeline';
+import { loadPhotoCanvases, detectAndProcess, processWithQuad } from '../../utils/scanner/scanPipeline';
 import { loadOpenCV } from '../../utils/scanner/cvLoader';
 import { canvasToMat, matToCanvas, canvasToBlob, rotateCanvas90 } from '../../utils/scanner/imageIo';
 import { toGrayscaleRgba } from '../../utils/scanner/enhance';
@@ -14,19 +14,32 @@ import { DetectionConfidence } from '../../utils/scanner/documentDetector';
 import { QualityCheckResult } from '../../utils/scanner/qualityCheck';
 import ManualCropEditor from './ManualCropEditor';
 
-// Petty Cash > Actions > Docs > "Scan Invoice" (2026-09-08 direct request) -
-// full SELECT -> AUTO DETECT -> AUTO CROP -> PERSPECTIVE CORRECT -> QUALITY
-// CHECK -> PREVIEW -> EMPLOYEE CONFIRMS -> SAVE workflow. Nothing is ever
-// uploaded/persisted before the employee clicks the real SAVE button below -
-// closing/cancelling at any earlier point (browser back, [X], choosing
-// another photo) simply discards in-memory canvases, so there is never an
-// orphaned server-side file or document record to clean up (spec section 4/
-// 24). On SAVE, the final canvas is uploaded through the EXACT SAME generic
-// upload endpoint (/api/upload/:module) DocumentAttachment.tsx already uses
-// for every other module's document uploads, and the resulting
-// VehicleDocument is handed back via onSaved for the caller to attach to
-// the voucher through the existing onUpdateVoucher path - no new document
-// API, no new storage system, no new DB schema (spec section 1/36).
+// Petty Cash > Actions > Docs > "Scan Invoice" (2026-09-08 direct request,
+// 2026-09-09 speed follow-up: ~100 invoices/day, the scanner must never
+// block a normal "just upload the photo" flow behind CV detection). Nothing
+// is ever uploaded/persisted before the employee clicks the real SAVE
+// button below - closing/cancelling at any earlier point (browser back,
+// [X], choosing another photo) simply discards in-memory canvases, so there
+// is never an orphaned server-side file or document record to clean up
+// (spec section 4/24). On SAVE, the final canvas is uploaded through the
+// EXACT SAME generic upload endpoint (/api/upload/:module)
+// DocumentAttachment.tsx already uses for every other module's document
+// uploads, and the resulting VehicleDocument is handed back via onSaved for
+// the caller to attach to the voucher through the existing onUpdateVoucher
+// path - no new document API, no new storage system, no new DB schema
+// (spec section 1/36).
+//
+// Two-stage flow (2026-09-09): selecting a photo decodes it and shows the
+// original immediately - Save is available right away, exactly like the
+// plain "browse and upload" flow used everywhere else in the app, so an
+// employee who doesn't need cropping is never made to wait on OpenCV at
+// all. Document-boundary detection then runs in the BACKGROUND
+// (`detecting` below); if it finds a confident crop before they've already
+// chosen a version themselves, it's applied automatically and flagged with
+// a dismissible banner - if they've already picked Original (or already
+// hit Save), their choice is respected and the background result is
+// discarded. A `scanToken` guards against a slow background detection from
+// a previous photo ever landing on a newer one (spec test 20).
 type ScannerPhase = 'idle' | 'processing' | 'preview' | 'adjusting' | 'saving' | 'success' | 'error';
 
 interface ScanData {
@@ -41,6 +54,8 @@ interface ScanData {
   partiallyOutOfFrame: boolean;
   selectedVersion: 'processed' | 'original';
   grayscale: boolean;
+  detecting: boolean; // background auto-detect still running - never blocks Save
+  userChoseVersion: boolean; // employee explicitly picked Original/Processed - stop auto-switching once true
 }
 
 interface Props {
@@ -54,11 +69,12 @@ interface Props {
 
 export default function DocumentScanner({ onClose, onSaved }: Props) {
   const [phase, setPhase] = useState<ScannerPhase>('idle');
-  const [progressMessage, setProgressMessage] = useState('Detecting document...');
+  const [progressMessage, setProgressMessage] = useState('Loading photo...');
   const [errorMessage, setErrorMessage] = useState('');
   const [scanData, setScanData] = useState<ScanData | null>(null);
   const [activeCanvas, setActiveCanvas] = useState<HTMLCanvasElement | null>(null);
   const savingRef = useRef(false); // hard guard against double-click/duplicate save independent of React state timing
+  const scanTokenRef = useRef(0); // bumped on every new file select / Choose Another - stale background detections are discarded
 
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -97,10 +113,48 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
   }, [scanData]);
 
   const resetToIdle = () => {
+    scanTokenRef.current++; // invalidate any in-flight background detection for the discarded photo
     setScanData(null);
     setActiveCanvas(null);
     setErrorMessage('');
     setPhase('idle');
+  };
+
+  // Kicks off document-boundary detection in the BACKGROUND - never
+  // awaited by the caller, never blocks the preview/Save the employee
+  // already has in front of them. Only applies its result if `token` is
+  // still the current scan (guards against a slow detection from a
+  // previous/discarded photo landing on a newer one) and only auto-selects
+  // the processed version if the employee hasn't already made their own
+  // choice in the meantime.
+  const runBackgroundDetection = (token: number, originalCanvas: HTMLCanvasElement, workingCanvas: HTMLCanvasElement) => {
+    detectAndProcess(originalCanvas, workingCanvas).then((result) => {
+      if (scanTokenRef.current !== token) return; // a newer/different photo has since been selected
+      setScanData((prev) => {
+        if (!prev || prev.originalCanvas !== originalCanvas) return prev;
+        return {
+          ...prev,
+          quad: result.quad,
+          quadFullRes: result.quadFullRes,
+          confidence: result.confidence,
+          processedCanvas: result.processedCanvas,
+          quality: result.quality,
+          partiallyOutOfFrame: result.partiallyOutOfFrame,
+          detecting: false,
+          // Auto-apply the crop only if a confident one was found AND the
+          // employee hasn't already explicitly picked Original/Processed
+          // themselves while detection was still running.
+          selectedVersion: !prev.userChoseVersion && result.processedCanvas ? 'processed' : prev.selectedVersion
+        };
+      });
+    }).catch((err) => {
+      // detectAndProcess itself already never rejects (it swallows CV
+      // errors into confidence:'low'), but guard anyway - a background
+      // failure must never surface as a blocking error screen.
+      console.error('Background document detection failed unexpectedly:', err);
+      if (scanTokenRef.current !== token) return;
+      setScanData((prev) => (prev && prev.originalCanvas === originalCanvas) ? { ...prev, detecting: false } : prev);
+    });
   };
 
   const handleFileSelected = async (file: File | undefined | null) => {
@@ -114,27 +168,35 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
       return;
     }
 
+    const token = ++scanTokenRef.current;
     setPhase('processing');
-    setProgressMessage('Detecting document...');
+    setProgressMessage('Loading photo...');
     try {
-      const result = await runScanPipeline(file, (msg) => setProgressMessage(msg));
+      // Fast, no OpenCV involved - the employee sees their actual photo and
+      // can hit Save immediately, exactly like the plain upload flow used
+      // everywhere else in the app. Document-edge detection is kicked off
+      // separately below, in the background, and never blocks this.
+      const { originalCanvas, workingCanvas } = await loadPhotoCanvases(file);
       setScanData({
         file,
-        originalCanvas: result.originalCanvas,
-        workingCanvas: result.workingCanvas,
-        quad: result.quad,
-        quadFullRes: result.quadFullRes,
-        confidence: result.confidence,
-        processedCanvas: result.processedCanvas,
-        quality: result.quality,
-        partiallyOutOfFrame: result.partiallyOutOfFrame,
-        selectedVersion: result.processedCanvas ? 'processed' : 'original',
-        grayscale: false
+        originalCanvas,
+        workingCanvas,
+        quad: null,
+        quadFullRes: null,
+        confidence: 'low',
+        processedCanvas: null,
+        quality: null,
+        partiallyOutOfFrame: false,
+        selectedVersion: 'original',
+        grayscale: false,
+        detecting: true,
+        userChoseVersion: false
       });
       setPhase('preview');
+      runBackgroundDetection(token, originalCanvas, workingCanvas);
     } catch (err) {
-      console.error('Document scan failed:', err);
-      setErrorMessage(err instanceof Error ? err.message : 'Unable to process this image.');
+      console.error('Loading the selected photo failed:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Unable to load this image.');
       setPhase('error');
     }
   };
@@ -148,12 +210,12 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
 
   const handleUseOriginal = () => {
     if (!scanData) return;
-    setScanData({ ...scanData, selectedVersion: 'original', grayscale: false });
+    setScanData({ ...scanData, selectedVersion: 'original', grayscale: false, userChoseVersion: true });
   };
 
   const handleUseProcessed = () => {
     if (!scanData || !scanData.processedCanvas) return;
-    setScanData({ ...scanData, selectedVersion: 'processed' });
+    setScanData({ ...scanData, selectedVersion: 'processed', userChoseVersion: true });
   };
 
   const handleApplyManualCrop = async (quad: Quad) => {
@@ -169,6 +231,7 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
         processedCanvas,
         quality,
         selectedVersion: 'processed',
+        userChoseVersion: true,
         partiallyOutOfFrame: false
       });
       setPhase('preview');
@@ -256,7 +319,7 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
           {phase === 'idle' && (
             <div className="space-y-4">
               <p className="text-slate-500 text-center">
-                Select a receipt/invoice photo received from a driver, vendor, WhatsApp, or email - the portal will automatically detect and crop the document.
+                Select a receipt/invoice photo - you can save it right away, or let auto-crop straighten it up for you in the background if it needs cropping.
               </p>
               <div className="grid grid-cols-2 gap-3">
                 <button
@@ -356,14 +419,37 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
                 )}
               </div>
 
-              {scanData.selectedVersion === 'processed' && (
+              {/* Background auto-detect status (2026-09-09 speed follow-up) -
+                  never blocks anything above: the photo is already visible
+                  and Save is already usable while this runs. */}
+              {scanData.detecting ? (
+                <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-400">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Detecting document edges in the background...
+                </div>
+              ) : scanData.processedCanvas && scanData.selectedVersion === 'original' ? (
+                // Detection finished with a confident crop, but the employee
+                // already chose Original (or was already looking at it) -
+                // offer it without forcing anything.
+                <div className="flex items-center justify-center gap-2 flex-wrap">
+                  <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-extrabold uppercase border ${confidenceLabel[scanData.confidence].className}`}>
+                    <CheckCircle2 className="w-3 h-3" /> Auto-crop available - {confidenceLabel[scanData.confidence].label}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleUseProcessed}
+                    className="text-[11px] font-bold text-teal-700 hover:text-teal-800 hover:underline cursor-pointer"
+                  >
+                    Use It
+                  </button>
+                </div>
+              ) : scanData.selectedVersion === 'processed' ? (
                 <div className="flex items-center justify-center gap-2">
                   <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-extrabold uppercase border ${confidenceLabel[scanData.confidence].className}`}>
                     {scanData.confidence === 'low' ? <AlertTriangle className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
                     {confidenceLabel[scanData.confidence].label}
                   </span>
                 </div>
-              )}
+              ) : null}
 
               {scanData.partiallyOutOfFrame && scanData.selectedVersion === 'processed' && (
                 <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-center">
@@ -377,7 +463,7 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
                 </div>
               )}
 
-              {!scanData.processedCanvas && scanData.selectedVersion === 'processed' && (
+              {!scanData.detecting && !scanData.processedCanvas && scanData.selectedVersion === 'processed' && (
                 <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-center">
                   Document boundary could not be detected confidently. Adjust the crop manually or use the original photo as-is.
                 </p>
