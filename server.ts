@@ -4948,6 +4948,17 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
+    // /vendor/opencv.js (the Petty Cash Document Scanner's ~13MB engine -
+    // see scripts/copyOpencv.mjs and src/utils/scanner/cvLoader.ts) is
+    // served with aggressive, long-lived caching (2026-09-09 fix) - it's
+    // regenerated fresh on every `npm run build` from whatever
+    // @techstark/opencv-js version is installed, so it's safe to cache
+    // essentially forever; without this, express.static's own default
+    // (no explicit max-age) meant every scanner open - by anyone, even
+    // re-opening it in the same browser - re-downloaded the full 13MB
+    // instead of using what the browser already fetched, making a slow
+    // first load feel like it happens every single time.
+    app.use('/vendor', express.static(path.join(distPath, 'vendor'), { maxAge: '365d', immutable: true }));
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

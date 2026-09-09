@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
-import { FuelLog, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage, Vendor, StaffEmployee, DriverEmployee } from '../types';
+import { FuelLog, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage, Vendor, StaffEmployee, DriverVehicleLookup } from '../types';
 import SortHeader from './SortHeader';
 import ColumnFilterHeader from './ColumnFilterHeader';
 import { SortState, SortDirection, extractLeadingNumber, compareText, compareNumber } from '../utils/sort';
@@ -124,7 +124,16 @@ interface FuelManagementProps {
   // existing entry, nothing else.
   onUpdateFuelLogRqId: (id: string, rqId: string) => Promise<void>;
   vehicles: Vehicle[];
-  drivers: DriverEmployee[];
+  // Authorized Driver name/ID lookup (2026-09-09 fix) - Driver Details'
+  // own /api/drivers/employees is gated by requireDriverAccess, which
+  // Chandan/Praveen (fuel_management department) don't have, so the
+  // "Authorized Driver" autocomplete/auto-fill silently had nothing to
+  // work with for them. driverVehicleLookup (/api/drivers/vehicle-lookup)
+  // is deliberately unrestricted (auth only) - same source PettyCash.tsx's
+  // vehicle-number-to-driver auto-fill already uses - and carries exactly
+  // what this module needs (id/name/vehicleNo), one row per (driver,
+  // vehicle) pair.
+  driverVehicleLookup: DriverVehicleLookup[];
   mileageReports: MileageReport[];
   // Returns the new report's id so the fuel log being saved alongside it can
   // link to it (FuelLog.mileageReportId).
@@ -199,7 +208,7 @@ export default function FuelManagement({
   onDeleteLog,
   onUpdateFuelLogRqId,
   vehicles,
-  drivers,
+  driverVehicleLookup,
   mileageReports,
   onAddMileageReport,
   onUpdateMileageReport,
@@ -399,19 +408,27 @@ export default function FuelManagement({
   const handleVehicleNumberKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) =>
     handleVehicleNumberEnterKey(e, vehicleNumber, vehicleList, setVehicleNumber);
 
-  // Authorized Driver autofetch list, from Driver Details
-  const driverNameList = Array.from(new Set(drivers.map(d => d.name).filter(Boolean))).sort();
+  // Authorized Driver autofetch list, from the unrestricted vehicle-lookup
+  // (see driverVehicleLookup's own prop comment for why not Driver Details'
+  // own gated /api/drivers/employees).
+  const driverNameList = Array.from(new Set(driverVehicleLookup.map(d => d.name).filter(Boolean))).sort();
 
   // Driver ID auto-fetch: only resolves when Authorized Driver contains
   // exactly one name that exactly matches exactly one registered driver
   // (same single-name-only rule as the fuel-audit note's resolveDriverWord
   // below) - multiple names ("Suresh / Adhithya") or an unregistered name
-  // leave Driver ID for manual entry instead.
+  // leave Driver ID for manual entry instead. driverVehicleLookup has one
+  // row per (driver, vehicle) pair, so a driver covering several vehicles
+  // can match more than one row by name - de-duplicated by id first so
+  // that alone doesn't wrongly read as "multiple different drivers".
   const matchedMileageDriver = (() => {
     const names = mDriverName.split('/').map(n => n.trim()).filter(Boolean);
     if (names.length !== 1) return undefined;
-    const matches = drivers.filter(d => (d.name || '').trim().toLowerCase() === names[0].toLowerCase());
-    return matches.length === 1 ? matches[0] : undefined;
+    const matchIds = new Set(
+      driverVehicleLookup.filter(d => (d.name || '').trim().toLowerCase() === names[0].toLowerCase()).map(d => d.id)
+    );
+    if (matchIds.size !== 1) return undefined;
+    return driverVehicleLookup.find(d => matchIds.has(d.id));
   })();
 
   // Auto-fills when a match is found; never clears an already-typed Driver ID
@@ -752,11 +769,8 @@ export default function FuelManagement({
       setMDriverId(lastReport.driverId || '');
       return;
     }
-    const assignedDriver = drivers.find(d => {
-      const target = vehicleNumber.trim().toUpperCase();
-      return (d.vehicleNos || []).some(v => (v || '').trim().toUpperCase() === target) ||
-        (d.vehicleNo || '').trim().toUpperCase() === target;
-    });
+    const target = vehicleNumber.trim().toUpperCase();
+    const assignedDriver = driverVehicleLookup.find(d => (d.vehicleNo || '').trim().toUpperCase() === target);
     if (assignedDriver) {
       setMDriverName(assignedDriver.name || '');
       setMDriverId(assignedDriver.id || '');
@@ -766,7 +780,7 @@ export default function FuelManagement({
     }
     // mDriverName deliberately excluded - same reasoning as mOpeningKm above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vehicleNumber, mileageReports, editingId, logs, drivers]);
+  }, [vehicleNumber, mileageReports, editingId, logs, driverVehicleLookup]);
 
   // Actual Mileage = the vehicle's fixed reference rating (per-vehicle
   // constant), not computed per trip.
@@ -1034,6 +1048,19 @@ export default function FuelManagement({
     // in (and validate/save it) when Opening KM, Closing KM, and Authorized
     // Driver are all present; otherwise the fuel entry commits on its own.
     const hasMileageData = !!(mOpeningKm && mClosingKm && mDriverName);
+    // 2026-09-09 bug fix: on a foreign entry (editingIsForeign - Chandan
+    // completing one of Praveen's), Details is locked read-only, so Mileage
+    // is the ONLY thing this save could possibly be for. Without this guard,
+    // submitting with the Mileage tab incomplete used to silently skip
+    // creating/updating the Mileage Report entirely (hasMileageData false)
+    // while still showing "Fuel entry updated successfully!" - a Save that
+    // looked like it worked but never actually recorded any mileage data,
+    // reported as "shows saved but never shows up in Mileage Report."
+    if (editingIsForeign && !hasMileageData) {
+      triggerNotif('Enter Opening KM, Closing KM, and Authorized Driver to save mileage for this entry.');
+      setEntrySection('mileage');
+      return;
+    }
     let oKm = 0;
     let cKm = 0;
     if (hasMileageData) {

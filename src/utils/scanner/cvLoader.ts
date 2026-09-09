@@ -27,13 +27,15 @@
 // warpPerspective, CLAHE, etc.) and treats `cv` as an untyped WASM module,
 // same as OpenCV.js's own official usage examples in plain JS.
 const OPENCV_SCRIPT_SRC = '/vendor/opencv.js';
-// 2026-09-09 direct request (100+ invoices/day, a stuck spinner is a real
-// throughput problem) - loading+parsing+WASM-compiling a 13MB file can
-// occasionally stall (slow/flaky network, a proxy that buffers large
-// responses, etc). This hard-caps how long anything ever waits on OpenCV
-// before giving up and falling back to manual/original - the scanner must
-// never sit on "Detecting document..." indefinitely.
-const LOAD_TIMEOUT_MS = 10000;
+// 2026-09-09: this hard-caps how long anything ever waits on OpenCV before
+// giving up and falling back to manual/original - the scanner must never
+// sit on "Detecting document..." indefinitely if the network genuinely
+// stalls. Raised from an initial 10s (2026-09-09 direct request) after that
+// turned out to fire on real office connections that simply take longer
+// than 10s for a ~13MB FIRST download - the file is cached by the browser
+// for a year after that (see server.ts's own /vendor static route), so
+// this long a wait only ever happens once per browser, not once per scan.
+const LOAD_TIMEOUT_MS = 45000;
 
 let cvPromise: Promise<any> | null = null;
 
