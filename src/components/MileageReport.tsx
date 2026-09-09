@@ -483,6 +483,8 @@ export default function MileageReportModule({
       'Extra Fuel': r.extraFuel || 0,
       'Extra Fuel Paid By': r.extraFuel && r.extraFuelPaymentMode === 'petty_cash'
         ? `Petty Cash${r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : ''}`
+        : r.extraFuel && r.extraFuelPaymentMode === 'card'
+        ? 'Card'
         : '',
       'Rate per Ltr (new)': r.ratePerLitreNew || 0,
       'Total Amount': r.totalAmount || 0,
@@ -861,6 +863,17 @@ export default function MileageReportModule({
                           title={`Paid by Petty Cash${r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : ''} - excluded from Total Litres/Total Amount`}
                         >
                           PC
+                        </span>
+                      )}
+                      {/* "Paid by Card" badge (2026-09-10) - same exclusion
+                          rule as Petty Cash above, just a different payment
+                          method, so hovering tells the two apart. */}
+                      {r.extraFuel && r.extraFuelPaymentMode === 'card' && (
+                        <span
+                          className="ml-1 px-1 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-sky-50 text-sky-700 border border-sky-200 align-middle"
+                          title="Paid by Card - excluded from Total Litres/Total Amount"
+                        >
+                          CARD
                         </span>
                       )}
                     </td>

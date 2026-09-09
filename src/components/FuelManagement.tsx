@@ -390,7 +390,7 @@ export default function FuelManagement({
   // instead, routing its cost to a linked Petty Cash voucher server-side
   // (see server.ts's syncFuelExtraPettyCashLink) rather than double-counting
   // it here as a normal fuel expense.
-  const [mExtraFuelPaymentMode, setMExtraFuelPaymentMode] = useState<'normal' | 'petty_cash'>('normal');
+  const [mExtraFuelPaymentMode, setMExtraFuelPaymentMode] = useState<'normal' | 'petty_cash' | 'card'>('normal');
   const [mPettyCashHolder, setMPettyCashHolder] = useState('');
   const [showMileageManager, setShowMileageManager] = useState(false);
   const [mileageFormVehicleNo, setMileageFormVehicleNo] = useState('');
@@ -819,14 +819,14 @@ export default function FuelManagement({
   // Total Ltrs = Litres (from the Fuel Entry section above) + Extra Fuel -
   // the actual total fuel consumed this trip, including any mid-trip
   // top-up(s). Extra Fuel accepts a sum expression like "30+40" - see
-  // sumExtraFuelExpression. EXCEPT when Extra Fuel is Paid by Petty Cash -
-  // then it's litres only, since that fuel's cost/litres are tracked
-  // entirely through the linked Petty Cash voucher instead (see
-  // MileageReport.extraFuelPaymentMode).
+  // sumExtraFuelExpression. EXCEPT when Extra Fuel is Paid by Petty Cash OR
+  // Card (2026-09-10: Card follows the exact same exclusion rule) - then
+  // it's litres only, since that fuel's cost/litres are tracked entirely
+  // outside this fuel entry instead (see MileageReport.extraFuelPaymentMode).
   useEffect(() => {
     const l = parseFloat(ltrs) || 0;
     const extra = sumExtraFuelExpression(mExtraFuel);
-    const total = mExtraFuelPaymentMode === 'petty_cash' ? l : l + extra;
+    const total = mExtraFuelPaymentMode !== 'normal' ? l : l + extra;
     setMTotalLtrs(String(parseFloat(total.toFixed(2))));
   }, [ltrs, mExtraFuel, mExtraFuelPaymentMode]);
 
@@ -847,15 +847,15 @@ export default function FuelManagement({
   }, [rate, mMileage]);
 
   // Total Amount = Diesel Amount (from Fuel Entry) + (Extra Fuel * new Rate)
-  // - EXCEPT when Extra Fuel is Paid by Petty Cash, where it's Diesel Amount
-  // only: that ₹ moves entirely to the linked Petty Cash voucher instead of
+  // - EXCEPT when Extra Fuel is Paid by Petty Cash OR Card, where it's
+  // Diesel Amount only: that ₹ is tracked outside this fuel entry instead of
   // being double-counted here as a normal fuel expense (see
   // MileageReport.extraFuelPaymentMode).
   useEffect(() => {
     const diesel = parseFloat(amount) || 0;
     const extra = sumExtraFuelExpression(mExtraFuel);
     const rateNew = parseFloat(mRatePerLitreNew) || 0;
-    const total = mExtraFuelPaymentMode === 'petty_cash' ? diesel : diesel + extra * rateNew;
+    const total = mExtraFuelPaymentMode !== 'normal' ? diesel : diesel + extra * rateNew;
     setMTotalAmount(String(parseFloat(total.toFixed(2))));
   }, [amount, mExtraFuel, mRatePerLitreNew, mExtraFuelPaymentMode]);
 
@@ -1018,7 +1018,11 @@ export default function FuelManagement({
       setMRemarks(stripPreviousAuditNote(linkedReport.remarks || ''));
       setMExtraFuel(String(linkedReport.extraFuel || ''));
       setMRatePerLitreNew(String(linkedReport.ratePerLitreNew || ''));
-      setMExtraFuelPaymentMode(linkedReport.extraFuelPaymentMode === 'petty_cash' ? 'petty_cash' : 'normal');
+      setMExtraFuelPaymentMode(
+        linkedReport.extraFuelPaymentMode === 'petty_cash' ? 'petty_cash'
+          : linkedReport.extraFuelPaymentMode === 'card' ? 'card'
+          : 'normal'
+      );
       setMPettyCashHolder(linkedReport.pettyCashHolderUsername || '');
     } else {
       setLinkedMileageReportId(null);
@@ -1042,7 +1046,11 @@ export default function FuelManagement({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!period || !date || !location || !bunkName || !vehicleNumber || !ltrs || !rate || !client) {
+    // Location/Bunk Name are not applicable when the whole amount is paid
+    // from Petty Cash (2026-09-10 direct request) - there's no company
+    // Bunk/Card account involved, so nothing to require there.
+    const isPettyCashEntry = bunkOrCard === 'Petty Cash';
+    if (!period || !date || (!isPettyCashEntry && (!location || !bunkName)) || !vehicleNumber || !ltrs || !rate || !client) {
       triggerNotif('Please complete all required fields (*)');
       return;
     }
@@ -1115,16 +1123,17 @@ export default function FuelManagement({
         // Total Ltrs (Litres + Extra Fuel, e.g. "30+40" for two top-ups
         // during one trip) is what actually got consumed, not just the main
         // fill-up - Mileage/Cost-per-KM/the fuel-theft audit all key off it.
-        // EXCEPT when Extra Fuel is Paid by Petty Cash: that fuel's
-        // cost/litres are tracked entirely through the linked Petty Cash
-        // voucher instead (server-side, see server.ts's
-        // syncFuelExtraPettyCashLink), so totalLitres/totalAmount here fall
-        // back to the base litres/diesel amount only - not double-counted.
-        // extraFuel/ratePerLitreNew are still stored below either way, so
-        // the 20 L itself stays visible on the record.
+        // EXCEPT when Extra Fuel is Paid by Petty Cash or Card (2026-09-10:
+        // Card follows the exact same rule): that fuel's cost/litres are
+        // tracked entirely outside this fuel entry instead, so totalLitres/
+        // totalAmount here fall back to the base litres/diesel amount only -
+        // not double-counted. extraFuel/ratePerLitreNew are still stored
+        // below either way, so the 20 L itself stays visible on the record.
         const extra = sumExtraFuelExpression(mExtraFuel);
         const isPettyCashExtra = mExtraFuelPaymentMode === 'petty_cash' && extra > 0 && !!mPettyCashHolder.trim();
-        const totalLitres = isPettyCashExtra ? l : parseFloat((l + extra).toFixed(2));
+        const isCardExtra = mExtraFuelPaymentMode === 'card' && extra > 0;
+        const isExcludedExtra = isPettyCashExtra || isCardExtra;
+        const totalLitres = isExcludedExtra ? l : parseFloat((l + extra).toFixed(2));
         const calculatedMileage = totalLitres > 0 ? parseFloat((calculatedTotalKm / totalLitres).toFixed(2)) : 0;
         const calculatedCostPerKm = calculatedMileage > 0 ? parseFloat((r / calculatedMileage).toFixed(2)) : 0;
         const calculatedActualMileage = fixedMileageForVehicle || 0;
@@ -1137,7 +1146,7 @@ export default function FuelManagement({
         const baseMileageRemarks = [remarks.trim(), stripPreviousAuditNote(mRemarks)].filter(Boolean).join(' | ');
         const finalMileageRemarks = note ? `${baseMileageRemarks}${baseMileageRemarks ? ' ' : ''}(Fuel Audit: ${note})` : baseMileageRemarks;
         const rateNew = parseFloat(mRatePerLitreNew) || 0;
-        const calculatedTotalAmount = isPettyCashExtra ? a : parseFloat((a + extra * rateNew).toFixed(2));
+        const calculatedTotalAmount = isExcludedExtra ? a : parseFloat((a + extra * rateNew).toFixed(2));
         const nextSlNo = mileageReports.length > 0 ? Math.max(...mileageReports.map(rep => rep.slNo || 0)) + 1 : 1;
 
         const mileagePayload = {
@@ -1163,7 +1172,7 @@ export default function FuelManagement({
           extraFuel: extra,
           ratePerLitreNew: rateNew,
           totalAmount: calculatedTotalAmount,
-          extraFuelPaymentMode: isPettyCashExtra ? 'petty_cash' as const : 'normal' as const,
+          extraFuelPaymentMode: isPettyCashExtra ? 'petty_cash' as const : isCardExtra ? 'card' as const : 'normal' as const,
           pettyCashHolderUsername: isPettyCashExtra ? mPettyCashHolder : undefined,
           // 2026-09-08 bug fix: filling in Mileage on one of Praveen's own
           // fuel entries (editingIsForeign - see isForeignEntry above) used
@@ -2066,7 +2075,7 @@ export default function FuelManagement({
                       </div>
                       <div>
                         <span className="text-[8.5px] text-slate-400 font-bold uppercase block">
-                          Total Ltrs {mExtraFuelPaymentMode === 'petty_cash' ? '(Litres only - Extra Fuel is Paid by Petty Cash)' : '(Litres + Extra Fuel)'}
+                          Total Ltrs {mExtraFuelPaymentMode === 'petty_cash' ? '(Litres only - Extra Fuel is Paid by Petty Cash)' : mExtraFuelPaymentMode === 'card' ? '(Litres only - Extra Fuel is Paid by Card)' : '(Litres + Extra Fuel)'}
                         </span>
                         <span className="text-xs font-black text-teal-700">{mTotalLtrs || 0} L</span>
                       </div>
@@ -2119,7 +2128,9 @@ export default function FuelManagement({
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block font-semibold text-slate-600 mb-1">
-                          Extra Fuel{mExtraFuelPaymentMode === 'petty_cash' && <span className="text-indigo-600 font-bold"> (Paid by Petty Cash)</span>}
+                          Extra Fuel
+                          {mExtraFuelPaymentMode === 'petty_cash' && <span className="text-indigo-600 font-bold"> (Paid by Petty Cash)</span>}
+                          {mExtraFuelPaymentMode === 'card' && <span className="text-indigo-600 font-bold"> (Paid by Card)</span>}
                         </label>
                         <input
                           type="text"
@@ -2152,28 +2163,46 @@ export default function FuelManagement({
                       </div>
                     </div>
 
-                    {/* "Paid by Petty Cash" - when checked, this Extra Fuel
-                        top-up was paid out of a Petty Cash handler's float,
-                        not the normal fuel/vendor account. Only relevant
-                        once Extra Fuel actually has a value; unmounted
-                        (state stays but stops mattering) otherwise so it
-                        doesn't sit there with nothing to apply to. Server
-                        creates/keeps in sync a linked Petty Cash voucher for
-                        this - see server.ts's syncFuelExtraPettyCashLink. */}
+                    {/* "Paid by Petty Cash" / "Paid by Card" (2026-09-10:
+                        Card added, same exclusion rule as Petty Cash) - when
+                        either is checked, this Extra Fuel top-up was paid
+                        outside the normal fuel/vendor account, so it's
+                        excluded from Total Ltrs/Total Amount below the same
+                        way either way. Only Petty Cash additionally asks
+                        which handler's float it's charged against - Card has
+                        nothing further to attribute. Mutually exclusive
+                        (checking one unchecks the other). Only relevant once
+                        Extra Fuel actually has a value; unmounted (state
+                        stays but stops mattering) otherwise so it doesn't
+                        sit there with nothing to apply to. */}
                     {sumExtraFuelExpression(mExtraFuel) > 0 && (
                       <div className="p-2.5 bg-indigo-50/60 rounded-lg border border-indigo-100 space-y-2">
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={mExtraFuelPaymentMode === 'petty_cash'}
-                            onChange={(e) => {
-                              setMExtraFuelPaymentMode(e.target.checked ? 'petty_cash' : 'normal');
-                              if (!e.target.checked) setMPettyCashHolder('');
-                            }}
-                            className="cursor-pointer"
-                          />
-                          <span className="font-semibold text-indigo-800">Paid by Petty Cash</span>
-                        </label>
+                        <div className="flex items-center gap-4">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={mExtraFuelPaymentMode === 'petty_cash'}
+                              onChange={(e) => {
+                                setMExtraFuelPaymentMode(e.target.checked ? 'petty_cash' : 'normal');
+                                if (!e.target.checked) setMPettyCashHolder('');
+                              }}
+                              className="cursor-pointer"
+                            />
+                            <span className="font-semibold text-indigo-800">Paid by Petty Cash</span>
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={mExtraFuelPaymentMode === 'card'}
+                              onChange={(e) => {
+                                setMExtraFuelPaymentMode(e.target.checked ? 'card' : 'normal');
+                                setMPettyCashHolder('');
+                              }}
+                              className="cursor-pointer"
+                            />
+                            <span className="font-semibold text-indigo-800">Paid by Card</span>
+                          </label>
+                        </div>
                         {mExtraFuelPaymentMode === 'petty_cash' && (
                           <div>
                             <label className="block font-semibold text-slate-600 mb-1">
@@ -2197,16 +2226,22 @@ export default function FuelManagement({
                             </p>
                           </div>
                         )}
+                        {mExtraFuelPaymentMode === 'card' && (
+                          <p className="text-[9px] text-indigo-500 font-mono mt-1">
+                            Extra Fuel: {sumExtraFuelExpression(mExtraFuel)} L - ₹{(sumExtraFuelExpression(mExtraFuel) * (parseFloat(mRatePerLitreNew) || 0)).toLocaleString('en-IN')} paid by Card - excluded from Total Ltrs/Total Amount below.
+                          </p>
+                        )}
                       </div>
                     )}
 
                     {/* Total Amount - only meaningfully different from Diesel
                         Amount once Extra Fuel is added and NOT Paid by
-                        Petty Cash (that portion is excluded, see above). */}
+                        Petty Cash/Card (that portion is excluded, see
+                        above). */}
                     <div className="p-2.5 bg-white rounded-lg border border-pink-100 flex items-center justify-between font-mono">
                       <div>
                         <span className="text-[9px] text-slate-400 uppercase font-bold block">
-                          Total Amount {mExtraFuelPaymentMode === 'petty_cash' ? '(Diesel only - Extra Fuel is Petty Cash)' : sumExtraFuelExpression(mExtraFuel) > 0 ? '(Diesel + Extra Fuel)' : '(auto)'}
+                          Total Amount {mExtraFuelPaymentMode === 'petty_cash' ? '(Diesel only - Extra Fuel is Petty Cash)' : mExtraFuelPaymentMode === 'card' ? '(Diesel only - Extra Fuel is Card)' : sumExtraFuelExpression(mExtraFuel) > 0 ? '(Diesel + Extra Fuel)' : '(auto)'}
                         </span>
                         <span className="text-xs font-black text-pink-700">₹{mTotalAmount || 0}</span>
                       </div>
@@ -2292,9 +2327,11 @@ export default function FuelManagement({
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block font-semibold text-slate-600 mb-1">Location *</label>
+                      <label className="block font-semibold text-slate-600 mb-1">
+                        Location {bunkOrCard === 'Petty Cash' ? '' : '*'}
+                      </label>
                       <select
-                        required={!locationIsOther}
+                        required={!locationIsOther && bunkOrCard !== 'Petty Cash'}
                         value={locationIsOther ? 'Other' : location}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -2312,7 +2349,7 @@ export default function FuelManagement({
                           <label className="block text-[9.5px] font-bold text-slate-500 uppercase mb-0.5">Other - Specify Location</label>
                           <input
                             type="text"
-                            required
+                            required={bunkOrCard !== 'Petty Cash'}
                             value={location}
                             onChange={(e) => setLocation(e.target.value)}
                             placeholder="Type the new location"
@@ -2323,14 +2360,16 @@ export default function FuelManagement({
                       )}
                     </div>
                     <div>
-                      <label className="block font-semibold text-slate-600 mb-1">Bunk Name *</label>
+                      <label className="block font-semibold text-slate-600 mb-1">
+                        Bunk Name {bunkOrCard === 'Petty Cash' ? '' : '*'}
+                      </label>
                       <input
                         type="text"
-                        required
+                        required={bunkOrCard !== 'Petty Cash'}
                         list="fuel-bunks-datalist"
                         value={bunkName}
                         onChange={(e) => setBunkName(e.target.value)}
-                        placeholder={locationIsOther ? 'New bunk - enter manually' : 'Search bunk'}
+                        placeholder={bunkOrCard === 'Petty Cash' ? 'Not applicable for Petty Cash' : locationIsOther ? 'New bunk - enter manually' : 'Search bunk'}
                         autoComplete="off"
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
                       />

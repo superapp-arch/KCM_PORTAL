@@ -1132,20 +1132,23 @@ export interface MileageReport {
   // instead, so it isn't double-counted here). totalLitres follows the same
   // rule: litres only, not litres+extraFuel, when petty-cash-paid.
   totalAmount?: number;
-  // "Paid by Petty Cash" for Extra Fuel (see FuelManagement.tsx's Mileage
-  // tab) - undefined/'normal' (the default) is today's original behavior
-  // (extraFuel folds into totalLitres/totalAmount above). 'petty_cash' means
-  // this specific top-up was paid out of a Petty Cash handler's float
-  // instead of the normal fuel/vendor account: extraFuel/ratePerLitreNew
-  // stay stored as-is (still shown on this record, plus a "(PC)"/holder
-  // badge - see FuelManagement.tsx and MileageReport.tsx), and totalLitres/
-  // totalAmount exclude them. Deliberately does NOT create/sync any linked
-  // Petty Cash entry - showing the badge is enough, per direct instruction.
-  extraFuelPaymentMode?: 'normal' | 'petty_cash';
+  // "Paid by Petty Cash"/"Paid by Card" for Extra Fuel (see
+  // FuelManagement.tsx's Mileage tab) - undefined/'normal' (the default) is
+  // today's original behavior (extraFuel folds into totalLitres/totalAmount
+  // above). 'petty_cash' or 'card' means this specific top-up was paid
+  // outside the normal fuel/vendor account: extraFuel/ratePerLitreNew stay
+  // stored as-is (still shown on this record, plus a badge naming which -
+  // see FuelManagement.tsx and MileageReport.tsx), and totalLitres/
+  // totalAmount exclude them, exactly the same rule either way. 'card'
+  // (2026-09-10) has no holder to attribute - only 'petty_cash' uses
+  // pettyCashHolderUsername below. Deliberately does NOT create/sync any
+  // linked Petty Cash entry for either - showing the badge is enough, per
+  // direct instruction.
+  extraFuelPaymentMode?: 'normal' | 'petty_cash' | 'card';
   // Which of the 3 Petty Cash logins (see utils/pettyCashUsers.ts) this
   // extra fuel is charged against - required whenever extraFuelPaymentMode
-  // is 'petty_cash'. Display-only (the "(PC) - Ramesh" badge); does not
-  // affect any Petty Cash balance.
+  // is 'petty_cash' (never set for 'card'). Display-only (the "(PC) -
+  // Ramesh" badge); does not affect any Petty Cash balance.
   pettyCashHolderUsername?: string;
   // Legacy - a linked-voucher mechanism that used to exist here was removed;
   // never populated by new saves. Kept only so old rows that already have a

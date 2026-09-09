@@ -139,7 +139,15 @@ export default function StaffSalarySheet({ user, employees, onAddEmployee, onUpd
     if (sortColumn === 'name') {
       rows.sort((a, b) => (nameSortDir === 'asc' ? compareText(a.name, b.name) : compareText(b.name, a.name)));
     } else {
-      rows.sort((a, b) => compareLeadingNumber(a.id, b.id));
+      // Default (Emp ID) sort groups On-Roll before Contract (2026-09-10
+      // direct request), Employee ID numeric within each group - Name sort
+      // above stays purely alphabetical, no Type grouping, matching "only
+      // one column drives the order at a time".
+      rows.sort((a, b) => {
+        const typeRank = (e: typeof a) => ((e.employmentType || 'On-Roll') === 'Contract' ? 1 : 0);
+        const typeCmp = typeRank(a) - typeRank(b);
+        return typeCmp !== 0 ? typeCmp : compareLeadingNumber(a.id, b.id);
+      });
     }
     return rows;
   }, [filtered, sortColumn, nameSortDir]);

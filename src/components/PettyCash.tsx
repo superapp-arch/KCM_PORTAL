@@ -527,6 +527,11 @@ export default function PettyCash({
   // prefix is fixed/shown separately and never part of what they type.
   const [manualEntryNoSeq, setManualEntryNoSeq] = useState('');
   const [categoryInput, setCategoryInput] = useState('');
+  // Market Driver Payment (2026-09-10 direct request) - Driver ID and
+  // Receiver Name are hidden entirely for this category, not just optional:
+  // it pays a one-off market driver who isn't in Driver Details and has no
+  // separate "receiver" to name.
+  const isMarketDriverPayment = categoryInput.trim().toUpperCase() === 'MARKET DRIVER PAYMENT';
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
   const [location, setLocation] = useState('');
   const [clientName, setClientName] = useState('Swiggy');
@@ -3942,7 +3947,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     </div>
 
                     {vehicleMode === 'vehicle' ? (
-                      <div className="grid grid-cols-2 gap-2.5">
+                      <div className={isMarketDriverPayment ? 'grid grid-cols-1 gap-2.5' : 'grid grid-cols-2 gap-2.5'}>
                         <div>
                           <label className="block font-semibold text-slate-700 mb-1">Vehicle Number</label>
                           <input
@@ -3960,24 +3965,30 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           </datalist>
                           <p className="text-[9px] text-slate-400 font-mono mt-0.5">Live from Fleet &amp; Vehicles - type to search.</p>
                         </div>
-                        <div>
-                          <label className="block font-semibold text-slate-700 mb-1">
-                            Driver ID {VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase()) && <span className="text-rose-500">*</span>}
-                          </label>
-                          <input
-                            type="text"
-                            required={VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase())}
-                            placeholder="Driver Identification"
-                            value={driverId}
-                            onChange={(e) => setDriverId(e.target.value)}
-                            className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                          />
-                          <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                            {VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase())
-                              ? 'Mandatory for this expense category.'
-                              : 'Auto-fetched from Driver Details by Vehicle Number - editable.'}
-                          </p>
-                        </div>
+                        {/* Driver ID not applicable for Market Driver Payment
+                            (2026-09-10 direct request) - that category pays a
+                            one-off market driver who isn't in Driver Details
+                            at all, so there's no ID to attach. */}
+                        {!isMarketDriverPayment && (
+                          <div>
+                            <label className="block font-semibold text-slate-700 mb-1">
+                              Driver ID {VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase()) && <span className="text-rose-500">*</span>}
+                            </label>
+                            <input
+                              type="text"
+                              required={VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase())}
+                              placeholder="Driver Identification"
+                              value={driverId}
+                              onChange={(e) => setDriverId(e.target.value)}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                            />
+                            <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                              {VENDOR_ID_MANDATORY_CATEGORIES.has(categoryInput.trim().toUpperCase())
+                                ? 'Mandatory for this expense category.'
+                                : 'Auto-fetched from Driver Details by Vehicle Number - editable.'}
+                            </p>
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="grid grid-cols-2 gap-2.5">
@@ -4022,22 +4033,26 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
 
                   {/* Receiver Name (2026-09-04: sits right after the Vehicle/
                       Vendor Identity block and before Location, same field
-                      regardless of which mode is active) - not mandatory. */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Receiver Name</label>
-                    <input
-                      type="text"
-                      list="petty-cash-receiver-name-datalist"
-                      placeholder="Cash recipient (optional)"
-                      value={receiver}
-                      onChange={(e) => handleReceiverChange(e.target.value)}
-                      autoComplete="off"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                    />
-                    <datalist id="petty-cash-receiver-name-datalist">
-                      {receiverNameOptions.map(name => <option key={name} value={name} />)}
-                    </datalist>
-                  </div>
+                      regardless of which mode is active) - not mandatory.
+                      Not applicable at all for Market Driver Payment
+                      (2026-09-10 direct request). */}
+                  {!isMarketDriverPayment && (
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Receiver Name</label>
+                      <input
+                        type="text"
+                        list="petty-cash-receiver-name-datalist"
+                        placeholder="Cash recipient (optional)"
+                        value={receiver}
+                        onChange={(e) => handleReceiverChange(e.target.value)}
+                        autoComplete="off"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                      />
+                      <datalist id="petty-cash-receiver-name-datalist">
+                        {receiverNameOptions.map(name => <option key={name} value={name} />)}
+                      </datalist>
+                    </div>
+                  )}
 
                   {/* Location - free text for everyone, but Ramesh and Vinod
                       additionally get a type-to-search suggestion list -
