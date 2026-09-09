@@ -742,15 +742,16 @@ export default function PettyCash({
     return { year, month, prefix: `ENT-${year}-${String(month).padStart(2, '0')}`, useMonthlyFormat };
   };
   const MANUAL_FIRST_ENTRY_USERNAMES = ['vinoda', 'saneel'];
-  // Vinod's real physical cash-book numbering doesn't reliably match the
-  // auto-sequential scheme (see nextPettyCashEntryNo below) even after his
-  // one-time manual catch-up above - so unlike Saneel, he manually types the
-  // Entry No EVERY time he saves a new entry, indefinitely, not just once
-  // (2026-09-07 direct request - see server.ts's identical
-  // ALWAYS_MANUAL_ENTRY_USERNAMES, which this mirrors exactly and which is
-  // what actually gets enforced on save). Scoped to Vinod only - Saneel
-  // keeps the existing one-time-then-auto behavior.
-  const ALWAYS_MANUAL_ENTRY_USERNAMES = ['vinoda'];
+  // [2026-09-07 to 2026-09-09] Vinod used to manually type his Entry No
+  // every save, indefinitely, because his auto-generated numbers didn't
+  // match his physical cash-book. Reverted by direct request now that his
+  // book has caught up to the app's own sequence (his real last entry is
+  // ENT-<year>-4183) - his Entry No is fully automatic and NOT editable
+  // again, exactly like every other handler, same as server.ts's identical
+  // revert (see NO_GAP_COMPACTION_USERNAMES there). He falls through to the
+  // same MANUAL_FIRST_ENTRY_USERNAMES one-time-only check below as Saneel,
+  // which evaluates to false for him since he already has entries under the
+  // current prefix.
   // A stray monthly-format entry (ENT-<year>-<MM><NN>) briefly created
   // during the now-reverted Sep 1 2026 cutover looks identical in shape to
   // the flat scheme's own ENT-<year>-<NNNN> - both are exactly 4 trailing
@@ -766,7 +767,6 @@ export default function PettyCash({
   };
   const canManualFirstEntryNo = (() => {
     if (editingId || isSuperAdmin) return false; // never applies to an edit, or to a Super Admin who isn't one of the 3 handlers
-    if (ALWAYS_MANUAL_ENTRY_USERNAMES.includes(user.username)) return true;
     if (!MANUAL_FIRST_ENTRY_USERNAMES.includes(user.username)) return false;
     const { prefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
     const holderVouchers = holderVouchersFor(user.username);
@@ -800,13 +800,6 @@ export default function PettyCash({
     : '';
   const isDuplicateManualEntryNo = canManualFirstEntryNo && manualEntryCandidate !== '' &&
     holderVouchersFor(user.username).some(v => (v.entryNo || '').trim().toUpperCase() === manualEntryCandidate.toUpperCase());
-
-  // Same live check for Vinod's plain edit-box on an EXISTING entry's own
-  // Entry No (see the editingId && isVinod branch below) - excludes the
-  // voucher currently being edited itself, so resubmitting its own
-  // unchanged value is never flagged as a collision with itself.
-  const isDuplicateEditEntryNo = !!editingId && isVinod && entryNo.trim() !== '' &&
-    holderVouchersFor(user.username).some(v => v.id !== editingId && (v.entryNo || '').trim().toUpperCase() === entryNo.trim().toUpperCase());
 
   const nextPettyCashEntryNo = () => {
     const { year, month, prefix, useMonthlyFormat } = pettyCashMonthlyPrefix();
@@ -1217,21 +1210,16 @@ export default function PettyCash({
       return;
     }
     if (canManualFirstEntryNo && !manualEntryNoSeq.trim()) {
-      triggerNotif(
-        ALWAYS_MANUAL_ENTRY_USERNAMES.includes(user.username)
-          ? 'Enter this entry\'s Entry No sequence.'
-          : 'Enter this month\'s first Entry No sequence.',
-        'error'
-      );
+      triggerNotif('Enter this month\'s first Entry No sequence.', 'error');
       return;
     }
     // No repeated Entry No, ever (2026-09-08 direct request) - the input
-    // already shows this inline live while typing (isDuplicateManualEntryNo/
-    // isDuplicateEditEntryNo above); this is the final guard right before
-    // save. server.ts's own findDuplicateEntryNo check on the API route is
-    // the real backstop regardless of what the client catches.
-    if (isDuplicateManualEntryNo || isDuplicateEditEntryNo) {
-      triggerNotif(`Entry No. ${isDuplicateEditEntryNo ? entryNo : manualEntryCandidate} already exists - enter a different number.`, 'error');
+    // already shows this inline live while typing (isDuplicateManualEntryNo
+    // above); this is the final guard right before save. server.ts's own
+    // findDuplicateEntryNo check on the API route is the real backstop
+    // regardless of what the client catches.
+    if (isDuplicateManualEntryNo) {
+      triggerNotif(`Entry No. ${manualEntryCandidate} already exists - enter a different number.`, 'error');
       return;
     }
     // Cash Paid = 0 isn't a real disbursement - don't let it create an entry
@@ -2591,11 +2579,13 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
             {/* Vouchers Table Ledger View */}
             <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-2xs flex-1 min-h-[350px]">
               <table className="w-full text-left text-xs border-collapse">
-                {/* 2026-09-05: header background changed from the flat,
-                    low-visibility bg-[#0f172a] to the same vivid gradient
-                    other modules (e.g. Fleet & Vehicles) already use, so it
-                    actually stands out instead of blending into the page. */}
-                <thead className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 border-b-2 border-purple-500 text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
+                {/* 2026-09-09 direct request: the dark navy/purple gradient
+                    (2026-09-05's own fix for the same "low visibility"
+                    complaint) still didn't read as clearly visible - a
+                    solid, brighter, on-brand teal now replaces it
+                    everywhere in this file, so header labels stand out
+                    immediately rather than needing to be picked out. */}
+                <thead className="bg-teal-700 border-b-2 border-teal-800 text-white font-sans font-bold tracking-wide uppercase text-[9px] sticky top-0 z-10">
                   <tr>
                     <th className="px-3 py-2.5"><ColumnFilterHeader label="Date" type="date" value={columnFilters.date} onChange={f => setColumnFilter('date', f)} /></th>
                     <th className="px-3 py-2.5"><ColumnFilterHeader label="Entry No" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'entryNo'))} value={columnFilters.entryNo} onChange={f => setColumnFilter('entryNo', f)} sortKey="entryNo" sort={sort} onSort={handleSort} sortType="numeric" /></th>
@@ -2857,9 +2847,9 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
           {/* Matrix table with horizontal scroll */}
           <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-2xs max-h-[500px]">
             <table className="w-full text-left text-xs border-collapse">
-              <thead className="bg-[#0f172a] text-slate-200 text-[9px] uppercase tracking-wider sticky top-0 z-15 divide-x divide-slate-800">
+              <thead className="bg-teal-700 text-white font-bold text-[9px] uppercase tracking-wider sticky top-0 z-15 divide-x divide-teal-800">
                 <tr>
-                  <th rowSpan={2} className="px-3 py-3 text-slate-200 font-sans uppercase tracking-widest min-w-[200px] align-middle sticky left-0 bg-[#0f172a] z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.3)]">
+                  <th rowSpan={2} className="px-3 py-3 text-white font-sans font-bold uppercase tracking-widest min-w-[200px] align-middle sticky left-0 bg-teal-700 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.3)]">
                     Expense Category
                   </th>
                   {MONTHS.map((m, idx) => (
@@ -2968,7 +2958,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-[#0f172a] text-slate-200 uppercase text-[9px] tracking-wider">
+                  <thead className="bg-teal-700 text-white font-bold uppercase text-[9px] tracking-wider">
                     <tr>
                       <th className="px-3 py-2">Handler</th>
                       <th className="px-3 py-2 text-right">Float (Total Received)</th>
@@ -3032,7 +3022,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
             </div>
             <div className="overflow-x-auto max-h-[420px]">
               <table className="w-full text-left text-xs">
-                <thead className="bg-[#0f172a] text-slate-200 uppercase text-[9px] tracking-wider sticky top-0 z-10">
+                <thead className="bg-teal-700 text-white font-bold uppercase text-[9px] tracking-wider sticky top-0 z-10">
                   <tr>
                     <th className="px-3 py-2">Date</th>
                     <th className="px-3 py-2">Source</th>
@@ -3206,7 +3196,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   low-visibility bg-[#0f172a] to the same vivid gradient
                   other modules (e.g. Fleet & Vehicles) already use, so it
                   actually stands out instead of blending into the page. */}
-              <thead className="bg-gradient-to-r from-purple-900 via-indigo-950 to-purple-900 border-b-2 border-purple-500 text-slate-200 font-sans tracking-wide uppercase text-[9px] sticky top-0 z-10">
+              <thead className="bg-teal-700 border-b-2 border-teal-800 text-white font-sans font-bold tracking-wide uppercase text-[9px] sticky top-0 z-10">
                 <tr>
                   <th className="px-3 py-2.5"><ColumnFilterHeader label="Date" type="date" value={mpColumnFilters.date} onChange={f => setMpColumnFilter('date', f)} /></th>
                   <th className="px-3 py-2.5"><ColumnFilterHeader label="Entry No" type="text" values={marketPodEntries.map(e => e.entryNo)} value={mpColumnFilters.entryNo} onChange={f => setMpColumnFilter('entryNo', f)} sortKey="entryNo" sort={mpSort} onSort={handleMpSort} sortType="numeric" /></th>
@@ -3395,7 +3385,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
             <div className="p-6 overflow-y-auto flex-1 bg-slate-50/50">
               <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
                 <table className="w-full text-left text-xs border-collapse">
-                  <thead className="bg-slate-50 text-slate-500 text-[10px] uppercase font-bold tracking-wider border-b border-slate-200">
+                  <thead className="bg-teal-700 text-white text-[10px] uppercase font-bold tracking-wider border-b-2 border-teal-800">
                     <tr>
                       <th className="px-4 py-2.5">Date</th>
                       <th className="px-4 py-2.5">Entry No</th>
@@ -3777,7 +3767,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   <p className="text-slate-400 text-[11px] py-8 text-center">No Amount Received entries logged yet.</p>
                 ) : (
                   <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-50 text-slate-500 uppercase text-[9.5px] tracking-wide sticky top-0">
+                    <thead className="bg-teal-700 text-white font-bold uppercase text-[9.5px] tracking-wide sticky top-0">
                       <tr>
                         <th className="px-3 py-2">Date</th>
                         <th className="px-3 py-2">Account</th>
@@ -3867,17 +3857,18 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   </div>
 
                   {/* Entry Number - auto-generated, not editable (same
-                      convention as Market POD's Entry No) - except: Saneel's
+                      convention as Market POD's Entry No) - except Saneel's
                       very first entry under the current scheme, which he
                       types himself to continue his own physical cash-book
                       numbering, then locks back to auto (see
-                      canManualFirstEntryNo); and Vinod, who types his EVERY
-                      time, indefinitely - his auto-generated numbers never
-                      reliably matched his own book, so this never locks back
-                      for him (see ALWAYS_MANUAL_ENTRY_USERNAMES, 2026-09-07).
-                      Width is 4 digits for the current flat scheme, 2 for
-                      the monthly scheme (from March 2027) - see
-                      pettyCashMonthlyPrefix. */}
+                      canManualFirstEntryNo). Vinod's own manual-every-time
+                      exception (2026-09-07) and his edit-existing-entry
+                      stopgap (2026-09-05) were both reverted 2026-09-09 -
+                      his book has caught up to the app's own sequence, so
+                      his Entry No is fully automatic and locked again too,
+                      for both new AND existing entries. Width is 4 digits
+                      for the current flat scheme, 2 for the monthly scheme
+                      (from March 2027) - see pettyCashMonthlyPrefix. */}
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Entry Number</label>
                     {canManualFirstEntryNo ? (() => {
@@ -3915,83 +3906,10 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                             </p>
                           ) : (
                             <p className="text-[9px] text-amber-700 font-mono mt-0.5">
-                              {ALWAYS_MANUAL_ENTRY_USERNAMES.includes(user.username)
-                                ? (manualUsesMonthlyFormat
-                                  ? 'Type this month\'s sequence number from your own cash-book (e.g. 01). You\'ll type it again every time - this never auto-locks.'
-                                  : 'Type this entry\'s own number from your own cash-book (e.g. 2941). You\'ll type it again every time - this never auto-locks.')
-                                : (manualUsesMonthlyFormat
-                                  ? 'This month\'s first entry - type its sequence number (e.g. 01). Every entry after this one auto-continues and locks again.'
-                                  : 'Type this entry\'s own number from your own cash-book (e.g. 2941, not the previous one). Every entry after this one auto-continues from it and locks again.')}
+                              {manualUsesMonthlyFormat
+                                ? 'This month\'s first entry - type its sequence number (e.g. 01). Every entry after this one auto-continues and locks again.'
+                                : 'Type this entry\'s own number from your own cash-book (e.g. 2941, not the previous one). Every entry after this one auto-continues from it and locks again.'}
                             </p>
-                          )}
-                        </>
-                      );
-                    })() : editingId && isVinod ? (() => {
-                      // 2026-09-05: Vinod gets a plain edit option on an
-                      // existing entry's own Entry No - a stopgap ("give
-                      // edit option for now") rather than the fuller
-                      // auto-resequence-everything-after-it behavior, which
-                      // would need its own careful design.
-                      //
-                      // 2026-09-05 fix: this used to be one big free-text
-                      // box editing the raw stored value directly. Vinod, by
-                      // habit from the manual-first-entry box above (which
-                      // only ever asks for the trailing digits, prefix shown
-                      // separately), typed just the digits here too (e.g.
-                      // "2700" instead of "ENT-2026-2700") - a value that
-                      // doesn't start with the expected prefix silently
-                      // drops OUT of nextPettyCashEntryNo()'s max
-                      // calculation entirely, so his sequence stopped
-                      // advancing and kept re-suggesting old, already-used
-                      // numbers on his next "Add Petty Cash Entry". Same
-                      // fixed-prefix-chip + digits-only-box shape as that
-                      // box now prevents a malformed value from ever being
-                      // typed in the first place.
-                      //
-                      // The chip shown to Vinod displays "ENT-" only (never
-                      // the year) - matches displayEntryNo's own year-
-                      // stripping convention, which applies everywhere an
-                      // Entry No is shown to anyone with Petty Cash access,
-                      // this box included. editFixedPrefix (WITH the year)
-                      // is still what actually gets built into entryNo and
-                      // saved - the STORED value has always kept the year
-                      // (nextPettyCashEntryNo's per-year scoping depends on
-                      // it), only the on-screen text is year-free.
-                      const { prefix: editYearPrefix, useMonthlyFormat: editUsesMonthlyFormat } = pettyCashMonthlyPrefix();
-                      const editWidth = editUsesMonthlyFormat ? 2 : 4;
-                      const editFixedPrefix = editUsesMonthlyFormat ? editYearPrefix : `ENT-${new Date().getFullYear()}-`;
-                      const editDisplayPrefix = 'ENT-';
-                      // Pulls the trailing digits out of whatever's actually
-                      // stored so far to seed the box - falls back to any
-                      // trailing digits at all if this entry's prefix
-                      // doesn't match today's (an older entry from a
-                      // previous year/format), so there's always something
-                      // sensible to start editing from.
-                      const currentSuffix = entryNo.toUpperCase().startsWith(editFixedPrefix)
-                        ? entryNo.slice(editFixedPrefix.length)
-                        : (entryNo.match(/(\d+)$/)?.[1] || '');
-                      return (
-                        <>
-                          <div className="flex items-center gap-1.5">
-                            <span className="px-2 py-2 bg-slate-100 border border-slate-200 rounded-lg font-mono font-bold text-slate-500 uppercase shrink-0">{editDisplayPrefix}</span>
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              value={currentSuffix}
-                              onChange={(e) => setEntryNo(`${editFixedPrefix}${e.target.value.replace(/\D/g, '').slice(0, editWidth)}`)}
-                              placeholder={editWidth === 2 ? '01' : '2941'}
-                              aria-invalid={isDuplicateEditEntryNo}
-                              className={`w-full rounded-lg p-2 font-mono font-bold tracking-wider focus:outline-none focus:ring-1 ${
-                                isDuplicateEditEntryNo
-                                  ? 'bg-rose-50 border border-rose-400 text-rose-800 focus:ring-rose-500'
-                                  : 'bg-amber-50 border border-amber-300 text-amber-800 focus:ring-amber-500'
-                              }`}
-                            />
-                          </div>
-                          {isDuplicateEditEntryNo ? (
-                            <p className="text-[9px] text-rose-600 font-bold font-mono mt-0.5">This Entry No already exists ({entryNo}) - enter a different number.</p>
-                          ) : (
-                            <p className="text-[9px] text-amber-700 font-mono mt-0.5">Editable - changing this does not renumber any other entries.</p>
                           )}
                         </>
                       );
@@ -4317,8 +4235,8 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 <button
                   type="submit"
                   form="petty-cash-entry-form"
-                  disabled={isSubmitting || isDuplicateManualEntryNo || isDuplicateEditEntryNo}
-                  title={isDuplicateManualEntryNo || isDuplicateEditEntryNo ? 'This Entry No already exists - enter a different number before saving.' : undefined}
+                  disabled={isSubmitting || isDuplicateManualEntryNo}
+                  title={isDuplicateManualEntryNo ? 'This Entry No already exists - enter a different number before saving.' : undefined}
                   className="flex-1 bg-gradient-to-r from-teal-600 to-emerald-700 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md transition-all uppercase text-[10px] flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isSubmitting ? (
