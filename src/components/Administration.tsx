@@ -1269,6 +1269,12 @@ export default function Administration({
               entries={entries}
               employees={employees}
               warehouseEntries={warehouseEntries}
+              vehicleServiceSchedules={vehicleServiceSchedules}
+              tireRecords={tireRecords}
+              batteryRecords={batteryRecords}
+              toolsChecklistRecords={toolsChecklistRecords}
+              serviceStationSpareParts={serviceStationSpareParts}
+              serviceStationInspections={serviceStationInspections}
             />
           )}
 

@@ -2,7 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   User, Vehicle, FuelLog, MileageReport, Vendor, DriverEmployee, VehicleLoan, BusinessLoan,
   BillingInvoice, PettyCashVoucher, PettyCashAdvance, MarketPodEntry, MaintenanceRecord,
-  BreakdownReport, AccountsEntry, StaffEmployee, WarehouseEntry
+  BreakdownReport, AccountsEntry, StaffEmployee, WarehouseEntry, VehicleServiceSchedule,
+  TireRecord, BatteryRecord, ToolsChecklistRecord, ServiceStationSparePart, ServiceStationInspection,
+  DriverAttendance
 } from '../types';
 import { authFetch } from '../authFetch';
 import {
@@ -12,6 +14,9 @@ import {
 import DateInput from './DateInput';
 import { ReportPeriod, ReportRange, getReportRange, isDateInRange, isMonthInRange } from '../utils/reportDateRange';
 import { ReportTableSection, exportReportToExcel, exportReportToPdf, buildExcelFile, buildPdfFile, shareOrDownloadFile } from '../utils/reportExport';
+import { computeMonthsCompleted, computeDueDate, resolveLoanStatus } from '../utils/loanDates';
+import { effectiveInvoiceAmount, effectiveInvoiceStatus } from '../utils/billingInvoiceCalc';
+import { payableAmount, payableAmountLive, driverSalaryRows, SALARY_COLUMNS } from '../utils/driverSalaryExport';
 
 interface ReportsProps {
   user: User;
@@ -31,6 +36,16 @@ interface ReportsProps {
   entries: AccountsEntry[];
   employees: StaffEmployee[];
   warehouseEntries: WarehouseEntry[];
+  // Fleet Maintenance's other 5 sub-modules (2026-09-10 direct request: each
+  // sub-module needs its own independently viewable/downloadable report,
+  // never flattened together) - already loaded in Administration.tsx's own
+  // state for the Maintenance tab, just not previously threaded down here.
+  vehicleServiceSchedules: VehicleServiceSchedule[];
+  tireRecords: TireRecord[];
+  batteryRecords: BatteryRecord[];
+  toolsChecklistRecords: ToolsChecklistRecord[];
+  serviceStationSpareParts: ServiceStationSparePart[];
+  serviceStationInspections: ServiceStationInspection[];
 }
 
 type ModuleKey =
@@ -97,24 +112,96 @@ interface ModuleReport {
 
 const money = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
 
+// One extra (non-date) filter dimension per module, on top of the existing
+// date-range control (2026-09-10 direct request) - a plain string map since
+// most modules need exactly one dimension (Bunk/Card/All, On-Roll/Contract,
+// company entity, maintenance sub-module) except Petty Cash, which needs two
+// (holder AND report type) at once. Defaults below always reproduce today's
+// existing behavior (nothing filtered out) until an admin actively picks a
+// non-default option - this is an addition, never a behavior change.
+type CardFilterState = Record<string, string>;
+
+const FUEL_SOURCE_OPTIONS = ['All', 'Bunk', 'Card', 'Petty Cash'];
+const HR_EMPLOYEE_TYPE_OPTIONS = ['All', 'On-Roll', 'Contract'];
+const BILLING_ENTITY_OPTIONS: { value: 'KCM Insta' | 'KCM Supply'; label: string }[] = [
+  { value: 'KCM Insta', label: 'KCM Insta Services' },
+  { value: 'KCM Supply', label: 'KCM Supply Chain Solutions' }
+];
+const PETTY_CASH_REPORT_TYPE_OPTIONS = ['Vouchers', 'Market Trip'];
+const MAINTENANCE_SUBMODULE_OPTIONS = [
+  'Service History', 'Service Schedule', 'Service Station', 'Tire & Alignment',
+  'Battery', 'Tools Checklist', 'Breakdown/Workshop/Electrical'
+];
+
+const defaultFilterState = (key: ModuleKey): CardFilterState => {
+  switch (key) {
+    case 'fuel': case 'mileage': return { source: 'All' };
+    case 'hr': return { employeeType: 'All' };
+    case 'billing': return { entity: 'KCM Insta' };
+    case 'pettycash': return { holder: 'All', reportType: 'Vouchers' };
+    case 'maintenance': return { subModule: 'Service History' };
+    default: return {};
+  }
+};
+
 function buildReport(
   moduleKey: ModuleKey,
   props: ReportsProps,
   range: ReportRange,
-  hrExtra: { staffAttendance: any[]; staffPayroll: any[] }
+  hrExtra: { staffAttendance: any[]; staffPayroll: any[] },
+  driverAttendance: DriverAttendance[],
+  filter: CardFilterState
 ): ModuleReport {
   switch (moduleKey) {
     case 'pettycash': {
-      const vouchersInRange = props.vouchers.filter(v => isDateInRange(v.date, range));
-      const advancesInRange = props.pettyCashAdvances.filter(a => isDateInRange(a.date, range));
-      const cashPodInRange = props.marketPodEntries.filter(e => e.paymentMode === 'Cash' && isDateInRange(e.date, range));
+      // 2026-09-10 direct request: filterable/downloadable per holder
+      // (Vinod/Ramesh/Saneel), plus a distinct Market Trip report separate
+      // from the general voucher report - both now real row-level filters,
+      // not just the summary-only per-user split this used to be.
+      const holder = filter.holder || 'All';
+      const reportType = filter.reportType || 'Vouchers';
+      const belongsToHolder = (enteredBy?: string) => holder === 'All' || enteredBy === holder;
+
+      const vouchersInRange = props.vouchers.filter(v => isDateInRange(v.date, range) && belongsToHolder(v.enteredBy));
+      const advancesInRange = props.pettyCashAdvances.filter(a => isDateInRange(a.date, range) && belongsToHolder(a.username));
+      const podInRange = props.marketPodEntries.filter(e => isDateInRange(e.date, range) && belongsToHolder(e.enteredBy));
+      const cashPodInRange = podInRange.filter(e => e.paymentMode === 'Cash');
+
       const totalCashPaid = vouchersInRange.reduce((s, v) => s + (v.cashPaid || 0), 0);
       const totalReceived = advancesInRange.reduce((s, a) => s + (a.amount || 0), 0);
       const totalPodFreight = cashPodInRange.reduce((s, e) => s + (e.totalFreight || 0), 0);
       const perUser = PETTY_CASH_USERS.map(u => ({
         label: u.label,
-        cashPaid: vouchersInRange.filter(v => v.enteredBy === u.username).reduce((s, v) => s + (v.cashPaid || 0), 0)
+        cashPaid: props.vouchers.filter(v => isDateInRange(v.date, range) && v.enteredBy === u.username).reduce((s, v) => s + (v.cashPaid || 0), 0)
       }));
+
+      if (reportType === 'Market Trip') {
+        const totalFreight = podInRange.reduce((s, e) => s + (e.totalFreight || 0), 0);
+        const totalAdvance = podInRange.reduce((s, e) => s + (e.receivedAdvance || 0), 0);
+        const totalExpenses = podInRange.reduce((s, e) => s + (e.otherExpenses || 0), 0);
+        const totalBalance = podInRange.reduce((s, e) => s + (e.balance || 0), 0);
+        return {
+          summary: [
+            { label: 'Trips', value: String(podInRange.length) },
+            { label: 'Total Freight', value: money(totalFreight) },
+            { label: 'Total Advance Received', value: money(totalAdvance) },
+            { label: 'Total Other Expenses', value: money(totalExpenses) },
+            { label: 'Total Balance', value: money(totalBalance) }
+          ],
+          sections: [
+            {
+              heading: 'Market Trip Details',
+              columns: ['Entry No', 'Date', 'Vehicle', 'From', 'To', 'Customer', 'Total Freight', 'Advance Received', 'Other Expenses', 'Balance', 'Coordinator', 'Status', 'Payment Mode', 'Entered By'],
+              rows: podInRange.map(e => [
+                e.entryNo, e.date, e.vehicleNumber, e.from, e.to, e.customer,
+                e.totalFreight || 0, e.receivedAdvance || 0, e.otherExpenses || 0, e.balance || 0,
+                e.coordinator || '-', e.status, e.paymentMode || '-', e.enteredBy || '-'
+              ])
+            }
+          ]
+        };
+      }
+
       return {
         summary: [
           { label: 'Total Cash Paid', value: money(totalCashPaid) },
@@ -141,27 +228,121 @@ function buildReport(
     }
 
     case 'maintenance': {
+      // 2026-09-10 direct request: 7 sub-modules, each its own report -
+      // never flattened together. subModule picks exactly one; everything
+      // below returns ONLY that sub-module's section(s).
+      const subModule = filter.subModule || 'Service History';
+
+      if (subModule === 'Service Schedule') {
+        const schedules = props.vehicleServiceSchedules;
+        return {
+          summary: [
+            { label: 'Vehicles Tracked', value: String(schedules.length) },
+            { label: 'Service Pending', value: String(schedules.filter(s => s.serviceStatus === 'Pending').length) }
+          ],
+          sections: [{
+            heading: 'Service Schedule',
+            columns: ['Reg No', 'Last Service Date', 'Last Service Km', 'Service Interval Km', 'Service Status', 'Warranty Status', 'Site'],
+            rows: schedules.map(s => [s.regNo, s.lastServiceDate || '-', s.lastServiceKm || 0, s.serviceIntervalKm || 0, s.serviceStatus || '-', s.warrantyStatus || '-', s.site || '-'])
+          }]
+        };
+      }
+
+      if (subModule === 'Service Station') {
+        const partsInRange = props.serviceStationSpareParts.filter(p => isDateInRange(p.date, range));
+        const inspectionsInRange = props.serviceStationInspections.filter(i => isDateInRange(i.date, range));
+        return {
+          summary: [
+            { label: 'Spare Parts Consumed', value: String(partsInRange.length) },
+            { label: 'Inspections', value: String(inspectionsInRange.length) },
+            { label: 'Inspections Pending', value: String(inspectionsInRange.filter(i => i.status === 'Pending').length) }
+          ],
+          sections: [
+            {
+              heading: 'Spare Parts', columns: ['Date', 'Reg No', 'Part Name', 'Part Number', 'Qty'],
+              rows: partsInRange.map(p => [p.date, p.regNo, p.partName, p.partNumber, p.qty || 0])
+            },
+            {
+              heading: 'Inspections', columns: ['Date', 'Reg No', 'Details', 'Status', 'Inspected By'],
+              rows: inspectionsInRange.map(i => [i.date, i.regNo, i.details, i.status, i.inspectedBy || '-'])
+            }
+          ]
+        };
+      }
+
+      if (subModule === 'Tire & Alignment') {
+        const tires = props.tireRecords;
+        return {
+          summary: [
+            { label: 'Tire Records', value: String(tires.length) },
+            { label: 'Currently Fitted', value: String(tires.filter(t => t.isCurrent !== false).length) }
+          ],
+          sections: [{
+            heading: 'Tire & Alignment',
+            columns: ['Reg No', 'Position', 'Brand', 'Serial No', 'Installed Date', 'Installed Km', 'Last Alignment Km', 'Current'],
+            rows: tires.map(t => [t.regNo, t.position, t.tireBrand, t.tireSerialNumber || '-', t.installedDate || '-', t.installedKm || 0, t.lastAlignmentKm || 0, t.isCurrent !== false ? 'Yes' : 'No'])
+          }]
+        };
+      }
+
+      if (subModule === 'Battery') {
+        const batteries = props.batteryRecords;
+        return {
+          summary: [
+            { label: 'Battery Records', value: String(batteries.length) },
+            { label: 'Currently Fitted', value: String(batteries.filter(b => b.isCurrent).length) }
+          ],
+          sections: [{
+            heading: 'Battery',
+            columns: ['Reg No', 'Battery Number', 'Make', 'Installed Date', 'Installed Km', 'Warranty Expiry', 'Current'],
+            rows: batteries.map(b => [b.regNo, b.batteryNumber, b.make || '-', b.installedDate || '-', b.installedKm || 0, b.warrantyExpiryDate || '-', b.isCurrent ? 'Yes' : 'No'])
+          }]
+        };
+      }
+
+      if (subModule === 'Tools Checklist') {
+        const toolsInRange = props.toolsChecklistRecords.filter(t => isDateInRange(t.checkDate, range));
+        return {
+          summary: [{ label: 'Checks (period)', value: String(toolsInRange.length) }],
+          sections: [{
+            heading: 'Tools Checklist',
+            columns: ['Check Date', 'Reg No', 'Jack', 'Jack Rod', 'Tommy Bar', 'Spanner', 'Checked By', 'Remarks'],
+            rows: toolsInRange.map(t => [t.checkDate, t.regNo, t.hasJack ? 'Yes' : 'No', t.hasJackRod ? 'Yes' : 'No', t.hasTommyBar ? 'Yes' : 'No', t.hasSpanner ? 'Yes' : 'No', t.checkedBy || '-', t.remarks || '-'])
+          }]
+        };
+      }
+
+      if (subModule === 'Breakdown/Workshop/Electrical') {
+        const breakdownsInRange = props.breakdownReports.filter(b => isDateInRange(b.date, range));
+        const totalBreakdownCost = breakdownsInRange.reduce((s, b) => s + (b.amount || 0), 0);
+        return {
+          summary: [
+            { label: 'Reports (period)', value: String(breakdownsInRange.length) },
+            { label: 'Total Cost', value: money(totalBreakdownCost) },
+            { label: 'Open (all-time)', value: String(props.breakdownReports.filter(b => b.status === 'Open').length) }
+          ],
+          sections: [{
+            heading: 'Breakdown / Workshop / Electrical',
+            columns: ['Date', 'Reg No', 'Type', 'Location', 'Description', 'Driver', 'Amount', 'Payment Type', 'Status'],
+            rows: breakdownsInRange.map(b => [b.date, b.regNo, b.type || '-', b.location || '-', b.description || '-', b.driverName || '-', b.amount || 0, b.paymentType || '-', b.status])
+          }]
+        };
+      }
+
+      // Default / 'Service History'
       const recordsInRange = props.records.filter(r => isDateInRange(r.date, range));
-      const breakdownsInRange = props.breakdownReports.filter(b => isDateInRange(b.date, range));
       const totalServiceCost = recordsInRange.reduce((s, r) => s + (r.cost || 0), 0);
-      const totalBreakdownCost = breakdownsInRange.reduce((s, b) => s + (b.amount || 0), 0);
       const byType: Record<string, number> = {};
       recordsInRange.forEach(r => { byType[r.serviceType] = (byType[r.serviceType] || 0) + (r.cost || 0); });
       return {
         summary: [
           { label: 'Total Service Cost', value: money(totalServiceCost) },
-          { label: 'Service Visits', value: String(recordsInRange.length) },
-          { label: 'Total Breakdown/Workshop Cost', value: money(totalBreakdownCost) },
-          { label: 'Open Breakdowns (all-time)', value: String(props.breakdownReports.filter(b => b.status === 'Open').length) }
+          { label: 'Service Visits', value: String(recordsInRange.length) }
         ],
         sections: [
           {
-            heading: 'Service History', columns: ['Date', 'Reg No', 'Type', 'Station', 'Cost', 'Driver'],
-            rows: recordsInRange.map(r => [r.date, r.regNo, r.serviceType, r.garageName || '-', r.cost || 0, r.driverName || '-'])
-          },
-          {
-            heading: 'Breakdown / Workshop / Electrical', columns: ['Date', 'Reg No', 'Type', 'Amount', 'Payment Type', 'Status'],
-            rows: breakdownsInRange.map(b => [b.date, b.regNo, b.type || '-', b.amount || 0, b.paymentType || '-', b.status])
+            heading: 'Service History', columns: ['Date', 'Reg No', 'Type', 'Station', 'Cost', 'Driver', 'Invoice No', 'Odometer'],
+            rows: recordsInRange.map(r => [r.date, r.regNo, r.serviceType, r.garageName || '-', r.cost || 0, r.driverName || '-', r.invoiceNumber || '-', r.odometer || 0])
           },
           {
             heading: 'Cost By Category', columns: ['Category', 'Total Cost'],
@@ -172,7 +353,12 @@ function buildReport(
     }
 
     case 'fuel': {
-      const logsInRange = props.fuelLogs.filter(f => isDateInRange(f.date, range));
+      // 2026-09-10 direct request: All / Bunk / Card source filter, reusing
+      // the exact same FuelLog.bunkOrCard field FuelManagement.tsx's own
+      // pill filter reads - "Download full" is simply the 'All' selection,
+      // already unfiltered by construction.
+      const source = filter.source || 'All';
+      const logsInRange = props.fuelLogs.filter(f => isDateInRange(f.date, range) && (source === 'All' || (f.bunkOrCard || 'Bunk') === source));
       const totalAmount = logsInRange.reduce((s, f) => s + (f.amount || 0), 0);
       const totalLtrs = logsInRange.reduce((s, f) => s + (f.ltrs || 0), 0);
       return {
@@ -184,15 +370,28 @@ function buildReport(
         ],
         sections: [
           {
-            heading: 'Fuel Entries', columns: ['Date', 'Vehicle', 'Bunk', 'Litres', 'Rate', 'Amount', 'Client', 'Type'],
-            rows: logsInRange.map(f => [f.date, f.vehicleNumber, f.bunkName || '-', f.ltrs || 0, f.rate || 0, f.amount || 0, f.client, f.type])
+            heading: 'Fuel Entries', columns: ['Date', 'Vehicle', 'Source', 'Bunk', 'Litres', 'Rate', 'Amount', 'Client', 'Type'],
+            rows: logsInRange.map(f => [f.date, f.vehicleNumber, f.bunkOrCard || 'Bunk', f.bunkName || '-', f.ltrs || 0, f.rate || 0, f.amount || 0, f.client, f.type])
           }
         ]
       };
     }
 
     case 'mileage': {
-      const reportsInRange = props.mileageReports.filter(m => isDateInRange(m.date, range));
+      // 2026-09-10 direct request: same Bunk/Card/All selection as Fuel
+      // Management above. MileageReport itself carries no bunk/card field -
+      // the link lives on the fuel side (FuelLog.mileageReportId points at
+      // the MileageReport it was created alongside, see FuelManagement.tsx's
+      // Mileage tab) - so the source is looked up via that link. A mileage
+      // entry with no linked fuel log (created directly, or from before this
+      // link existed) only ever shows under 'All', same as an unlinked fuel
+      // entry does on the Fuel card above - never silently dropped.
+      const source = filter.source || 'All';
+      const sourceByMileageReportId = new Map<string, string>();
+      props.fuelLogs.forEach(f => { if (f.mileageReportId) sourceByMileageReportId.set(f.mileageReportId, f.bunkOrCard || 'Bunk'); });
+      const reportsInRange = props.mileageReports.filter(m =>
+        isDateInRange(m.date, range) && (source === 'All' || sourceByMileageReportId.get(m.id) === source)
+      );
       const totalKm = reportsInRange.reduce((s, m) => s + (m.totalKm || 0), 0);
       const totalLtrs = reportsInRange.reduce((s, m) => s + (m.litres || 0), 0);
       return {
@@ -246,8 +445,11 @@ function buildReport(
         ],
         sections: [
           {
-            heading: 'Vendor-wise Summary', columns: ['Name', 'Code', 'Client(s)', 'Vehicles', 'Contact'],
-            rows: vendors.map(v => [v.name, v.code, Array.isArray(v.client) ? v.client.join(', ') : (v.client || '-'), (v.vehicleNumbers || []).length, v.contactNumber || '-'])
+            heading: 'Vendor-wise Summary', columns: ['Name', 'Code', 'Client(s)', 'Vehicle No(s)', 'Contact'],
+            // 2026-09-10 direct request: the actual vehicle numbers, not just
+            // a count - matches VendorManagement.tsx's own on-screen badge
+            // list and its own Excel export exactly.
+            rows: vendors.map(v => [v.name, v.code, Array.isArray(v.client) ? v.client.join(', ') : (v.client || '-'), (v.vehicleNumbers || []).join(', ') || '-', v.contactNumber || '-'])
           }
         ]
       };
@@ -259,67 +461,119 @@ function buildReport(
       const totalLop = driversInRange.reduce((s, d) => s + (d.lopAmount || 0), 0);
       const totalLoanDeduction = driversInRange.reduce((s, d) => s + (d.loanDeduction || 0), 0);
       const totalWelfare = driversInRange.reduce((s, d) => s + (d.driverWelfare || 0), 0);
+      // Payable Amount reuses the exact same shared formula/row-builder
+      // Driver Salary's own downloads use (driverSalaryExport.ts) rather
+      // than re-deriving LOP/deductions math here - "mirrors the Driver
+      // Details module structure exactly" (2026-09-10 direct request).
+      const totalPayable = driversInRange.reduce((s, d) => s + (driverAttendance.length ? payableAmountLive(d, driverAttendance) : payableAmount(d)), 0);
+
+      // Attendance as an additional section alongside the existing driver
+      // data (2026-09-10 direct request offered either approach - this one
+      // keeps a single self-contained Driver Details download).
+      const driverName = (driverId: string) => props.drivers.find(d => d.id === driverId)?.name || driverId;
+      const attendanceInRange = driverAttendance.filter(a => isDateInRange(a.date, range));
+
       return {
         summary: [
           { label: 'Drivers (this period)', value: String(driversInRange.length) },
           { label: 'Total Petty Cash Advance', value: money(totalAdvance) },
           { label: 'Total LOP Amount', value: money(totalLop) },
           { label: 'Total Loan Deduction', value: money(totalLoanDeduction) },
-          { label: 'Total Driver Welfare', value: money(totalWelfare) }
+          { label: 'Total Driver Welfare', value: money(totalWelfare) },
+          { label: 'Total Payable Amount', value: money(totalPayable) }
         ],
         sections: [
           {
-            heading: 'Driver Salary & Cost', columns: ['Driver ID', 'Name', 'Vehicle', 'Month', 'LOP Amt', 'Advance', 'Loan Ded.', 'Recovery', 'Welfare'],
-            rows: driversInRange.map(d => [d.id, d.name, d.vehicleNo || '-', d.month || '-', d.lopAmount || 0, d.pettyCashAdvance || 0, d.loanDeduction || 0, d.recoveryAmount || 0, d.driverWelfare || 0])
+            heading: 'Driver Salary & Cost',
+            columns: SALARY_COLUMNS,
+            rows: driverSalaryRows(driversInRange, driverAttendance.length ? driverAttendance : undefined)
+          },
+          {
+            heading: 'Driver Attendance',
+            columns: ['Date', 'Driver ID', 'Name', 'Location', 'Status', 'Remarks'],
+            rows: attendanceInRange.map(a => [a.date, a.driverId, driverName(a.driverId), a.location || '-', a.status, a.remarks || '-'])
           }
         ]
       };
     }
 
     case 'loans': {
+      // 2026-09-10 direct request: same EMI Paid/Due Date/Status math every
+      // other loan screen uses (src/utils/loanDates.ts), never re-derived -
+      // matches VehicleLoanSheet.tsx/BusinessLoanSheet.tsx's own columns.
       const vLoans = props.vehicleLoans;
       const bLoans = props.businessLoans;
-      const activeV = vLoans.filter(l => l.loanStatus === 'Active').length;
-      const activeB = bLoans.filter(l => l.loanStatus === 'Active').length;
+      const vRows = vLoans.map(l => {
+        const monthsCompleted = computeMonthsCompleted(l.emiStartDate, l.tenure);
+        const dueDate = computeDueDate(l.emiStartDate, monthsCompleted, l.tenure);
+        const status = resolveLoanStatus(l.loanStatus, l.loanStatusManual, monthsCompleted, l.tenure);
+        const emiPending = l.tenure != null ? Math.max(0, l.tenure - monthsCompleted) : 0;
+        const outstanding = emiPending * (l.monthlyEmi || 0);
+        return { l, monthsCompleted, dueDate, status, emiPending, outstanding };
+      });
+      const bRows = bLoans.map(l => {
+        const monthsCompleted = computeMonthsCompleted(l.emiDate, l.tenure);
+        const dueDate = computeDueDate(l.emiDate, monthsCompleted, l.tenure);
+        const status = resolveLoanStatus(l.loanStatus, l.loanStatusManual, monthsCompleted, l.tenure);
+        const emiPending = l.tenure != null ? Math.max(0, l.tenure - monthsCompleted) : 0;
+        const outstanding = emiPending * (l.emiMonthly || 0);
+        return { l, monthsCompleted, dueDate, status, emiPending, outstanding };
+      });
+      const activeV = vRows.filter(r => r.status === 'Active').length;
+      const activeB = bRows.filter(r => r.status === 'Active').length;
       const totalMonthlyEmi =
-        vLoans.filter(l => l.loanStatus === 'Active').reduce((s, l) => s + (l.monthlyEmi || 0), 0) +
-        bLoans.filter(l => l.loanStatus === 'Active').reduce((s, l) => s + (l.emiMonthly || 0), 0);
+        vRows.filter(r => r.status === 'Active').reduce((s, r) => s + (r.l.monthlyEmi || 0), 0) +
+        bRows.filter(r => r.status === 'Active').reduce((s, r) => s + (r.l.emiMonthly || 0), 0);
+      const totalOutstanding = vRows.reduce((s, r) => s + r.outstanding, 0) + bRows.reduce((s, r) => s + r.outstanding, 0);
       return {
         summary: [
           { label: 'Active Vehicle Loans', value: String(activeV) },
           { label: 'Active Business Loans', value: String(activeB) },
-          { label: 'Total Active Monthly EMI', value: money(totalMonthlyEmi) }
+          { label: 'Total Active Monthly EMI', value: money(totalMonthlyEmi) },
+          { label: 'Total Outstanding Amount', value: money(totalOutstanding) }
         ],
         sections: [
           {
-            heading: 'Vehicle Loans', columns: ['Reg No', 'Financer', 'Loan Amount', 'Monthly EMI', 'Status'],
-            rows: vLoans.map(l => [l.regNo, l.financer, l.loanAmount || 0, l.monthlyEmi || 0, l.loanStatus])
+            heading: 'Vehicle Loans',
+            columns: ['Reg No', 'Financer', 'Loan Amount', 'Monthly EMI', 'Tenure', 'EMI Paid', 'EMI Pending', 'O/S Amount', 'Due Date', 'Status'],
+            rows: vRows.map(r => [r.l.regNo, r.l.financer, r.l.loanAmount || 0, r.l.monthlyEmi || 0, r.l.tenure || 0, r.monthsCompleted, r.emiPending, r.outstanding, r.dueDate, r.status])
           },
           {
-            heading: 'Business Loans', columns: ['Financer', 'Loan Type', 'Sanctioned Amount', 'Monthly EMI', 'Status'],
-            rows: bLoans.map(l => [l.financer, l.loanType, l.sanctionedAmount || 0, l.emiMonthly || 0, l.loanStatus])
+            heading: 'Business Loans',
+            columns: ['Financer', 'Loan Type', 'Sanctioned Amount', 'Monthly EMI', 'Tenure', 'EMI Paid', 'EMI Pending', 'O/S Amount', 'Due Date', 'Status'],
+            rows: bRows.map(r => [r.l.financer, r.l.loanType, r.l.sanctionedAmount || 0, r.l.emiMonthly || 0, r.l.tenure || 0, r.monthsCompleted, r.emiPending, r.outstanding, r.dueDate, r.status])
           }
         ]
       };
     }
 
     case 'billing': {
-      const invoicesInRange = props.invoices.filter(i => isDateInRange(i.date, range));
-      const total = invoicesInRange.reduce((s, i) => s + (i.amount || 0), 0);
-      const paid = invoicesInRange.filter(i => i.status === 'Paid').reduce((s, i) => s + (i.amount || 0), 0);
-      const pending = invoicesInRange.filter(i => i.status === 'Pending').reduce((s, i) => s + (i.amount || 0), 0);
-      const overdue = invoicesInRange.filter(i => i.status === 'Overdue').reduce((s, i) => s + (i.amount || 0), 0);
+      // 2026-09-10 direct request: KCM Insta Services / KCM Supply Chain
+      // Solutions shown and downloadable separately, never merged into one
+      // combined report - matches Billing.tsx's own activeCompany tab
+      // exactly (same field, same default-to-Insta rule). Figures use the
+      // same live-computed effectiveInvoiceAmount/Status Billing.tsx's own
+      // KPIs use, not the legacy raw amount/status fields.
+      const entity = (filter.entity as 'KCM Insta' | 'KCM Supply') || 'KCM Insta';
+      const invoicesInRange = props.invoices.filter(i => isDateInRange(i.date, range) && (i.company || 'KCM Insta') === entity);
+      const total = invoicesInRange.reduce((s, i) => s + effectiveInvoiceAmount(i), 0);
+      const paid = invoicesInRange.filter(i => effectiveInvoiceStatus(i) === 'Cleared').reduce((s, i) => s + effectiveInvoiceAmount(i), 0);
+      const pending = invoicesInRange.filter(i => effectiveInvoiceStatus(i) === 'Pending').reduce((s, i) => s + effectiveInvoiceAmount(i), 0);
+      const overdue = invoicesInRange.filter(i => effectiveInvoiceStatus(i) === 'Overdue').reduce((s, i) => s + effectiveInvoiceAmount(i), 0);
+      const shortPayment = invoicesInRange.filter(i => effectiveInvoiceStatus(i) === 'Short Payment').reduce((s, i) => s + effectiveInvoiceAmount(i), 0);
       return {
         summary: [
           { label: 'Total Invoiced', value: money(total) },
-          { label: 'Paid', value: money(paid) },
+          { label: 'Cleared', value: money(paid) },
           { label: 'Pending', value: money(pending) },
-          { label: 'Overdue', value: money(overdue) }
+          { label: 'Overdue', value: money(overdue) },
+          { label: 'Short Payment', value: money(shortPayment) }
         ],
         sections: [
           {
-            heading: 'Invoices', columns: ['Date', 'Invoice No', 'Customer', 'Amount', 'Status'],
-            rows: invoicesInRange.map(i => [i.date, i.invoiceNo, i.customerName, i.amount || 0, i.status])
+            heading: `Invoices - ${BILLING_ENTITY_OPTIONS.find(o => o.value === entity)?.label}`,
+            columns: ['Date', 'Invoice No', 'Customer', 'Entity', 'Amount', 'Amount Receivable', 'Amount Received', 'Status'],
+            rows: invoicesInRange.map(i => [i.date, i.invoiceNo, i.customerName, i.entity || '-', effectiveInvoiceAmount(i), i.amountReceivable || 0, i.amountReceived || 0, effectiveInvoiceStatus(i)])
           }
         ]
       };
@@ -356,46 +610,102 @@ function buildReport(
         ],
         sections: [
           {
-            heading: 'Warehouse Entries', columns: ['Date', 'Warehouse', 'City', 'Vehicle', 'Type', 'KM Utilised', 'POD'],
-            rows: entriesInRange.map(e => [e.date, e.warehouseName, e.warehouseCity, e.vehicleNumber, e.vehicleType, e.kmUtilised || 0, e.pod || '-'])
+            // 2026-09-10 direct request: mirrors WarehouseDetails.tsx's own
+            // export field-for-field (handleExportCSV) - stored per-entry
+            // values read as-is, never recomputed from current rate config,
+            // so historical entries stay correct even if rates change later.
+            heading: 'Warehouse Entries',
+            columns: [
+              'Date', 'Warehouse Name', 'Warehouse City', 'Vehicle Number', 'Vehicle Type', 'Vehicle Category',
+              'Deployment Type', 'POD Name', 'POD City', 'Fixed Hours', 'Opening Km', 'Closing Km', 'KM Utilised',
+              'Base Rate', 'Fuel Cost', 'Final Base Rate', 'Additional KM Cost', 'Additional Hour Cost',
+              'Toll Charges', 'Parking Cost', 'Hybrid Reefer Cost', 'Grand Total', 'Vendor Remarks'
+            ],
+            rows: entriesInRange.map(e => [
+              e.date, e.warehouseName, e.warehouseCity, e.vehicleNumber, e.vehicleType, e.vehicleCategory || '-',
+              e.deploymentType || '-', e.pod || '-', e.podCity || '-', e.fixedHours || 0, e.openingKm || 0, e.closingKm || 0, e.kmUtilised || 0,
+              e.baseRate || 0, e.fuelCost || 0, e.finalBaseRate || 0, e.additionalKmCost || 0, e.additionalHourCost || 0,
+              e.tollCharges || 0, e.parkingCost || 0, e.hybridReeferCost || 0, e.grandTotal || 0, e.vendorRemarks || '-'
+            ])
           }
         ]
       };
     }
 
     case 'hr': {
-      const activeEmployees = props.employees.filter(e => e.status === 'Active');
-      const attendanceInRange = hrExtra.staffAttendance.filter((a: any) => isDateInRange(a.date, range));
-      const payrollInRange = hrExtra.staffPayroll.filter((p: any) => isMonthInRange(p.month, range));
+      // 2026-09-10 direct request: full/On-Roll-only/Contract-only download,
+      // each with Gross/Deductions/Net/Total Paying Amount matching HR &
+      // Payroll's own calculation exactly - these already come straight off
+      // /api/staff/provident-fund's server-computed fields (server.ts's
+      // Salary Breakup formula, the one true source), never recomputed here.
+      const employeeType = filter.employeeType || 'All';
+      const employmentTypeOf = (empId: string) => props.employees.find(e => e.id === empId)?.employmentType || 'On-Roll';
+      const matchesType = (empId: string) => employeeType === 'All' || employmentTypeOf(empId) === employeeType;
+
+      const employeesFiltered = props.employees.filter(e => employeeType === 'All' || (e.employmentType || 'On-Roll') === employeeType);
+      const activeEmployees = employeesFiltered.filter(e => e.status === 'Active');
+      const attendanceInRange = hrExtra.staffAttendance.filter((a: any) => isDateInRange(a.date, range) && matchesType(a.empId));
+      const payrollInRange = hrExtra.staffPayroll.filter((p: any) => isMonthInRange(p.month, range) && matchesType(p.empId));
       const presentDays = attendanceInRange.filter((a: any) => a.status === 'Present').length;
       const lopDaysCount = attendanceInRange.filter((a: any) => a.status === 'AbsentLOP').length;
       const totalGross = payrollInRange.reduce((s: number, p: any) => s + (p.totalEarnings || 0), 0);
       const totalDeductions = payrollInRange.reduce((s: number, p: any) => s + (p.totalDeductions || 0), 0);
-      const totalNetPayroll = payrollInRange.reduce((s: number, p: any) => s + (p.netSalary || 0), 0);
+      const totalPayingAmount = payrollInRange.reduce((s: number, p: any) => s + (p.netSalary || 0), 0);
       const empName = (empId: string) => props.employees.find(e => e.id === empId)?.name || empId;
       return {
         summary: [
           { label: 'Active Headcount', value: String(activeEmployees.length) },
           { label: 'Present Days (period)', value: String(presentDays) },
           { label: 'LOP Days (period)', value: String(lopDaysCount) },
-          { label: 'Total Gross Earnings', value: money(totalGross) },
+          { label: 'Total Gross Salary', value: money(totalGross) },
           { label: 'Total Deductions', value: money(totalDeductions) },
-          { label: 'Total Net Payroll', value: money(totalNetPayroll) }
+          { label: 'Total Paying Amount', value: money(totalPayingAmount) }
         ],
         sections: [
           {
-            heading: 'Payroll (by month)', columns: ['Emp ID', 'Name', 'Month', 'Gross Earnings', 'Deductions', 'Net Salary'],
-            rows: payrollInRange.map((p: any) => [p.empId, empName(p.empId), p.month, Math.round(p.totalEarnings || 0), Math.round(p.totalDeductions || 0), Math.round(p.netSalary || 0)])
+            heading: 'Payroll (by month)', columns: ['Emp ID', 'Name', 'Employment Type', 'Month', 'Gross Salary', 'Deductions', 'Net Salary'],
+            rows: payrollInRange.map((p: any) => [p.empId, empName(p.empId), employmentTypeOf(p.empId), p.month, Math.round(p.totalEarnings || 0), Math.round(p.totalDeductions || 0), Math.round(p.netSalary || 0)])
           },
           {
-            heading: 'Employee Master', columns: ['Emp ID', 'Name', 'Designation', 'Status', 'Org Unit'],
-            rows: props.employees.map(e => [e.id, e.name, e.designation || '-', e.status, e.orgUnit])
+            heading: 'Employee Master', columns: ['Emp ID', 'Name', 'Designation', 'Employment Type', 'Status', 'Org Unit'],
+            rows: employeesFiltered.map(e => [e.id, e.name, e.designation || '-', e.employmentType || 'On-Roll', e.status, e.orgUnit])
           }
         ]
       };
     }
   }
 }
+
+// Small reusable pill-button row for the extra per-module filters below -
+// same visual language as the existing period pills (Reports.tsx's own
+// established pattern) so a new filter dimension never looks bolted-on.
+function FilterPillRow({ options, selected, onSelect, theme }: {
+  options: { value: string; label: string }[];
+  selected: string;
+  onSelect: (value: string) => void;
+  theme: { btn: string };
+}) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      {options.map(o => (
+        <button
+          key={o.value}
+          onClick={() => onSelect(o.value)}
+          className={`px-2 py-1 rounded-md font-semibold cursor-pointer transition-colors text-[10px] ${
+            selected === o.value ? `${theme.btn} text-white` : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const PETTY_CASH_HOLDER_PILL_OPTIONS = [
+  { value: 'All', label: 'All' },
+  ...PETTY_CASH_USERS.map(u => ({ value: u.username, label: u.label }))
+];
 
 const PERIOD_LABELS: { value: ReportPeriod; label: string }[] = [
   { value: 'daily', label: 'Daily' },
@@ -428,6 +738,19 @@ export default function Reports(props: ReportsProps) {
   const updateCardRange = (key: ModuleKey, patch: Partial<CardRangeState>) =>
     setCardRanges(prev => ({ ...prev, [key]: { ...prev[key], ...patch } }));
 
+  // Per-module extra filter (Bunk/Card, On-Roll/Contract, entity, holder,
+  // sub-module - see defaultFilterState) - same "no mismatch" guarantee as
+  // cardRanges: reportFor() below is the single call site for View, both
+  // Download formats, and Share, so this is automatically what every one of
+  // those shows/exports, never something a download path could drift from.
+  const [cardFilters, setCardFilters] = useState<Record<ModuleKey, CardFilterState>>(() => {
+    const init = {} as Record<ModuleKey, CardFilterState>;
+    MODULES.forEach(m => { init[m.key] = defaultFilterState(m.key); });
+    return init;
+  });
+  const updateCardFilter = (key: ModuleKey, patch: CardFilterState) =>
+    setCardFilters(prev => ({ ...prev, [key]: { ...prev[key], ...patch } }));
+
   const [viewingModule, setViewingModule] = useState<ModuleKey | null>(null);
   const [openMenu, setOpenMenu] = useState<{ key: ModuleKey; kind: 'download' | 'share' } | null>(null);
   const [notif, setNotif] = useState<string | null>(null);
@@ -454,6 +777,18 @@ export default function Reports(props: ReportsProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSuperAdmin]);
 
+  // Driver Details' Attendance section (2026-09-10 direct request) - same
+  // fetch-once-on-mount pattern as HR & Payroll's data above; Driver
+  // Attendance isn't otherwise part of this portal's shared Administration
+  // state either.
+  const [driverAttendance, setDriverAttendance] = useState<DriverAttendance[]>([]);
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    authFetch('/api/drivers/attendance').then(r => r.ok ? r.json() : [])
+      .then(data => setDriverAttendance(Array.isArray(data) ? data : []))
+      .catch(err => console.error('Failed to load Driver Attendance report data:', err));
+  }, [isSuperAdmin]);
+
   // Close an open Download/Share menu on any outside click.
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -469,12 +804,40 @@ export default function Reports(props: ReportsProps) {
     const c = cardRanges[key];
     return getReportRange(c.period, c.anchorDate, c.customStart, c.customEnd);
   };
-  const reportFor = (key: ModuleKey): ModuleReport => buildReport(key, props, rangeFor(key), { staffAttendance, staffPayroll });
+  const reportFor = (key: ModuleKey): ModuleReport => buildReport(key, props, rangeFor(key), { staffAttendance, staffPayroll }, driverAttendance, cardFilters[key]);
+
+  // 2026-09-10 direct request: whatever filter is active on screen must be
+  // exactly what's in the download - the filename/subtitle spelling it out
+  // too means it's never ambiguous which selection a saved file represents,
+  // even after it's been downloaded and renamed/moved.
+  const filterLabelFor = (key: ModuleKey): string | null => {
+    const f = cardFilters[key];
+    switch (key) {
+      case 'fuel': case 'mileage': return f.source && f.source !== 'All' ? f.source : null;
+      case 'hr': return f.employeeType && f.employeeType !== 'All' ? f.employeeType : null;
+      case 'billing': return BILLING_ENTITY_OPTIONS.find(o => o.value === f.entity)?.label || null;
+      case 'pettycash': {
+        const holderLabel = f.holder && f.holder !== 'All' ? PETTY_CASH_HOLDER_PILL_OPTIONS.find(o => o.value === f.holder)?.label : null;
+        return [f.reportType, holderLabel].filter(Boolean).join(' - ') || null;
+      }
+      case 'maintenance': return f.subModule || null;
+      default: return null;
+    }
+  };
 
   const exportMetaFor = (meta: ModuleMeta) => {
     const range = rangeFor(meta.key);
-    const filenameBase = `KCM_Report_${meta.label.replace(/[^a-zA-Z0-9]+/g, '_')}_${meta.dateFiltered ? range.label.replace(/[^a-zA-Z0-9]+/g, '_') : 'Snapshot'}`;
-    const subtitle = meta.dateFiltered ? `Period: ${range.label} (${range.start} to ${range.end})` : 'Current snapshot';
+    const filterLabel = filterLabelFor(meta.key);
+    const filenameParts = [
+      `KCM_Report_${meta.label.replace(/[^a-zA-Z0-9]+/g, '_')}`,
+      filterLabel ? filterLabel.replace(/[^a-zA-Z0-9]+/g, '_') : null,
+      meta.dateFiltered ? range.label.replace(/[^a-zA-Z0-9]+/g, '_') : 'Snapshot'
+    ].filter(Boolean);
+    const filenameBase = filenameParts.join('_');
+    const subtitle = [
+      filterLabel ? `Filter: ${filterLabel}` : null,
+      meta.dateFiltered ? `Period: ${range.label} (${range.start} to ${range.end})` : 'Current snapshot'
+    ].filter(Boolean).join(' | ');
     const title = `KCM Logistics - ${meta.label} Report`;
     return { filenameBase, subtitle, title };
   };
@@ -579,6 +942,59 @@ export default function Reports(props: ReportsProps) {
                 </div>
               ) : (
                 <p className="text-[9px] text-slate-500 font-mono bg-white/70 border border-slate-200 rounded-lg p-2">{meta.note}</p>
+              )}
+
+              {/* Extra per-module filter dimension (2026-09-10 direct
+                  request) - narrows both the on-screen View and every
+                  download/share the same way, since they all read this same
+                  cardFilters state via reportFor(). */}
+              {(meta.key === 'fuel' || meta.key === 'mileage') && (
+                <FilterPillRow
+                  theme={theme}
+                  options={FUEL_SOURCE_OPTIONS.map(v => ({ value: v, label: v }))}
+                  selected={cardFilters[meta.key].source}
+                  onSelect={(source) => updateCardFilter(meta.key, { source })}
+                />
+              )}
+              {meta.key === 'hr' && (
+                <FilterPillRow
+                  theme={theme}
+                  options={HR_EMPLOYEE_TYPE_OPTIONS.map(v => ({ value: v, label: v }))}
+                  selected={cardFilters.hr.employeeType}
+                  onSelect={(employeeType) => updateCardFilter('hr', { employeeType })}
+                />
+              )}
+              {meta.key === 'billing' && (
+                <FilterPillRow
+                  theme={theme}
+                  options={BILLING_ENTITY_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
+                  selected={cardFilters.billing.entity}
+                  onSelect={(entity) => updateCardFilter('billing', { entity })}
+                />
+              )}
+              {meta.key === 'pettycash' && (
+                <div className="space-y-1">
+                  <FilterPillRow
+                    theme={theme}
+                    options={PETTY_CASH_REPORT_TYPE_OPTIONS.map(v => ({ value: v, label: v }))}
+                    selected={cardFilters.pettycash.reportType}
+                    onSelect={(reportType) => updateCardFilter('pettycash', { reportType })}
+                  />
+                  <FilterPillRow
+                    theme={theme}
+                    options={PETTY_CASH_HOLDER_PILL_OPTIONS}
+                    selected={cardFilters.pettycash.holder}
+                    onSelect={(holder) => updateCardFilter('pettycash', { holder })}
+                  />
+                </div>
+              )}
+              {meta.key === 'maintenance' && (
+                <FilterPillRow
+                  theme={theme}
+                  options={MAINTENANCE_SUBMODULE_OPTIONS.map(v => ({ value: v, label: v }))}
+                  selected={cardFilters.maintenance.subModule}
+                  onSelect={(subModule) => updateCardFilter('maintenance', { subModule })}
+                />
               )}
 
               <div className="flex items-center gap-1.5 pt-1 mt-auto border-t border-white/60">
