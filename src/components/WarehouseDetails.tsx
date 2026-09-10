@@ -1962,19 +1962,31 @@ export default function WarehouseDetails({
 
       </div>
 
-      {/* Edit Modal (Overlaid) */}
+      {/* Edit Modal (Overlaid) - 2026-09-10 fix: the modal box previously had
+          no height cap and the outer overlay centered it with
+          items-center - once the form's natural height exceeded the
+          viewport, that combination clips the overflowing top portion
+          without it ever being reachable by scrolling (a well-known
+          flexbox-centering-plus-overflow gotcha), which is exactly why it
+          only ever became visible by zooming out (shrinking the content
+          below viewport height sidesteps the bug rather than fixing it).
+          Same max-h-[90vh] + flex-col + one inner overflow-y-auto/flex-1
+          scroll region pattern already used correctly elsewhere in this
+          app (e.g. Reports.tsx's View modal) - normal scroll now works
+          like every other modal. */}
       {selectedEntry && (
-        <div className="fixed inset-0 bg-purple-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl shadow-2xl border border-pink-100 max-w-4xl w-full p-6 relative overflow-hidden my-8">
+        <div className="fixed inset-0 bg-purple-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl border border-pink-100 max-w-4xl w-full max-h-[90vh] relative flex flex-col overflow-hidden">
             <div className="absolute top-0 left-0 right-0 h-2.5 bg-gradient-to-r from-pink-500 to-purple-800" />
-            
+
             <button
               onClick={() => setSelectedEntry(null)}
-              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
+              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer z-10"
             >
               <X className="w-5 h-5" />
             </button>
 
+            <div className="overflow-y-auto p-6 flex-1">
             <div className="flex items-center gap-2 mb-4">
               <Warehouse className="text-pink-600 w-5.5 h-5.5" />
               <div>
@@ -2483,6 +2495,7 @@ export default function WarehouseDetails({
               </div>
 
             </form>
+            </div>
           </div>
         </div>
       )}
