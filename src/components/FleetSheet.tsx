@@ -29,6 +29,7 @@ import {
   Activity,
   FileText,
   Upload,
+  Eye,
   Download,
   Share2,
   Printer,
@@ -436,8 +437,58 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
   const findVehicleIncidentsForRegNo = (regNo: string) =>
     vehicleIncidents.filter(inc => (inc.regNo || '').trim().toUpperCase() === regNo.trim().toUpperCase());
 
+  // 2026-09-10 direct request: Insurance Portfolio's "To" auto-mirrors the
+  // Insurance Expiry Date, "From" auto = one year earlier, minus a day -
+  // both then remain independently editable (same "auto-fill on the
+  // driving field's change, freely overridable after" convention already
+  // used elsewhere in this app, e.g. Fuel Entry's Amount field). Confirmed
+  // against the exact worked example given: Expiry 10-09-2026 -> From
+  // 09-09-2025 - a flat "minus 365 days" actually lands on 10-09-2025 (one
+  // day later) for that specific example, since there's no Feb 29 between
+  // them to eat up the extra day; "same calendar date one year back, then
+  // one day earlier" is the one formula that reproduces the given example
+  // exactly, and is also the standard non-overlapping-annual-policy
+  // convention (this year's policy ends the day before next year's
+  // anniversary date, so back-to-back renewals never gap or overlap).
+  const insurancePeriodFromForTo = (toDateVal: string): string => {
+    const d = parseFlexibleDate(toDateVal);
+    if (!d) return '';
+    const result = new Date(d.getFullYear() - 1, d.getMonth(), d.getDate());
+    result.setDate(result.getDate() - 1);
+    const y = result.getFullYear();
+    const m = String(result.getMonth() + 1).padStart(2, '0');
+    const day = String(result.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  // Resolves the vehicle's current insurance period for the Incidents &
+  // Claims "within this policy period" indicator (see VehicleIncidentHistory
+  // below) - uses the explicit From/To fields once they've been saved, but
+  // falls back to deriving them live from the Insurance Expiry Date (To =
+  // expiry, From = expiry - 365 days) for any vehicle that hasn't had its
+  // edit form re-saved since this feature was added, so the indicator works
+  // immediately across the whole existing fleet, not just newly-edited
+  // vehicles.
+  const resolveInsurancePeriod = (v: Vehicle): { from: string; to: string } => {
+    const to = v.insurancePeriodTo || v['Insurance Period To'] || v.Insurance || v.insurance || '';
+    const from = v.insurancePeriodFrom || v['Insurance Period From'] || (to ? insurancePeriodFromForTo(to) : '');
+    return { from, to };
+  };
+
   const startEdit = (vehicle: Vehicle, initialTab: typeof activeTab = 'general') => {
-    setEditForm({ ...vehicle });
+    // Backfill From/To with the derived default right away (see
+    // resolveInsurancePeriod above) so the Insurance Portfolio tab shows a
+    // sensible period immediately, even for a vehicle that's never had
+    // these fields saved before - ready to just hit Save as-is, or adjust
+    // first.
+    const period = resolveInsurancePeriod(vehicle);
+    setEditForm({
+      ...vehicle,
+      insurancePeriodFrom: vehicle.insurancePeriodFrom || vehicle['Insurance Period From'] || period.from,
+      'Insurance Period From': vehicle.insurancePeriodFrom || vehicle['Insurance Period From'] || period.from,
+      insurancePeriodTo: vehicle.insurancePeriodTo || vehicle['Insurance Period To'] || period.to,
+      'Insurance Period To': vehicle.insurancePeriodTo || vehicle['Insurance Period To'] || period.to
+    });
     setIsNewVehicle(false);
     setActiveTab(initialTab);
     const regNo = vehicle['Reg. No.'] || vehicle.regNo || '';
@@ -1312,6 +1363,22 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
 
                                               {/* Operational Actions */}
                                               <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                                                {/* View (2026-09-10 direct request) - opens the file directly in a
+                                                    new tab (the browser's own PDF/image viewer), separate from
+                                                    Download/Print/Share which all either save or transform it -
+                                                    this is the one action that's purely "look at it now". */}
+                                                <button
+                                                  onClick={() => {
+                                                    const url = resolveDocUrl(doc);
+                                                    if (!url) return;
+                                                    window.open(url, '_blank', 'noopener,noreferrer');
+                                                  }}
+                                                  className="p-1.5 bg-white border border-purple-100 text-purple-700 hover:bg-pink-50 rounded-lg transition-colors cursor-pointer"
+                                                  title="View Document"
+                                                >
+                                                  <Eye className="w-3.5 h-3.5" />
+                                                </button>
+
                                                 {/* Download */}
                                                 <button
                                                   onClick={() => {
@@ -1807,9 +1874,43 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                       <DateInput
                         required
                         value={editForm.Insurance || editForm.insurance || ''}
-                        onChange={(e) => setEditForm({ ...editForm, Insurance: e.target.value, insurance: e.target.value })}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const toVal = val;
+                          const fromVal = val ? insurancePeriodFromForTo(val) : '';
+                          setEditForm({
+                            ...editForm,
+                            Insurance: val, insurance: val,
+                            insurancePeriodTo: toVal, 'Insurance Period To': toVal,
+                            insurancePeriodFrom: fromVal, 'Insurance Period From': fromVal
+                          });
+                        }}
                         className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono font-bold text-teal-700"
                       />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
+                        Insurance Period - To
+                      </label>
+                      <DateInput
+                        value={editForm.insurancePeriodTo || editForm['Insurance Period To'] || ''}
+                        onChange={(e) => setEditForm({ ...editForm, insurancePeriodTo: e.target.value, 'Insurance Period To': e.target.value })}
+                        className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono"
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">Auto-fills to the Insurance Expiry Date above when it changes - still freely editable.</p>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
+                        Insurance Period - From
+                      </label>
+                      <DateInput
+                        value={editForm.insurancePeriodFrom || editForm['Insurance Period From'] || ''}
+                        onChange={(e) => setEditForm({ ...editForm, insurancePeriodFrom: e.target.value, 'Insurance Period From': e.target.value })}
+                        className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono"
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">Auto = one year before Insurance Period To, minus a day (e.g. To 10-09-2026 → From 09-09-2025) - still freely editable. Used to check whether an Incident's Accident Date falls within the current policy period (see Incidents &amp; Claims tab).</p>
                     </div>
 
                     <div>
@@ -1894,6 +1995,8 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                     onAdd={onAddVehicleIncident}
                     onUpdate={onUpdateVehicleIncident}
                     onDelete={onDeleteVehicleIncident}
+                    insuranceFrom={resolveInsurancePeriod(editForm).from}
+                    insuranceTo={resolveInsurancePeriod(editForm).to}
                   />
                 )}
 

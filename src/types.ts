@@ -43,6 +43,17 @@ export interface Vehicle {
   emissionTest?: string;
   fc?: string;
   insurance?: string;
+  // Insurance Portfolio "period" (2026-09-10 direct request) - To auto-
+  // mirrors `insurance` (the Expiry Date) whenever that field is changed,
+  // From auto = To minus 365 days - both then stay independently editable
+  // (see FleetSheet.tsx's isoDateMinusDays/resolveInsurancePeriod). Used to
+  // flag whether an Incidents & Claims accident date falls within the
+  // CURRENT policy period - see VehicleIncidentHistory.tsx's
+  // isWithinInsurancePeriod. Optional so any vehicle saved before this
+  // existed falls back to a value derived live from `insurance` instead
+  // of showing nothing (resolveInsurancePeriod handles that fallback).
+  insurancePeriodFrom?: string;
+  insurancePeriodTo?: string;
   allIndiaPermit?: string;
   statePermit?: string;
   engineNo?: string;
@@ -80,6 +91,8 @@ export interface Vehicle {
   "Emission Test"?: string;
   "FC"?: string;
   "Insurance"?: string;
+  "Insurance Period From"?: string;
+  "Insurance Period To"?: string;
   "All India Permit"?: string;
   "State permit"?: string;
   "Engine No"?: string;

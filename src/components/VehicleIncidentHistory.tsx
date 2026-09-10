@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CheckCircle2, XCircle, Plus, Pencil, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
+import { CheckCircle2, XCircle, Plus, Pencil, Trash2, ChevronDown, ChevronUp, ShieldCheck } from 'lucide-react';
 import { VehicleIncident, VEHICLE_INCIDENT_CLAIM_STATUSES } from '../types';
 import { parseFlexibleDate, formatDateDDMMYYYY } from '../utils/dateFormat';
 import DateInput from './DateInput';
@@ -42,6 +42,24 @@ const BLANK_FORM: IncidentFormState = {
 
 const isClaimed = (inc: VehicleIncident) => !!(inc.claimNumber && inc.claimNumber.trim());
 
+// 2026-09-10 direct request: whether this incident's Accident Date falls
+// within the vehicle's CURRENT insurance policy period (Insurance Portfolio
+// tab's From/To, see FleetSheet.tsx's resolveInsurancePeriod) - shown as a
+// green "within current policy" mark only when true. An incident outside
+// that window (i.e. it happened under a PREVIOUS, already-expired policy)
+// gets no mark at all here - it stays in the incident history list either
+// way (nothing is ever hidden/deleted), only this one indicator is absent,
+// same as the direct request: "if the accident date is not in that period
+// ... it should hide" refers to this indicator, not the incident itself.
+const isWithinInsurancePeriod = (inc: VehicleIncident, from?: string, to?: string): boolean => {
+  if (!from || !to) return false;
+  const accidentD = parseFlexibleDate(inc.accidentDate);
+  const fromD = parseFlexibleDate(from);
+  const toD = parseFlexibleDate(to);
+  if (!accidentD || !fromD || !toD) return false;
+  return accidentD.getTime() >= fromD.getTime() && accidentD.getTime() <= toD.getTime();
+};
+
 interface Props {
   regNo: string;
   incidents: VehicleIncident[]; // already filtered to this vehicle
@@ -49,9 +67,11 @@ interface Props {
   onAdd: (incident: Omit<VehicleIncident, 'id' | 'createdAt'>) => Promise<void>;
   onUpdate: (id: string, incident: Partial<VehicleIncident>) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  insuranceFrom?: string; // Insurance Portfolio tab's current policy period - see isWithinInsurancePeriod above
+  insuranceTo?: string;
 }
 
-export default function VehicleIncidentHistory({ regNo, incidents, readOnly, onAdd, onUpdate, onDelete }: Props) {
+export default function VehicleIncidentHistory({ regNo, incidents, readOnly, onAdd, onUpdate, onDelete, insuranceFrom, insuranceTo }: Props) {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   // Preserved across an edit and sent back on update - the PUT route
@@ -326,6 +346,7 @@ export default function VehicleIncidentHistory({ regNo, incidents, readOnly, onA
           displayList.map(inc => {
             const claimed = isClaimed(inc);
             const expanded = expandedId === inc.id;
+            const withinPolicy = isWithinInsurancePeriod(inc, insuranceFrom, insuranceTo);
             return (
               <div key={inc.id} className="bg-white border border-slate-200 rounded-xl p-3.5">
                 <div className="flex items-start justify-between gap-3">
@@ -335,6 +356,14 @@ export default function VehicleIncidentHistory({ regNo, incidents, readOnly, onA
                       {formatDateDDMMYYYY(inc.accidentDate) || 'No date recorded'}
                       {inc.accidentPlace ? ` · ${inc.accidentPlace}` : ''}
                     </p>
+                    {withinPolicy && (
+                      <span
+                        className="inline-flex items-center gap-1 mt-1 text-[10px] font-extrabold uppercase text-emerald-700"
+                        title={`Accident Date falls within the current Insurance Period (${formatDateDDMMYYYY(insuranceFrom)} to ${formatDateDDMMYYYY(insuranceTo)})`}
+                      >
+                        <ShieldCheck className="w-3 h-3" /> Within Current Insurance Period
+                      </span>
+                    )}
                   </div>
                   <span className={`shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-extrabold uppercase border ${
                     claimed ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-red-100 text-red-800 border-red-300'
