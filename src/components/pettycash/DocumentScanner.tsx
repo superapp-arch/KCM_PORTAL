@@ -13,6 +13,7 @@ import { Quad } from '../../utils/scanner/geometry';
 import { DetectionConfidence } from '../../utils/scanner/documentDetector';
 import { QualityCheckResult } from '../../utils/scanner/qualityCheck';
 import ManualCropEditor from './ManualCropEditor';
+import LiveCameraCapture from './LiveCameraCapture';
 
 // Petty Cash > Actions > Docs > "Scan Invoice" (2026-09-08 direct request,
 // 2026-09-09 speed follow-up: ~100 invoices/day, the scanner must never
@@ -40,7 +41,7 @@ import ManualCropEditor from './ManualCropEditor';
 // hit Save), their choice is respected and the background result is
 // discarded. A `scanToken` guards against a slow background detection from
 // a previous photo ever landing on a newer one (spec test 20).
-type ScannerPhase = 'idle' | 'processing' | 'preview' | 'adjusting' | 'saving' | 'success' | 'error';
+type ScannerPhase = 'idle' | 'camera' | 'processing' | 'preview' | 'adjusting' | 'saving' | 'success' | 'error';
 
 interface ScanData {
   file: File;
@@ -246,6 +247,36 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
     }
   };
 
+  // 2026-09-10 direct request: "take photo should redirect to camera...
+  // under the camera if we place invoice then it auto detects the invoice
+  // and shows" - LiveCameraCapture hands back a full-resolution captured
+  // <canvas> from its live preview; wrapped into a File here so it can go
+  // straight through the EXACT SAME handleFileSelected -> loadPhotoCanvases
+  // -> runBackgroundDetection path a gallery upload already takes (and
+  // which this session's fixes above were verified against) - no separate,
+  // less-trusted code path for a camera-captured photo.
+  const handleCameraCapture = async (canvas: HTMLCanvasElement) => {
+    try {
+      const blob = await canvasToBlob(canvas, 'image/jpeg', 0.92);
+      const file = new File([blob], `scan_${Date.now()}.jpg`, { type: 'image/jpeg' });
+      await handleFileSelected(file);
+    } catch (err) {
+      console.error('Encoding the captured photo failed:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Unable to use the captured photo.');
+      setPhase('error');
+    }
+  };
+
+  // getUserMedia (live camera + real-time detection overlay) can fail for
+  // reasons with no good in-app remedy - permission denied, no camera
+  // hardware, an insecure (non-HTTPS) origin. Never a dead end: falls back
+  // to the plain native camera-app picker that already worked before this
+  // feature existed, so the employee can always still take a photo.
+  const handleCameraUnavailable = () => {
+    setPhase('idle');
+    cameraInputRef.current?.click();
+  };
+
   const handleRotate = () => {
     if (!scanData) return;
     // Invalidates any still-in-flight background detection for the
@@ -378,7 +409,7 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
-                  onClick={() => cameraInputRef.current?.click()}
+                  onClick={() => setPhase('camera')}
                   className="flex flex-col items-center gap-2 border-2 border-dashed border-slate-300 hover:border-teal-500 hover:bg-teal-50/50 rounded-xl py-6 cursor-pointer transition-colors"
                 >
                   <Camera className="w-7 h-7 text-teal-600" />
@@ -409,6 +440,14 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
                 onChange={(e) => { handleFileSelected(e.target.files?.[0]); e.target.value = ''; }}
               />
             </div>
+          )}
+
+          {phase === 'camera' && (
+            <LiveCameraCapture
+              onCapture={handleCameraCapture}
+              onCancel={() => setPhase('idle')}
+              onUnavailable={handleCameraUnavailable}
+            />
           )}
 
           {phase === 'processing' && (
