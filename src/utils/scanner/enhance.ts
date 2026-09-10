@@ -24,7 +24,17 @@ export function enhanceMat(cv: any, srcMat: any): any {
     const a = track(channels.get(1));
     const b = track(channels.get(2));
 
-    const clahe = cv.createCLAHE(2.0, new cv.Size(8, 8));
+    // 2026-09-10 root-cause fix: cv.createCLAHE (the usual factory helper)
+    // does not exist in this OpenCV.js build (confirmed absent from the
+    // actual public/vendor/opencv.js binary, not a version fluke) - it was
+    // throwing here on every single call, which detectAndProcess's outer
+    // try/catch silently swallowed, discarding an already-correctly-found
+    // crop and reverting to "no crop" every time. This has likely been
+    // true since the feature was first built - unrelated to any of the
+    // detection-tuning work above. new cv.CLAHE(...) (the class
+    // constructor) IS bound in this build and behaves identically - same
+    // algorithm, just a different JS entry point.
+    const clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
     const Leq = track(new cv.Mat());
     try {
       clahe.apply(L, Leq);
