@@ -35,6 +35,7 @@ import {
 } from '../utils/warehouseRateMatrix24hr';
 import { WAREHOUSE_LOCATIONS, WAREHOUSE_CITIES, cityForWarehouseName } from '../utils/warehouseLocations';
 import RatesSummary from './warehouse/RatesSummary';
+import WarehouseImportModal from './warehouse/WarehouseImportModal';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
 
@@ -818,178 +819,13 @@ export default function WarehouseDetails({
     XLSX.writeFile(workbook, `KCM_Warehouse_Details_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
-  // --- Import (Excel/CSV) - lets the office bulk-load a past month's data
-  // instead of re-typing it entry-by-entry. Column headers are matched
-  // case/spacing-insensitively against this alias table, which covers this
-  // module's own Export Sheet headers exactly (so an exported sheet always
-  // re-imports cleanly) plus a handful of common real-world spreadsheet
-  // variations. A row is only skipped if it's missing Date, Warehouse Name,
-  // Vehicle Number, or Closing KM - the same minimum this module's own Add
-  // Entry form requires; everything else defaults sensibly (blank/0) rather
-  // than rejecting the whole row over one missing optional column.
-  const normalizeHeader = (h: string) => h.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const WAREHOUSE_IMPORT_ALIASES: Record<string, keyof WarehouseEntry> = {
-    date: 'date', deploymentdate: 'date',
-    warehousename: 'warehouseName', warehouse: 'warehouseName',
-    warehousecity: 'warehouseCity',
-    vehiclenumber: 'vehicleNumber', vehicleno: 'vehicleNumber', vehicle: 'vehicleNumber', regno: 'vehicleNumber',
-    vehicletype: 'vehicleType', type: 'vehicleType',
-    vehiclecategory: 'vehicleCategory', category: 'vehicleCategory',
-    deploymenttype: 'deploymentType', deployment: 'deploymentType',
-    fromcityadhoc: 'adHocFromCity', fromcity: 'adHocFromCity',
-    tocityadhoc: 'adHocToCity', tocity: 'adHocToCity',
-    podname: 'pod', pod: 'pod',
-    podcity: 'podCity',
-    fixedhours: 'fixedHours', fixedhrs: 'fixedHours',
-    kmslab: 'kmSlab',
-    openingkm: 'openingKm', opening: 'openingKm',
-    closingkm: 'closingKm', closing: 'closingKm',
-    intime: 'inTime',
-    closuretime: 'closureTime', closure: 'closureTime',
-    contractperioddayshrs: 'hoursDaysAsPerContract', contractperiod: 'hoursDaysAsPerContract',
-    hourdayaspercontract: 'hoursDaysAsPerContract', hourdayascontract: 'hoursDaysAsPerContract',
-    overtimevehicle: 'overtimeVehicle', ot: 'overtimeVehicle', otvehicle: 'overtimeVehicle',
-    extrakm: 'extraKm', addkm: 'extraKm',
-    baserate: 'baseRate',
-    fuelcost: 'fuelCost',
-    finalbaserate: 'finalBaseRate',
-    additionalkmcost: 'additionalKmCost',
-    additionalhourcost: 'additionalHourCost',
-    tollcharges: 'tollCharges', tolls: 'tollCharges',
-    parkingcost: 'parkingCost', parking: 'parkingCost',
-    hybridreefercost: 'hybridReeferCost', hybridreefer: 'hybridReeferCost',
-    grandtotal: 'grandTotal',
-    vendorremarks: 'vendorRemarks', remarks: 'vendorRemarks',
-    scheduledrate: 'scheduledRate',
-    warehousegroup: 'warehouseGroup',
-  };
-
-  // Tolerant of an already-ISO date, dd.mm.yyyy/dd-mm-yyyy/dd/mm/yyyy (same
-  // formats DateInput.tsx's own normalizer accepts), a month-name text date
-  // ("11 July 2026", "July 11, 2026", "11 Jul 2026" - seen from Google
-  // Sheets exports whose Date column is formatted as a month-name string,
-  // which has no numeric/ISO form at all once exported to CSV/XLSX), or an
-  // Excel date serial number (sheet_to_json's raw:false + dateNF below
-  // normally formats these as text already, this is just a safety net).
-  const normalizeImportDate = (raw: string | number): string => {
-    if (typeof raw === 'number') {
-      const d = new Date(Math.round((raw - 25569) * 86400 * 1000));
-      return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
-    }
-    const s = String(raw || '').trim();
-    if (!s) return '';
-    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-    const dmy = /^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/.exec(s);
-    if (dmy) { const [, d, m, y] = dmy; return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`; }
-    // Only attempted when the string contains a letter (a month name) -
-    // JS's Date parser is otherwise ambiguous about numeric-only formats
-    // (e.g. would read "07/11/2026" as US-style MM/DD), which the explicit
-    // dd/mm/yyyy regex above already handles unambiguously.
-    if (/[a-zA-Z]/.test(s)) {
-      const parsed = new Date(s);
-      // Local getters, not toISOString() (which converts to UTC) - a
-      // month-name string like "11 July 2026" parses as local midnight, and
-      // for any timezone ahead of UTC (IST included, this app's own
-      // userbase) toISOString would silently shift the date back a day.
-      if (!isNaN(parsed.getTime())) {
-        return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
-      }
-    }
-    return '';
-  };
-
-  const [isImporting, setIsImporting] = useState(false);
-  const importFileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleImportFile = async (file: File) => {
-    setIsImporting(true);
-    try {
-      const buf = await file.arrayBuffer();
-      const workbook = XLSX.read(buf, { type: 'array', cellDates: false });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rows: Record<string, string | number>[] = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false, dateNF: 'yyyy-mm-dd' });
-
-      let imported = 0;
-      let skipped = 0;
-      const startingSlNo = entries.length > 0 ? Math.max(...entries.map(e => e.slNo || 0)) : 0;
-
-      for (const row of rows) {
-        const mapped: Partial<Record<keyof WarehouseEntry, string | number>> = {};
-        Object.entries(row).forEach(([header, value]) => {
-          const key = WAREHOUSE_IMPORT_ALIASES[normalizeHeader(header)];
-          if (key && value !== '') mapped[key] = value;
-        });
-
-        const dateVal = normalizeImportDate(mapped.date ?? '');
-        const whName = String(mapped.warehouseName || '').trim();
-        const vehNo = String(mapped.vehicleNumber || '').trim().toUpperCase();
-        const closingKmVal = Number(mapped.closingKm) || 0;
-        if (!dateVal || !whName || !vehNo || !closingKmVal) { skipped++; continue; }
-
-        const openingKmVal = Number(mapped.openingKm) || 0;
-        const baseRateVal = Number(mapped.baseRate) || 0;
-        const fuelCostVal = Number(mapped.fuelCost) || 0;
-        const additionalKmCostVal = Number(mapped.additionalKmCost) || 0;
-        const additionalHourCostVal = Number(mapped.additionalHourCost) || 0;
-        const tollChargesVal = Number(mapped.tollCharges) || 0;
-        const parkingCostVal = Number(mapped.parkingCost) || 0;
-        const hybridReeferCostVal = Number(mapped.hybridReeferCost) || 0;
-
-        try {
-          await onAddEntry({
-            slNo: startingSlNo + imported + 1,
-            date: dateVal,
-            warehouseName: whName,
-            warehouseCity: String(mapped.warehouseCity || '').trim(),
-            vehicleNumber: vehNo,
-            vehicleType: String(mapped.vehicleType || '').trim(),
-            vehicleCategory: String(mapped.vehicleCategory || '').trim(),
-            deploymentType: String(mapped.deploymentType || 'regular').trim(),
-            adHocFromCity: String(mapped.adHocFromCity || '').trim() || undefined,
-            adHocToCity: String(mapped.adHocToCity || '').trim() || undefined,
-            pod: String(mapped.pod || '').trim(),
-            podCity: String(mapped.podCity || '').trim(),
-            fixedHours: Number(mapped.fixedHours) || 12,
-            kmSlab: String(mapped.kmSlab || '').trim(),
-            openingKm: openingKmVal,
-            closingKm: closingKmVal,
-            inTime: String(mapped.inTime || '').trim(),
-            closureTime: String(mapped.closureTime || '').trim(),
-            kmUtilised: Math.max(0, closingKmVal - openingKmVal),
-            hoursDaysAsPerContract: Number(mapped.hoursDaysAsPerContract) || 1,
-            overtimeVehicle: String(mapped.overtimeVehicle || '').trim(),
-            extraKm: Number(mapped.extraKm) || 0,
-            baseRate: baseRateVal,
-            fuelCost: fuelCostVal,
-            finalBaseRate: Number(mapped.finalBaseRate) || round2(baseRateVal + fuelCostVal),
-            additionalKmCost: additionalKmCostVal,
-            additionalHourCost: additionalHourCostVal,
-            tollCharges: tollChargesVal,
-            parkingCost: parkingCostVal,
-            hybridReeferCost: hybridReeferCostVal,
-            grandTotal: Number(mapped.grandTotal) || round2(
-              baseRateVal + fuelCostVal + additionalKmCostVal + additionalHourCostVal + tollChargesVal + parkingCostVal + hybridReeferCostVal
-            ),
-            vendorRemarks: String(mapped.vendorRemarks || '').trim(),
-            scheduledRate: mapped.scheduledRate ? Number(mapped.scheduledRate) : undefined,
-            warehouseGroup: mapped.warehouseGroup ? String(mapped.warehouseGroup).trim() : undefined,
-            documents: []
-          });
-          imported++;
-        } catch {
-          skipped++;
-        }
-      }
-
-      triggerNotif(`📥 Imported ${imported} row${imported === 1 ? '' : 's'}${skipped > 0 ? ` - skipped ${skipped} (missing Date/Warehouse Name/Vehicle Number/Closing KM, or failed to save)` : ''}.`);
-    } catch (err) {
-      console.error(err);
-      alert('Failed to read the import file. Make sure it\'s a valid Excel (.xlsx/.xls) or CSV file with a header row.');
-    } finally {
-      setIsImporting(false);
-      if (importFileInputRef.current) importFileInputRef.current.value = '';
-    }
-  };
+  // --- Import (Excel/CSV) - 2026-09-10 direct request: replaced the old
+  // bare "pick a file -> rows save immediately" flow with the same
+  // validated-preview wizard Customer Billing's import already uses (see
+  // src/components/warehouse/WarehouseImportModal.tsx and
+  // src/utils/warehouseImportExport.ts, which now own the column-matching/
+  // validation/duplicate-detection logic this file used to have inline).
+  const [showImportModal, setShowImportModal] = useState(false);
 
   // Deployments/Rates switcher - shared between the early return below (Rates
   // tab) and the main return's Header Widget (Deployments tab), so there's
@@ -1079,24 +915,16 @@ export default function WarehouseDetails({
             <FileSpreadsheet className="w-4 h-4" />
             Export Sheet (Excel)
           </button>
-          {/* Import - bulk-loads a past month's data from Excel/CSV instead
-              of re-typing it (see handleImportFile above for the column
-              matching/skip rules). */}
-          <input
-            ref={importFileInputRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            className="hidden"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportFile(f); }}
-          />
+          {/* Import - opens the validated-preview wizard (see
+              WarehouseImportModal below); no scope toggle since a single
+              file can span multiple warehouses/date ranges. */}
           <button
-            onClick={() => importFileInputRef.current?.click()}
-            disabled={isImporting}
-            title="Import a past month's data from Excel/CSV"
-            className="bg-white border border-purple-200 hover:bg-purple-50 text-purple-800 font-bold text-xs py-2.5 px-4 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-md transition-all disabled:opacity-50"
+            onClick={() => setShowImportModal(true)}
+            title="Import warehouse deployment data from Excel/CSV"
+            className="bg-white border border-purple-200 hover:bg-purple-50 text-purple-800 font-bold text-xs py-2.5 px-4 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
           >
             <Upload className="w-4 h-4" />
-            {isImporting ? 'Importing...' : 'Import'}
+            Import
           </button>
           <button
             onClick={() => setShowAddSidebar(true)}
@@ -2498,6 +2326,17 @@ export default function WarehouseDetails({
             </div>
           </div>
         </div>
+      )}
+
+      {showImportModal && (
+        <WarehouseImportModal
+          entries={entries}
+          vehicles={vehicles}
+          onAddEntry={onAddEntry}
+          onUpdateEntry={onUpdateEntry}
+          onClose={() => setShowImportModal(false)}
+          onImported={() => triggerNotif('📥 Import complete - see the summary for details.')}
+        />
       )}
 
       {/* Big, centered save/delete confirmation for "Post Warehouse Details
