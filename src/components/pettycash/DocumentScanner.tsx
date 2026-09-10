@@ -123,15 +123,38 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
   // Kicks off document-boundary detection in the BACKGROUND - never
   // awaited by the caller, never blocks the preview/Save the employee
   // already has in front of them. Only applies its result if `token` is
-  // still the current scan (guards against a slow detection from a
-  // previous/discarded photo landing on a newer one) and only auto-selects
+  // still the current scan (bumped on a new photo, Choose Another, AND
+  // Rotate - see resetToIdle/handleRotate - so this is the ONE signal that
+  // guards against a stale detection, for a discarded/superseded/since-
+  // rotated photo, ever landing on the wrong state) and only auto-selects
   // the processed version if the employee hasn't already made their own
   // choice in the meantime.
+  //
+  // 2026-09-10: wrapped in an 8s safety-net race. detectDocument itself now
+  // bounds its own worst-case work (see documentDetector.ts's
+  // MAX_CANDIDATES_EVALUATED), so this shouldn't normally fire - but a
+  // Promise-based hang elsewhere (an unexpected gap in the OpenCV engine
+  // load, for instance) must still never leave the "Detecting document
+  // edges..." spinner running forever with no way out. On timeout the
+  // employee still keeps Manual Crop / Use Original / Save, exactly like
+  // any other low-confidence result - never a dead end.
   const runBackgroundDetection = (token: number, originalCanvas: HTMLCanvasElement, workingCanvas: HTMLCanvasElement) => {
+    const DETECTION_TIMEOUT_MS = 8000;
+    let settled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (settled || scanTokenRef.current !== token) return;
+      settled = true;
+      console.warn('Document detection exceeded 8s - falling back to manual/original.');
+      setScanData((prev) => (prev ? { ...prev, detecting: false } : prev));
+    }, DETECTION_TIMEOUT_MS);
+
     detectAndProcess(originalCanvas, workingCanvas).then((result) => {
-      if (scanTokenRef.current !== token) return; // a newer/different photo has since been selected
+      if (settled) return; // the 8s safety net already resolved this scan
+      settled = true;
+      window.clearTimeout(timeoutId);
+      if (scanTokenRef.current !== token) return; // a newer/different/rotated photo has since taken over
       setScanData((prev) => {
-        if (!prev || prev.originalCanvas !== originalCanvas) return prev;
+        if (!prev) return prev;
         return {
           ...prev,
           quad: result.quad,
@@ -152,8 +175,11 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
       // errors into confidence:'low'), but guard anyway - a background
       // failure must never surface as a blocking error screen.
       console.error('Background document detection failed unexpectedly:', err);
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
       if (scanTokenRef.current !== token) return;
-      setScanData((prev) => (prev && prev.originalCanvas === originalCanvas) ? { ...prev, detecting: false } : prev);
+      setScanData((prev) => (prev ? { ...prev, detecting: false } : prev));
     });
   };
 
@@ -203,9 +229,18 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
 
   const handleRotate = () => {
     if (!scanData) return;
+    // Invalidates any still-in-flight background detection for the
+    // pre-rotation image (same token mechanism as a new photo/Choose
+    // Another - see runBackgroundDetection's own comment) - its result, if
+    // it lands late, describes the wrong orientation and must never be
+    // applied. detecting is cleared here too since nothing will resolve it
+    // otherwise: rotating doesn't re-kick a fresh detection on the rotated
+    // image, so the spinner would otherwise spin forever with no way to
+    // clear itself.
+    scanTokenRef.current++;
     const rotatedOriginal = rotateCanvas90(scanData.originalCanvas, true);
     const rotatedProcessed = scanData.processedCanvas ? rotateCanvas90(scanData.processedCanvas, true) : null;
-    setScanData({ ...scanData, originalCanvas: rotatedOriginal, processedCanvas: rotatedProcessed });
+    setScanData({ ...scanData, originalCanvas: rotatedOriginal, processedCanvas: rotatedProcessed, detecting: false });
   };
 
   const handleUseOriginal = () => {

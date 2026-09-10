@@ -66,23 +66,46 @@ export function detectDocument(cv: any, srcMat: any): DetectionResult {
     // than only ever looking at the outermost contour.
     cv.findContours(dilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
 
-    const candidates: Candidate[] = [];
     const centerX = w / 2;
     const centerY = h / 2;
     const minArea = imgArea * 0.05; // ignore obvious noise/specks up front
 
-    for (let i = 0; i < contours.size(); i++) {
+    // 2026-09-10 performance fix: a heavily-textured background (leather,
+    // fabric, wood grain, ...) can make Canny+findContours return thousands
+    // of small contours - approxPolyDP-ing every single one (with multiple
+    // epsilon attempts each) was unbounded work that could make detection
+    // take tens of seconds to minutes on a real device, which looked
+    // indistinguishable from a hang (100+ invoices/day makes that
+    // unacceptable). contourArea() alone is cheap, so every contour still
+    // gets scored on area first (capped at MAX_CONTOURS_SCANNED as a hard
+    // ceiling against pathological cases) - only the largest
+    // MAX_CANDIDATES_EVALUATED then go through the actual expensive
+    // approxPolyDP step. The real document is essentially always among the
+    // largest contours in the frame, so this doesn't trade away accuracy.
+    const MAX_CONTOURS_SCANNED = 2000;
+    const MAX_CANDIDATES_EVALUATED = 25;
+    const areaEntries: { contour: any; area: number }[] = [];
+    const scanLimit = Math.min(contours.size(), MAX_CONTOURS_SCANNED);
+    for (let i = 0; i < scanLimit; i++) {
       const contour = contours.get(i);
       track(contour);
       const area = cv.contourArea(contour);
-      if (area < minArea) continue;
+      if (area >= minArea) areaEntries.push({ contour, area });
+    }
+    areaEntries.sort((a, b) => b.area - a.area);
+    const topEntries = areaEntries.slice(0, MAX_CANDIDATES_EVALUATED);
 
+    const candidates: Candidate[] = [];
+
+    for (const { contour } of topEntries) {
       const perimeter = cv.arcLength(contour, true);
       let quadPoints: Point[] | null = null;
 
-      // Try a few epsilons - a slightly wavy real-world paper edge doesn't
-      // always collapse to exactly 4 points on the first attempt.
-      for (const epsilonFactor of [0.02, 0.035, 0.05, 0.08]) {
+      // Two epsilons (was four) - a slightly wavy real-world paper edge
+      // doesn't always collapse to exactly 4 points on the first attempt,
+      // but a third/fourth attempt was rarely the one that actually
+      // succeeded - halving this was most of the win above.
+      for (const epsilonFactor of [0.02, 0.05]) {
         const approx = new cv.Mat();
         cv.approxPolyDP(contour, approx, epsilonFactor * perimeter, true);
         if (approx.rows === 4 && cv.isContourConvex(approx)) {
@@ -126,10 +149,16 @@ export function detectDocument(cv: any, srcMat: any): DetectionResult {
     candidates.sort((a, b) => b.score - a.score);
     const best = candidates[0];
 
+    // 2026-09-10: loosened from the original 0.72/15/0.15 and 0.45/0.08
+    // floors - at 100+ invoices/day, silently doing nothing (confidence
+    // 'low' never auto-applies a crop) on a real but slightly-imperfect
+    // detection was worse than committing to a crop and showing a "medium
+    // confidence, please double-check" badge the employee can glance at and
+    // override with Adjust Crop if it's actually wrong.
     let confidence: DetectionConfidence;
-    if (best.score >= 0.72 && best.angleDev <= 15 && best.coverage >= 0.15) {
+    if (best.score >= 0.65 && best.angleDev <= 20 && best.coverage >= 0.12) {
       confidence = 'high';
-    } else if (best.score >= 0.45 && best.coverage >= 0.08) {
+    } else if (best.score >= 0.32 && best.coverage >= 0.05) {
       confidence = 'medium';
     } else {
       confidence = 'low';
