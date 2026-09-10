@@ -35,7 +35,18 @@ const OPENCV_SCRIPT_SRC = '/vendor/opencv.js';
 // than 10s for a ~13MB FIRST download - the file is cached by the browser
 // for a year after that (see server.ts's own /vendor static route), so
 // this long a wait only ever happens once per browser, not once per scan.
-const LOAD_TIMEOUT_MS = 45000;
+//
+// 2026-09-10: raised again, from 45s to 90s. The real fix for a slow first
+// load was serving this file compressed at all - it turned out to be
+// served completely uncompressed (confirmed: no compression anywhere on
+// the server), so every "first load" was a full 13.3MB transfer instead of
+// the ~2.7MB brotli/~3.75MB gzip this exact file compresses down to (see
+// scripts/copyOpencv.mjs and server.ts's /vendor/opencv.js route) - that
+// alone should make 45s enough again for the vast majority of real
+// connections. This timeout is raised further purely as safety margin on
+// top of that fix, for a genuinely poor connection, not a replacement for
+// it - the two are complementary, not alternatives.
+const LOAD_TIMEOUT_MS = 90000;
 
 let cvPromise: Promise<any> | null = null;
 

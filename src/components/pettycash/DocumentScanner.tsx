@@ -135,25 +135,25 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
   // 2026-09-10, corrected same day: an earlier version of this wrapped the
   // WHOLE call (engine load + detection) in an 8s safety-net race - that
   // was a real regression, not a safety net: cvLoader.ts's own engine-load
-  // timeout is deliberately 45s (see that file's own comment - real office
-  // connections can genuinely take longer than 10s to download the ~13MB
-  // engine the FIRST time in a browser, after which it's cached for a
-  // year), and racing the whole thing against 8s meant the very first scan
-  // in any browser almost always hit the 8s cutoff before the download
-  // even finished, silently discarding it every time - exactly "loads for
-  // 8s then returns the same uncropped photo". The safety net now sits
-  // comfortably above cvLoader's own 45s ceiling (50s) so it only ever
-  // fires for a genuinely unexpected hang beyond what that timeout would
-  // already catch - detectDocument's own bounded work (see
-  // documentDetector.ts's MAX_CANDIDATES_EVALUATED) means the detection
-  // step itself, once the engine is loaded, is fast.
+  // timeout is deliberately generous (see that file's own comment - real
+  // office connections can genuinely take a while to download the engine
+  // the FIRST time in a browser, after which it's cached for a year), and
+  // racing the whole thing against 8s meant the very first scan in any
+  // browser almost always hit the 8s cutoff before the download even
+  // finished, silently discarding it every time - exactly "loads for 8s
+  // then returns the same uncropped photo". The safety net stays
+  // comfortably above cvLoader's own ceiling (currently 90s, see that
+  // file) so it only ever fires for a genuinely unexpected hang beyond
+  // what that timeout would already catch - detectDocument's own bounded
+  // work (see documentDetector.ts's MAX_CANDIDATES_EVALUATED) means the
+  // detection step itself, once the engine is loaded, is fast.
   const runBackgroundDetection = (token: number, originalCanvas: HTMLCanvasElement, workingCanvas: HTMLCanvasElement) => {
-    const DETECTION_TIMEOUT_MS = 50000;
+    const DETECTION_TIMEOUT_MS = 100000;
     let settled = false;
     const timeoutId = window.setTimeout(() => {
       if (settled || scanTokenRef.current !== token) return;
       settled = true;
-      console.warn('Document detection exceeded 50s - falling back to manual/original.');
+      console.warn('Document detection exceeded 100s - falling back to manual/original.');
       setScanData((prev) => (prev ? { ...prev, detecting: false } : prev));
     }, DETECTION_TIMEOUT_MS);
 

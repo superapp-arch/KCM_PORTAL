@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { Resend } from "resend";
 import dotenv from "dotenv";
 import upload from "./src/upload/upload.ts";
@@ -4966,6 +4967,39 @@ async function startServer() {
     // re-opening it in the same browser - re-downloaded the full 13MB
     // instead of using what the browser already fetched, making a slow
     // first load feel like it happens every single time.
+    //
+    // 2026-09-10 fix: confirmed this file was being served completely
+    // uncompressed (no compression middleware existed anywhere in this
+    // server) - real employees on a real connection were timing out
+    // waiting for the full 13.3MB before cvLoader.ts's own 45s allowance
+    // elapsed. copyOpencv.mjs now also pre-compresses this exact file at
+    // build time (measured directly: brotli -80%, gzip -72%) - this route
+    // serves whichever the browser's Accept-Encoding actually supports,
+    // set with the matching Content-Encoding header, before falling through
+    // to the plain-file static handler below for a client that supports
+    // neither (or a dev/local build that hasn't generated the .br/.gz files
+    // yet). Handles ONLY this one file - every other /vendor asset (there
+    // are none today, but if that changes) still goes through the plain
+    // static handler untouched.
+    app.get('/vendor/opencv.js', (req, res, next) => {
+      const vendorDir = path.join(distPath, 'vendor');
+      const acceptEncoding = String(req.headers['accept-encoding'] || '');
+      const tryServe = (file: string, encoding: string): boolean => {
+        const full = path.join(vendorDir, file);
+        if (!fs.existsSync(full)) return false;
+        res.set({
+          'Content-Type': 'application/javascript; charset=UTF-8',
+          'Content-Encoding': encoding,
+          'Cache-Control': 'public, max-age=31536000, immutable',
+          Vary: 'Accept-Encoding'
+        });
+        res.sendFile(full);
+        return true;
+      };
+      if (acceptEncoding.includes('br') && tryServe('opencv.js.br', 'br')) return;
+      if (acceptEncoding.includes('gzip') && tryServe('opencv.js.gz', 'gzip')) return;
+      next(); // neither supported/available - fall through to the plain file below
+    });
     app.use('/vendor', express.static(path.join(distPath, 'vendor'), { maxAge: '365d', immutable: true }));
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
