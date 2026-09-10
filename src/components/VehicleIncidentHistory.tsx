@@ -51,7 +51,7 @@ const isClaimed = (inc: VehicleIncident) => !!(inc.claimNumber && inc.claimNumbe
 // way (nothing is ever hidden/deleted), only this one indicator is absent,
 // same as the direct request: "if the accident date is not in that period
 // ... it should hide" refers to this indicator, not the incident itself.
-const isWithinInsurancePeriod = (inc: VehicleIncident, from?: string, to?: string): boolean => {
+export const isWithinInsurancePeriod = (inc: VehicleIncident, from?: string, to?: string): boolean => {
   if (!from || !to) return false;
   const accidentD = parseFlexibleDate(inc.accidentDate);
   const fromD = parseFlexibleDate(from);

@@ -5,7 +5,7 @@ import { motion } from 'motion/react';
 import { Vehicle, VehicleDocument, VehicleMileage, VehicleLoan, VehicleIncident } from '../types';
 import SortHeader from './SortHeader';
 import ColumnFilterHeader from './ColumnFilterHeader';
-import VehicleIncidentHistory from './VehicleIncidentHistory';
+import VehicleIncidentHistory, { isWithinInsurancePeriod } from './VehicleIncidentHistory';
 import { SortState, SortDirection, extractLeadingNumber } from '../utils/sort';
 import { VEHICLE_CATEGORIES, normalizeVehicleCategory, matchVehicleCategoryOption } from '../utils/vehicleCycleDefaults';
 import { parseFlexibleDate, formatDateDDMMYYYY } from '../utils/dateFormat';
@@ -339,25 +339,82 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
     return o.replace(/kcm/gi, 'KCM') || 'KCM SUPPLY';
   };
 
+  // 2026-09-10 direct request: Insurance Portfolio's "To" auto-mirrors the
+  // Insurance Expiry Date, "From" auto = one year earlier, minus a day -
+  // both then remain independently editable (same "auto-fill on the
+  // driving field's change, freely overridable after" convention already
+  // used elsewhere in this app, e.g. Fuel Entry's Amount field). Confirmed
+  // against the exact worked example given: Expiry 10-09-2026 -> From
+  // 09-09-2025 - a flat "minus 365 days" actually lands on 10-09-2025 (one
+  // day later) for that specific example, since there's no Feb 29 between
+  // them to eat up the extra day; "same calendar date one year back, then
+  // one day earlier" is the one formula that reproduces the given example
+  // exactly, and is also the standard non-overlapping-annual-policy
+  // convention (this year's policy ends the day before next year's
+  // anniversary date, so back-to-back renewals never gap or overlap).
+  const insurancePeriodFromForTo = (toDateVal: string): string => {
+    const d = parseFlexibleDate(toDateVal);
+    if (!d) return '';
+    const result = new Date(d.getFullYear() - 1, d.getMonth(), d.getDate());
+    result.setDate(result.getDate() - 1);
+    const y = result.getFullYear();
+    const m = String(result.getMonth() + 1).padStart(2, '0');
+    const day = String(result.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  // Resolves the vehicle's current insurance period for the Incidents &
+  // Claims "within this policy period" filter below - uses the explicit
+  // From/To fields once they've been saved, but falls back to deriving them
+  // live from the Insurance Expiry Date (To = expiry, From = derived) for
+  // any vehicle that hasn't had its edit form re-saved since this feature
+  // was added, so this works immediately across the whole existing fleet,
+  // not just newly-edited vehicles.
+  const resolveInsurancePeriod = (v: Vehicle): { from: string; to: string } => {
+    const to = v.insurancePeriodTo || v['Insurance Period To'] || v.Insurance || v.insurance || '';
+    const from = v.insurancePeriodFrom || v['Insurance Period From'] || (to ? insurancePeriodFromForTo(to) : '');
+    return { from, to };
+  };
+
   // Fleet & Vehicles > Incidents & Claims - per-vehicle claimed/not-claimed
-  // counts, computed once from the full vehicleIncidents list (one fetch,
-  // no per-vehicle API calls - GLOBAL UI REQUIREMENT section 20). CLAIMED
-  // is purely "Claim Number is non-blank after trimming" (section 19) -
-  // never claim status. Declared before filteredVehicles below (which calls
-  // incidentSummaryFor inside its .filter() callback, executed immediately)
-  // so it isn't referenced before its own initialization.
+  // counts for the main table's Incident column badge, computed once from
+  // the full vehicleIncidents list (one fetch, no per-vehicle API calls -
+  // GLOBAL UI REQUIREMENT section 20). CLAIMED is purely "Claim Number is
+  // non-blank after trimming" (section 19) - never claim status.
+  //
+  // 2026-09-10 direct request: this badge now only counts incidents whose
+  // Accident Date falls within the OWNING VEHICLE's current insurance
+  // period (see resolveInsurancePeriod/isWithinInsurancePeriod) - an
+  // incident from a previous, already-expired policy period no longer
+  // shows here at all (not just unmarked - fully excluded from the count),
+  // since it's no longer relevant to what the current policy covers. The
+  // incident itself is never deleted - it's still visible, unfiltered, in
+  // the vehicle's own Incidents & Claims tab (VehicleIncidentHistory),
+  // which shows every incident ever recorded and marks in-period ones with
+  // its own "Within Current Insurance Period" indicator.
+  //
+  // Declared before filteredVehicles below (which calls incidentSummaryFor
+  // inside its .filter() callback, executed immediately) so it isn't
+  // referenced before its own initialization.
   const incidentSummaryByRegNo = useMemo(() => {
     const map: Record<string, { total: number; claimed: number; notClaimed: number }> = {};
-    for (const inc of vehicleIncidents) {
-      const key = (inc.regNo || '').trim().toUpperCase();
+    for (const v of vehicles) {
+      const key = String(v['Reg. No.'] || v.regNo || '').trim().toUpperCase();
       if (!key) continue;
-      if (!map[key]) map[key] = { total: 0, claimed: 0, notClaimed: 0 };
-      map[key].total++;
-      if (inc.claimNumber && inc.claimNumber.trim()) map[key].claimed++;
-      else map[key].notClaimed++;
+      const period = resolveInsurancePeriod(v);
+      const relevant = vehicleIncidents.filter(inc =>
+        (inc.regNo || '').trim().toUpperCase() === key && isWithinInsurancePeriod(inc, period.from, period.to)
+      );
+      if (relevant.length === 0) continue;
+      map[key] = {
+        total: relevant.length,
+        claimed: relevant.filter(inc => inc.claimNumber && inc.claimNumber.trim()).length,
+        notClaimed: relevant.filter(inc => !(inc.claimNumber && inc.claimNumber.trim())).length
+      };
     }
     return map;
-  }, [vehicleIncidents]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vehicles, vehicleIncidents]);
   const incidentSummaryFor = (regNo: string) =>
     incidentSummaryByRegNo[String(regNo || '').trim().toUpperCase()] || { total: 0, claimed: 0, notClaimed: 0 };
 
@@ -436,44 +493,6 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
 
   const findVehicleIncidentsForRegNo = (regNo: string) =>
     vehicleIncidents.filter(inc => (inc.regNo || '').trim().toUpperCase() === regNo.trim().toUpperCase());
-
-  // 2026-09-10 direct request: Insurance Portfolio's "To" auto-mirrors the
-  // Insurance Expiry Date, "From" auto = one year earlier, minus a day -
-  // both then remain independently editable (same "auto-fill on the
-  // driving field's change, freely overridable after" convention already
-  // used elsewhere in this app, e.g. Fuel Entry's Amount field). Confirmed
-  // against the exact worked example given: Expiry 10-09-2026 -> From
-  // 09-09-2025 - a flat "minus 365 days" actually lands on 10-09-2025 (one
-  // day later) for that specific example, since there's no Feb 29 between
-  // them to eat up the extra day; "same calendar date one year back, then
-  // one day earlier" is the one formula that reproduces the given example
-  // exactly, and is also the standard non-overlapping-annual-policy
-  // convention (this year's policy ends the day before next year's
-  // anniversary date, so back-to-back renewals never gap or overlap).
-  const insurancePeriodFromForTo = (toDateVal: string): string => {
-    const d = parseFlexibleDate(toDateVal);
-    if (!d) return '';
-    const result = new Date(d.getFullYear() - 1, d.getMonth(), d.getDate());
-    result.setDate(result.getDate() - 1);
-    const y = result.getFullYear();
-    const m = String(result.getMonth() + 1).padStart(2, '0');
-    const day = String(result.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  };
-
-  // Resolves the vehicle's current insurance period for the Incidents &
-  // Claims "within this policy period" indicator (see VehicleIncidentHistory
-  // below) - uses the explicit From/To fields once they've been saved, but
-  // falls back to deriving them live from the Insurance Expiry Date (To =
-  // expiry, From = expiry - 365 days) for any vehicle that hasn't had its
-  // edit form re-saved since this feature was added, so the indicator works
-  // immediately across the whole existing fleet, not just newly-edited
-  // vehicles.
-  const resolveInsurancePeriod = (v: Vehicle): { from: string; to: string } => {
-    const to = v.insurancePeriodTo || v['Insurance Period To'] || v.Insurance || v.insurance || '';
-    const from = v.insurancePeriodFrom || v['Insurance Period From'] || (to ? insurancePeriodFromForTo(to) : '');
-    return { from, to };
-  };
 
   const startEdit = (vehicle: Vehicle, initialTab: typeof activeTab = 'general') => {
     // Backfill From/To with the derived default right away (see
