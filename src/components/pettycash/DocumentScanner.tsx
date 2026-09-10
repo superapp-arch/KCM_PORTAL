@@ -55,6 +55,7 @@ interface ScanData {
   selectedVersion: 'processed' | 'original';
   grayscale: boolean;
   detecting: boolean; // background auto-detect still running - never blocks Save
+  detectingMessage: string; // what's actually happening right now - distinguishes a one-time engine download from the (usually much faster) detection step itself
   userChoseVersion: boolean; // employee explicitly picked Original/Processed - stop auto-switching once true
 }
 
@@ -130,25 +131,42 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
   // the processed version if the employee hasn't already made their own
   // choice in the meantime.
   //
-  // 2026-09-10: wrapped in an 8s safety-net race. detectDocument itself now
-  // bounds its own worst-case work (see documentDetector.ts's
-  // MAX_CANDIDATES_EVALUATED), so this shouldn't normally fire - but a
-  // Promise-based hang elsewhere (an unexpected gap in the OpenCV engine
-  // load, for instance) must still never leave the "Detecting document
-  // edges..." spinner running forever with no way out. On timeout the
-  // employee still keeps Manual Crop / Use Original / Save, exactly like
-  // any other low-confidence result - never a dead end.
+  // 2026-09-10, corrected same day: an earlier version of this wrapped the
+  // WHOLE call (engine load + detection) in an 8s safety-net race - that
+  // was a real regression, not a safety net: cvLoader.ts's own engine-load
+  // timeout is deliberately 45s (see that file's own comment - real office
+  // connections can genuinely take longer than 10s to download the ~13MB
+  // engine the FIRST time in a browser, after which it's cached for a
+  // year), and racing the whole thing against 8s meant the very first scan
+  // in any browser almost always hit the 8s cutoff before the download
+  // even finished, silently discarding it every time - exactly "loads for
+  // 8s then returns the same uncropped photo". The safety net now sits
+  // comfortably above cvLoader's own 45s ceiling (50s) so it only ever
+  // fires for a genuinely unexpected hang beyond what that timeout would
+  // already catch - detectDocument's own bounded work (see
+  // documentDetector.ts's MAX_CANDIDATES_EVALUATED) means the detection
+  // step itself, once the engine is loaded, is fast.
   const runBackgroundDetection = (token: number, originalCanvas: HTMLCanvasElement, workingCanvas: HTMLCanvasElement) => {
-    const DETECTION_TIMEOUT_MS = 8000;
+    const DETECTION_TIMEOUT_MS = 50000;
     let settled = false;
     const timeoutId = window.setTimeout(() => {
       if (settled || scanTokenRef.current !== token) return;
       settled = true;
-      console.warn('Document detection exceeded 8s - falling back to manual/original.');
+      console.warn('Document detection exceeded 50s - falling back to manual/original.');
       setScanData((prev) => (prev ? { ...prev, detecting: false } : prev));
     }, DETECTION_TIMEOUT_MS);
 
-    detectAndProcess(originalCanvas, workingCanvas).then((result) => {
+    // onProgress lets the spinner say what's actually happening - loading
+    // the scanner engine (only slow the first time per browser) is a very
+    // different wait from the detection step itself, and an employee
+    // watching a static "Detecting..." message for 20+ seconds on their
+    // very first scan of the day has no way to tell those apart otherwise.
+    const onProgress = (message: string) => {
+      if (scanTokenRef.current !== token) return;
+      setScanData((prev) => (prev && prev.detecting ? { ...prev, detectingMessage: message } : prev));
+    };
+
+    detectAndProcess(originalCanvas, workingCanvas, onProgress).then((result) => {
       if (settled) return; // the 8s safety net already resolved this scan
       settled = true;
       window.clearTimeout(timeoutId);
@@ -216,6 +234,7 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
         selectedVersion: 'original',
         grayscale: false,
         detecting: true,
+        detectingMessage: 'Detecting document edges...',
         userChoseVersion: false
       });
       setPhase('preview');
@@ -459,7 +478,7 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
                   and Save is already usable while this runs. */}
               {scanData.detecting ? (
                 <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-400">
-                  <Loader2 className="w-3 h-3 animate-spin" /> Detecting document edges in the background...
+                  <Loader2 className="w-3 h-3 animate-spin" /> {scanData.detectingMessage}
                 </div>
               ) : scanData.processedCanvas && scanData.selectedVersion === 'original' ? (
                 // Detection finished with a confident crop, but the employee

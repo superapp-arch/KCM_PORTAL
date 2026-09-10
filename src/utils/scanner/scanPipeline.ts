@@ -65,10 +65,18 @@ export async function detectAndProcess(
   let quality: QualityCheckResult | null = null;
 
   try {
-    onProgress?.('Detecting document edges...');
+    // 2026-09-10: this message now specifically calls out the one-time
+    // engine download, not the (much faster) detection step that follows
+    // it - loadOpenCV() below can legitimately take up to 45s the first
+    // time a browser hits this feature (cvLoader.ts caches the ~13MB
+    // engine for a year after that), and an employee staring at a generic
+    // "Detecting document edges..." for 20-30 seconds on their very first
+    // scan of the day has no way to tell that apart from an actual hang.
+    onProgress?.('Loading scanner engine (first time only)...');
     const cv = await loadOpenCV();
     const scaleUp = originalCanvas.width / workingCanvas.width;
 
+    onProgress?.('Detecting document edges...');
     const workingMat = canvasToMat(cv, workingCanvas);
     let detection;
     try {
