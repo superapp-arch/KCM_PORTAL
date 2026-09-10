@@ -83,16 +83,20 @@ export async function detectAndProcess(
       quadFullRes = detection.quad.map(p => ({ x: p.x * scaleUp, y: p.y * scaleUp })) as Quad;
       partiallyOutOfFrame = quadTouchesImageBorder(detection.quad, workingCanvas.width, workingCanvas.height);
 
-      // Low confidence never auto-produces a final crop (spec section 19) -
-      // the employee can still opt into Manual Crop; the detected quad is
-      // returned so that editor can start from it rather than a blind
-      // full-frame guess.
-      if (detection.confidence !== 'low') {
-        onProgress?.('Correcting perspective...');
-        const result = processWithQuad(cv, originalCanvas, quadFullRes);
-        processedCanvas = result.processedCanvas;
-        quality = result.quality;
-      }
+      // 2026-09-10 direct request: ANY detected quad now gets auto-cropped
+      // and shown, not just medium/high confidence ones - tested against
+      // real invoice photos (small receipts on textured car-seat leather,
+      // rotated, off-centre), silently showing nothing whenever confidence
+      // dipped below 'medium' made the whole feature feel like it wasn't
+      // working at 100+ scans/day. The confidence badge (see
+      // DocumentScanner.tsx) still tells the employee how much to trust
+      // it, and Adjust Crop/Use Original are always one tap away - but the
+      // default is now "always attempt a crop", never "silently do
+      // nothing".
+      onProgress?.('Correcting perspective...');
+      const result = processWithQuad(cv, originalCanvas, quadFullRes);
+      processedCanvas = result.processedCanvas;
+      quality = result.quality;
     }
   } catch (cvError) {
     // The OpenCV engine failed to load, timed out, or a CV step threw -

@@ -6,10 +6,24 @@
 // close small gaps -> findContours (RETR_LIST, so both the outer paper AND
 // any strong inner printed border are candidates) -> approxPolyDP each down
 // to a quadrilateral -> score every quad -> pick the best OUTER document
-// boundary, never just "the strongest rectangle" (section 9's internal-
-// border trap - scoring below explicitly favours larger, more centred
-// quads over smaller/inset ones so a strong inner box never outranks the
-// actual outer paper edge).
+// boundary.
+//
+// 2026-09-10 recalibration against real KCM invoice photos (small
+// municipal-toll receipts, roughly 15-55% of the frame, photographed at an
+// angle on a car seat/door panel - heavily textured perforated leather in
+// almost every real sample, sometimes rotated 30-45 degrees, sometimes
+// off-centre, lighting ranging from bright to quite dark): the original
+// scoring was tuned for the OPPOSITE failure mode (an inner printed border
+// on a full-frame sheet of paper outscoring the real outer paper edge), so
+// it weighted "bigger = better" heavily. Against these real photos that
+// bias instead favours the wrong thing - the textured leather background
+// itself (or a seat-panel stitching seam, which is a genuine straight
+// near-rectangular edge) is much LARGER than the small receipt actually in
+// frame, so a naive "prefer bigger" score would pick the seat over the
+// receipt. Coverage is now a bounded preference for the realistic
+// receipt-size range instead of a monotonic "bigger wins" term - see
+// coverageScoreFor below - and carries less overall weight than
+// rectangularity, which is a more reliable signal across these photos.
 //
 // OpenCV.js is manual-memory WASM: every cv.Mat / MatVector created here is
 // tracked in `owned` and deleted in the `finally` block, regardless of
@@ -38,8 +52,12 @@ export function detectDocument(cv: any, srcMat: any): DetectionResult {
     const gray = track(new cv.Mat());
     cv.cvtColor(srcMat, gray, cv.COLOR_RGBA2GRAY);
 
+    // 7x7 (was 5x5) - real photos of a small receipt on textured leather
+    // need more smoothing to suppress the leather's own fine-grain edges
+    // (which otherwise survive Canny as noise) while still preserving the
+    // receipt's own larger-scale boundary.
     const blurred = track(new cv.Mat());
-    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+    cv.GaussianBlur(gray, blurred, new cv.Size(7, 7), 0);
 
     // Auto-thresholded Canny (classic "median +/- 33%" trick) instead of
     // fixed thresholds - real receipts range from high-contrast white paper
@@ -53,10 +71,13 @@ export function detectDocument(cv: any, srcMat: any): DetectionResult {
 
     // Close small gaps in the outer boundary (a shadow or reflection can
     // locally break an otherwise-continuous paper edge) before contour
-    // tracing, so the real outer edge still closes into one contour.
+    // tracing, so the real outer edge still closes into one contour. Only
+    // 1 iteration (was 2) - on a textured background, over-dilating merges
+    // nearby leather-grain edges into large blob contours that can rival
+    // or exceed the receipt's own contour area.
     const kernel = track(cv.Mat.ones(3, 3, cv.CV_8U));
     const dilated = track(new cv.Mat());
-    cv.dilate(edges, dilated, kernel, new cv.Point(-1, -1), 2);
+    cv.dilate(edges, dilated, kernel, new cv.Point(-1, -1), 1);
 
     const contours = track(new cv.MatVector());
     const hierarchy = track(new cv.Mat());
@@ -68,7 +89,10 @@ export function detectDocument(cv: any, srcMat: any): DetectionResult {
 
     const centerX = w / 2;
     const centerY = h / 2;
-    const minArea = imgArea * 0.05; // ignore obvious noise/specks up front
+    // 3% (was 5%) - real receipts photographed on a car seat can be a
+    // fairly small fraction of the frame; the floor only needs to reject
+    // obvious noise/specks, not plausible small documents.
+    const minArea = imgArea * 0.03;
 
     // 2026-09-10 performance fix: a heavily-textured background (leather,
     // fabric, wood grain, ...) can make Canny+findContours return thousands
@@ -126,18 +150,18 @@ export function detectDocument(cv: any, srcMat: any): DetectionResult {
       const cy = quad.reduce((s, p) => s + p.y, 0) / 4;
       const centerDist = Math.hypot(cx - centerX, cy - centerY) / Math.hypot(centerX, centerY);
 
-      // Weighted score: favour larger (outer, not inner-border) quads that
-      // are close to rectangular and roughly centred in the frame. Coverage
-      // is intentionally the heaviest term - section 9/52's "prefer the
-      // outer paper, prefer more document area over a tighter but wrong
-      // crop" bias, implemented directly as a scoring weight rather than
-      // just picking the single largest contour outright (which would also
-      // happily pick up an unrelated large dark background region with no
-      // rectangularity check at all).
+      // Weighted score - rectangularity carries the most weight (the most
+      // reliable signal across real photos), coverage rewards the
+      // plausible receipt-size range rather than "bigger is always better"
+      // (see coverageScoreFor - a giant textured-leather blob or a seat
+      // stitching seam must not outscore the actual small receipt just for
+      // being larger), centrality is a mild tie-breaker only (real photos
+      // are very often off-centre - a driver photographing a receipt
+      // handed to them doesn't carefully frame it).
       const rectangularityScore = Math.max(0, 1 - angleDev / 40);
-      const coverageScore = Math.min(1, coverage / 0.85);
+      const coverageScore = coverageScoreFor(coverage);
       const centralityScore = Math.max(0, 1 - centerDist);
-      const score = coverageScore * 0.5 + rectangularityScore * 0.35 + centralityScore * 0.15;
+      const score = rectangularityScore * 0.45 + coverageScore * 0.35 + centralityScore * 0.2;
 
       candidates.push({ quad, score, coverage, angleDev });
     }
@@ -170,6 +194,20 @@ export function detectDocument(cv: any, srcMat: any): DetectionResult {
       try { m.delete(); } catch { /* already freed */ }
     }
   }
+}
+
+// 2026-09-10: real KCM receipts, sampled from actual photos, occupy
+// roughly 10%-60% of the frame - that whole range scores at (or near) the
+// maximum. Below it, taper down toward 0 (too small to plausibly be the
+// intended document - more likely noise). Above it, taper down too, but
+// keep a real floor (0.35) rather than dropping toward 0 - a receipt that
+// genuinely fills most of the frame is still plausible, it's just no
+// longer preferred over a more typically-sized candidate the way a
+// monotonic "bigger is better" score would treat it.
+function coverageScoreFor(coverage: number): number {
+  if (coverage < 0.1) return Math.max(0, coverage / 0.1) * 0.7;
+  if (coverage <= 0.6) return 1;
+  return Math.max(0.35, 1 - (coverage - 0.6) * 1.2);
 }
 
 function matToPoints(approxMat: any): Point[] {

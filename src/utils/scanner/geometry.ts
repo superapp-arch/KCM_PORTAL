@@ -94,7 +94,12 @@ export function isValidDocumentQuad(q: Quad, imgW: number, imgH: number): boolea
   const imgArea = imgW * imgH;
   if (imgArea <= 0) return false;
   const coverage = area / imgArea;
-  if (coverage < 0.05 || coverage > 1.0) return false;
+  // 3% (was 5%, 2026-09-10) - matches documentDetector.ts's own minArea
+  // floor, recalibrated against real invoice photos where the receipt can
+  // be a fairly small fraction of the frame; also applies to a manual
+  // four-corner drag, where a deliberately tight crop around a small
+  // document should be allowed, not just a large one.
+  if (coverage < 0.03 || coverage > 1.0) return false;
   if (maxAngleDeviation(q) > 40) return false;
   // Every side must have a sensible minimum length (not a collapsed edge).
   const minSide = Math.min(imgW, imgH) * 0.05;
