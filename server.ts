@@ -16,7 +16,7 @@ import { createSession, getSessionUser, destroySession, extractBearerToken, star
 import { issueOtp, verifyOtp } from './src/auth/otp.ts';
 import { istTimestamp, istDateKey, istHour, istMonthDayKey } from './src/auth/time.ts';
 import { computeDueDateRaw } from './src/utils/loanDates.ts';
-import { extractTrailingNumber, extractLeadingNumber } from './src/utils/sort.ts';
+import { extractTrailingNumber } from './src/utils/sort.ts';
 import { nextBunkFuelIndentNumber, nextCardFuelIndentNumber } from './src/utils/fuelIndentNumber.ts';
 import {
   WASHING_CYCLE_DAYS, isWashingEligible,
@@ -892,76 +892,16 @@ function findDuplicateFuelIndentNumber(logs: FuelLog[], indentNumber: string | u
   });
 }
 
-// Closes any gap left in the Indent No sequence after a delete - same idea
-// as renumberPettyCashSequence above, applied to both Fuel sequences
-// independently, and now further bucketed per enteredBy (see the block
-// comment above):
-// - Bunk: bucketed per (calendar month, enteredBy) (matches
-//   nextBunkFuelIndentNumber's own scoping) - within each bucket, the
-//   surviving entries are renumbered to run consecutively starting from that
-//   bucket's own lowest existing number (whatever the office originally
-//   typed by hand for that month's first entry), preserving relative order.
-// - Card: one sequence per enteredBy, each renumbered to run consecutively
-//   from 00001 - matches nextCardFuelIndentNumber's own always-starts-at-1
-//   rule.
-// Only ever touches entries whose current Indent No is already in the
-// numeric shape each sequence recognizes (extractLeadingNumber()>0 for Bunk,
-// the exact 5-digit shape for Card) - anything else (blank, non-numeric,
-// legacy/free-text) is left completely alone, same "don't touch what it
-// doesn't recognize" rule as the Petty Cash version. Idempotent - a no-op
-// once a bucket is already gap-free.
-async function renumberFuelIndentSequence(): Promise<void> {
-  try {
-    const logs = await getFuelLogs();
-
-    // Bunk - one bucket per (bunk name, calendar month, enteredBy) -
-    // 2026-09-04: bunk name added, matching nextBunkFuelIndentNumber's own
-    // scoping fix.
-    const bunkBuckets = new Map<string, { log: FuelLog; seq: number }[]>();
-    logs.forEach(l => {
-      if ((l.bunkOrCard || 'Bunk') !== 'Bunk') return;
-      const seq = extractLeadingNumber(l.indentNumber);
-      if (seq <= 0) return;
-      const monthKey = (l.date || '').slice(0, 7);
-      if (!monthKey) return;
-      const bucketKey = `${(l.bunkName || '').trim().toLowerCase()}::${monthKey}::${l.enteredBy || ''}`;
-      if (!bunkBuckets.has(bucketKey)) bunkBuckets.set(bucketKey, []);
-      bunkBuckets.get(bucketKey)!.push({ log: l, seq });
-    });
-    for (const entries of bunkBuckets.values()) {
-      entries.sort((a, b) => a.seq - b.seq);
-      const floor = entries[0].seq;
-      for (let i = 0; i < entries.length; i++) {
-        const targetIndentNumber = String(floor + i);
-        if ((entries[i].log.indentNumber || '').trim() !== targetIndentNumber) {
-          await saveFuelLog({ ...entries[i].log, id: entries[i].log.id, indentNumber: targetIndentNumber });
-        }
-      }
-    }
-
-    // Card - one continuous sequence per enteredBy, always starting at 00001.
-    const cardBuckets = new Map<string, { log: FuelLog; seq: number }[]>();
-    logs.forEach(l => {
-      if (l.bunkOrCard !== 'Card' || !/^\d{5}$/.test((l.indentNumber || '').trim())) return;
-      const seq = parseInt(l.indentNumber.trim(), 10);
-      if (isNaN(seq) || seq <= 0) return;
-      const bucketKey = l.enteredBy || '';
-      if (!cardBuckets.has(bucketKey)) cardBuckets.set(bucketKey, []);
-      cardBuckets.get(bucketKey)!.push({ log: l, seq });
-    });
-    for (const entries of cardBuckets.values()) {
-      entries.sort((a, b) => a.seq - b.seq);
-      for (let i = 0; i < entries.length; i++) {
-        const targetIndentNumber = String(i + 1).padStart(5, '0');
-        if ((entries[i].log.indentNumber || '').trim() !== targetIndentNumber) {
-          await saveFuelLog({ ...entries[i].log, id: entries[i].log.id, indentNumber: targetIndentNumber });
-        }
-      }
-    }
-  } catch (error) {
-    console.error('Failed to renumber Fuel Indent No sequence:', error);
-  }
-}
+// 2026-09-11 direct request: the function that used to live here
+// (renumberFuelIndentSequence, called after every Fuel entry delete) has
+// been removed - see DELETE /api/fuel/:id's own comment for the full
+// reasoning. It closed gaps in the Indent No sequence by re-sorting and
+// overwriting an entire per-person bucket to a tight consecutive run,
+// which silently discarded a manually-edited real-world reference number
+// (Card's Indent No is editable precisely so it CAN hold one) any time
+// that same person deleted an unrelated entry later. Gaps are left alone
+// now; nextCardFuelIndentNumber/nextBunkFuelIndentNumber below still
+// auto-continue correctly off whatever the current highest value is.
 
 // Newest-first by default (Petty Cash Ledger / Market POD Trip Ledger) -
 // sorted here, server-side, not left to the client, so the order is correct
@@ -1396,20 +1336,11 @@ async function startServer() {
   // existed before renumberPettyCashSequence started running on every
   // delete - no-op once the sequence is already gap-free.
   await renumberPettyCashSequence();
-  // Fuel Indent No's own equivalent sweep is DELIBERATELY NOT run here
-  // (2026-09-04) - Bunk's bucketing just changed to also scope by bunk name
-  // (previously only (calendar month, enteredBy), which silently blended
-  // every bunk one person filled up at that month into one shared sequence -
-  // the real bug behind "ABC bunk's next entry should be 002, not
-  // continuing off BCD bunk's 501"). Running the full sweep here would
-  // immediately re-bucket and renumber every pre-existing historical Bunk
-  // entry onto the new scheme on the very next restart - a real, physical-
-  // paper-matching Indent No changing under records that were already
-  // fine, with nobody having asked for that. renumberFuelIndentSequence()
-  // still runs after every delete (its original, narrower, incremental
-  // job - see DELETE /api/fuel/:id) so gaps left by a deletion still close
-  // correctly under the new per-bunk scoping; it's just not swept
-  // wholesale across all existing data on boot.
+  // Fuel Indent No has no equivalent boot-time or on-delete sweep (removed
+  // 2026-09-11, see DELETE /api/fuel/:id's own comment) - a real, physical-
+  // paper-matching Indent No an employee has typed in must never be
+  // silently renumbered by anything other than that employee editing it
+  // themselves again.
   // Petty Cash / Market POD change request part 2: backfill pre-existing
   // Petty-Cash-mode trips that predate the float-sync logic (see
   // backfillMarketPodPettyCashFloats above) - no-op once every trip's
@@ -2802,10 +2733,27 @@ async function startServer() {
       // write on mileageReportId, never delete.
       if (!canModifyEntryRow(existing, sessionUser)) return res.status(403).json({ error: 'You cannot delete this entry.' });
       await deleteFuelLog(req.params.id);
-      // Deleting an entry leaves a gap in its Indent No sequence - close it
-      // immediately, same as Petty Cash's Entry No (see
-      // renumberFuelIndentSequence).
-      await renumberFuelIndentSequence();
+      // 2026-09-11 direct request: no longer auto-renumbers the rest of
+      // that Indent No sequence after a delete (this used to call
+      // renumberFuelIndentSequence(), the same gap-closing idea Petty
+      // Cash's Entry No uses). Root-caused a real reported bug: Card's
+      // Indent No is manually EDITABLE precisely because it's meant to
+      // match a real external reference number (a card provider's own
+      // voucher/statement line, e.g. "16312") once someone types one in -
+      // it stops being an arbitrary internal counter at that point. The
+      // renumber sweep didn't know that: any unrelated delete by the same
+      // user re-sorted their WHOLE Card bucket by current value and
+      // overwrote every entry (including a manually-set 16312) back down
+      // to a tight 00001, 00002... run - silently discarding real data
+      // that had already been correctly entered, with no error and no
+      // audit trail of the overwrite itself (only the triggering delete
+      // was logged). A gap left by a delete is just left alone now - the
+      // next new entry still auto-continues from the CURRENT highest
+      // value in the bucket (see nextCardFuelIndentNumber/
+      // nextBunkFuelIndentNumber, both already live-computed off Math.max
+      // each time, never a cached counter), so a real jumped value an
+      // employee already typed in is never reordered by anything other
+      // than that employee explicitly editing it again themselves.
       await createAuditLog({
         user: sessionUser,
         action: 'DELETE',
