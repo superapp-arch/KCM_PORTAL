@@ -7,9 +7,11 @@
 // layer Customer Billing's importer already had and Warehouse's own direct-
 // save-loop version never did.
 import * as XLSX from 'xlsx';
-import { WarehouseEntry, Vehicle } from '../types';
+import { WarehouseEntry, Vehicle, WarehouseRateOverride } from '../types';
 import { WAREHOUSE_LOCATIONS } from './warehouseLocations';
-import { computeWarehouseRates, round2 } from './warehouseRates';
+import { computeWarehouseRates, computeAutoWorkingDays, resolveWorkingDays, round2 } from './warehouseRates';
+import { rateGroupForWarehouseName, lookupScheduledRate } from './warehouseRateMatrix';
+import { lookup24hrDedicatedRate, lookupReeferWalkesRate, lookupAdHocRouteRate } from './warehouseRateMatrix24hr';
 
 // --- Column matching (promoted from WarehouseDetails.tsx unchanged, plus
 // the rate-calc-input aliases needed so computeWarehouseRates() can run on
@@ -97,7 +99,7 @@ export function downloadWarehouseImportTemplate(): void {
     'Closing KM': 10120, 'In Time': '', 'Closure Time': '', 'Contract Period (Days/Hrs)': 1, 'Extra KM': 0,
     'Working Days': 30, 'Variable Cost Per KM': 0, 'Rate Per Extra KM': 0, 'Add Hour': 0, 'Rate Per Extra Hour': 0,
     'Toll Charges': 0, 'Parking Cost': 0, 'Hybrid Reefer Cost': 0, 'Scheduled Rate': 15000,
-    'Vendor Remarks': 'Sample row - delete before importing. Only Date/Warehouse Name/Vehicle Number/Closing KM are required. KM Utilised, Base Rate, Fuel Cost, Final Base Rate, Additional KM/Hour Cost and Grand Total are recalculated automatically whenever Scheduled Rate/Working Days (and Variable Cost Per KM for 24Hr) are supplied - otherwise this row\'s own cost figures below are used as-is.'
+    'Vendor Remarks': 'Sample row - delete before importing. Only Date/Warehouse Name/Vehicle Number are always required (Closing KM too, unless Deployment Type is Ad-hoc/Hybrid - those don\'t track KM at all, leave that whole block blank as in a real Ad-hoc export). KM Utilised, Base Rate, Fuel Cost, Final Base Rate, Additional KM/Hour Cost and Grand Total auto-resolve through the same rate-lookup tables the Add/Edit Entry form itself uses (Warehouse + Vehicle Type + KM Slab/Deployment Type) - Scheduled Rate/Variable Cost Per KM below are only a fallback for when no configured rate matches.'
   };
   const ws = XLSX.utils.json_to_sheet([sample], { header: TEMPLATE_HEADERS });
   ws['!cols'] = TEMPLATE_HEADERS.map(h => ({ wch: Math.max(14, h.length + 2) }));
@@ -156,15 +158,21 @@ const DUPLICATE_ERROR = 'This entry already exists for this Warehouse + Vehicle 
 export async function parseWarehouseImportFile(
   file: File,
   existingEntries: WarehouseEntry[],
-  vehicles: Vehicle[]
+  vehicles: Vehicle[],
+  warehouseRateOverrides: WarehouseRateOverride[]
 ): Promise<{ headerValid: boolean; missingHeaders: string[]; rows: ParsedWarehouseImportRow[] }> {
   const buf = await file.arrayBuffer();
   const workbook = XLSX.read(buf, { type: 'array', cellDates: false });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const headerRow: unknown[] = (XLSX.utils.sheet_to_json(sheet, { header: 1 })[0] as unknown[]) || [];
 
-  const REQUIRED = ['date', 'warehousename', 'vehiclenumber', 'closingkm'];
-  const REQUIRED_LABELS: Record<string, string> = { date: 'Date', warehousename: 'Warehouse Name', vehiclenumber: 'Vehicle Number', closingkm: 'Closing KM' };
+  // 2026-09-11: Closing KM dropped from the column-level requirement - a
+  // file can be entirely Ad-hoc/Hybrid rows, which (see WarehouseDetails.tsx's
+  // hideKmTimeBlock) don't track Closing KM at all, so requiring that
+  // COLUMN to even exist would reject an otherwise-valid all-Ad-hoc file.
+  // It's still required PER ROW for Regular deployments, checked below.
+  const REQUIRED = ['date', 'warehousename', 'vehiclenumber'];
+  const REQUIRED_LABELS: Record<string, string> = { date: 'Date', warehousename: 'Warehouse Name', vehiclenumber: 'Vehicle Number' };
   const presentNormalized = new Set(headerRow.map(h => normalizeHeader(h)));
   const missingRequired = REQUIRED.filter(k => !presentNormalized.has(k)).map(k => REQUIRED_LABELS[k]);
   if (missingRequired.length > 0) {
@@ -200,11 +208,15 @@ export async function parseWarehouseImportFile(
     const vehicleNumber = String(mapped.vehicleNumber || '').trim().toUpperCase();
     const closingKm = Number(mapped.closingKm) || 0;
     const openingKm = Number(mapped.openingKm) || 0;
+    const deploymentTypeVal = String(mapped.deploymentType || 'regular').trim().toLowerCase() || 'regular';
+    // Ad-hoc/Hybrid don't track KM at all (see WarehouseDetails.tsx's
+    // hideKmTimeBlock) - Closing KM is only required for Regular.
+    const hideKmTimeRow = deploymentTypeVal === 'ad-hoc' || deploymentTypeVal === 'hybrid';
 
     if (!date) errors.push('Date is missing or not a recognized date.');
     if (!warehouseName) errors.push('Warehouse Name is required.');
     if (!vehicleNumber) errors.push('Vehicle Number is required.');
-    if (!closingKm) errors.push('Closing KM is required.');
+    if (!closingKm && !hideKmTimeRow) errors.push('Closing KM is required.');
 
     // Known warehouse - a warning, not a hard error (free-text in the manual
     // form too), so an office adding a genuinely new warehouse isn't blocked.
@@ -242,16 +254,65 @@ export async function parseWarehouseImportFile(
 
     const kmUtilised = Math.max(0, closingKm - openingKm); // always derived, never trusted raw - same as today
 
-    // Cost figures - recompute via the module's own formula whenever the row
-    // supplies enough rate-calc inputs, otherwise trust the file's own
-    // figures for this row and flag it (confirmed approach: recompute when
-    // possible, else trust file + flag "unverified").
+    // 2026-09-11 direct request: "it will be of complete data so it should
+    // not sit like that only instead take necessary data and auto
+    // calculate the other rates data and grand total everything" - cost
+    // figures now resolve through the EXACT SAME rate-lookup chain the
+    // live Add/Edit Entry form uses (see WarehouseDetails.tsx's own
+    // matchedScheduledRate/matched24hrDedicatedRate/matchedReeferWalkesRate/
+    // matchedAdHocRate), not just a flag on whether the file happened to
+    // supply a Scheduled Rate directly. A file only needs the identifying/
+    // operational columns (Warehouse Name, Vehicle Type, KM Slab, Fixed
+    // Hours, Deployment Type, From/To City for Ad-hoc) for the correct
+    // rate to resolve automatically - Scheduled Rate/Variable Cost Per KM
+    // are only ever read from the file as a LAST resort, when no
+    // configured rate matches (same "Rate not configured, enter manually"
+    // situation the live form already has).
     const fixedHoursVal = Number(mapped.fixedHours) || 12;
-    const scheduledRateVal = mapped.scheduledRate != null ? Number(mapped.scheduledRate) : undefined;
-    const workingDaysVal = mapped.workingDays != null ? Number(mapped.workingDays) : (mapped.workingDaysOverride != null ? Number(mapped.workingDaysOverride) : undefined);
-    const variableCostPerKmVal = Number(mapped.variableCostPerKm) || 0;
-    const canRecompute = scheduledRateVal != null && scheduledRateVal > 0 && workingDaysVal != null && workingDaysVal > 0
-      && (fixedHoursVal !== 24 || variableCostPerKmVal > 0 || (mapped.variableCostPerKm != null));
+    const vehicleTypeVal = String(mapped.vehicleType || '').trim();
+    const vehicleCategoryVal = String(mapped.vehicleCategory || '').trim();
+    const kmSlabVal = parseFloat(String(mapped.kmSlab || '')) || 0;
+    const adHocFromCityVal = String(mapped.adHocFromCity || '').trim();
+    const adHocToCityVal = String(mapped.adHocToCity || '').trim();
+    const warehouseGroupVal = rateGroupForWarehouseName(warehouseName) || '';
+
+    let lookedUpScheduledRate: number | null = null;
+    let lookedUpVariableCostPerKm: number | null = null;
+    let lookedUpFlatBaseRate: number | null = null;
+    let rateSourceNote: string | null = null;
+
+    if (fixedHoursVal === 24 && deploymentTypeVal === 'ad-hoc') {
+      lookedUpFlatBaseRate = lookupAdHocRouteRate(adHocFromCityVal, adHocToCityVal, vehicleTypeVal, vehicleCategoryVal);
+      if (lookedUpFlatBaseRate != null) rateSourceNote = `Auto-resolved from the Ad-hoc route table (${adHocFromCityVal} -> ${adHocToCityVal}).`;
+    } else if (fixedHoursVal === 24 && deploymentTypeVal === 'regular') {
+      const dedicated = lookup24hrDedicatedRate(warehouseName, vehicleTypeVal, vehicleCategoryVal, warehouseRateOverrides);
+      if (dedicated) {
+        lookedUpScheduledRate = dedicated.fixed;
+        lookedUpVariableCostPerKm = dedicated.variable;
+        rateSourceNote = `Auto-resolved from ${warehouseGroupVal || warehouseName}'s 24Hr Dedicated rate table.`;
+      } else {
+        const reeferWalkes = lookupReeferWalkesRate(warehouseName, vehicleTypeVal, vehicleCategoryVal, warehouseRateOverrides);
+        if (reeferWalkes) {
+          lookedUpScheduledRate = reeferWalkes.fc;
+          lookedUpVariableCostPerKm = reeferWalkes.vc;
+          rateSourceNote = 'Auto-resolved from the 24Hr Reefer & Walkes rate table.';
+        }
+      }
+    } else if (fixedHoursVal === 12) {
+      const dedicated12 = lookupScheduledRate(warehouseGroupVal, vehicleTypeVal, kmSlabVal, warehouseRateOverrides);
+      if (dedicated12 != null) {
+        lookedUpScheduledRate = dedicated12;
+        rateSourceNote = `Auto-resolved from ${warehouseGroupVal || warehouseName}'s 12Hr Dedicated rate table.`;
+      }
+    }
+
+    const scheduledRateVal = lookedUpScheduledRate ?? (mapped.scheduledRate != null ? Number(mapped.scheduledRate) : undefined);
+    const variableCostPerKmVal = lookedUpVariableCostPerKm ?? (Number(mapped.variableCostPerKm) || 0);
+    const workingDaysOverrideVal = mapped.workingDays != null ? Number(mapped.workingDays) : (mapped.workingDaysOverride != null ? Number(mapped.workingDaysOverride) : null);
+    const workingDaysAutoVal = computeAutoWorkingDays(date ? date.slice(0, 7) : '', false, 0);
+    const workingDaysVal = resolveWorkingDays(workingDaysAutoVal, workingDaysOverrideVal);
+
+    const canRecompute = lookedUpFlatBaseRate != null || (scheduledRateVal != null && scheduledRateVal > 0);
 
     let baseRate: number, fuelCost: number, finalBaseRate: number, additionalKmCost: number, additionalHourCost: number, grandTotal: number;
     const tollChargesVal = Number(mapped.tollCharges) || 0;
@@ -261,8 +322,8 @@ export async function parseWarehouseImportFile(
     if (canRecompute) {
       const result = computeWarehouseRates({
         fixedHours: fixedHoursVal,
-        scheduledRate: scheduledRateVal!,
-        workingDays: workingDaysVal!,
+        scheduledRate: scheduledRateVal ?? 0,
+        workingDays: workingDaysVal,
         kmSlab: 0,
         variableCostPerKm: variableCostPerKmVal,
         kmUtilised,
@@ -272,7 +333,8 @@ export async function parseWarehouseImportFile(
         ratePerExtraHour: Number(mapped.ratePerExtraHour) || 0,
         tollCharges: tollChargesVal,
         parkingCost: parkingCostVal,
-        hybridReeferCost: hybridReeferCostVal
+        hybridReeferCost: hybridReeferCostVal,
+        flatBaseRateOverride: lookedUpFlatBaseRate
       });
       baseRate = result.baseRate;
       fuelCost = result.fuelCost;
@@ -280,6 +342,8 @@ export async function parseWarehouseImportFile(
       additionalHourCost = result.extraHourAmount;
       finalBaseRate = round2(baseRate + fuelCost);
       grandTotal = result.grandTotal;
+      if (rateSourceNote) warnings.push(rateSourceNote);
+      else warnings.push('Cost figures recalculated from this row\'s own Scheduled Rate/Working Days (no matching rate-table entry - same as "Rate not configured" on the live form).');
     } else {
       baseRate = Number(mapped.baseRate) || 0;
       fuelCost = Number(mapped.fuelCost) || 0;
@@ -287,15 +351,15 @@ export async function parseWarehouseImportFile(
       additionalHourCost = Number(mapped.additionalHourCost) || 0;
       finalBaseRate = Number(mapped.finalBaseRate) || round2(baseRate + fuelCost);
       grandTotal = Number(mapped.grandTotal) || round2(baseRate + fuelCost + additionalKmCost + additionalHourCost + tollChargesVal + parkingCostVal + hybridReeferCostVal);
-      warnings.push('Cost figures read from file - could not verify (missing rate-calc inputs: Scheduled Rate/Working Days' + (fixedHoursVal === 24 ? '/Variable Cost Per KM' : '') + ').');
+      warnings.push('Cost figures read from file - could not verify (no configured rate for this Warehouse/Vehicle Type/KM Slab/Deployment Type combination, and no Scheduled Rate supplied to fall back on).');
     }
 
     return {
       rowNumber: idx + 2, errors, warnings,
       date, warehouseName, warehouseCity: String(mapped.warehouseCity || '').trim(),
-      vehicleNumber, vehicleType: String(mapped.vehicleType || '').trim(), vehicleCategory: String(mapped.vehicleCategory || '').trim(),
-      deploymentType: String(mapped.deploymentType || 'regular').trim(),
-      adHocFromCity: String(mapped.adHocFromCity || '').trim(), adHocToCity: String(mapped.adHocToCity || '').trim(),
+      vehicleNumber, vehicleType: vehicleTypeVal, vehicleCategory: vehicleCategoryVal,
+      deploymentType: deploymentTypeVal,
+      adHocFromCity: adHocFromCityVal, adHocToCity: adHocToCityVal,
       pod: String(mapped.pod || '').trim(), podCity: String(mapped.podCity || '').trim(),
       fixedHours: fixedHoursVal, kmSlab: String(mapped.kmSlab || '').trim(),
       openingKm, closingKm, inTime: String(mapped.inTime || '').trim(), closureTime: String(mapped.closureTime || '').trim(),

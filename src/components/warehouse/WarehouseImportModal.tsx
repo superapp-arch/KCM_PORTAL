@@ -1,5 +1,5 @@
 import React from 'react';
-import { WarehouseEntry, Vehicle } from '../../types';
+import { WarehouseEntry, Vehicle, WarehouseRateOverride } from '../../types';
 import {
   downloadWarehouseImportTemplate, parseWarehouseImportFile, buildWarehouseEntryFromImportRow,
   exportWarehouseImportErrorRows, ParsedWarehouseImportRow
@@ -9,6 +9,7 @@ import ImportWizardModal from '../ImportWizardModal';
 interface WarehouseImportModalProps {
   entries: WarehouseEntry[];
   vehicles: Vehicle[];
+  warehouseRateOverrides: WarehouseRateOverride[];
   onAddEntry: (entry: Omit<WarehouseEntry, 'id'>) => Promise<void>;
   onUpdateEntry: (id: string, entry: Partial<WarehouseEntry>) => Promise<void>;
   onClose: () => void;
@@ -26,7 +27,7 @@ interface WarehouseImportModalProps {
 // file belong to?" up front because the answer varies row by row. Each
 // row's own Warehouse Name/Vehicle Number/Date columns are what route it -
 // see parseWarehouseImportFile in warehouseImportExport.ts.
-export default function WarehouseImportModal({ entries, vehicles, onAddEntry, onUpdateEntry, onClose, onImported }: WarehouseImportModalProps) {
+export default function WarehouseImportModal({ entries, vehicles, warehouseRateOverrides, onAddEntry, onUpdateEntry, onClose, onImported }: WarehouseImportModalProps) {
   const startingSlNo = entries.length > 0 ? Math.max(...entries.map(e => e.slNo || 0)) : 0;
   let nextSlNo = startingSlNo;
 
@@ -36,11 +37,11 @@ export default function WarehouseImportModal({ entries, vehicles, onAddEntry, on
       infoText={
         <>
           Upload an Excel (.xlsx) or CSV file matching the template below. Every row is validated and previewed before anything is actually imported - nothing goes in blind.
-          KM Utilised is always recalculated from Opening/Closing KM. Base Rate, Fuel Cost, Final Base Rate, Additional KM/Hour Cost and Grand Total are recalculated the same way the module itself computes them whenever a row supplies Scheduled Rate/Working Days (and Variable Cost Per KM for 24Hr) - otherwise that row's own cost figures are used as-is and flagged "unverified" below.
+          KM Utilised is always recalculated from Opening/Closing KM. Base Rate, Fuel Cost, Final Base Rate, Additional KM/Hour Cost and Grand Total auto-resolve through the SAME rate-lookup tables the Add/Edit Entry form itself uses (Warehouse + Vehicle Type + KM Slab/Deployment Type) - a Scheduled Rate/Variable Cost typed directly in the file is only used as a fallback when no configured rate matches, flagged below either way so you always know which happened.
         </>
       }
       onDownloadTemplate={downloadWarehouseImportTemplate}
-      onParseFile={(file) => parseWarehouseImportFile(file, entries, vehicles)}
+      onParseFile={(file) => parseWarehouseImportFile(file, entries, vehicles, warehouseRateOverrides)}
       previewColumns={['Row', 'Date', 'Warehouse', 'Vehicle No', 'Deployment', 'Grand Total']}
       renderPreviewRow={(r) => [
         r.rowNumber, r.date || '-', r.warehouseName || '-', r.vehicleNumber || '-', r.deploymentType || '-',

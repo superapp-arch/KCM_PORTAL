@@ -213,6 +213,20 @@ export default function WarehouseDetails({
   const workingDays = resolveWorkingDays(workingDaysAuto, workingDaysOverride);
   const kmSlabNumber = parseFloat(kmSlab) || 0;
   const isAdHoc24 = fixedHours === 24 && deploymentType === 'ad-hoc';
+  // 2026-09-11 direct request: KM Slab through Add Hour (KM Slab, Opening/
+  // Closing KM, In/Closure Time, Add KM, Add Hour, Variable Cost Per KM,
+  // Rate Per Extra KM/Hour) don't apply to Ad-hoc or Hybrid deployments at
+  // all - those trips aren't tracked against a monthly KM Slab/shift-time
+  // budget the way Regular ones are, matching the real exported sheet (an
+  // Ad-hoc row leaves every one of these columns blank, Base Rate/Fuel
+  // Cost/Grand Total still populated). Base Rate still resolves: Ad-hoc at
+  // 24Hr already has its own flat round-trip route lookup (matchedAdHocRate
+  // below); everything else in this block (Ad-hoc 12Hr, Hybrid at either
+  // Fixed Hours) falls back to Scheduled Rate / Working Days with Scheduled
+  // Rate as a plain manual entry - the KM-Slab-dependent 12Hr matrix lookup
+  // naturally can't match with no KM Slab to look up, and the 24Hr Dedicated/
+  // Reefer&Walkes lookups were already Regular-only before this change.
+  const hideKmTimeBlock = deploymentType === 'ad-hoc' || deploymentType === 'hybrid';
   // Ad-hoc 24Hr: flat round-trip rate from the route table, by From/To City +
   // Vehicle Type/Category ("Hybrid Vehicle" <- Vehicle Category = Hybrid).
   // No match (missing selection, or a genuinely unconfigured combination)
@@ -302,6 +316,8 @@ export default function WarehouseDetails({
   const editWorkingDays = resolveWorkingDays(editWorkingDaysAuto, editWorkingDaysOverride);
   const editKmSlabNumber = parseFloat(editKmSlab) || 0;
   const editIsAdHoc24 = editFixedHours === 24 && editDeploymentType === 'ad-hoc';
+  // See hideKmTimeBlock's own comment above (Add form) - same rule, mirrored.
+  const editHideKmTimeBlock = editDeploymentType === 'ad-hoc' || editDeploymentType === 'hybrid';
   const editMatchedAdHocRate = editIsAdHoc24 ? lookupAdHocRouteRate(editAdHocFromCity, editAdHocToCity, editVehicleType, editVehicleCategory) : null;
   const editRates = computeWarehouseRates({
     fixedHours: editFixedHours, scheduledRate: editScheduledRate, workingDays: editWorkingDays, kmSlab: editKmSlabNumber,
@@ -1124,7 +1140,7 @@ export default function WarehouseDetails({
             </div>
 
             {/* 5. Fixed Hours, Slab & Hours/Days */}
-            <div className={`grid gap-2 ${isAdHoc24 ? 'grid-cols-1' : 'grid-cols-2'}`}>
+            <div className={`grid gap-2 ${hideKmTimeBlock ? 'grid-cols-1' : 'grid-cols-2'}`}>
               <div>
                 <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Fixed Hrs</label>
                 <select
@@ -1136,12 +1152,13 @@ export default function WarehouseDetails({
                   <option value={24}>24 hrs</option>
                 </select>
               </div>
-              {/* Ad-hoc 24Hr is trip-based (flat round-trip rate from a From
-                  City/To City/Vehicle lookup, see below) - KM Slab doesn't
-                  apply to it at all, so it's hidden rather than left sitting
-                  there unused. Every other combination (12Hr, 24Hr Regular)
-                  keeps it exactly as before. */}
-              {!isAdHoc24 && (
+              {/* Ad-hoc/Hybrid are trip-based, not tracked against a monthly
+                  KM Slab budget the way Regular is (Ad-hoc 24Hr instead uses
+                  a flat round-trip rate from a From City/To City/Vehicle
+                  lookup, see below) - KM Slab doesn't apply to either, so
+                  it's hidden rather than left sitting there unused. Only
+                  Regular keeps it. */}
+              {!hideKmTimeBlock && (
                 <div>
                   <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">KM Slab</label>
                   <input
@@ -1159,7 +1176,9 @@ export default function WarehouseDetails({
               )}
             </div>
 
-            {/* 6. Opening & Closing KM */}
+            {/* 6. Opening & Closing KM - N/A for Ad-hoc/Hybrid, see
+                hideKmTimeBlock's own comment above. */}
+            {!hideKmTimeBlock && (
             <div className="grid grid-cols-2 gap-2 bg-pink-50/30 p-2 rounded-xl border border-pink-100/30">
               <div>
                 <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Opening KM (Auto)</label>
@@ -1193,11 +1212,14 @@ export default function WarehouseDetails({
                 )}
               </div>
             </div>
+            )}
 
-            {/* 7. In Time & Closure Time & Add KM & Add Hour - Overtime is now
-                captured via Add Hour below, so the old OT Vehicle Yes/No
-                field is gone here (still shown as-is in reports/exports for
-                any entry that already has one). */}
+            {/* 7. In Time & Closure Time & Add KM & Add Hour - N/A for Ad-hoc/
+                Hybrid, see hideKmTimeBlock's own comment above. Overtime is
+                now captured via Add Hour below, so the old OT Vehicle
+                Yes/No field is gone here (still shown as-is in
+                reports/exports for any entry that already has one). */}
+            {!hideKmTimeBlock && (
             <div className="grid grid-cols-4 gap-1.5">
               <div className="col-span-1">
                 <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">In Time{fixedHours === 24 ? ' (N/A)' : ''}</label>
@@ -1264,6 +1286,7 @@ export default function WarehouseDetails({
                 />
               </div>
             </div>
+            )}
 
             {/* 8. Rate Configuration - Base Rate/Fuel Cost/Extra KM & Hour
                 Amounts below all auto-calculate from these, nothing here is
@@ -1330,7 +1353,7 @@ export default function WarehouseDetails({
                       selection needed here. A combination with no configured
                       rate leaves Scheduled Rate/Variable Cost as plain manual
                       fields exactly as before. */}
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className={`grid gap-2 ${hideKmTimeBlock ? 'grid-cols-1' : 'grid-cols-2'}`}>
                     <div>
                       <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Scheduled Rate (₹/month)</label>
                       <input type="number" placeholder="e.g. 75000" value={scheduledRate || ''}
@@ -1343,16 +1366,25 @@ export default function WarehouseDetails({
                         <p className="text-[9px] text-emerald-600 font-mono mt-0.5">Auto-filled from {warehouseGroup}'s 24Hr Dedicated rate table.</p>
                       ) : matchedReeferWalkesRate != null ? (
                         <p className="text-[9px] text-emerald-600 font-mono mt-0.5">Auto-filled from the 24Hr Reefer &amp; Walkes rate table.</p>
+                      ) : hideKmTimeBlock ? (
+                        <p className="text-[9px] text-slate-400 font-mono mt-0.5">Ad-hoc/Hybrid - not KM-Slab-tracked, so this isn't auto-looked-up. Enter the agreed rate directly.</p>
                       ) : fixedHours === 12 && warehouseGroup ? (
                         <p className="text-[9px] text-rose-500 font-mono mt-0.5">Rate not configured for this combination. Contact admin.</p>
                       ) : null}
                     </div>
-                    <div>
-                      <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra KM (₹)</label>
-                      <input type="number" placeholder="0" value={ratePerExtraKm || ''} onChange={(e) => setRatePerExtraKm(Number(e.target.value))}
-                        className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
-                    </div>
+                    {!hideKmTimeBlock && (
+                      <div>
+                        <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra KM (₹)</label>
+                        <input type="number" placeholder="0" value={ratePerExtraKm || ''} onChange={(e) => setRatePerExtraKm(Number(e.target.value))}
+                          className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800" />
+                      </div>
+                    )}
                   </div>
+                  {/* Rate/Extra KM & Hour and Variable Cost all multiply
+                      against Add KM/Add Hour/KM Utilised, none of which
+                      apply to Ad-hoc/Hybrid either - see hideKmTimeBlock's
+                      own comment. */}
+                  {!hideKmTimeBlock && (
                   <div className={`grid gap-2 ${fixedHours === 24 ? 'grid-cols-2' : 'grid-cols-1'}`}>
                     <div>
                       <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra Hour (₹)</label>
@@ -1369,10 +1401,14 @@ export default function WarehouseDetails({
                       </div>
                     )}
                   </div>
+                  )}
 
                   {/* Working Days - auto-fills from the Month + Year calendar,
                       never hard-coded to 30; stays editable with a Reset to
-                      auto link. */}
+                      auto link. Still needed for Ad-hoc/Hybrid too - Base
+                      Rate = Scheduled Rate / Working Days still applies to
+                      them, just without the Variable Cost/KM Utilised term
+                      on top. */}
                   <div className="p-2 bg-white rounded-lg border border-purple-100 space-y-1.5">
                     <div className="flex items-center justify-between">
                       <span className="text-[9px] font-bold text-purple-700 uppercase tracking-wide">Working Days</span>
@@ -1392,7 +1428,7 @@ export default function WarehouseDetails({
                     </p>
                   </div>
 
-                  {fixedHours === 24 && (
+                  {fixedHours === 24 && !hideKmTimeBlock && (
                     <p className="text-[9px] text-slate-400 font-mono">
                       Variable Cost term uses KM Utilised ({kmUtilised} KM = Closing − Opening), shown above under Opening/Closing KM.
                     </p>
@@ -1972,10 +2008,11 @@ export default function WarehouseDetails({
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:ring-1 focus:ring-pink-500 focus:outline-none"
                   />
                 </div>
-                {/* Ad-hoc 24Hr doesn't use KM Slab at all - From/To City
-                    (Rate Configuration below) drives its flat route rate
-                    instead, same as Add Entry. */}
-                {!editIsAdHoc24 && (
+                {/* Ad-hoc/Hybrid don't use KM Slab at all - see
+                    editHideKmTimeBlock's own comment (Add form). Ad-hoc 24Hr
+                    specifically uses its own From/To City flat route rate
+                    instead (Rate Configuration below). */}
+                {!editHideKmTimeBlock && (
                   <div>
                     <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">KM Slab</label>
                     <input
@@ -1990,19 +2027,23 @@ export default function WarehouseDetails({
                     </datalist>
                   </div>
                 )}
-                <div>
-                  <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Contract Quantity</label>
-                  <input
-                    type="number"
-                    value={editHoursDaysAsPerContract}
-                    onChange={(e) => setEditHoursDaysAsPerContract(Number(e.target.value))}
-                    className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:ring-1 focus:ring-pink-500 focus:outline-none"
-                  />
-                </div>
+                {!editHideKmTimeBlock && (
+                  <div>
+                    <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Contract Quantity</label>
+                    <input
+                      type="number"
+                      value={editHoursDaysAsPerContract}
+                      onChange={(e) => setEditHoursDaysAsPerContract(Number(e.target.value))}
+                      className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:ring-1 focus:ring-pink-500 focus:outline-none"
+                    />
+                  </div>
+                )}
 
               </div>
 
-              {/* KM Tracking */}
+              {/* KM Tracking - N/A for Ad-hoc/Hybrid, see
+                  editHideKmTimeBlock's own comment. */}
+              {!editHideKmTimeBlock && (
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-pink-50/20 p-3 rounded-2xl border border-pink-100/50 font-mono">
                 <div>
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Opening KM (Manual Override)</label>
@@ -2074,31 +2115,39 @@ export default function WarehouseDetails({
                   </div>
                 </div>
               </div>
+              )}
 
-              {/* Add KM / Add Hour - Overtime is now captured via Add Hour
-                  instead of the old separate OT Vehicle Yes/No field. */}
+              {/* Add KM / Add Hour - N/A for Ad-hoc/Hybrid, see
+                  editHideKmTimeBlock's own comment. Overtime is now
+                  captured via Add Hour instead of the old separate OT
+                  Vehicle Yes/No field. Vendor Remarks always applies
+                  regardless, so it's never hidden. */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
-                <div>
-                  <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1" title={editFixedHours === 12 ? 'Auto = this entry\'s KM Utilised - (Km Slab / Working Days) - can go negative on a lighter day. Still editable by hand.' : 'km run beyond the KM Slab'}>Add KM</label>
-                  <input
-                    type="number"
-                    step="1"
-                    value={editExtraKm}
-                    onKeyDown={blockDecimalKey}
-                    onChange={(e) => setEditExtraKm(roundToWhole(Number(e.target.value)))}
-                    className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1" title="hours run beyond Fixed Hours">Add Hour</label>
-                  <input
-                    type="number"
-                    value={editAddHour}
-                    onChange={(e) => setEditAddHour(Number(e.target.value))}
-                    className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2"
-                  />
-                </div>
-                <div className="md:col-span-2">
+                {!editHideKmTimeBlock && (
+                  <>
+                    <div>
+                      <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1" title={editFixedHours === 12 ? 'Auto = this entry\'s KM Utilised - (Km Slab / Working Days) - can go negative on a lighter day. Still editable by hand.' : 'km run beyond the KM Slab'}>Add KM</label>
+                      <input
+                        type="number"
+                        step="1"
+                        value={editExtraKm}
+                        onKeyDown={blockDecimalKey}
+                        onChange={(e) => setEditExtraKm(roundToWhole(Number(e.target.value)))}
+                        className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1" title="hours run beyond Fixed Hours">Add Hour</label>
+                      <input
+                        type="number"
+                        value={editAddHour}
+                        onChange={(e) => setEditAddHour(Number(e.target.value))}
+                        className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2"
+                      />
+                    </div>
+                  </>
+                )}
+                <div className={editHideKmTimeBlock ? 'md:col-span-4' : 'md:col-span-2'}>
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Vendor Remarks</label>
                   <input
                     type="text"
@@ -2165,7 +2214,7 @@ export default function WarehouseDetails({
                   <>
                     {/* Warehouse Group/City is derived automatically from
                         Warehouse Name above - no separate selection here. */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <div className={`grid gap-2 ${editHideKmTimeBlock ? 'grid-cols-1' : 'grid-cols-2 md:grid-cols-4'}`}>
                       <div>
                         <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Scheduled Rate (₹/mo)</label>
                         <input type="number" value={editScheduledRate || ''}
@@ -2178,28 +2227,34 @@ export default function WarehouseDetails({
                           <p className="text-[9px] text-emerald-600 font-mono mt-0.5">Auto-filled from {editWarehouseGroup}'s 24Hr Dedicated rate table.</p>
                         ) : editMatchedReeferWalkesRate != null ? (
                           <p className="text-[9px] text-emerald-600 font-mono mt-0.5">Auto-filled from the 24Hr Reefer &amp; Walkes rate table.</p>
+                        ) : editHideKmTimeBlock ? (
+                          <p className="text-[9px] text-slate-400 font-mono mt-0.5">Ad-hoc/Hybrid - not KM-Slab-tracked, so this isn't auto-looked-up. Enter the agreed rate directly.</p>
                         ) : editFixedHours === 12 && editWarehouseGroup ? (
                           <p className="text-[9px] text-rose-500 font-mono mt-0.5">Rate not configured for this combination. Contact admin.</p>
                         ) : null}
                       </div>
-                      <div>
-                        <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra KM</label>
-                        <input type="number" value={editRatePerExtraKm || ''} onChange={(e) => setEditRatePerExtraKm(Number(e.target.value))}
-                          className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
-                      </div>
-                      <div>
-                        <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra Hour</label>
-                        <input type="number" value={editRatePerExtraHour || ''} onChange={(e) => setEditRatePerExtraHour(Number(e.target.value))}
-                          className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
-                      </div>
-                      {editFixedHours === 24 && (
-                        <div>
-                          <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Variable Cost (₹/km)</label>
-                          <input type="number" value={editVariableCostPerKm || ''}
-                            readOnly={editMatched24hrDedicatedRate != null || editMatchedReeferWalkesRate != null}
-                            onChange={(e) => setEditVariableCostPerKm(Number(e.target.value))}
-                            className={`w-full border border-purple-100 rounded-lg p-1.5 font-bold ${(editMatched24hrDedicatedRate != null || editMatchedReeferWalkesRate != null) ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white text-slate-800'}`} />
-                        </div>
+                      {!editHideKmTimeBlock && (
+                        <>
+                          <div>
+                            <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra KM</label>
+                            <input type="number" value={editRatePerExtraKm || ''} onChange={(e) => setEditRatePerExtraKm(Number(e.target.value))}
+                              className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                          </div>
+                          <div>
+                            <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Rate / Extra Hour</label>
+                            <input type="number" value={editRatePerExtraHour || ''} onChange={(e) => setEditRatePerExtraHour(Number(e.target.value))}
+                              className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800" />
+                          </div>
+                          {editFixedHours === 24 && (
+                            <div>
+                              <label className="block text-[9px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Variable Cost (₹/km)</label>
+                              <input type="number" value={editVariableCostPerKm || ''}
+                                readOnly={editMatched24hrDedicatedRate != null || editMatchedReeferWalkesRate != null}
+                                onChange={(e) => setEditVariableCostPerKm(Number(e.target.value))}
+                                className={`w-full border border-purple-100 rounded-lg p-1.5 font-bold ${(editMatched24hrDedicatedRate != null || editMatchedReeferWalkesRate != null) ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : 'bg-white text-slate-800'}`} />
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
 
@@ -2220,7 +2275,7 @@ export default function WarehouseDetails({
                       <p className="text-[9px] text-slate-400 font-mono">Auto: {editWorkingDaysAuto} days</p>
                     </div>
 
-                    {editFixedHours === 24 && (
+                    {editFixedHours === 24 && !editHideKmTimeBlock && (
                       <p className="text-[9px] text-slate-400 font-mono">
                         Variable Cost term uses KM Utilised ({editKmUtilised} KM = Closing − Opening).
                       </p>
@@ -2332,6 +2387,7 @@ export default function WarehouseDetails({
         <WarehouseImportModal
           entries={entries}
           vehicles={vehicles}
+          warehouseRateOverrides={warehouseRateOverrides}
           onAddEntry={onAddEntry}
           onUpdateEntry={onUpdateEntry}
           onClose={() => setShowImportModal(false)}
