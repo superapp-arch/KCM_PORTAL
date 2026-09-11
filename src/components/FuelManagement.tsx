@@ -256,6 +256,14 @@ export default function FuelManagement({
   // Fuel Report panel, and Bunk Summary's own download (picking a bunk to
   // view also scopes what gets downloaded, which is the expected pairing).
   const [bunkFilter, setBunkFilter] = useState('All');
+  // Location filter (2026-09-11 direct request) - a bunk BRAND (e.g. HPCL)
+  // can exist at several different physical locations, and Bunk Name alone
+  // can't tell them apart - this sits beside the Bunk Name filter (both
+  // apply together, AND'd) so "HPCL" + "Hyderabad" together actually
+  // isolates that one specific outlet instead of merging every HPCL
+  // station's entries. Shares the same "also scopes the download" pairing
+  // as bunkFilter above.
+  const [locationFilter, setLocationFilter] = useState('All');
   // Bunk/Card filter - whichever payment method (Bunk vs Card) an entry was
   // logged under, independent of the Bunk Name filter above.
   const [bunkOrCardFilter, setBunkOrCardFilter] = useState<'All' | 'Bunk' | 'Card' | 'Petty Cash'>('All');
@@ -459,6 +467,11 @@ export default function FuelManagement({
   // typed in that isn't in the fixed list yet) - used by both the ledger's
   // own Bunk Name filter and the Download/Bunk Summary panels below.
   const usedBunks = Array.from(new Set([...BUNK_NAMES, ...logs.map(l => l.bunkName).filter(Boolean)])).sort();
+  // Same "known list + anything actually used" union as usedBunks above -
+  // real historical data can include a location not in the hardcoded
+  // LOCATIONS list, so this never hides one just because it's missing from
+  // that seed list.
+  const usedLocations = Array.from(new Set([...LOCATIONS, ...logs.map(l => l.location).filter(Boolean)])).sort();
 
   // Amount auto-calc = Ltrs * Rate (editable override afterward)
   useEffect(() => {
@@ -1284,6 +1297,7 @@ export default function FuelManagement({
     if (!(
       (viewPeriod === 'all' || (log.date >= viewStart && log.date <= viewEnd)) &&
       (bunkFilter === 'All' || log.bunkName === bunkFilter) &&
+      (locationFilter === 'All' || log.location === locationFilter) &&
       (bunkOrCardFilter === 'All' || (log.bunkOrCard || 'Bunk') === bunkOrCardFilter) &&
       (!canSeeEnteredBy || enteredByFilter === 'All' || log.enteredBy === enteredByFilter) &&
       (
@@ -1349,7 +1363,7 @@ export default function FuelManagement({
   // behavior as Petty Cash's own Ledger pagination, see PaginationFooter.tsx.
   const LEDGER_PAGE_SIZE = 50;
   const [ledgerPage, setLedgerPage] = useState(1);
-  useEffect(() => { setLedgerPage(1); }, [viewPeriod, viewDate, bunkFilter, bunkOrCardFilter, enteredByFilter, searchTerm, columnFilters]);
+  useEffect(() => { setLedgerPage(1); }, [viewPeriod, viewDate, bunkFilter, locationFilter, bunkOrCardFilter, enteredByFilter, searchTerm, columnFilters]);
   const paginatedLogs = paginateRows(filteredLogs, ledgerPage, LEDGER_PAGE_SIZE);
 
   // Groups entries by their (Location, Bunk Name) pair - the same bunk name
@@ -1409,7 +1423,9 @@ export default function FuelManagement({
       return;
     }
     const { start, end } = getPeriodDateRange(downloadPeriod, downloadDate);
-    const periodLogs = logs.filter(l => l.date >= start && l.date <= end && (bunkFilter === 'All' || l.bunkName === bunkFilter));
+    const periodLogs = logs.filter(l => l.date >= start && l.date <= end
+      && (bunkFilter === 'All' || l.bunkName === bunkFilter)
+      && (locationFilter === 'All' || l.location === locationFilter));
 
     if (periodLogs.length === 0) {
       triggerNotif('No fuel entries found for the selected period/bunk.');
@@ -1440,7 +1456,8 @@ export default function FuelManagement({
 
     const periodLabel = downloadPeriod === 'day' ? 'Daily' : downloadPeriod === 'month' ? 'MTD' : 'YTD';
     const bunkLabel = bunkFilter === 'All' ? 'AllBunks' : bunkFilter.replace(/\s+/g, '_');
-    XLSX.writeFile(workbook, `KCM_Fuel_Entries_${periodLabel}_${bunkLabel}_${downloadDate}.xlsx`);
+    const locationLabel = locationFilter === 'All' ? '' : `_${locationFilter.replace(/\s+/g, '_')}`;
+    XLSX.writeFile(workbook, `KCM_Fuel_Entries_${periodLabel}_${bunkLabel}${locationLabel}_${downloadDate}.xlsx`);
     triggerNotif('Fuel entries report downloaded successfully!');
   };
 
@@ -1493,9 +1510,14 @@ export default function FuelManagement({
 
 
   // KPI calculations - unchanged in label/position/layout, only field refs updated (ltrs replaces quantity)
-  const totalFuelAmt = logs.reduce((sum, log) => sum + (log.amount || 0), 0);
-  const totalLitres = logs.reduce((sum, log) => sum + (log.ltrs || 0), 0);
-  const avgRate = logs.length > 0 ? (logs.reduce((sum, log) => sum + (log.rate || 0), 0) / logs.length) : 0;
+  // 2026-09-11 direct request: these now reflect the CURRENT filtered view
+  // (period/bunk/location/Bunk-Card/entered-by/search/column filters - same
+  // set the ledger table itself shows), not a permanent grand total across
+  // every entry ever logged - selecting one bunk's one location must show
+  // that outlet's own total, not the whole brand's.
+  const totalFuelAmt = filteredLogsUnsorted.reduce((sum, log) => sum + (log.amount || 0), 0);
+  const totalLitres = filteredLogsUnsorted.reduce((sum, log) => sum + (log.ltrs || 0), 0);
+  const avgRate = filteredLogsUnsorted.length > 0 ? (filteredLogsUnsorted.reduce((sum, log) => sum + (log.rate || 0), 0) / filteredLogsUnsorted.length) : 0;
 
   return (
     <div className="space-y-6" id="fuel-view-wrapper">
@@ -1624,6 +1646,20 @@ export default function FuelManagement({
               </select>
             </div>
             <div className="flex items-center gap-1.5">
+              {/* Locations (2026-09-11 direct request) - a bunk brand (e.g.
+                  HPCL) can exist at several locations; this sits beside Bunk
+                  Name so picking both together isolates one specific
+                  physical outlet instead of merging every location sharing
+                  that brand. */}
+              <select
+                value={locationFilter}
+                onChange={(e) => setLocationFilter(e.target.value)}
+                title="Filter by location"
+                className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-700 focus:outline-none"
+              >
+                <option value="All">All Locations</option>
+                {usedLocations.map((loc, i) => <option key={i} value={loc}>{loc}</option>)}
+              </select>
               <select
                 value={bunkFilter}
                 onChange={(e) => setBunkFilter(e.target.value)}
@@ -1635,7 +1671,7 @@ export default function FuelManagement({
               </select>
               <button
                 onClick={handleDownloadFuelEntryReport}
-                title="Download Fuel Entries for the selected date, period, and bunk"
+                title="Download Fuel Entries for the selected date, period, bunk, and location"
                 className="p-2 bg-teal-50 text-teal-600 hover:bg-teal-100 rounded-lg cursor-pointer shrink-0 transition-colors"
               >
                 <Download className="w-4 h-4" />
@@ -1678,6 +1714,19 @@ export default function FuelManagement({
               >
                 <option value="newest">Indent No: Newest First</option>
                 <option value="oldest">Indent No: Oldest First</option>
+              </select>
+              {/* Locations (2026-09-11 direct request) - sits beside Bunk
+                  Name since one brand (e.g. HPCL) can exist at several
+                  locations; picking both together isolates one specific
+                  physical outlet, not the whole brand merged together. */}
+              <select
+                value={locationFilter}
+                onChange={(e) => setLocationFilter(e.target.value)}
+                title="Filter by Location"
+                className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-700"
+              >
+                <option value="All">All Locations</option>
+                {usedLocations.map((loc, i) => <option key={i} value={loc}>{loc}</option>)}
               </select>
               {/* Bunk Name filter - All Bunks + BUNK_NAMES + any other bunk
                   name already used in the ledger (see usedBunks above). Also
