@@ -17,7 +17,6 @@ import { FuelLog, Vehicle } from '../types';
 import { findDuplicateFuelIndentNumber } from './fuelIndentNumber';
 
 const normalizeHeader = (h: unknown): string => String(h || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-const stripRegNo = (s: string) => s.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 // Same tolerant date parser the Warehouse importer uses - ISO,
 // dd.mm.yyyy/dd-mm-yyyy/dd/mm/yyyy, month-name text, or an Excel date serial.
@@ -162,8 +161,6 @@ async function parseFuelRows(
   // Indent No. cell reads back exactly as typed, leading zeros and all.
   const json: Record<string, string | number>[] = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false, dateNF: 'yyyy-mm-dd' });
 
-  const knownVehicleNos = new Set(vehicles.map(v => stripRegNo(v.regNo || v['Reg. No.'] || '')));
-
   // GET /api/fuel strips `enteredBy` off every row the viewer owns before it
   // ever reaches this client (see server.ts's filterFuelOrMileageRowsForViewer
   // - "the viewer's own rows... enteredBy always stripped, even from
@@ -221,14 +218,12 @@ async function parseFuelRows(
     if (!(rate > 0)) errors.push('Rate must be greater than 0.');
     if (!client) errors.push('Client is required.');
 
-    // Vehicle not in Fleet & Vehicles - a warning only, matching Fuel
-    // Management's own existing rule (FuelLog.vehicleNumber's own type
-    // comment: "autofetched from Fleet, manual entry allowed if not
-    // found") - not a new, stricter rule invented for import.
-    if (vehicleNumber && !knownVehicleNos.has(stripRegNo(vehicleNumber))) {
-      warnings.push('Vehicle Number not found in Fleet & Vehicles - imported as-is (manual entry is already allowed for this field on the live form too).');
-    }
-
+    // 2026-09-11 direct follow-up: a Vehicle Number not present in Fleet &
+    // Vehicles is not flagged at all (not even a warning) - it's routinely
+    // a vendor/third-party vehicle, which Fuel Management's own manual
+    // entry form already accepts with no fuss (FuelLog.vehicleNumber's own
+    // type comment: "autofetched from Fleet, manual entry allowed if not
+    // found"). Import must accept it exactly as freely.
     const candidate = { bunkOrCard, bunkName, date, enteredBy };
     if (indentNumber) {
       if (findDuplicateFuelIndentNumber(existingLogsForDupeCheck, indentNumber, candidate)) {
