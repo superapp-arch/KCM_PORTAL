@@ -185,7 +185,16 @@ export async function parseWarehouseImportFile(
     ...WAREHOUSE_LOCATIONS.map(w => w.name.trim().toLowerCase()),
     ...existingEntries.map(e => (e.warehouseName || '').trim().toLowerCase())
   ]);
-  const knownVehicleNos = new Set(vehicles.map(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase()));
+  // 2026-09-11: compared punctuation-stripped, not just trimmed+uppercased -
+  // Fleet & Vehicles' own Reg. No. field doesn't strip spaces/hyphens either
+  // (confirmed: FleetSheet.tsx only .toUpperCase().trim()s it), so the same
+  // real vehicle can easily be stored there as "KA51AL3422" while a real
+  // import file has "KA 51 AL 3422" or "KA-51-AL-3422" - a strict compare
+  // would wrongly reject a genuine match. Stripping all non-alphanumerics
+  // before comparing can only ever turn a false rejection into a correct
+  // match - two genuinely different plates never collide from this alone.
+  const stripRegNo = (s: string) => s.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const knownVehicleNos = new Set(vehicles.map(v => stripRegNo(v.regNo || v['Reg. No.'] || '')));
 
   // For duplicate + deployment-conflict checks: every entry already saved,
   // PLUS every row already parsed earlier in this same file (both checks
@@ -225,7 +234,7 @@ export async function parseWarehouseImportFile(
     }
 
     // Vehicle must exist in Fleet & Vehicles - hard error, per direct request.
-    if (vehicleNumber && !knownVehicleNos.has(vehicleNumber)) {
+    if (vehicleNumber && !knownVehicleNos.has(stripRegNo(vehicleNumber))) {
       errors.push('Vehicle Number not found in Fleet & Vehicles.');
     }
 
