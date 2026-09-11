@@ -71,7 +71,7 @@ const FUEL_TEMPLATE_HEADERS_COMMON = [
 const FUEL_TEMPLATE_HEADERS_BUNK = FUEL_TEMPLATE_HEADERS_COMMON; // Bunk Name/Location supplied by the Select Bunk step, not a file column
 const FUEL_TEMPLATE_HEADERS_CARD = ['Date', 'Period (YYYY-MM)', 'Location', 'Bunk Name', 'Vehicle Number', 'Indent No.', 'Litres', 'Rate', 'Amount', 'Client', 'Type', 'Vendor Name', 'Vendor Code', 'Remarks', 'Requested By'];
 
-const TEMPLATE_INDENT_NOTE = 'Sample row - delete before importing. Indent No. is imported EXACTLY as typed here, including leading zeros - Excel must treat this column as TEXT (format the column as Text, or prefix the value with an apostrophe like \'0014258) or Excel itself will silently drop the leading zeros before this file is even uploaded. Amount is recalculated as Litres x Rate when left blank.';
+const TEMPLATE_INDENT_NOTE = 'Sample row - delete before importing. Indent No. is imported EXACTLY as typed here, including leading zeros - Excel must treat this column as TEXT (format the column as Text, or prefix the value with an apostrophe like \'0014258) or Excel itself will silently drop the leading zeros before this file is even uploaded. Amount is always recalculated as Litres x Rate - whatever is typed in this column is ignored, so it can be left blank.';
 
 export function downloadFuelBunkImportTemplate(): void {
   const sample: Record<string, string | number> = {
@@ -240,7 +240,18 @@ async function parseFuelRows(
     }
 
     const period = String(mapped.period || '').trim() || (date ? date.slice(0, 7) : '');
-    const amount = mapped.amount != null && mapped.amount !== '' ? Number(mapped.amount) : Math.round(ltrs * rate * 100) / 100;
+    // 2026-09-11 direct follow-up: ALWAYS computed as Ltrs x Rate, the file's
+    // own Amount column (if any) is never trusted - it was previously used
+    // whenever present, but a real file's Amount column showing a literal
+    // 0 (not truly blank - an empty cell that still round-trips through
+    // XLSX as 0, or a spreadsheet formula that resolved to 0) was silently
+    // accepted as-is instead of falling back to the Ltrs x Rate calculation,
+    // so imported entries showed Amount: 0 in the ledger until someone
+    // opened Edit (whose own useEffect recomputes Amount fresh from
+    // Ltrs/Rate) and re-saved. Matches the manual Add Entry form's own
+    // auto-calc (FuelManagement.tsx's `Amount auto-calc = Ltrs * Rate`
+    // useEffect) exactly - always correct, no import-only exception.
+    const amount = Math.round(ltrs * rate * 100) / 100;
     const typeRaw = String(mapped.type || '').trim();
     // Same default rule the manual Add Entry form uses (FuelManagement.tsx)
     // - 'KCM' unless the Client is specifically "One Time Vendor", still
