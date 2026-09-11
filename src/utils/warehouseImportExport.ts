@@ -233,9 +233,18 @@ export async function parseWarehouseImportFile(
       warnings.push('Unrecognized warehouse name - not found in the warehouse master list or existing entries.');
     }
 
-    // Vehicle must exist in Fleet & Vehicles - hard error, per direct request.
+    // 2026-09-11 direct request (reversed from the earlier hard-error
+    // version): a vehicle not in Fleet & Vehicles is very often a genuine
+    // vendor/third-party vehicle used for a warehouse trip, not a data
+    // error - these rows must still import. This is a warning only, never
+    // a hard error, and importing one never writes anything back to Fleet
+    // & Vehicles or any other module's vehicle list - this file only ever
+    // calls onAddEntry/onUpdateEntry for WarehouseEntry rows themselves,
+    // so an unrecognized vehicle number can never "sit" in Fleet &
+    // Vehicles, Vendor Management, or anywhere else just by importing it
+    // here.
     if (vehicleNumber && !knownVehicleNos.has(stripRegNo(vehicleNumber))) {
-      errors.push('Vehicle Number not found in Fleet & Vehicles.');
+      warnings.push('Vehicle Number not found in Fleet & Vehicles - imported as-is (likely a vendor/third-party vehicle). This does not add it to Fleet & Vehicles or any other module.');
     }
 
     // Deployment conflict - same vehicle, same date, a DIFFERENT warehouse
