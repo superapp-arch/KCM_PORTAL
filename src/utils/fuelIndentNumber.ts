@@ -30,6 +30,7 @@
 import { extractLeadingNumber } from './sort';
 
 interface IndentableFuelLog {
+  id?: string; // only needed by findDuplicateFuelIndentNumber's excludeId check below
   bunkOrCard?: string;
   bunkName?: string;
   date?: string;
@@ -67,4 +68,49 @@ export function nextCardFuelIndentNumber(logs: IndentableFuelLog[], enteredBy: s
     .filter(n => !isNaN(n) && n > 0);
   const next = cardNumbers.length > 0 ? Math.max(...cardNumbers) + 1 : 1;
   return String(next).padStart(5, '0');
+}
+
+// 2026-09-11: promoted here from server.ts (was server-only) so the Fuel
+// Excel/Card Import wizard's client-side preview can call the EXACT SAME
+// duplicate-identity check POST/PUT /api/fuel independently re-run at
+// actual-save time - "the correct existing business identity", never a
+// separately-invented one, and the preview can never disagree with what
+// the server will actually do. server.ts now imports this instead of
+// keeping its own copy.
+//
+// Duplicate guard for all three sequences - scoped to match how each is
+// generated: Bunk within the same (bunk name, calendar month, enteredBy)
+// bucket (2026-09-04: bunk name added to match nextBunkFuelIndentNumber's
+// own scoping - the same number can legitimately recur across different
+// bunks, different months, or different people), Card across its whole
+// per-person sequence (never resets, so no two Card entries by the SAME
+// person should ever share a number - two different people's Card
+// sequences may coincide freely). Petty Cash (2026-09-09) has no
+// auto-generated sequence at all (typed manually every time - see
+// nextPettyCashEntryNo's own "Petty Cash" pattern for the equivalent Petty
+// Cash module concept) - scoped the same way as Card, one continuous
+// per-person space, entirely separate from both Bunk and Card. Only ever
+// rejects a genuinely new-to-this-id value - resubmitting a record's own
+// unchanged Indent No (a normal edit that didn't touch it) always passes.
+export function findDuplicateFuelIndentNumber(
+  logs: IndentableFuelLog[],
+  indentNumber: string | undefined,
+  candidate: { bunkOrCard?: string; bunkName?: string; date?: string; enteredBy?: string },
+  excludeId?: string
+): boolean {
+  const target = (indentNumber || '').trim().toUpperCase();
+  if (!target) return false;
+  const classify = (v: string | undefined) => (v === 'Card' ? 'Card' : v === 'Petty Cash' ? 'Petty Cash' : 'Bunk');
+  const candidateClass = classify(candidate.bunkOrCard);
+  const monthKey = (candidate.date || '').slice(0, 7);
+  const bunkNameKey = normBunkName(candidate.bunkName);
+  return logs.some(l => {
+    if (l.id === excludeId) return false;
+    if ((l.indentNumber || '').trim().toUpperCase() !== target) return false;
+    if ((l.enteredBy || '') !== (candidate.enteredBy || '')) return false; // separate sequence per person
+    if (classify(l.bunkOrCard) !== candidateClass) return false;
+    if (candidateClass !== 'Bunk') return true; // Card/Petty Cash: one sequence per person, no month/bunk scoping
+    if (normBunkName(l.bunkName) !== bunkNameKey) return false; // separate sequence per bunk
+    return (l.date || '').slice(0, 7) === monthKey;
+  });
 }

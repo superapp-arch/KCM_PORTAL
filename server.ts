@@ -17,7 +17,7 @@ import { issueOtp, verifyOtp } from './src/auth/otp.ts';
 import { istTimestamp, istDateKey, istHour, istMonthDayKey } from './src/auth/time.ts';
 import { computeDueDateRaw } from './src/utils/loanDates.ts';
 import { extractTrailingNumber } from './src/utils/sort.ts';
-import { nextBunkFuelIndentNumber, nextCardFuelIndentNumber } from './src/utils/fuelIndentNumber.ts';
+import { nextBunkFuelIndentNumber, nextCardFuelIndentNumber, findDuplicateFuelIndentNumber } from './src/utils/fuelIndentNumber.ts';
 import {
   WASHING_CYCLE_DAYS, isWashingEligible,
   AC_SERVICE_CYCLE_DAYS, isAcServiceEligible,
@@ -860,37 +860,12 @@ function findDuplicateEntryNo<T extends { id?: string; entryNo?: string }>(rows:
 // under '' - isolated from every real login's own sequence, never blended
 // into one of them by accident.
 
-// Duplicate guard for all three sequences - scoped to match how each is
-// generated: Bunk within the same (bunk name, calendar month, enteredBy)
-// bucket (2026-09-04: bunk name added to match nextBunkFuelIndentNumber's
-// own scoping - the same number can legitimately recur across different
-// bunks, different months, or different people), Card across its whole
-// per-person sequence (never resets, so no two Card entries by the SAME
-// person should ever share a number - two different people's Card
-// sequences may coincide freely). Petty Cash (2026-09-09) has no
-// auto-generated sequence at all (typed manually every time - see
-// nextPettyCashEntryNo's own "Petty Cash" pattern for the equivalent Petty
-// Cash module concept) - scoped the same way as Card, one continuous
-// per-person space, entirely separate from both Bunk and Card. Only ever
-// rejects a genuinely new-to-this-id value - resubmitting a record's own
-// unchanged Indent No (a normal edit that didn't touch it) always passes.
-function findDuplicateFuelIndentNumber(logs: FuelLog[], indentNumber: string | undefined, candidate: { bunkOrCard?: string; bunkName?: string; date?: string; enteredBy?: string }, excludeId?: string): boolean {
-  const target = (indentNumber || '').trim().toUpperCase();
-  if (!target) return false;
-  const classify = (v: string | undefined) => (v === 'Card' ? 'Card' : v === 'Petty Cash' ? 'Petty Cash' : 'Bunk');
-  const candidateClass = classify(candidate.bunkOrCard);
-  const monthKey = (candidate.date || '').slice(0, 7);
-  const bunkNameKey = (candidate.bunkName || '').trim().toLowerCase();
-  return logs.some(l => {
-    if (l.id === excludeId) return false;
-    if ((l.indentNumber || '').trim().toUpperCase() !== target) return false;
-    if ((l.enteredBy || '') !== (candidate.enteredBy || '')) return false; // separate sequence per person
-    if (classify(l.bunkOrCard) !== candidateClass) return false;
-    if (candidateClass !== 'Bunk') return true; // Card/Petty Cash: one sequence per person, no month/bunk scoping
-    if ((l.bunkName || '').trim().toLowerCase() !== bunkNameKey) return false; // separate sequence per bunk
-    return (l.date || '').slice(0, 7) === monthKey;
-  });
-}
+// 2026-09-11: findDuplicateFuelIndentNumber itself moved to
+// src/utils/fuelIndentNumber.ts (imported above) - promoted out of here so
+// the Fuel Excel/Card Import wizard's client-side preview can call the
+// exact same function this server independently re-checks at save time,
+// per that file's own comment on why. Bunk/Card/Petty Cash scoping rules
+// are documented there now, not duplicated here.
 
 // 2026-09-11 direct request: the function that used to live here
 // (renumberFuelIndentSequence, called after every Fuel entry delete) has

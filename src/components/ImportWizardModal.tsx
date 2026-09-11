@@ -39,6 +39,11 @@ export interface ImportWizardModalProps<T extends ImportWizardRow> {
     options: { value: string; label: string }[];
     onChange: (value: string) => void;
     caption: string;
+    // 'pills' (default) - a row of buttons, fine for a couple of options
+    // (Billing's KCM Insta/KCM Supply). 'dropdown' - a real <select>, for
+    // a module with many options (Fuel's Select Bunk, a dozen+ bunk/
+    // location pairs) where a button row would overflow/look wrong.
+    variant?: 'pills' | 'dropdown';
   };
   onDownloadTemplate: () => void;
   onParseFile: (file: File) => Promise<{ headerValid: boolean; missingHeaders: string[]; rows: T[] }>;
@@ -150,14 +155,25 @@ export default function ImportWizardModal<T extends ImportWizardRow>({
               {scopeToggle && (
                 <div>
                   <label className="block font-bold text-slate-600 mb-1.5 uppercase text-[10px] tracking-wider">{scopeToggle.label}</label>
-                  <div className="flex gap-2">
-                    {scopeToggle.options.map(o => (
-                      <button key={o.value} type="button" onClick={() => scopeToggle.onChange(o.value)}
-                        className={`flex-1 py-2 rounded-lg border font-bold text-xs cursor-pointer transition-colors ${scopeToggle.value === o.value ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'}`}>
-                        {o.label}
-                      </button>
-                    ))}
-                  </div>
+                  {scopeToggle.variant === 'dropdown' ? (
+                    <select
+                      value={scopeToggle.value}
+                      onChange={(e) => scopeToggle.onChange(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      {!scopeToggle.options.some(o => o.value === scopeToggle.value) && <option value={scopeToggle.value}>Select...</option>}
+                      {scopeToggle.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  ) : (
+                    <div className="flex gap-2">
+                      {scopeToggle.options.map(o => (
+                        <button key={o.value} type="button" onClick={() => scopeToggle.onChange(o.value)}
+                          className={`flex-1 py-2 rounded-lg border font-bold text-xs cursor-pointer transition-colors ${scopeToggle.value === o.value ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'}`}>
+                          {o.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <p className="text-[9px] text-slate-400 font-mono mt-1">{scopeToggle.caption}</p>
                 </div>
               )}

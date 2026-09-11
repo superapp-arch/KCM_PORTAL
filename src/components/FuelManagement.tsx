@@ -28,7 +28,8 @@ import {
   DollarSign,
   User as UserIcon,
   Lock,
-  Check
+  Check,
+  Upload
 } from 'lucide-react';
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
@@ -36,6 +37,8 @@ import { authFetch } from '../authFetch';
 import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
 import { PETTY_CASH_USERS } from '../utils/pettyCashUsers';
 import { fuelEnteredByLabel } from '../utils/fuelEnteredBy';
+import FuelBunkImportModal from './fuel/FuelBunkImportModal';
+import FuelCardImportModal from './fuel/FuelCardImportModal';
 
 const LOCATIONS = [
   'AP', 'Nelmangala', 'Belagaum', 'BLR', 'Chennai', 'Goa', 'Hyderabad', 'Hassan',
@@ -320,6 +323,10 @@ export default function FuelManagement({
 
   // Sidebar / editing state
   const [showSidebar, setShowSidebar] = useState(false);
+  // Import Fuel Excel (Bunk) / Import Card Entry modals - 2026-09-11 direct
+  // request, see FuelBunkImportModal.tsx/FuelCardImportModal.tsx.
+  const [showBunkImport, setShowBunkImport] = useState(false);
+  const [showCardImport, setShowCardImport] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   // Add/Edit sidebar tab: fuel details are entered first, then the user
   // switches to the Mileage tab - keeps the form from showing every mileage
@@ -472,6 +479,29 @@ export default function FuelManagement({
   // LOCATIONS list, so this never hides one just because it's missing from
   // that seed list.
   const usedLocations = Array.from(new Set([...LOCATIONS, ...logs.map(l => l.location).filter(Boolean)])).sort();
+
+  // (bunkName, location) pairs for the "Import Fuel Excel" wizard's Select
+  // Bunk dropdown (FuelBunkImportModal) - flattened from LOCATION_BUNK_MAP
+  // (so a shared bunk name like HPCL appears once per physical location it's
+  // actually mapped to at, e.g. "HPCL (BLR)" and "HPCL (Chennai)" as
+  // distinct options) unioned with any (bunkName, location) combination
+  // that's actually appeared together on a real saved log, deduped by the
+  // same "location|||bunkName" composite key convention used throughout
+  // this file's own Bunk/Location filtering.
+  const bunkOptions = (() => {
+    const seen = new Set<string>();
+    const pairs: { bunkName: string; location: string }[] = [];
+    const add = (bunkName: string, location: string) => {
+      if (!bunkName || !location) return;
+      const key = `${location}|||${bunkName}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      pairs.push({ bunkName, location });
+    };
+    Object.entries(LOCATION_BUNK_MAP).forEach(([location, bunks]) => bunks.forEach(bunkName => add(bunkName, location)));
+    logs.forEach(l => add(l.bunkName, l.location));
+    return pairs.sort((a, b) => a.bunkName.localeCompare(b.bunkName) || a.location.localeCompare(b.location));
+  })();
 
   // Amount auto-calc = Ltrs * Rate (editable override afterward)
   useEffect(() => {
@@ -1741,15 +1771,57 @@ export default function FuelManagement({
                 {usedBunks.map((b, i) => <option key={i} value={b}>{b}</option>)}
               </select>
               {!isRqIdOnlyUser && !isViewOnlyUser && (
-                <button
-                  onClick={() => { resetForm(); setShowSidebar(true); }}
-                  className="bg-gradient-to-r from-emerald-500 to-blue-600 hover:from-emerald-600 hover:to-blue-700 text-xs text-white font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-md whitespace-nowrap"
-                >
-                  <Plus className="w-4 h-4" /> Add Entry
-                </button>
+                <>
+                  <button
+                    onClick={() => { resetForm(); setShowSidebar(true); }}
+                    className="bg-gradient-to-r from-emerald-500 to-blue-600 hover:from-emerald-600 hover:to-blue-700 text-xs text-white font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-md whitespace-nowrap"
+                  >
+                    <Plus className="w-4 h-4" /> Add Entry
+                  </button>
+                  {/* 2026-09-11 direct request: bulk-import Bunk-paid and
+                      Card-paid fuel entries from Excel - same underlying
+                      onAddLog -> POST /api/fuel path as a manual Add Entry,
+                      so every existing validation/Indent No/duplicate rule
+                      applies automatically. See FuelBunkImportModal.tsx /
+                      FuelCardImportModal.tsx. */}
+                  <button
+                    onClick={() => setShowBunkImport(true)}
+                    className="bg-white border border-slate-200 hover:bg-slate-50 text-xs text-slate-700 font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-sm whitespace-nowrap"
+                  >
+                    <Upload className="w-4 h-4" /> Import Fuel Excel
+                  </button>
+                  <button
+                    onClick={() => setShowCardImport(true)}
+                    className="bg-white border border-slate-200 hover:bg-slate-50 text-xs text-slate-700 font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-sm whitespace-nowrap"
+                  >
+                    <Upload className="w-4 h-4" /> Import Card Entry
+                  </button>
+                </>
               )}
             </div>
           </div>
+
+          {showBunkImport && (
+            <FuelBunkImportModal
+              logs={logs}
+              vehicles={vehicles}
+              enteredBy={user.username}
+              bunkOptions={bunkOptions}
+              onAddLog={onAddLog}
+              onClose={() => setShowBunkImport(false)}
+              onImported={() => setShowBunkImport(false)}
+            />
+          )}
+          {showCardImport && (
+            <FuelCardImportModal
+              logs={logs}
+              vehicles={vehicles}
+              enteredBy={user.username}
+              onAddLog={onAddLog}
+              onClose={() => setShowCardImport(false)}
+              onImported={() => setShowCardImport(false)}
+            />
+          )}
 
           {/* Bunk | Card - the two ledgers are clearly separated views over
               the same underlying entries (bunkOrCard on each FuelLog), not
