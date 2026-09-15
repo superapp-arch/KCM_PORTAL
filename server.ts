@@ -555,6 +555,24 @@ async function requireWarehouseAccess(req: express.Request, res: express.Respons
   next();
 }
 
+// Customer Billings had no server-side gate at all - unlike every other
+// financial module (Fuel, Petty Cash, Payments, Loan Management, Warehouse,
+// Vendor Management), invoice create/edit/delete was reachable by anyone
+// with a valid session, even users the UI never shows the tab to (and a
+// request with no Authorization header at all still went through, since
+// sessionUser was only ever used to stamp the audit log, never checked).
+// Mirrors Administration.tsx's own hasAccess('billing') check.
+async function requireBillingAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (sessionUser.department !== 'super_admin' && sessionUser.department !== 'billing' && sessionUser.email !== 'bhagya@kcmlogistics.in') {
+    return res.status(403).json({ error: 'You do not have access to Customer Billings.' });
+  }
+  next();
+}
+
 // Payments module (bunk payment periods + their payments) is restricted to
 // Praveen and super admins (Principal included - department 'super_admin'
 // covers both, same as every other "Super Admin / Principal only" gate in
@@ -1047,13 +1065,15 @@ function maskAttributionField<T extends Record<string, any>>(rows: T[], field: k
 // Safety net for attendance/petty-cash/fuel/mileage entry dates - the UI
 // already disables future dates at the calendar-widget level (DateInput's
 // max prop, or the attendance grids' disabled day cells), but this catches
-// anyone bypassing that (e.g. a raw API call). Same yyyy-mm-dd "today"
-// convention every date default in this codebase already uses (server's own
-// local clock, consistent with how every "today" default is computed
-// client-side too - not a separate timezone standard).
+// anyone bypassing that (e.g. a raw API call). Uses istDateKey() (IST,
+// UTC+5:30) for "today", same as every other yyyy-mm-dd "today" convention
+// in this codebase - a plain `new Date().toISOString()` here used to
+// compare against UTC-today instead, which during IST 00:00-05:29 each day
+// is still the PREVIOUS UTC calendar date, so a perfectly valid same-day
+// entry made in that window was rejected as "in the future."
 function isFutureDate(date: string | undefined | null): boolean {
   if (!date) return false;
-  return date.slice(0, 10) > new Date().toISOString().slice(0, 10);
+  return date.slice(0, 10) > istDateKey();
 }
 
 // A non-super-admin may only modify (update/delete) a row they themselves
@@ -2001,7 +2021,8 @@ async function startServer() {
       }
       const cleanEmail = String(email).trim().toLowerCase();
 
-      const usersList = await getUsersWithFallback();
+      // getUsers(), not getUsersWithFallback() - see the login handler above.
+      const usersList = await getUsers();
       const matchedUser = usersList.find((u: any) => u.email && u.email.toLowerCase() === cleanEmail);
 
       if (!matchedUser) {
@@ -2048,7 +2069,12 @@ async function startServer() {
       const cleanPass = String(password || '').trim();
       const cleanOtp = String(otp || '').trim();
 
-      const usersList = await getUsersWithFallback();
+      // Deliberately getUsers(), not getUsersWithFallback() - login must
+      // never authenticate against the hardcoded DEFAULT_USERS seed list
+      // (with its default plaintext passwords) just because the DB had a
+      // transient hiccup. A real failure here should surface as a 500, not
+      // silently let someone in against stale/default credentials.
+      const usersList = await getUsers();
 
       const matchedUser = usersList.find((u: any) =>
         u.username.toLowerCase() === cleanLoginId ||
@@ -2168,7 +2194,8 @@ async function startServer() {
       }
       const cleanEmail = String(email).trim().toLowerCase();
 
-      const usersList = await getUsersWithFallback();
+      // getUsers(), not getUsersWithFallback() - see the login handler above.
+      const usersList = await getUsers();
       const matchedUser = usersList.find((u: any) => u.email && u.email.toLowerCase() === cleanEmail);
 
       if (!matchedUser) {
@@ -2223,7 +2250,8 @@ async function startServer() {
       }
 
       await updateUserPassword(cleanEmail, cleanPass);
-      const usersList = await getUsersWithFallback();
+      // getUsers(), not getUsersWithFallback() - see the login handler above.
+      const usersList = await getUsers();
       const resetUser = usersList.find((u: any) => (u.email || '').toLowerCase() === cleanEmail);
       await createAuditLog({
         usernameOverride: resetUser?.username || cleanEmail,
@@ -2253,7 +2281,8 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'New password is required.' });
       }
 
-      const usersList = await getUsersWithFallback();
+      // getUsers(), not getUsersWithFallback() - see the login handler above.
+      const usersList = await getUsers();
       const userObj = usersList.find((u: any) => u.username === sessionUser.username);
       if (userObj) {
         if (oldPassword) {
@@ -2318,15 +2347,29 @@ async function startServer() {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const updatedVehicle: Vehicle = req.body;
       const vehiclesList = await getVehicles();
-      const index = vehiclesList.findIndex((v: Vehicle) => v['Reg. No.'] === updatedVehicle['Reg. No.'] || v.regNo === updatedVehicle.regNo || v.id === updatedVehicle.id);
+      // Each `v.x === updatedVehicle.x` comparison is guarded so two
+      // vehicles that both happen to be missing the same field (e.g. two
+      // partially-filled drafts with no id yet) don't match on
+      // `undefined === undefined` and get treated as the same vehicle.
+      const index = vehiclesList.findIndex((v: Vehicle) =>
+        (!!v['Reg. No.'] && v['Reg. No.'] === updatedVehicle['Reg. No.']) ||
+        (!!v.regNo && v.regNo === updatedVehicle.regNo) ||
+        (!!v.id && !!updatedVehicle.id && v.id === updatedVehicle.id)
+      );
 
       let newSi = vehiclesList.length + 1;
+      // The vehicles table has no id separate from Reg. No. - if this is an
+      // update and Reg. No. is being changed, tell saveVehicle which row's
+      // current key to migrate off of, so it doesn't leave a stale
+      // duplicate behind under the old Reg. No.
+      let previousId: string | undefined;
       if (index !== -1) {
         newSi = vehiclesList[index]['SI No'] || newSi;
+        previousId = vehiclesList[index]['Reg. No.'] || vehiclesList[index].regNo || vehiclesList[index].id;
       }
       const finalVehicle = { ...updatedVehicle, "SI No": newSi };
 
-      const result = await saveVehicle(finalVehicle);
+      const result = await saveVehicle(finalVehicle, previousId);
 
       // Refresh compliance notifications and notify Super Admin + Vehicle Data Manager
       await checkAndNotifyComplianceAlerts(finalVehicle);
@@ -2567,11 +2610,27 @@ async function startServer() {
     }
   });
 
+  // Dashboard bell notifications (compliance/maintenance/security alerts)
+  // are Super-Admin-only (see the "Fetch alerts for Super Admin" comment on
+  // GET /api/alerts above). Previously this route had no auth check at all
+  // AND unconditionally also called resolveAllAbnormalLogins() on every
+  // call, regardless of which notification `id` was being dismissed - so
+  // dismissing an unrelated insurance/service reminder from the bell would
+  // silently mark every open "Abnormal Login" security alert as resolved
+  // too. resolveNotification(id) already fully handles resolving the one
+  // notification that was actually clicked; abnormal logins have their own
+  // dedicated resolve action (POST /api/abnormal-logins/resolve below).
   app.post('/api/notifications/resolve', async (req, res) => {
     try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser) {
+        return res.status(401).json({ error: 'Authentication required.' });
+      }
+      if (sessionUser.department !== 'super_admin') {
+        return res.status(403).json({ error: 'You do not have access to dashboard notifications.' });
+      }
       const { id } = req.body;
       const result = await resolveNotification(id);
-      await resolveAllAbnormalLogins();
       res.json({ success: true, data: result });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2744,6 +2803,8 @@ async function startServer() {
       res.json({ success: true, data: filterFuelLogsForViewer(result, sessionUser) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
+
+  app.use('/api/billing', requireBillingAccess);
 
   app.get('/api/billing', async (req, res) => {
     try { res.json(await getBillingInvoices()); } catch (err: any) { res.status(500).json({ error: err.message }); }

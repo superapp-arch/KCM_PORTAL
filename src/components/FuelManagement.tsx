@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { FuelLog, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage, Vendor, StaffEmployee, DriverVehicleLookup } from '../types';
@@ -373,6 +373,13 @@ export default function FuelManagement({
   const [ltrs, setLtrs] = useState('');
   const [rate, setRate] = useState('');
   const [amount, setAmount] = useState('');
+  // Set by startEdit right before it loads a log's own ltrs/rate/amount, so
+  // the Amount auto-calc effect below skips the render where those values
+  // first change - without this, opening Edit on any entry whose stored
+  // amount wasn't bit-for-bit Ltrs x Rate (an intentional override, a
+  // rounding difference, or older data) would silently overwrite the
+  // Amount the moment the sidebar opened, before the user touched anything.
+  const skipNextAmountAutoCalc = useRef(false);
   const [client, setClient] = useState('');
   const [entryType, setEntryType] = useState<'Vendor' | 'KCM'>('KCM');
   const [vendorName, setVendorName] = useState('');
@@ -505,6 +512,10 @@ export default function FuelManagement({
 
   // Amount auto-calc = Ltrs * Rate (editable override afterward)
   useEffect(() => {
+    if (skipNextAmountAutoCalc.current) {
+      skipNextAmountAutoCalc.current = false;
+      return;
+    }
     const l = parseFloat(ltrs) || 0;
     const r = parseFloat(rate) || 0;
     setAmount(String(parseFloat((l * r).toFixed(2))));
@@ -1039,6 +1050,7 @@ export default function FuelManagement({
     setVehicleNumber(log.vehicleNumber);
     setIndentNumber(log.indentNumber);
     setIndentNumberIsLocalEstimate(false);
+    skipNextAmountAutoCalc.current = true;
     setLtrs(String(log.ltrs));
     setRate(String(log.rate));
     setAmount(String(log.amount));
@@ -1095,6 +1107,31 @@ export default function FuelManagement({
     const isPettyCashEntry = bunkOrCard === 'Petty Cash';
     if (!period || !date || (!isPettyCashEntry && (!location || !bunkName)) || !vehicleNumber || !ltrs || !rate || !client) {
       triggerNotif('Please complete all required fields (*)');
+      return;
+    }
+    // `!ltrs`/`!rate` above only catch a blank field - the string "0" is
+    // truthy, so it passed straight through with no floor, unlike the
+    // import path (fuelImportExport.ts), which explicitly rejects
+    // Ltrs/Rate <= 0. A zero-litre or zero-rate manual entry would silently
+    // save (Amount auto-calculating to 0) and skew ledger totals.
+    if (!(parseFloat(ltrs) > 0)) {
+      triggerNotif('Litres must be greater than 0.');
+      return;
+    }
+    if (!(parseFloat(rate) > 0)) {
+      triggerNotif('Rate must be greater than 0.');
+      return;
+    }
+    // FuelLog.indentNumber is a required field (types.ts) and the import
+    // path already rejects a blank one (fuelImportExport.ts), but this form
+    // never enforced it - the field is legitimately blank only for the
+    // "first entry of a new month" prompt (see indentNumberFirstOfPeriod
+    // below, which tells the office to type a starting number by hand);
+    // submitting without ever doing that used to save with an empty Indent
+    // No, breaking the Bunk/Card auto-continue sequence and duplicate
+    // detection for every entry after it that month.
+    if (!indentNumber.trim()) {
+      triggerNotif('Indent Number is required.');
       return;
     }
     if (bunkOrCard === 'Petty Cash' && !fuelPettyCashHolder.trim()) {
@@ -1154,7 +1191,14 @@ export default function FuelManagement({
     try {
       const l = parseFloat(ltrs);
       const r = parseFloat(rate);
-      const a = parseFloat(amount) || parseFloat((l * r).toFixed(2));
+      // Not `|| parseFloat(...)` - that treated a deliberate Amount
+      // override of exactly 0 (e.g. free/complimentary fuel) the same as
+      // "field left blank," silently discarding it and recomputing
+      // Ltrs x Rate instead (the same bug class already fixed for the
+      // import path in commit 85079ee). Only an actually-unparseable
+      // Amount falls back to the computed value.
+      const parsedAmount = parseFloat(amount);
+      const a = Number.isNaN(parsedAmount) ? parseFloat((l * r).toFixed(2)) : parsedAmount;
       const nextEntryNumber = logs.length > 0 ? Math.max(...logs.map(lg => lg.entryNumber || 0)) + 1 : 1;
 
       let mileageReportId = linkedMileageReportId;
@@ -2631,9 +2675,10 @@ export default function FuelManagement({
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-600 mb-1">Indent Number</label>
+                    <label className="block font-semibold text-slate-600 mb-1">Indent Number *</label>
                     <input
                       type="text"
+                      required
                       value={indentNumber}
                       onChange={(e) => setIndentNumber(e.target.value)}
                       autoComplete="off"

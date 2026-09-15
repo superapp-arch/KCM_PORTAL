@@ -462,16 +462,22 @@ export default function Administration({
   const handleLogoutClick = async () => {
     setIsLoggingOut(true);
     try {
-      const res = await fetch('/api/logout', {
+      await fetch('/api/logout', {
         method: 'POST',
         headers: token ? { Authorization: `Bearer ${token}` } : undefined
       });
-      if (res.ok) {
-        onLogout();
-      }
     } catch (err) {
       console.error(err);
     } finally {
+      // Always clear the local session, even if the server call failed or
+      // 401'd (e.g. the token had already expired right as the user clicked
+      // Logout, or a brief network blip) - gating this on `res.ok` used to
+      // leave the authenticated UI fully visible with no error shown, so
+      // someone on a shared machine could believe they'd logged out while
+      // the session was actually still live in the browser. A failed
+      // server-side invalidation just means that token times out on its
+      // own later; it's never worse than silently staying logged in here.
+      onLogout();
       setIsLoggingOut(false);
     }
   };

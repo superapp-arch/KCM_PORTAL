@@ -30,8 +30,23 @@ export function resetSessionExpiredNotification(): void {
   sessionExpiredNotified = false;
 }
 
+// In-memory fallback for the session token. Login.tsx deliberately does NOT
+// persist the token to localStorage when the user unchecks "Remember
+// session" (so it doesn't survive a browser restart on a shared machine) -
+// but authFetch used to read the token from localStorage exclusively, so
+// with "Remember session" off, every authFetch call went out with no
+// Authorization header at all and immediately 401'd, right after a
+// successful login. App.tsx calls setSessionToken() on login/logout so the
+// current tab's in-flight session keeps working either way; only
+// persistence across a browser restart depends on "Remember session".
+let inMemoryToken: string | null = null;
+
+export function setSessionToken(token: string | null): void {
+  inMemoryToken = token;
+}
+
 export function authFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-  const token = localStorage.getItem('kcm_session_token');
+  const token = inMemoryToken || localStorage.getItem('kcm_session_token');
   const headers = new Headers(init.headers);
   if (token) headers.set('Authorization', `Bearer ${token}`);
   return fetch(input, { ...init, headers }).then(res => {

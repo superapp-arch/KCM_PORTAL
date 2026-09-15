@@ -128,7 +128,15 @@ export function computeDueDate(issueDateIso: string, creditPeriodDays: number): 
   const [y, m, d] = issueDateIso.split('-').map(Number);
   const dt = new Date(y, (m || 1) - 1, d || 1);
   dt.setDate(dt.getDate() + (creditPeriodDays || 0));
-  return dt.toISOString().slice(0, 10);
+  // Format from dt's own local Y/M/D, NOT toISOString() - dt is built as
+  // local midnight, and toISOString() converts to UTC, which in any
+  // timezone ahead of UTC (IST included - this company's own timezone)
+  // rolls local midnight back to the previous UTC calendar day. That made
+  // every computed due date one day early for the whole user base.
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
 }
 
 export function computeShortageExcess(amountReceivable: number, amountReceived: number): number {
@@ -142,9 +150,16 @@ export function computeShortageExcess(amountReceivable: number, amountReceived: 
 // this is only ever a suggestion applied when the relevant inputs change,
 // same "auto-fills, still overridable" convention used elsewhere.
 // ---------------------------------------------------------------------------
-export function suggestPaymentStatus(amountReceived: number, amountReceivable: number, dueDateIso: string | undefined, todayIso: string = new Date().toISOString().slice(0, 10)): BillingPaymentStatus {
+export function suggestPaymentStatus(amountReceived: number, amountReceivable: number, dueDateIso: string | undefined, totalAmt: number = 0, todayIso: string = new Date().toISOString().slice(0, 10)): BillingPaymentStatus {
   const received = amountReceived || 0;
   const receivable = amountReceivable || 0;
+  // A receivable of exactly 0 (or less) normally just means "nothing owed
+  // yet" - true for a brand-new, still-blank invoice, where it should stay
+  // Pending. But when there's a real charge (totalAmt > 0) and Discount/
+  // TDS/Credit Notes have brought the receivable down to 0 or below, the
+  // invoice is actually fully settled, not empty - it should read Cleared
+  // rather than falling through to Overdue once its due date passes.
+  if ((totalAmt || 0) > 0 && receivable <= 0) return 'Cleared';
   if (receivable > 0 && received >= receivable) return 'Cleared';
   if (received > 0 && received < receivable) return 'Short Payment';
   const isPastDue = !!dueDateIso && dueDateIso < todayIso;

@@ -4402,8 +4402,16 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       settled (possibly in more than one partial receipt)
                       after the trip completes. Only actionable once the trip
                       itself has been saved (a real id is required by the
-                      dedicated balance-receipt endpoint). */}
-                  {mpEditingId && mpBalance > 0 && (
+                      dedicated balance-receipt endpoint). Also shown
+                      whenever real balance receipts already exist on this
+                      record (mpBalanceReceipts), even if editing Freight/
+                      Advance/Expenses just now dropped the live recomputed
+                      mpBalance to 0 or below - gating on mpBalance > 0 alone
+                      made the panel (and any already-received amount, plus
+                      the settlement-mismatch warning) vanish mid-edit, with
+                      no way to see that money had already been tracked
+                      against this trip. */}
+                  {mpEditingId && (mpBalance > 0 || mpBalanceReceipts.length > 0) && (
                     <div className="p-3 bg-indigo-50/50 border border-indigo-200 rounded-lg space-y-2.5">
                       <div className="flex items-center justify-between">
                         <span className="text-indigo-600 uppercase text-[9px] font-bold">Balance Settlement</span>

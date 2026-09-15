@@ -444,8 +444,16 @@ export async function getUsers() {
   try {
     return await db.select().from(users);
   } catch (error) {
-    console.error("Database query failed in getUsers: falling back to seeded users", error);
-    return DEFAULT_USERS;
+    // Unlike every other getX() in this file, this used to swallow the
+    // error and silently return DEFAULT_USERS (including its hardcoded
+    // plaintext seed passwords) instead of surfacing the failure - so a
+    // transient DB outage during login could transparently authenticate
+    // against stale default credentials instead of the real stored
+    // password hashes, with nothing telling the caller anything was wrong.
+    // DEFAULT_USERS is only ever meant for one-time seeding (see
+    // seedDatabase above), never as a live fallback.
+    console.error("Database query failed in getUsers:", error);
+    throw new Error("Failed to retrieve users.", { cause: error });
   }
 }
 
@@ -453,8 +461,17 @@ export async function updateUserPassword(email: string, newPass: string) {
   try {
     const cleanEmail = email.trim().toLowerCase();
     const matched = await db.select().from(users);
-    const user = matched.find(u => u.email?.toLowerCase() === cleanEmail);
-    if (!user) throw new Error("User not found");
+    const candidates = matched.filter(u => u.email?.toLowerCase() === cleanEmail);
+    if (candidates.length === 0) throw new Error("User not found");
+    // `users.email` has no unique constraint, so more than one row can
+    // share the same address - silently taking the first match (whichever
+    // order the DB happened to return) could reset a different account
+    // than the one the requester intended. Refuse rather than guess; an
+    // admin needs to de-duplicate the emails first.
+    if (candidates.length > 1) {
+      throw new Error(`Multiple accounts share the email "${cleanEmail}" (${candidates.map(u => u.username).join(', ')}) - cannot safely determine which one to update. Please de-duplicate their email addresses first.`);
+    }
+    const user = candidates[0];
     const hashed = await hashPassword(newPass);
     await db.update(users).set({ pass: hashed }).where(eq(users.id, user.id));
     return true;
@@ -497,11 +514,25 @@ export async function getVehicles(): Promise<Vehicle[]> {
   }
 }
 
-export async function saveVehicle(vehicle: Vehicle) {
+// `previousId` is the row's CURRENT primary key in the vehicles table,
+// before this save - pass it whenever the caller already knows which
+// existing vehicle is being updated (see /api/fleet's POST handler). The
+// table has no synthetic identity separate from Reg. No.: the row's id is
+// always re-derived from the (possibly just-edited) Reg. No./regNo fields
+// below, so if a caller changes Reg. No. for an existing vehicle without
+// this hint, the row would previously get inserted under a brand-new id,
+// leaving the old row behind as an orphaned duplicate. When previousId is
+// given and differs from the freshly-computed id, the old row is removed
+// first so the vehicle migrates to its new key instead of duplicating.
+export async function saveVehicle(vehicle: Vehicle, previousId?: string) {
   try {
     const regNo = vehicle['Reg. No.'] || vehicle.regNo || vehicle.id || `v-${Date.now()}`;
     const id = regNo;
     const dataString = JSON.stringify(vehicle);
+
+    if (previousId && previousId !== id) {
+      await db.delete(vehicles).where(eq(vehicles.id, previousId));
+    }
 
     const existing = await db.select().from(vehicles).where(eq(vehicles.id, id));
     if (existing.length > 0) {
@@ -761,13 +792,20 @@ export async function saveDieselBunkAccount(account: DieselBunkAccount) {
 
 export async function deleteDieselBunkAccount(id: string) {
   try {
-    await db.delete(dieselBunkAccounts).where(eq(dieselBunkAccounts.id, id));
-    // Deleting an account orphans its own payments - clean those up too
-    // rather than leaving unreachable rows behind (mirrors
-    // handleDeletePeriod's own "delete a period, delete its payments"
-    // cascade from the old scheme).
-    const orphaned = (await getDieselBunkPayments()).filter(p => p.bunkId === id);
-    for (const p of orphaned) await db.delete(dieselBunkPayments).where(eq(dieselBunkPayments.id, p.id));
+    // Runs as one transaction - the account and its now-orphaned payments
+    // must disappear together. Previously the account was deleted first and
+    // its payments removed one at a time afterward with no transaction, so
+    // a failure partway through the payment loop left the account gone but
+    // some of its payments permanently orphaned (referencing a bunkId that
+    // no longer resolves to any account).
+    await db.transaction(async (tx) => {
+      await tx.delete(dieselBunkAccounts).where(eq(dieselBunkAccounts.id, id));
+      // Deleting an account orphans its own payments - clean those up too
+      // rather than leaving unreachable rows behind (mirrors
+      // handleDeletePeriod's own "delete a period, delete its payments"
+      // cascade from the old scheme).
+      await tx.delete(dieselBunkPayments).where(eq(dieselBunkPayments.bunkId, id));
+    });
     return await getDieselBunkAccounts();
   } catch (error) {
     console.error("Database action failed in deleteDieselBunkAccount:", error);
@@ -2570,31 +2608,87 @@ export async function deleteDriverEmployee(id: string) {
 //    reports and Mileage Report entries only ever stamp driverId as a plain
 //    optional snapshot field (not a table id), so these are likewise
 //    updated in place.
+// Runs as a single DB transaction so a failure partway through (e.g. a
+// transient connection drop) can never leave a driver's history split
+// across the old and new id - either every table below ends up renamed, or
+// (on error) none of them do, and the whole operation is retried safely.
+// Uses `tx` directly against each table instead of calling the individual
+// saveX() helpers above, since those always operate against the module-
+// level `db` connection rather than this transaction's connection.
 export async function cascadeRenameDriverId(oldId: string, newId: string) {
-  const attendance = (await getDriverAttendance()).filter(a => a.driverId === oldId);
-  for (const rec of attendance) {
-    const newRecId = `${newId}-${rec.date}`;
-    await saveDriverAttendanceRecord({ ...rec, id: newRecId, driverId: newId });
-    if (newRecId !== rec.id) await deleteDriverAttendanceRecord(rec.id);
+  try {
+    await db.transaction(async (tx) => {
+      // Driver Attendance: id is deterministic `${driverId}-${date}`, so
+      // each row is re-saved under a brand-new id; the old row is deleted
+      // in the same transaction rather than only after, so a failure
+      // mid-loop can't lose a day's mark or leave it duplicated.
+      const attendanceRows = await tx.select().from(driverAttendance).where(eq(driverAttendance.driverId, oldId));
+      for (const row of attendanceRows) {
+        const rec = JSON.parse(row.data);
+        const newRecId = `${newId}-${rec.date}`;
+        const complete = { ...rec, id: newRecId, driverId: newId };
+        const dataString = JSON.stringify(complete);
+        await tx.insert(driverAttendance).values({ id: newRecId, driverId: newId, data: dataString })
+          .onConflictDoUpdate({ target: driverAttendance.id, set: { driverId: newId, data: dataString } });
+        if (newRecId !== row.id) await tx.delete(driverAttendance).where(eq(driverAttendance.id, row.id));
+      }
+
+      // Driver Salary Slips: id is independent (slipNumber-based), so these
+      // are just updated in place.
+      const slipRows = await tx.select().from(driverSalarySlips).where(eq(driverSalarySlips.driverId, oldId));
+      for (const row of slipRows) {
+        const slip = JSON.parse(row.data);
+        const dataString = JSON.stringify({ ...slip, driverId: newId });
+        await tx.update(driverSalarySlips).set({ driverId: newId, data: dataString }).where(eq(driverSalarySlips.id, row.id));
+      }
+
+      // Driver Salary Slip Audits: append-only log, but renaming updates
+      // each existing row's driverId in place - re-inserting under the
+      // same id (as the old saveDriverSalarySlipAuditRecord-based code did)
+      // would violate that table's own primary key.
+      const auditRows = await tx.select().from(driverSalarySlipAudits).where(eq(driverSalarySlipAudits.driverId, oldId));
+      for (const row of auditRows) {
+        const audit = JSON.parse(row.data);
+        const dataString = JSON.stringify({ ...audit, driverId: newId });
+        await tx.update(driverSalarySlipAudits).set({ driverId: newId, data: dataString }).where(eq(driverSalarySlipAudits.id, row.id));
+      }
+
+      // Petty Cash vouchers, Maintenance (Service Ledger) records, Breakdown
+      // reports and Mileage Report entries only ever stamp driverId as a
+      // plain optional snapshot field inside their JSON blob (not a table
+      // column), so these tables are scanned in full and updated in place.
+      const vouchers = await tx.select().from(pettyCashVouchers);
+      for (const row of vouchers) {
+        const v = JSON.parse(row.data);
+        if (v.driverId !== oldId) continue;
+        await tx.update(pettyCashVouchers).set({ data: JSON.stringify({ ...v, driverId: newId }) }).where(eq(pettyCashVouchers.id, row.id));
+      }
+
+      const serviceRecords = await tx.select().from(maintenanceRecords);
+      for (const row of serviceRecords) {
+        const r = JSON.parse(row.data);
+        if (r.driverId !== oldId) continue;
+        await tx.update(maintenanceRecords).set({ data: JSON.stringify({ ...r, driverId: newId }) }).where(eq(maintenanceRecords.id, row.id));
+      }
+
+      const breakdowns = await tx.select().from(breakdownReports);
+      for (const row of breakdowns) {
+        const r = JSON.parse(row.data);
+        if (r.driverId !== oldId) continue;
+        await tx.update(breakdownReports).set({ data: JSON.stringify({ ...r, driverId: newId }) }).where(eq(breakdownReports.id, row.id));
+      }
+
+      const mileageRows = await tx.select().from(mileageReports);
+      for (const row of mileageRows) {
+        const r = JSON.parse(row.data);
+        if (r.driverId !== oldId) continue;
+        await tx.update(mileageReports).set({ data: JSON.stringify({ ...r, driverId: newId }) }).where(eq(mileageReports.id, row.id));
+      }
+    });
+  } catch (error) {
+    console.error("Database action failed in cascadeRenameDriverId:", error);
+    throw new Error("Failed to rename driver ID across related records.", { cause: error });
   }
-
-  const slips = (await getDriverSalarySlips()).filter(s => s.driverId === oldId);
-  for (const slip of slips) await saveDriverSalarySlipRecord({ ...slip, driverId: newId });
-
-  const slipAudits = (await getDriverSalarySlipAudits()).filter(a => a.driverId === oldId);
-  for (const audit of slipAudits) await saveDriverSalarySlipAuditRecord({ ...audit, driverId: newId });
-
-  const vouchers = (await getPettyCashVouchers()).filter(v => v.driverId === oldId);
-  for (const v of vouchers) await savePettyCashVoucher({ ...v, driverId: newId });
-
-  const serviceRecords = (await getMaintenanceRecords()).filter(r => r.driverId === oldId);
-  for (const r of serviceRecords) await saveMaintenanceRecord({ ...r, driverId: newId });
-
-  const breakdowns = (await getBreakdownReports()).filter(r => r.driverId === oldId);
-  for (const r of breakdowns) await saveBreakdownReport({ ...r, driverId: newId });
-
-  const mileageReports = (await getMileageReports()).filter(r => r.driverId === oldId);
-  for (const r of mileageReports) await saveMileageReport({ ...r, driverId: newId });
 }
 
 export async function getDriverAttendance(): Promise<DriverAttendance[]> {

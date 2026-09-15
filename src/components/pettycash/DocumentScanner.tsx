@@ -9,7 +9,7 @@ import { loadPhotoCanvases, detectAndProcess, processWithQuad } from '../../util
 import { loadOpenCV } from '../../utils/scanner/cvLoader';
 import { canvasToMat, matToCanvas, canvasToBlob, rotateCanvas90 } from '../../utils/scanner/imageIo';
 import { toGrayscaleRgba } from '../../utils/scanner/enhance';
-import { Quad } from '../../utils/scanner/geometry';
+import { Quad, rotateQuadClockwise } from '../../utils/scanner/geometry';
 import { DetectionConfidence } from '../../utils/scanner/documentDetector';
 import { QualityCheckResult } from '../../utils/scanner/qualityCheck';
 import ManualCropEditor from './ManualCropEditor';
@@ -288,9 +288,28 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
     // image, so the spinner would otherwise spin forever with no way to
     // clear itself.
     scanTokenRef.current++;
+    // quad/quadFullRes are computed against the PRE-rotation originalCanvas/
+    // workingCanvas dimensions - captured here before those canvases are
+    // replaced below, then remapped into the rotated image's coordinate
+    // space. Left untransformed, Adjust Crop's crop-box overlay (seeded
+    // from quadFullRes - see the ManualCropEditor render below) would open
+    // badly misaligned against the now-rotated photo.
     const rotatedOriginal = rotateCanvas90(scanData.originalCanvas, true);
     const rotatedProcessed = scanData.processedCanvas ? rotateCanvas90(scanData.processedCanvas, true) : null;
-    setScanData({ ...scanData, originalCanvas: rotatedOriginal, processedCanvas: rotatedProcessed, detecting: false });
+    const rotatedQuad = scanData.quad
+      ? rotateQuadClockwise(scanData.quad, scanData.workingCanvas.width, scanData.workingCanvas.height)
+      : null;
+    const rotatedQuadFullRes = scanData.quadFullRes
+      ? rotateQuadClockwise(scanData.quadFullRes, scanData.originalCanvas.width, scanData.originalCanvas.height)
+      : null;
+    setScanData({
+      ...scanData,
+      originalCanvas: rotatedOriginal,
+      processedCanvas: rotatedProcessed,
+      quad: rotatedQuad,
+      quadFullRes: rotatedQuadFullRes,
+      detecting: false
+    });
   };
 
   const handleUseOriginal = () => {

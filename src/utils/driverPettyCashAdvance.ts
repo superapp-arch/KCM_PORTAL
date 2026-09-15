@@ -29,6 +29,21 @@ export interface DriverPettyCashAdvanceResult {
   entries: DriverPettyCashAdvanceEntry[];
 }
 
+// Petty Cash's own date column is documented (see PettyCash.tsx's own
+// getYearFromDate/getMonthFromDate) as sometimes YYYY-MM-DD and sometimes
+// DD-MM-YYYY, depending on how it was entered/imported. Extracts a YYYY-MM
+// key handling either shape - a plain `.slice(0, 7)` only works for
+// YYYY-MM-DD, so a DD-MM-YYYY voucher (e.g. "05-09-2026") never matched any
+// month key and was silently dropped from the driver's total.
+function monthKeyFromDate(dateStr: string): string {
+  const parts = (dateStr || '').split(/[-/]/);
+  if (parts.length === 3) {
+    if (parts[0].length === 4) return `${parts[0]}-${parts[1].padStart(2, '0')}`; // YYYY-MM-DD
+    if (parts[2].length === 4) return `${parts[2]}-${parts[1].padStart(2, '0')}`; // DD-MM-YYYY
+  }
+  return (dateStr || '').slice(0, 7);
+}
+
 // `month` is YYYY-MM. Matches vendorId case/whitespace-insensitively against
 // driverId, since Petty Cash's Vendor ID is free-typed by the desk handling
 // it, not selected from a locked list.
@@ -40,7 +55,7 @@ export function computeDriverPettyCashAdvance(
 
   const matches = slimVouchers.filter(v =>
     (v.vendorId || '').trim().toUpperCase() === targetDriverId &&
-    (v.date || '').slice(0, 7) === month
+    monthKeyFromDate(v.date) === month
   );
 
   const entries: DriverPettyCashAdvanceEntry[] = matches

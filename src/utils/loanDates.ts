@@ -3,6 +3,26 @@
 // VehicleLoan/BusinessLoan records and must agree on Months Completed/EMI
 // Paid and Due Date, so the calculation lives in one place.
 
+function daysInCalendarMonth(year: number, monthIndex0: number): number {
+  return new Date(year, monthIndex0 + 1, 0).getDate();
+}
+
+// Adds `months` calendar months to (year, monthIndex0, day), clamping the
+// day to the target month's actual last day instead of letting the Date
+// constructor roll over into the following month. `new Date(y, m, 31)`
+// silently overflows into the next month whenever the target month has
+// fewer than 31 days (e.g. Sept 31 -> Oct 1) - for an EMI start day of 29,
+// 30 or 31 that shifted the Due Date a day late and delayed Months
+// Completed/EMI Paid by a period at every 28/29/30-day month crossed
+// (Feb, Apr, Jun, Sep, Nov).
+function addMonthsClamped(year: number, monthIndex0: number, day: number, months: number): Date {
+  const totalMonthIndex = monthIndex0 + months;
+  const targetYear = year + Math.floor(totalMonthIndex / 12);
+  const targetMonthIndex0 = ((totalMonthIndex % 12) + 12) % 12;
+  const clampedDay = Math.min(day, daysInCalendarMonth(targetYear, targetMonthIndex0));
+  return new Date(targetYear, targetMonthIndex0, clampedDay);
+}
+
 // Finds k = how many EMI due-dates (startDate, startDate+1mo, +2mo, ...)
 // have already fully passed as of today. The due date itself still counts as
 // "not yet passed" on its own day - it only rolls to the next month's due
@@ -17,7 +37,7 @@ function findElapsedPeriods(startDate: string): number {
   today.setHours(0, 0, 0, 0);
 
   const calendarMonthsDiff = (today.getFullYear() - y) * 12 + (today.getMonth() - (m - 1));
-  const candidateDue = new Date(y, m - 1 + calendarMonthsDiff, startDay);
+  const candidateDue = addMonthsClamped(y, m - 1, startDay, calendarMonthsDiff);
   const k = candidateDue >= today ? calendarMonthsDiff : calendarMonthsDiff + 1;
   return Math.max(0, k);
 }
@@ -37,7 +57,7 @@ export function computeDueDate(startDate: string | undefined, monthsCompleted: n
   if (tenure != null && monthsCompleted >= tenure) return 'Completed';
   const [y, m, d] = startDate.split('-').map(Number);
   if (!y || !m) return '-';
-  const due = new Date(y, m - 1 + monthsCompleted, d || 1);
+  const due = addMonthsClamped(y, m - 1, d || 1, monthsCompleted);
   return due.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
@@ -71,5 +91,5 @@ export function computeDueDateRaw(startDate: string | undefined, tenure: number 
   if (tenure != null && monthsCompleted >= tenure) return null;
   const [y, m, d] = startDate.split('-').map(Number);
   if (!y || !m) return null;
-  return new Date(y, m - 1 + monthsCompleted, d || 1);
+  return addMonthsClamped(y, m - 1, d || 1, monthsCompleted);
 }

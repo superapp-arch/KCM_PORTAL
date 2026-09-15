@@ -284,7 +284,13 @@ export default function BreakdownsTab({
                   <td className="px-3 py-2.5 text-slate-500 max-w-[200px] truncate" title={b.description}>{b.description || '-'}</td>
                   <td className="px-3 py-2.5 whitespace-nowrap">{b.driverName || '-'}</td>
                   <td className="px-3 py-2.5 whitespace-nowrap">{b.paymentType || '-'}</td>
-                  <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800 whitespace-nowrap">{b.amount ? `₹${b.amount.toLocaleString('en-IN')}` : '-'}</td>
+                  {/* `b.amount != null`, not truthy - a genuine ₹0 (e.g. a
+                      warranty-covered repair with no cost) is a real,
+                      deliberately-entered figure and must read as ₹0, not
+                      "-" (which should mean "no amount was entered at all"
+                      - otherwise the two are indistinguishable and cost
+                      audits can't tell a real zero from a missing value). */}
+                  <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800 whitespace-nowrap">{b.amount != null ? `₹${b.amount.toLocaleString('en-IN')}` : '-'}</td>
                   <td className="px-3 py-2.5 text-center">
                     {b.documents && b.documents.length > 0 ? (
                       <span className="inline-flex items-center justify-center px-1.5 py-0.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-[10px] font-bold">{b.documents.length}</span>

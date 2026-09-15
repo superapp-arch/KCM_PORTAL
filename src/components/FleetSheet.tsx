@@ -402,8 +402,18 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
       const key = String(v['Reg. No.'] || v.regNo || '').trim().toUpperCase();
       if (!key) continue;
       const period = resolveInsurancePeriod(v);
+      // isWithinInsurancePeriod unconditionally returns false when there's
+      // no current policy window to compare against (from/to both blank -
+      // e.g. a newly added vehicle whose Insurance Expiry Date hasn't been
+      // filled in yet) - filtering on it in that case hid every real,
+      // already-logged incident for that vehicle, not just ones from an
+      // expired prior policy (the actual, intended target of this filter).
+      // With no window defined there's nothing to filter against, so every
+      // incident stays visible until the vehicle actually has one on file.
+      const hasInsurancePeriod = !!(period.from && period.to);
       const relevant = vehicleIncidents.filter(inc =>
-        (inc.regNo || '').trim().toUpperCase() === key && isWithinInsurancePeriod(inc, period.from, period.to)
+        (inc.regNo || '').trim().toUpperCase() === key &&
+        (!hasInsurancePeriod || isWithinInsurancePeriod(inc, period.from, period.to))
       );
       if (relevant.length === 0) continue;
       map[key] = {

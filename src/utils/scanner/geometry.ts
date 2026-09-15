@@ -9,6 +9,18 @@ export type Quad = [Point, Point, Point, Point];
 
 export const dist = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y);
 
+// Maps a quad's points from a `srcWidth` x `srcHeight` image's coordinate
+// space into the coordinate space of that SAME image rotated 90 degrees
+// clockwise (matching imageIo.ts's rotateCanvas90(canvas, true) exactly - a
+// point (x, y) lands at (srcHeight - y, x) in the rotated image). Needed
+// whenever a canvas a quad refers to gets rotated - DocumentScanner's own
+// handleRotate used to rotate the image canvases but leave any already-
+// detected quad/quadFullRes untouched, silently misaligning the crop-box
+// overlay with the actual document edges the next time Adjust Crop opened.
+export function rotateQuadClockwise(quad: Quad, srcWidth: number, srcHeight: number): Quad {
+  return quad.map(p => ({ x: srcHeight - p.y, y: p.x })) as Quad;
+}
+
 // Shoelace formula - always returns a positive area regardless of winding
 // order, used both for scoring candidate document contours and for
 // validating a manually-dragged quad isn't degenerate.

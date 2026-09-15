@@ -18,6 +18,26 @@ import { lookup24hrDedicatedRate, lookupReeferWalkesRate, lookupAdHocRouteRate }
 // an imported row - see the alignment note above additionalKmCost etc.) ---
 const normalizeHeader = (h: unknown): string => String(h || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 
+// 2026-09-11: compared punctuation-stripped, not just trimmed+uppercased -
+// Fleet & Vehicles' own Reg. No. field doesn't strip spaces/hyphens either
+// (confirmed: FleetSheet.tsx only .toUpperCase().trim()s it), so the same
+// real vehicle can easily be stored there as "KA51AL3422" while elsewhere
+// it's typed as "KA 51 AL 3422" or "KA-51-AL-3422" - a strict compare would
+// wrongly reject a genuine match. Stripping all non-alphanumerics before
+// comparing can only ever turn a false rejection into a correct match - two
+// genuinely different plates never collide from this alone. Exported so
+// WarehouseDetails.tsx's own live-entry-form vehicle matching (Fleet lookup,
+// duplicate/conflict checks) uses the exact same rule as this importer,
+// instead of drifting into its own plain string compare.
+export const stripRegNo = (s: string): string => s.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+// Case/whitespace-insensitive Warehouse Name compare, for the same reason
+// as stripRegNo above - the duplicate/deployment-conflict checks below used
+// to compare warehouseName with a raw ===, so "Bangalore Hub" vs
+// "bangalore hub" (or a trailing space from a pasted cell) read as two
+// different warehouses and let a real duplicate/conflict through.
+const sameWarehouseName = (a: string, b: string): boolean => (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
+
 const WAREHOUSE_IMPORT_ALIASES: Record<string, keyof WarehouseEntry> = {
   date: 'date', deploymentdate: 'date',
   warehousename: 'warehouseName', warehouse: 'warehouseName',
@@ -185,15 +205,6 @@ export async function parseWarehouseImportFile(
     ...WAREHOUSE_LOCATIONS.map(w => w.name.trim().toLowerCase()),
     ...existingEntries.map(e => (e.warehouseName || '').trim().toLowerCase())
   ]);
-  // 2026-09-11: compared punctuation-stripped, not just trimmed+uppercased -
-  // Fleet & Vehicles' own Reg. No. field doesn't strip spaces/hyphens either
-  // (confirmed: FleetSheet.tsx only .toUpperCase().trim()s it), so the same
-  // real vehicle can easily be stored there as "KA51AL3422" while a real
-  // import file has "KA 51 AL 3422" or "KA-51-AL-3422" - a strict compare
-  // would wrongly reject a genuine match. Stripping all non-alphanumerics
-  // before comparing can only ever turn a false rejection into a correct
-  // match - two genuinely different plates never collide from this alone.
-  const stripRegNo = (s: string) => s.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   const knownVehicleNos = new Set(vehicles.map(v => stripRegNo(v.regNo || v['Reg. No.'] || '')));
 
   // For duplicate + deployment-conflict checks: every entry already saved,
@@ -251,20 +262,25 @@ export async function parseWarehouseImportFile(
     // already on record (either already-saved or elsewhere in this file).
     // There is no separate "Vehicle Deployment" table in this codebase -
     // a vehicle's own WarehouseEntry history IS its deployment record.
+    // Compared via stripRegNo/sameWarehouseName (not raw === ), same as the
+    // Fleet-vehicle check just above - a strict compare here would miss the
+    // exact "KA51AL3422" vs "KA 51 AL 3422" mismatch this file already
+    // fixed for that check, letting a real conflict/duplicate slip through
+    // as a fresh import instead.
     if (vehicleNumber && date) {
-      const conflict = existingEntries.find(e => e.vehicleNumber === vehicleNumber && e.date === date && e.warehouseName !== warehouseName)
-        || seenThisFile.find(e => e.vehicleNumber === vehicleNumber && e.date === date && e.warehouseName !== warehouseName);
+      const conflict = existingEntries.find(e => stripRegNo(e.vehicleNumber) === stripRegNo(vehicleNumber) && e.date === date && !sameWarehouseName(e.warehouseName, warehouseName))
+        || seenThisFile.find(e => stripRegNo(e.vehicleNumber) === stripRegNo(vehicleNumber) && e.date === date && !sameWarehouseName(e.warehouseName, warehouseName));
       if (conflict) errors.push(`Vehicle already logged at a different warehouse (${conflict.warehouseName}) on this date.`);
     }
 
     // Duplicate - same Warehouse + Vehicle + Date already on record.
     let duplicateOf: string | null = null;
     if (warehouseName && vehicleNumber && date) {
-      const existing = existingEntries.find(e => e.warehouseName === warehouseName && e.vehicleNumber === vehicleNumber && e.date === date);
+      const existing = existingEntries.find(e => sameWarehouseName(e.warehouseName, warehouseName) && stripRegNo(e.vehicleNumber) === stripRegNo(vehicleNumber) && e.date === date);
       if (existing) {
         duplicateOf = existing.id;
         errors.push(DUPLICATE_ERROR);
-      } else if (seenThisFile.some(e => e.warehouseName === warehouseName && e.vehicleNumber === vehicleNumber && e.date === date)) {
+      } else if (seenThisFile.some(e => sameWarehouseName(e.warehouseName, warehouseName) && stripRegNo(e.vehicleNumber) === stripRegNo(vehicleNumber) && e.date === date)) {
         errors.push('Duplicated elsewhere in this file (same Warehouse + Vehicle + Date).');
       }
       seenThisFile.push({ warehouseName, vehicleNumber, date });

@@ -37,6 +37,7 @@ import { WAREHOUSE_LOCATIONS, WAREHOUSE_CITIES, cityForWarehouseName } from '../
 import RatesSummary from './warehouse/RatesSummary';
 import WarehouseImportModal from './warehouse/WarehouseImportModal';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
+import { stripRegNo } from '../utils/warehouseImportExport';
 import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
 
 // Suggestions only (not a locked list) for a vendor vehicle's Type field,
@@ -232,9 +233,23 @@ export default function WarehouseDetails({
   // No match (missing selection, or a genuinely unconfigured combination)
   // means Base Rate is 0, not a leftover formula-based number.
   const matchedAdHocRate = isAdHoc24 ? lookupAdHocRouteRate(adHocFromCity, adHocToCity, vehicleType, vehicleCategory) : null;
+  // KM Slab through Add Hour are zeroed out here (not just hidden from the
+  // UI) whenever hideKmTimeBlock is true - switching Deployment Type away
+  // from Regular doesn't reset their underlying state (so re-selecting
+  // Regular later doesn't lose whatever the office had typed), but nothing
+  // was stopping those still-populated values from silently continuing to
+  // feed the Base Rate/Extra KM/Extra Hour Amount/Grand Total for a
+  // deployment type that's explicitly "not tracked against a monthly KM
+  // Slab/shift-time budget the way Regular ones are."
   const rates = computeWarehouseRates({
-    fixedHours, scheduledRate, workingDays, kmSlab: kmSlabNumber, variableCostPerKm, kmUtilised,
-    addKm: extraKm, ratePerExtraKm, addHour, ratePerExtraHour,
+    fixedHours, scheduledRate, workingDays,
+    kmSlab: hideKmTimeBlock ? 0 : kmSlabNumber,
+    variableCostPerKm: hideKmTimeBlock ? 0 : variableCostPerKm,
+    kmUtilised: hideKmTimeBlock ? 0 : kmUtilised,
+    addKm: hideKmTimeBlock ? 0 : extraKm,
+    ratePerExtraKm: hideKmTimeBlock ? 0 : ratePerExtraKm,
+    addHour: hideKmTimeBlock ? 0 : addHour,
+    ratePerExtraHour: hideKmTimeBlock ? 0 : ratePerExtraHour,
     tollCharges, parkingCost, hybridReeferCost,
     flatBaseRateOverride: isAdHoc24 ? (matchedAdHocRate ?? 0) : null
   });
@@ -319,10 +334,18 @@ export default function WarehouseDetails({
   // See hideKmTimeBlock's own comment above (Add form) - same rule, mirrored.
   const editHideKmTimeBlock = editDeploymentType === 'ad-hoc' || editDeploymentType === 'hybrid';
   const editMatchedAdHocRate = editIsAdHoc24 ? lookupAdHocRouteRate(editAdHocFromCity, editAdHocToCity, editVehicleType, editVehicleCategory) : null;
+  // See the Add form's own rates call above - same "zero out, don't just
+  // hide" rule so a stale KM Slab/Add KM/Add Hour left over from before
+  // switching Deployment Type can't silently keep feeding the Grand Total.
   const editRates = computeWarehouseRates({
-    fixedHours: editFixedHours, scheduledRate: editScheduledRate, workingDays: editWorkingDays, kmSlab: editKmSlabNumber,
-    variableCostPerKm: editVariableCostPerKm, kmUtilised: editKmUtilised,
-    addKm: editExtraKm, ratePerExtraKm: editRatePerExtraKm, addHour: editAddHour, ratePerExtraHour: editRatePerExtraHour,
+    fixedHours: editFixedHours, scheduledRate: editScheduledRate, workingDays: editWorkingDays,
+    kmSlab: editHideKmTimeBlock ? 0 : editKmSlabNumber,
+    variableCostPerKm: editHideKmTimeBlock ? 0 : editVariableCostPerKm,
+    kmUtilised: editHideKmTimeBlock ? 0 : editKmUtilised,
+    addKm: editHideKmTimeBlock ? 0 : editExtraKm,
+    ratePerExtraKm: editHideKmTimeBlock ? 0 : editRatePerExtraKm,
+    addHour: editHideKmTimeBlock ? 0 : editAddHour,
+    ratePerExtraHour: editHideKmTimeBlock ? 0 : editRatePerExtraHour,
     tollCharges: editTollCharges, parkingCost: editParkingCost, hybridReeferCost: editHybridReeferCost,
     flatBaseRateOverride: editIsAdHoc24 ? (editMatchedAdHocRate ?? 0) : null
   });
@@ -415,8 +438,14 @@ export default function WarehouseDetails({
     ...vehicles.map(v => (v['Reg. No.'] || v.regNo || '').trim()).filter(Boolean),
     ...vendorVehicleNumbers,
   ]));
+  // Compared via stripRegNo (punctuation-stripped), same rule
+  // warehouseImportExport.ts's importer already uses - Fleet & Vehicles'
+  // own Reg. No. field doesn't strip spaces/hyphens either, so a manually
+  // typed "KA-51-AL-3422" would otherwise fail to match a Fleet record
+  // stored as "KA51AL3422" and silently be treated as an unregistered
+  // vendor vehicle instead of auto-locking to its real Fleet record.
   const isFleetVehicleNumber = (num: string) =>
-    vehicles.some(v => (v['Reg. No.'] || v.regNo || '').trim().toLowerCase() === num.trim().toLowerCase());
+    vehicles.some(v => stripRegNo(v['Reg. No.'] || v.regNo || '') === stripRegNo(num));
 
   // Handle vehicle number selection to also autofill Type/Category:
   // - Registered in Fleet & Vehicles -> that record is authoritative, always
@@ -430,7 +459,7 @@ export default function WarehouseDetails({
     const trimmed = num.trim();
     if (!trimmed) { setVehicleType(''); setVehicleCategory(''); return; }
 
-    const matchedVehicle = vehicles.find(v => (v['Reg. No.'] || v.regNo || '').trim().toLowerCase() === trimmed.toLowerCase());
+    const matchedVehicle = vehicles.find(v => stripRegNo(v['Reg. No.'] || v.regNo || '') === stripRegNo(trimmed));
     if (matchedVehicle) {
       const vType = matchedVehicle.Type || matchedVehicle.type || '';
       const vCategory = matchedVehicle.Category || matchedVehicle.category || '';
@@ -440,7 +469,7 @@ export default function WarehouseDetails({
     }
 
     const priorEntry = [...entries]
-      .filter(e => (e.vehicleNumber || '').trim().toLowerCase() === trimmed.toLowerCase())
+      .filter(e => stripRegNo(e.vehicleNumber || '') === stripRegNo(trimmed))
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.slNo - a.slNo)[0];
     setVehicleType(priorEntry?.vehicleType || '');
     setVehicleCategory(priorEntry?.vehicleCategory || '');
@@ -449,12 +478,17 @@ export default function WarehouseDetails({
   // Form Submit (New Warehouse Entry)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!date || !warehouseName || !vehicleNumber || !closingKm) {
+    // Closing KM is hidden entirely for Ad-hoc/Hybrid (see hideKmTimeBlock
+    // above - they aren't tracked against a monthly KM Slab at all), so
+    // requiring it here unconditionally made those deployment types
+    // impossible to save at all. Mirrors warehouseImportExport.ts's own
+    // `if (!closingKm && !hideKmTimeRow)` exemption for the import path.
+    if (!date || !warehouseName || !vehicleNumber || (!closingKm && !hideKmTimeBlock)) {
       alert('Please fill in Date, Warehouse Name, Vehicle Number, and Closing KM.');
       return;
     }
 
-    if (closingKm < openingKm) {
+    if (!hideKmTimeBlock && closingKm < openingKm) {
       alert(`Closing KM (${closingKm}) cannot be less than Opening KM (${openingKm}).`);
       return;
     }
@@ -564,7 +598,7 @@ export default function WarehouseDetails({
     const trimmed = num.trim();
     if (!trimmed) { setEditVehicleType(''); setEditVehicleCategory(''); return; }
 
-    const matchedVehicle = vehicles.find(v => (v['Reg. No.'] || v.regNo || '').trim().toLowerCase() === trimmed.toLowerCase());
+    const matchedVehicle = vehicles.find(v => stripRegNo(v['Reg. No.'] || v.regNo || '') === stripRegNo(trimmed));
     if (matchedVehicle) {
       const vType = matchedVehicle.Type || matchedVehicle.type || '';
       const vCategory = matchedVehicle.Category || matchedVehicle.category || '';
@@ -574,7 +608,7 @@ export default function WarehouseDetails({
     }
 
     const priorEntry = [...entries]
-      .filter(e => e.id !== selectedEntry?.id && (e.vehicleNumber || '').trim().toLowerCase() === trimmed.toLowerCase())
+      .filter(e => e.id !== selectedEntry?.id && stripRegNo(e.vehicleNumber || '') === stripRegNo(trimmed))
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.slNo - a.slNo)[0];
     setEditVehicleType(priorEntry?.vehicleType || '');
     setEditVehicleCategory(priorEntry?.vehicleCategory || '');
@@ -785,8 +819,18 @@ export default function WarehouseDetails({
   }, [searchTerm, filterWarehouse, filterVehicleType, filterVehicleCategory, filterDeploymentType, filterStartDate, filterEndDate]);
   const paginatedEntries = paginateRows(filteredEntries, warehousePage, WAREHOUSE_PAGE_SIZE);
 
-  // Unique lists for filters
+  // Unique lists for filters - derived from actual saved entries (like
+  // uniqueWarehouses already was), not a hardcoded option list. The Vehicle
+  // Type/Category filters used to offer fixed lowercase values ('tata ace',
+  // 'dry', etc.) compared with a strict === against entry.vehicleType/
+  // vehicleCategory, which are populated from Fleet's real casing ('Tata
+  // Ace', 'Dry', '14 FT', ...) or free-typed vendor values - so selecting
+  // any of those filter options always matched zero rows. Deriving the
+  // options from the data itself guarantees each one is a real, matchable
+  // value.
   const uniqueWarehouses = Array.from(new Set(entries.map(e => e.warehouseName).filter(Boolean)));
+  const uniqueVehicleTypes = Array.from(new Set(entries.map(e => e.vehicleType).filter(Boolean))).sort();
+  const uniqueVehicleCategories = Array.from(new Set(entries.map(e => e.vehicleCategory).filter(Boolean))).sort();
 
   // Simple Excel Export helper
   const handleExportCSV = () => {
@@ -1606,14 +1650,9 @@ export default function WarehouseDetails({
                   className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 focus:outline-none"
                 >
                   <option value="">All Types</option>
-                  <option value="tata ace">TATA Ace</option>
-                  <option value="bolero">Bolero</option>
-                  <option value="tata 407">TATA 407</option>
-                  <option value="14ft">14ft</option>
-                  <option value="17ft">17ft</option>
-                  <option value="20ft">20ft</option>
-                  <option value="22ft">22ft</option>
-                  <option value="32ft">32ft</option>
+                  {uniqueVehicleTypes.map((vt, idx) => (
+                    <option key={vt || `vt-filter-${idx}`} value={vt}>{vt}</option>
+                  ))}
                 </select>
               </div>
 
@@ -1626,10 +1665,9 @@ export default function WarehouseDetails({
                   className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 focus:outline-none"
                 >
                   <option value="">All Categories</option>
-                  <option value="dry">Dry</option>
-                  <option value="reefer">Reefer</option>
-                  <option value="hybrid">Hybrid</option>
-                  <option value="walkes">Walkes</option>
+                  {uniqueVehicleCategories.map((vc, idx) => (
+                    <option key={vc || `vc-filter-${idx}`} value={vc}>{vc}</option>
+                  ))}
                 </select>
               </div>
 

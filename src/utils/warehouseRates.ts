@@ -101,8 +101,13 @@ export function computeAutoWorkingDays(yyyyMm: string, deductSundays: boolean, h
 
 // The Working Days value actually used in the formula - an explicit
 // override always wins over the auto-computed one, still floored at 1.
+// `override !== 0` used to treat an explicit 0 the same as "no override,"
+// silently falling back to the auto value - so typing 0 into Working Days
+// showed 0 on screen but the Base Rate was actually computed against the
+// unrelated auto value instead, contradicting this very comment. The final
+// Math.max(1, ...) below still floors the result to at least 1 either way.
 export function resolveWorkingDays(auto: number, override: number | undefined | null): number {
-  const val = override != null && override !== 0 ? override : auto;
+  const val = override != null ? override : auto;
   return Math.max(1, Math.floor(val || 1));
 }
 

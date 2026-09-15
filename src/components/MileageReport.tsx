@@ -206,10 +206,20 @@ export default function MileageReportModule({
 
   // 2. Actual Mileage = the vehicle's FIXED reference rating from the Vehicle
   // Mileage Master / Fleet & Vehicles (same shared value) - a per-vehicle
-  // constant, not computed per trip.
+  // constant, not computed per trip. While editing an existing entry for the
+  // SAME vehicle it was originally logged against, this must stay the
+  // record's own historically-snapshotted actualMileage (set by startEdit)
+  // instead of re-syncing to today's master value - otherwise the on-screen
+  // Fuel Audit preview (and the value handleSubmit saves) would silently
+  // shift if the Vehicle Mileage Master has since been updated, even for an
+  // edit that has nothing to do with mileage (e.g. fixing a Remarks typo).
   useEffect(() => {
+    if (editingId) {
+      const original = reports.find(r => r.id === editingId);
+      if (original && original.vehicleNo === vehicleNo) return;
+    }
     setActualMileage(fixedMileageForVehicle != null ? String(fixedMileageForVehicle) : '0');
-  }, [fixedMileageForVehicle]);
+  }, [fixedMileageForVehicle, editingId, vehicleNo, reports]);
 
   // 3. Distance Covered (Total KM) = Closing KM - Opening KM (real odometer).
   useEffect(() => {
@@ -344,8 +354,20 @@ export default function MileageReportModule({
       const calculatedCostPerKm = calculatedMileage > 0 ? parseFloat((rate / calculatedMileage).toFixed(2)) : 0;
       // Snapshot the vehicle's current fixed Actual Mileage reference at entry
       // time, so later edits to the Vehicle Mileage Master don't retroactively
-      // change historical entries.
-      const calculatedActualMileage = fixedMileageForVehicle || 0;
+      // change historical entries. This must actually read the ORIGINAL
+      // record's own stored actualMileage when editing (not fixedMileageForVehicle,
+      // which always reflects today's Vehicle Mileage Master) - otherwise
+      // editing an old report years later for an unrelated reason (fixing a
+      // typo in Remarks, say) would silently recompute its Fuel Audit
+      // difference/note against whatever the vehicle's rating happens to be
+      // today, contradicting this very comment. Only falls back to the
+      // current master value if the vehicle itself was changed during this
+      // edit (so the old rating would no longer even apply) or for a brand
+      // new entry.
+      const originalReport = editingId ? reports.find(r => r.id === editingId) : undefined;
+      const calculatedActualMileage = (originalReport && originalReport.vehicleNo === vehicleNo)
+        ? (originalReport.actualMileage ?? fixedMileageForVehicle ?? 0)
+        : (fixedMileageForVehicle || 0);
       const { difference, note } = computeFuelAudit(calculatedTotalKm, calculatedTotalLitres, rate, calculatedActualMileage, driverName);
       const baseRemarks = stripPreviousAuditNote(remarks);
       const finalRemarks = note ? `${baseRemarks}${baseRemarks ? ' ' : ''}(Fuel Audit: ${note})` : baseRemarks;
@@ -400,6 +422,9 @@ export default function MileageReportModule({
     setEditingId(report.id);
     setDate(report.date);
     setVehicleNo(report.vehicleNo);
+    // The record's own historically-snapshotted rating, not today's Vehicle
+    // Mileage Master value - see the guarded effect above.
+    setActualMileage(report.actualMileage != null ? String(report.actualMileage) : '0');
     setOpeningKm(report.openingKm != null ? String(report.openingKm) : '');
     setClosingKm(report.closingKm != null ? String(report.closingKm) : '');
     setRatePerLitre(String(report.ratePerLitre));

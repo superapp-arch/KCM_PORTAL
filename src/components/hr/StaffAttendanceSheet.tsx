@@ -78,29 +78,58 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-// StaffEmployee.dateOfLeaving is free-text "DD/MM/YYYY" (no date picker, see
-// StaffFormModal) - tolerate "-" as a separator and single-digit day/month
-// too, since nothing enforces the exact format on entry. Returns a "YYYY-MM"
-// month key, or null if the field is empty/unparsable (treated as "never
-// left" below, so an odd manual entry can never wrongly hide someone).
-function parseDateOfLeavingMonthKey(raw?: string): string | null {
+// StaffEmployee.dateOfJoining/dateOfLeaving are both free-text "DD/MM/YYYY"
+// (no date picker, see StaffFormModal) - tolerate "-" as a separator and
+// single-digit day/month too, since nothing enforces the exact format on
+// entry. Returns null if the field is empty/unparsable (an odd manual entry
+// should never wrongly hide/misdate someone).
+function parseFreeTextDate(raw?: string): { year: number; month: number; day: number } | null {
   if (!raw) return null;
   const m = raw.trim().match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
   if (!m) return null;
   const day = parseInt(m[1], 10);
   const month = parseInt(m[2], 10);
+  const year = parseInt(m[3], 10);
   if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  return `${m[3]}-${String(month).padStart(2, '0')}`;
+  return { year, month, day };
+}
+
+function monthKeyOf(d: { year: number; month: number } | null): string | null {
+  return d ? `${d.year}-${String(d.month).padStart(2, '0')}` : null;
 }
 
 // An employee who has left stays visible for the month they actually left in
 // (and every month before it) - e.g. leaving Aug 25 still shows their August
 // attendance in full - but drops out of every month from the following one
-// onward, regardless of the Active/Inactive tab selected. An employee with
-// no Date of Leaving (or an unparsable one) is always visible.
+// onward, regardless of the Active/Inactive tab selected. Symmetrically, a
+// newly joined employee only becomes visible from their own joining month
+// onward - previously there was no such check at all, so a new joiner
+// (Date of Joining this month, or even next month) was already fully
+// visible/editable in every PAST month's grid too. An employee with no
+// Date of Joining/Leaving (or an unparsable one) is always visible for that
+// side of the check.
 function isEmployeeVisibleForMonth(emp: StaffEmployee, month: string): boolean {
-  const leavingMonth = parseDateOfLeavingMonthKey(emp.dateOfLeaving);
-  return !leavingMonth || month <= leavingMonth;
+  const leavingMonth = monthKeyOf(parseFreeTextDate(emp.dateOfLeaving));
+  if (leavingMonth && month > leavingMonth) return false;
+  const joiningMonth = monthKeyOf(parseFreeTextDate(emp.dateOfJoining));
+  if (joiningMonth && month < joiningMonth) return false;
+  return true;
+}
+
+// How many of the month's calendar days actually fall within this
+// employee's tenure - the full month, unless they joined and/or left mid-
+// month. Used to scope the "Working Days" denominator below; previously it
+// was always the full calendar month regardless of Date of Joining, so a
+// mid-month joiner's summary implied they were absent for every day before
+// they were even employed.
+function daysApplicableInMonth(emp: StaffEmployee, month: string, totalDaysInMonth: number): number {
+  let firstDay = 1;
+  let lastDay = totalDaysInMonth;
+  const joining = parseFreeTextDate(emp.dateOfJoining);
+  if (joining && monthKeyOf(joining) === month) firstDay = Math.max(firstDay, joining.day);
+  const leaving = parseFreeTextDate(emp.dateOfLeaving);
+  if (leaving && monthKeyOf(leaving) === month) lastDay = Math.min(lastDay, leaving.day);
+  return Math.max(0, lastDay - firstDay + 1);
 }
 
 export default function StaffAttendanceSheet({ employees, readOnly = false }: StaffAttendanceSheetProps) {
@@ -139,7 +168,9 @@ export default function StaffAttendanceSheet({ employees, readOnly = false }: St
     const rows = monthAttendance.filter(a => a.empId === empId);
     const counts: Partial<Record<AttendanceStatusCode, number>> = {};
     rows.forEach(r => { counts[r.status] = (counts[r.status] || 0) + 1; });
-    const workingDays = totalDays - (counts.Holiday || 0) - (counts.WeekOff || 0);
+    const emp = employees.find(e => e.id === empId);
+    const applicableDays = emp ? daysApplicableInMonth(emp, month, totalDays) : totalDays;
+    const workingDays = applicableDays - (counts.Holiday || 0) - (counts.WeekOff || 0);
     const daysWorked = counts.Present || 0;
     return { daysWorked, workingDays };
   };

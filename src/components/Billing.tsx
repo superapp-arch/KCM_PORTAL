@@ -142,7 +142,7 @@ function deriveComputed(form: InvoiceFormState, creditNotes: BillingCreditNote[]
   const dueDate = computeDueDate(form.date, Number(form.creditPeriodDays) || 0);
   const amountReceived = Number(form.amountReceived) || 0;
   const shortageExcess = computeShortageExcess(amountReceivable, amountReceived);
-  const suggestedStatus = suggestPaymentStatus(amountReceived, amountReceivable, dueDate);
+  const suggestedStatus = suggestPaymentStatus(amountReceived, amountReceivable, dueDate, totalAmt);
   return { listPrice, igst, cgst, sgst, totalAmt, discountAndDebit, tdsAmount, amountReceivable, dueDate, amountReceived, shortageExcess, suggestedStatus };
 }
 
@@ -623,18 +623,25 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
   const [cnSubmitting, setCnSubmitting] = useState(false);
 
   const handleAddCreditNote = async () => {
-    if (!selectedInvoiceForManage || !editForm) return;
+    if (!selectedInvoiceForManage) return;
     const amt = parseFloat(cnAmount);
     if (!amt || amt <= 0) { triggerNotif('Enter a valid Credit Note amount greater than 0.', 'error'); return; }
+    // Built from selectedInvoiceForManage (the last-SAVED invoice), not the
+    // live `editForm` - editForm is the same state bound to every input in
+    // the Edit Invoice Fields column, so using it here despite this action
+    // being "independent of the Save Invoice Changes button" (per this
+    // comment) silently persisted whatever unsaved edits happened to be
+    // sitting in that form as a side effect of adding a credit note.
+    const baseForm = invoiceToForm(selectedInvoiceForManage);
     const updatedNotes = [...(selectedInvoiceForManage.creditNotes || []), { id: String(Date.now()), date: cnDate, amount: amt, reason: cnReason.trim() || undefined }];
-    const computed = deriveComputed(editForm, updatedNotes);
+    const computed = deriveComputed(baseForm, updatedNotes);
     if (sumCreditNotes(updatedNotes) > computed.totalAmt) {
       triggerNotif('Credit Note cannot exceed Total Amt.', 'error');
       return;
     }
     setCnSubmitting(true);
     try {
-      const updatedData = buildInvoicePayload(editForm, computed, updatedNotes);
+      const updatedData = buildInvoicePayload(baseForm, computed, updatedNotes);
       await onUpdateInvoice(selectedInvoiceForManage.id, updatedData);
       setSelectedInvoiceForManage({ ...selectedInvoiceForManage, ...updatedData });
       setEditForm(f => f && ({ ...f, paymentStatus: updatedData.paymentStatus || f.paymentStatus }));
@@ -649,14 +656,18 @@ export default function Billing({ invoices, onAddInvoice, onUpdateInvoice, onDel
   };
 
   const handleRemoveCreditNote = async (noteId: string) => {
-    if (!selectedInvoiceForManage || !editForm) return;
+    if (!selectedInvoiceForManage) return;
     if (!confirm('Remove this credit note? Amount Receivable will go back up.')) return;
     try {
+      // See handleAddCreditNote above - built from the last-saved invoice,
+      // not the live (possibly unsaved) editForm.
+      const baseForm = invoiceToForm(selectedInvoiceForManage);
       const updatedNotes = (selectedInvoiceForManage.creditNotes || []).filter(c => c.id !== noteId);
-      const computed = deriveComputed(editForm, updatedNotes);
-      const updatedData = buildInvoicePayload(editForm, computed, updatedNotes);
+      const computed = deriveComputed(baseForm, updatedNotes);
+      const updatedData = buildInvoicePayload(baseForm, computed, updatedNotes);
       await onUpdateInvoice(selectedInvoiceForManage.id, updatedData);
       setSelectedInvoiceForManage({ ...selectedInvoiceForManage, ...updatedData });
+      setEditForm(f => f && ({ ...f, paymentStatus: updatedData.paymentStatus || f.paymentStatus }));
       triggerNotif('Credit note removed.');
     } catch (err) {
       console.error(err);

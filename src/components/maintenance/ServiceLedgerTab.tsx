@@ -129,7 +129,22 @@ export default function ServiceLedgerTab({
   const autoOdometer = matchedVehicleForOdometer ? latestOdometerFor(regNo.trim().toUpperCase(), mileageReports) : undefined;
 
   const selectedStation = serviceStations.find(s => s.id === serviceStationId);
-  const selectedStationName = (selectedStation?.name || (serviceStations.length === 0 ? garageName : '')).trim();
+  // Falls back to garageName (the frozen name snapshotted at save time)
+  // whenever serviceStationId doesn't resolve to a station on the CURRENT
+  // master list - not only when that list is empty. Deleting a station is
+  // explicitly supported elsewhere in this file ("past records stay
+  // intact" via their own frozen garageName), but a legacy work order whose
+  // station was later deleted still has serviceStationId pointing at that
+  // now-gone id - `serviceStations.length === 0` alone missed exactly that
+  // case whenever OTHER stations still existed, leaving this blank.
+  const selectedStationName = (selectedStation?.name || garageName || '').trim();
+  // serviceStationId set, but it no longer matches any station on the
+  // current master list - the <select> below needs a synthetic option for
+  // it, or it would render as unselected (matching no <option>) even
+  // though a value is set, forcing the office to pick an unrelated real
+  // station just to satisfy the required attribute - permanently
+  // overwriting this record's actual, historical station attribution.
+  const staleServiceStationId = !!(serviceStationId && !selectedStation);
   const isKcmStationSelected = selectedStationName.toLowerCase() === KCM_STATION_NAME;
 
   const vehicleList = Array.from(new Set(vehicles.map(v => v.regNo || v['Reg. No.'] || '').filter(Boolean))).sort();
@@ -675,6 +690,9 @@ export default function ServiceLedgerTab({
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 font-semibold"
                   >
                     <option value="">Select station...</option>
+                    {staleServiceStationId && (
+                      <option value={serviceStationId}>{garageName ? `${garageName} (deleted - kept for history)` : 'Deleted station (kept for history)'}</option>
+                    )}
                     {serviceStations.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
                   {serviceStations.length === 0 && !serviceStationId && (

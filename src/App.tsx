@@ -3,7 +3,7 @@ import SplashScreen from './components/SplashScreen';
 import Login from './components/Login';
 import Administration from './components/Administration';
 import {
-  authFetch, registerSessionExpiredHandler, resetSessionExpiredNotification,
+  authFetch, setSessionToken, registerSessionExpiredHandler, resetSessionExpiredNotification,
   registerBackendUnreachableHandler, resetBackendUnreachableNotification, installBackendUnreachableGuard
 } from './authFetch';
 import { DriverSalaryAdvanceVoucherSlim } from './utils/driverPettyCashAdvance';
@@ -109,6 +109,7 @@ export default function App() {
             if (sessionUser && sessionUser.username) {
               setUser(sessionUser);
               setToken(savedToken);
+              setSessionToken(savedToken);
               await fetchAllData();
             } else {
               // Token is stale/unknown to the server (e.g. server restarted) - clear it
@@ -168,7 +169,7 @@ export default function App() {
       ] = await Promise.all([
         fetch('/api/fleet'),
         authFetch('/api/fuel'),
-        fetch('/api/billing'),
+        authFetch('/api/billing'),
         authFetch('/api/petty-cash'),
         authFetch('/api/market-pod'),
         authFetch('/api/petty-cash-advances'),
@@ -271,7 +272,7 @@ export default function App() {
   };
 
   const handleAddInvoice = async (inv: Omit<BillingInvoice, 'id'>) => {
-    const res = await fetch('/api/billing', {
+    const res = await authFetch('/api/billing', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(inv)
@@ -956,7 +957,7 @@ export default function App() {
   };
 
   const handleUpdateInvoice = async (id: string, inv: Partial<BillingInvoice>) => {
-    const res = await fetch(`/api/billing/${id}`, {
+    const res = await authFetch(`/api/billing/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(inv)
@@ -970,7 +971,7 @@ export default function App() {
   };
 
   const handleDeleteInvoice = async (id: string) => {
-    const res = await fetch(`/api/billing/${id}`, {
+    const res = await authFetch(`/api/billing/${id}`, {
       method: 'DELETE'
     });
     if (res.ok) {
@@ -1034,7 +1035,7 @@ export default function App() {
   };
 
   const handleResolveNotification = async (notifId: string) => {
-    const res = await fetch('/api/notifications/resolve', {
+    const res = await authFetch('/api/notifications/resolve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: notifId })
@@ -1314,13 +1315,17 @@ export default function App() {
     resetSessionExpiredNotification(); // a fresh login can trigger the expiry flow again if it happens a second time
     resetBackendUnreachableNotification(); // likewise for a later, separate outage
     setUser(loggedInUser);
-    if (sessionToken) setToken(sessionToken);
+    if (sessionToken) {
+      setToken(sessionToken);
+      setSessionToken(sessionToken);
+    }
     await fetchAllData();
   };
 
   const handleLogout = () => {
     setUser(null);
     setToken(null);
+    setSessionToken(null);
     localStorage.removeItem('kcm_session_user');
     localStorage.removeItem('kcm_session_token');
   };

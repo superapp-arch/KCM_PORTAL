@@ -199,14 +199,22 @@ export default function DriverFormModal({ driver, vehicles, writableLocations, o
         drivingLicenseDocuments,
         otherDocuments,
         month: salaryMonth,
-        grossSalary: num(salaryForm.grossSalary) || undefined,
-        otherAdditions: num(salaryForm.otherAdditions) || undefined,
-        pettyCashAdvance: num(salaryForm.pettyCashAdvance) || undefined,
-        loanDeduction: num(salaryForm.loanDeduction) || undefined,
-        recoveryAmount: num(salaryForm.recoveryAmount) || undefined,
-        driverWelfare: num(salaryForm.driverWelfare) || undefined,
-        bata: num(salaryForm.bata) || undefined,
-        lopAmount: lopAmount || undefined,
+        // NOT `|| undefined` - num() already turns a blank field into a
+        // real 0, and the PUT route below does a merge-patch onto the
+        // existing record (`{...existing, ...req.body}` server-side), which
+        // drops any key whose value is `undefined` from the JSON body
+        // entirely. `|| undefined` was turning a deliberately-zeroed field
+        // (e.g. clearing a paid-off Loan Deduction back to 0) into exactly
+        // that dropped key, so the server kept the stale non-zero value
+        // instead of clearing it.
+        grossSalary: num(salaryForm.grossSalary),
+        otherAdditions: num(salaryForm.otherAdditions),
+        pettyCashAdvance: num(salaryForm.pettyCashAdvance),
+        loanDeduction: num(salaryForm.loanDeduction),
+        recoveryAmount: num(salaryForm.recoveryAmount),
+        driverWelfare: num(salaryForm.driverWelfare),
+        bata: num(salaryForm.bata),
+        lopAmount,
         workingDays: isEditing ? attendanceSummary.presentDays : undefined
       };
       if (isEditing) {
