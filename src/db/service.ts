@@ -59,6 +59,7 @@ import { eq, ne, and, or, ilike, gte, lte, asc, desc, sql } from 'drizzle-orm';
 import { hashPassword, isHashed } from '../auth/password.ts';
 import { istTimestamp } from '../auth/time.ts';
 import { redactSensitive } from './auditRedact.ts';
+import { normalizeLocationName } from '../utils/pettyCashLocations.ts';
 import {
   User,
   Vehicle,
@@ -664,6 +665,76 @@ export async function savePettyCashVoucher(voucher: PettyCashVoucher) {
   } catch (error) {
     console.error("Database action failed in savePettyCashVoucher:", error);
     throw new Error("Failed to save petty cash voucher.", { cause: error });
+  }
+}
+
+// One-time cleanup (2026-09-18 direct request): the same real place had
+// been logged under several different spellings/casings over time,
+// depending on who typed the Location/From/To field freehand (e.g.
+// "BANGALURE"/"bangalure"/"Bangalure" all meant to be one place),
+// fragmenting the Petty Cash ledger's own Location column/filter into
+// near-duplicate values instead of one clean one. Rewrites every already-
+// saved Petty Cash Voucher's Location and every Market Trip's From/To to
+// normalizeLocationName's canonical spelling wherever it actually differs -
+// see src/utils/pettyCashLocations.ts for the exact alias/canonical list
+// this shares with the live form's own autocomplete + auto-correct-on-blur,
+// so a value already in its canonical spelling, or any genuinely
+// unrecognized place name, is left completely untouched (this never
+// invents a rename for something it doesn't already know about). Runs as
+// one transaction; safe to call on every boot - a no-op once every row
+// already matches its own normalized value. Logs each distinct rename
+// actually applied, with how many rows it hit, so there's a clear audit
+// trail in the server's startup log of exactly what changed.
+export async function normalizePettyCashLocationNames() {
+  try {
+    const renameCounts = new Map<string, number>(); // "old -> new" -> row count
+    const bump = (from: string, to: string) => {
+      const key = `"${from}" -> "${to}"`;
+      renameCounts.set(key, (renameCounts.get(key) || 0) + 1);
+    };
+
+    await db.transaction(async (tx) => {
+      const voucherRows = await tx.select().from(pettyCashVouchers);
+      for (const row of voucherRows) {
+        const voucher = JSON.parse(row.data);
+        const normalized = normalizeLocationName(voucher.location || '');
+        if (normalized && normalized !== voucher.location) {
+          bump(voucher.location, normalized);
+          await tx.update(pettyCashVouchers)
+            .set({ data: JSON.stringify({ ...voucher, location: normalized }) })
+            .where(eq(pettyCashVouchers.id, row.id));
+        }
+      }
+
+      const tripRows = await tx.select().from(marketPodEntries);
+      for (const row of tripRows) {
+        const trip = JSON.parse(row.data);
+        const normalizedFrom = normalizeLocationName(trip.from || '');
+        const normalizedTo = normalizeLocationName(trip.to || '');
+        const fromChanged = !!normalizedFrom && normalizedFrom !== trip.from;
+        const toChanged = !!normalizedTo && normalizedTo !== trip.to;
+        if (fromChanged || toChanged) {
+          if (fromChanged) bump(trip.from, normalizedFrom);
+          if (toChanged) bump(trip.to, normalizedTo);
+          await tx.update(marketPodEntries)
+            .set({ data: JSON.stringify({
+              ...trip,
+              from: fromChanged ? normalizedFrom : trip.from,
+              to: toChanged ? normalizedTo : trip.to
+            }) })
+            .where(eq(marketPodEntries.id, row.id));
+        }
+      }
+    });
+
+    if (renameCounts.size > 0) {
+      console.log(`[MIGRATION] normalizePettyCashLocationNames: applied ${renameCounts.size} distinct rename(s):`);
+      for (const [rename, count] of renameCounts) {
+        console.log(`  ${rename} (${count} row${count === 1 ? '' : 's'})`);
+      }
+    }
+  } catch (error) {
+    console.error("Migration failed in normalizePettyCashLocationNames:", error);
   }
 }
 

@@ -160,6 +160,7 @@ import {
   deleteDieselBunkPayment,
   migrateLegacyMaintenanceProfiles,
   migrateMileageReportTotalLitres,
+  normalizePettyCashLocationNames,
   getAccountsEntries,
   saveAccountsEntry,
   deleteAccountsEntry,
@@ -1331,6 +1332,12 @@ async function startServer() {
   // existed before renumberPettyCashSequence started running on every
   // delete - no-op once the sequence is already gap-free.
   await renumberPettyCashSequence();
+  // One-time cleanup of already-saved Petty Cash Voucher Location / Market
+  // Trip From-To values that were logged under a known variant spelling or
+  // casing (see src/utils/pettyCashLocations.ts) - no-op once every row
+  // already matches its own canonical spelling. Logs exactly what it
+  // renamed on the run that actually changes anything.
+  await normalizePettyCashLocationNames();
   // Fuel Indent No has no equivalent boot-time or on-delete sweep (removed
   // 2026-09-11, see DELETE /api/fuel/:id's own comment) - a real, physical-
   // paper-matching Indent No an employee has typed in must never be

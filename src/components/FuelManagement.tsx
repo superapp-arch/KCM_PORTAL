@@ -380,6 +380,13 @@ export default function FuelManagement({
   // rounding difference, or older data) would silently overwrite the
   // Amount the moment the sidebar opened, before the user touched anything.
   const skipNextAmountAutoCalc = useRef(false);
+  // Set together by openAddEntry (below) when it prefills BOTH Location and
+  // Bunk Name from the ledger's top filter dropdowns, so the Location->Bunk
+  // and Bunk->Location auto-fill effects above don't fight the explicit
+  // pair just set and silently swap one of them for a different bunk/
+  // location that also happens to satisfy LOCATION_BUNK_MAP/BUNK_LOCATION_MAP.
+  const skipLocationAutoFillRef = useRef(false);
+  const skipBunkAutoFillRef = useRef(false);
   const [client, setClient] = useState('');
   const [entryType, setEntryType] = useState<'Vendor' | 'KCM'>('KCM');
   const [vendorName, setVendorName] = useState('');
@@ -486,6 +493,30 @@ export default function FuelManagement({
   // LOCATIONS list, so this never hides one just because it's missing from
   // that seed list.
   const usedLocations = Array.from(new Set([...LOCATIONS, ...logs.map(l => l.location).filter(Boolean)])).sort();
+
+  // Cascading Bunk options for the ledger's own Location filter - same
+  // "Location narrows Bunk" relationship the Add/Edit Entry form already
+  // gives via bunkOptionsForLocation, applied here to the top filter bar
+  // too: with a specific Location filter selected (not "All"), the Bunk
+  // filter only offers bunks that could actually appear there (LOCATION_BUNK_MAP's
+  // known set, unioned with whatever bunk names this ledger's own entries
+  // have actually logged at that location), instead of every bunk used
+  // anywhere. "All Locations" still offers every bunk, unchanged.
+  const bunkFilterOptions = locationFilter === 'All'
+    ? usedBunks
+    : Array.from(new Set([
+        ...(LOCATION_BUNK_MAP[locationFilter] || []),
+        ...logs.filter(l => l.location === locationFilter).map(l => l.bunkName).filter(Boolean)
+      ])).sort();
+
+  // If narrowing the Location filter leaves the currently-picked Bunk
+  // filter no longer valid for it, fall back to "All Bunks" rather than
+  // silently keeping a Bunk filter value that no option in the (now
+  // narrower) dropdown actually matches.
+  useEffect(() => {
+    if (bunkFilter !== 'All' && !bunkFilterOptions.includes(bunkFilter)) setBunkFilter('All');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locationFilter]);
 
   // (bunkName, location) pairs for the "Import Fuel Excel" wizard's Select
   // Bunk dropdown (FuelBunkImportModal) - flattened from LOCATION_BUNK_MAP
@@ -633,6 +664,7 @@ export default function FuelManagement({
 
   // Location -> Bunk: auto-fill when the location maps to exactly one bunk.
   useEffect(() => {
+    if (skipLocationAutoFillRef.current) { skipLocationAutoFillRef.current = false; return; }
     const bunks = location ? LOCATION_BUNK_MAP[location] : undefined;
     if (bunks && bunks.length === 1) setBunkName(bunks[0]);
   }, [location]);
@@ -640,6 +672,7 @@ export default function FuelManagement({
   // Bunk -> Location: auto-fill only when that bunk belongs to exactly one
   // location (skipped for bunks shared across locations, like HPCL).
   useEffect(() => {
+    if (skipBunkAutoFillRef.current) { skipBunkAutoFillRef.current = false; return; }
     const loc = BUNK_LOCATION_MAP[bunkName];
     if (loc) setLocation(loc);
   }, [bunkName]);
@@ -1036,6 +1069,37 @@ export default function FuelManagement({
       // while the sidebar showing it stays open).
       setSaveConfirmation(null);
     }
+  };
+
+  // Add Entry, launched from the ledger toolbar - if the office already has
+  // the top Location/Bunk filters narrowed down to one specific outlet, the
+  // new entry starts pre-filled with that same Location/Bunk instead of
+  // blank, so an office logging several entries for one bunk stop doesn't
+  // have to re-pick it every time. Only ever touches Location/Bunk Name -
+  // never entry ownership/enteredBy or any other access-scoped field, so it
+  // can't interact with the separate "who can see/add which rows" rules
+  // (FUEL_ENTRY_USER_EMAILS/FUEL_VIEW_ONLY_EMAILS etc.) elsewhere in this
+  // module. When BOTH filters are set, the auto-fill effects above are
+  // skipped once so neither Location nor Bunk Name gets silently swapped
+  // for whatever LOCATION_BUNK_MAP/BUNK_LOCATION_MAP would otherwise infer
+  // from the other; with only one filter set, that single-field auto-fill
+  // still runs normally (same as if it had been typed by hand).
+  const openAddEntry = () => {
+    resetForm();
+    const hasLocationFilter = locationFilter !== 'All';
+    const hasBunkFilter = bunkFilter !== 'All';
+    if (hasLocationFilter && hasBunkFilter) {
+      skipLocationAutoFillRef.current = true;
+      skipBunkAutoFillRef.current = true;
+    }
+    if (hasLocationFilter) {
+      setLocationIsOther(!LOCATIONS.includes(locationFilter));
+      setLocation(locationFilter);
+    }
+    if (hasBunkFilter) {
+      setBunkName(bunkFilter);
+    }
+    setShowSidebar(true);
   };
 
   const startEdit = (log: FuelLog) => {
@@ -1741,7 +1805,7 @@ export default function FuelManagement({
                 className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-700 focus:outline-none"
               >
                 <option value="All">All Bunks</option>
-                {usedBunks.map((b, i) => <option key={i} value={b}>{b}</option>)}
+                {bunkFilterOptions.map((b, i) => <option key={i} value={b}>{b}</option>)}
               </select>
               <button
                 onClick={handleDownloadFuelEntryReport}
@@ -1812,12 +1876,12 @@ export default function FuelManagement({
                 className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-700"
               >
                 <option value="All">All Bunks</option>
-                {usedBunks.map((b, i) => <option key={i} value={b}>{b}</option>)}
+                {bunkFilterOptions.map((b, i) => <option key={i} value={b}>{b}</option>)}
               </select>
               {!isRqIdOnlyUser && !isViewOnlyUser && (
                 <>
                   <button
-                    onClick={() => { resetForm(); setShowSidebar(true); }}
+                    onClick={openAddEntry}
                     className="bg-gradient-to-r from-emerald-500 to-blue-600 hover:from-emerald-600 hover:to-blue-700 text-xs text-white font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-md whitespace-nowrap"
                   >
                     <Plus className="w-4 h-4" /> Add Entry

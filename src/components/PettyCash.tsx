@@ -39,6 +39,7 @@ import ColumnFilterHeader from './ColumnFilterHeader';
 import { SortState, SortDirection, extractLeadingNumber, extractTrailingNumber, compareText } from '../utils/sort';
 import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../utils/columnFilter';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
+import { PETTY_CASH_CANONICAL_LOCATIONS, normalizeLocationName } from '../utils/pettyCashLocations';
 import { exportReportToExcel, exportReportToPdf, ReportTableSection } from '../utils/reportExport';
 import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
 import { PETTY_CASH_USERS } from '../utils/pettyCashUsers';
@@ -1069,11 +1070,23 @@ export default function PettyCash({
     setVendorId(matchedVendor ? matchedVendor.code : '');
   };
 
-  // Location field's onChange (both the Ramesh dropdown and the free-text
-  // field for everyone else) - cascades into the Client Name auto-fill.
+  // Location field's onChange (both the Ramesh/Vinod suggestion list and
+  // the free-text field for everyone else) - cascades into the Client Name
+  // auto-fill. Kept as-typed here (not normalized keystroke-by-keystroke,
+  // which would fight the office mid-type); handleLocationBlur below
+  // normalizes it to a known canonical spelling once they leave the field.
   const handleLocationChange = (raw: string) => {
     setLocation(raw);
     applyLocationAutoClient(raw, vehicleNumber.trim().toUpperCase());
+  };
+
+  // Snaps a typed Location to its canonical spelling/casing on blur - see
+  // normalizeLocationName above. Never fires on an empty field (nothing to
+  // normalize) and never touches Client Name (already resolved on keystroke
+  // via applyLocationAutoClient, which already saw the raw typed value).
+  const handleLocationBlur = () => {
+    const normalized = normalizeLocationName(location);
+    if (normalized !== location) setLocation(normalized);
   };
 
   // Handle clicking outside of category dropdown to close it
@@ -1473,6 +1486,25 @@ export default function PettyCash({
   // retyping the same location by hand every time. Shared between both
   // fields (a "To" for one trip is very often a "From" for another).
   const usedMpLocations = Array.from(new Set(marketPodEntries.flatMap(e => [e.from, e.to]).filter(Boolean))).sort();
+  // Voucher Location suggestions (2026-09-18) - was Ramesh/Vinod-only
+  // before; now every Petty Cash login's Location field shares one growing
+  // list: the canonical/known names first, then Vinod's and Ramesh's own
+  // circuits, then every location any voucher has actually used - so a
+  // repeat location never needs retyping by hand, and a newly-typed one
+  // (once normalized - see normalizeLocationName above) joins this list for
+  // next time. Still a plain <input list="...">, never a restrictive
+  // dropdown - a genuinely new place always saves fine as typed.
+  const usedVoucherLocations = Array.from(new Set(vouchers.map(v => v.location).filter(Boolean))).sort();
+  // Not alphabetized - a <datalist> shows its options in this list order
+  // (filtered by whatever's typed so far), so the well-known/most-used
+  // names stay first instead of getting buried alphabetically once every
+  // other real location joins the list.
+  const pettyCashLocationSuggestions = Array.from(new Set([
+    ...PETTY_CASH_CANONICAL_LOCATIONS,
+    ...VINOD_LOCATIONS,
+    ...RAMESH_LOCATIONS,
+    ...usedVoucherLocations,
+  ]));
 
   // Filter vouchers based on search, client, vehicle, receiver, category, year and month
   const filteredVouchersUnsorted = vouchers.filter(v => {
@@ -4054,44 +4086,33 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     </div>
                   )}
 
-                  {/* Location - free text for everyone, but Ramesh and Vinod
-                      additionally get a type-to-search suggestion list -
-                      purely autocomplete, never restrictive. Ramesh's own 4
-                      (Nelamangala/Nidagatta/DHL Attibele/Chennai); Vinod's
-                      own 5 (Hyderabad/Vizag/Vijayawada/Hoskote/Service
-                      Station, 2026-09-03) listed first/highest priority,
-                      with Ramesh's 4 appended at the end/lowest priority -
-                      he still occasionally covers those, they're just no
-                      longer his primary suggestions. May be auto-filled by
-                      Vehicle Number above. */}
+                  {/* Location - every login gets the same type-to-search
+                      suggestion list (2026-09-18, was Ramesh/Vinod-only
+                      before) - purely autocomplete, never restrictive; a
+                      genuinely new place still saves fine as typed and
+                      joins pettyCashLocationSuggestions for next time. On
+                      blur, a typed value that matches a known variant
+                      spelling/casing (see normalizeLocationName above)
+                      snaps to its one canonical name, so the same real
+                      place stops fragmenting into several near-duplicate
+                      Location values. May be auto-filled by Vehicle Number
+                      above. */}
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Location *</label>
-                    {(user.username === 'ramesh' || isVinod) ? (
-                      <>
-                        <input
-                          type="text"
-                          required
-                          list="petty-cash-ramesh-locations-datalist"
-                          placeholder="Search or select a location"
-                          value={location}
-                          onChange={(e) => handleLocationChange(e.target.value)}
-                          autoComplete="off"
-                          className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                        />
-                        <datalist id="petty-cash-ramesh-locations-datalist">
-                          {(isVinod ? VINOD_LOCATIONS : RAMESH_LOCATIONS).map(loc => <option key={loc} value={loc} />)}
-                        </datalist>
-                      </>
-                    ) : (
-                      <input
-                        type="text"
-                        required
-                        placeholder="Manual branch or location"
-                        value={location}
-                        onChange={(e) => handleLocationChange(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                      />
-                    )}
+                    <input
+                      type="text"
+                      required
+                      list="petty-cash-locations-datalist"
+                      placeholder="Search or select a location"
+                      value={location}
+                      onChange={(e) => handleLocationChange(e.target.value)}
+                      onBlur={handleLocationBlur}
+                      autoComplete="off"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    />
+                    <datalist id="petty-cash-locations-datalist">
+                      {pettyCashLocationSuggestions.map(loc => <option key={loc} value={loc} />)}
+                    </datalist>
                   </div>
 
                   {/* Client Name (Swiggy, Reliance F&V, Market Load, KCM, Other) */}

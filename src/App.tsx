@@ -110,7 +110,9 @@ export default function App() {
               setUser(sessionUser);
               setToken(savedToken);
               setSessionToken(savedToken);
-              await fetchAllData();
+              // Explicit sessionUser, not the default `user` state param -
+              // see fetchAllData's own comment above.
+              await fetchAllData(sessionUser);
             } else {
               // Token is stale/unknown to the server (e.g. server restarted) - clear it
               localStorage.removeItem('kcm_session_user');
@@ -129,8 +131,30 @@ export default function App() {
   }, []);
 
   // 2. Fetch All Departmental Datasets from Server
-  const fetchAllData = async () => {
+  // `forUser` defaults to the current `user` state, but callers right after
+  // a login/session-restore (where `setUser(...)` was just called in the
+  // SAME event handler, one render before this closure's own `user` would
+  // reflect it) must pass the just-resolved user explicitly - otherwise
+  // these access checks would see the stale pre-login `user` (null) for
+  // that one critical first fetch and wrongly skip Billing/Warehouse/Loans/
+  // HR for every account, including Super Admins, until the next refresh.
+  const fetchAllData = async (forUser: User | null = user) => {
     try {
+      // Skips a handful of endpoints this account's role can never access
+      // anyway (mirrors each one's own requireXAccess check in server.ts) -
+      // purely a request-count/console-noise reduction (those calls would
+      // otherwise 403 every single time, on every save across the WHOLE
+      // app, not just in that module). Deliberately narrow: only the
+      // handful of access rules that are a single simple department/email
+      // check and unlikely to drift - Driver Details' own access rule is
+      // genuinely per-location/per-email and non-trivial, so it's
+      // deliberately NOT skipped here; getting that one wrong could
+      // silently hide real driver data from someone who should see it,
+      // which is a far worse outcome than one harmless extra 403.
+      const hasBillingAccess = forUser?.department === 'super_admin' || forUser?.department === 'billing' || forUser?.email === 'bhagya@kcmlogistics.in';
+      const hasWarehouseAccess = forUser?.department === 'super_admin' || forUser?.email === 'bhagya@kcmlogistics.in';
+      const hasLoanAccess = forUser?.department === 'super_admin' || forUser?.email === 'finance@kcmlogistics.in';
+      const hasHrAccess = forUser?.department === 'super_admin' || forUser?.email === 'bhagya@kcmlogistics.in' || forUser?.email === 'vinod@kcmlogistics.in';
       const [
         fleetRes,
         fuelRes,
@@ -169,7 +193,7 @@ export default function App() {
       ] = await Promise.all([
         fetch('/api/fleet'),
         authFetch('/api/fuel'),
-        authFetch('/api/billing'),
+        hasBillingAccess ? authFetch('/api/billing') : Promise.resolve(null),
         authFetch('/api/petty-cash'),
         authFetch('/api/market-pod'),
         authFetch('/api/petty-cash-advances'),
@@ -179,7 +203,7 @@ export default function App() {
         fetch('/api/vehicle-service-schedules'),
         fetch('/api/vehicle-maintenance-reference'),
         authFetch('/api/drivers/petty-cash-advances'),
-        authFetch('/api/warehouse-rate-overrides'),
+        hasWarehouseAccess ? authFetch('/api/warehouse-rate-overrides') : Promise.resolve(null),
         fetch('/api/tire-brands'),
         fetch('/api/tire-records'),
         fetch('/api/battery-records'),
@@ -187,56 +211,71 @@ export default function App() {
         fetch('/api/service-station-spare-parts'),
         fetch('/api/service-station-inspections'),
         fetch('/api/accounts'),
-        authFetch('/api/staff/employees'),
+        hasHrAccess ? authFetch('/api/staff/employees') : Promise.resolve(null),
         fetch('/api/notifications'),
-        authFetch('/api/warehouse'),
+        hasWarehouseAccess ? authFetch('/api/warehouse') : Promise.resolve(null),
         authFetch('/api/mileage'),
         authFetch('/api/fuel-vendors'),
         authFetch('/api/vehicle-mileage'),
         authFetch('/api/vendors'),
         authFetch('/api/drivers/employees'),
         authFetch('/api/drivers/vehicle-lookup'),
-        authFetch('/api/vehicle-loans'),
+        hasLoanAccess ? authFetch('/api/vehicle-loans') : Promise.resolve(null),
         fetch('/api/vehicle-incidents'),
-        authFetch('/api/business-loans'),
+        hasLoanAccess ? authFetch('/api/business-loans') : Promise.resolve(null),
         authFetch('/api/diesel-bunk-accounts'),
         authFetch('/api/diesel-bunk-payments')
-      ]);
+        // Each promise is caught individually (-> null on failure) instead
+        // of leaving a bare Promise.all() here - a bare Promise.all rejects
+        // the WHOLE batch the instant any single one of these ~34 requests
+        // fails (a dropped connection, a slow/flaky laptop Wi-Fi, one
+        // unrelated endpoint timing out), and this function's own outer
+        // catch only logs to the console - invisible to the user. That
+        // meant a real, already-successful save (e.g. a Fuel Entry edit,
+        // whose own PUT/POST already completed and persisted before this
+        // refresh even started) could still end up displaying stale data
+        // afterward, with no error shown anywhere, if literally any other
+        // one of these unrelated endpoints hiccuped during the refresh.
+        // Each `xRes` below is now `Response | null` - every check already
+        // reads `xRes?.ok` accordingly, so one failed fetch just leaves
+        // that one piece of data un-refreshed instead of silently reverting
+        // everything else in the app to its old cached state too.
+      ].map(p => p.catch(() => null)));
 
-      if (fleetRes.ok) setVehicles(await fleetRes.json());
-      if (fuelRes.ok) setFuelLogs(await fuelRes.json());
-      if (billingRes.ok) setInvoices(await billingRes.json());
-      if (pettyRes.ok) setVouchers(await pettyRes.json());
-      if (marketPodRes.ok) setMarketPodEntries(await marketPodRes.json());
-      if (pettyCashAdvancesRes.ok) setPettyCashAdvances(await pettyCashAdvancesRes.json());
-      if (maintRes.ok) setRecords(await maintRes.json());
-      if (maintenanceServiceStationsRes.ok) setMaintenanceServiceStations(await maintenanceServiceStationsRes.json());
-      if (breakdownReportsRes.ok) setBreakdownReports(await breakdownReportsRes.json());
-      if (vehicleServiceSchedulesRes.ok) setVehicleServiceSchedules(await vehicleServiceSchedulesRes.json());
-      if (vehicleMaintenanceReferencesRes.ok) setVehicleMaintenanceReferences(await vehicleMaintenanceReferencesRes.json());
-      if (driverPettyCashAdvanceVouchersRes.ok) setDriverPettyCashAdvanceVouchers(await driverPettyCashAdvanceVouchersRes.json());
-      if (warehouseRateOverridesRes.ok) setWarehouseRateOverrides(await warehouseRateOverridesRes.json());
-      if (tireBrandsRes.ok) setTireBrands(await tireBrandsRes.json());
-      if (tireRecordsRes.ok) setTireRecords(await tireRecordsRes.json());
-      if (batteryRecordsRes.ok) setBatteryRecords(await batteryRecordsRes.json());
-      if (toolsChecklistRecordsRes.ok) setToolsChecklistRecords(await toolsChecklistRecordsRes.json());
-      if (serviceStationSparePartsRes.ok) setServiceStationSpareParts(await serviceStationSparePartsRes.json());
-      if (serviceStationInspectionsRes.ok) setServiceStationInspections(await serviceStationInspectionsRes.json());
-      if (acctRes.ok) setEntries(await acctRes.json());
-      if (hrRes.ok) setEmployees(await hrRes.json());
-      if (notifRes.ok) setNotifications(await notifRes.json());
-      if (warehouseRes.ok) setWarehouseEntries(await warehouseRes.json());
-      if (mileageRes.ok) setMileageReports(await mileageRes.json());
-      if (fuelVendorsRes.ok) setFuelVendors(await fuelVendorsRes.json());
-      if (vehicleMileagesRes.ok) setVehicleMileages(await vehicleMileagesRes.json());
-      if (vendorsRes.ok) setVendors(await vendorsRes.json());
-      if (driversRes.ok) setDrivers(await driversRes.json());
-      if (driverVehicleLookupRes.ok) setDriverVehicleLookup(await driverVehicleLookupRes.json());
-      if (vehicleLoansRes.ok) setVehicleLoans(await vehicleLoansRes.json());
-      if (vehicleIncidentsRes.ok) setVehicleIncidents(await vehicleIncidentsRes.json());
-      if (businessLoansRes.ok) setBusinessLoans(await businessLoansRes.json());
-      if (dieselBunkAccountsRes.ok) setDieselBunkAccounts(await dieselBunkAccountsRes.json());
-      if (dieselBunkPaymentsRes.ok) setDieselBunkPayments(await dieselBunkPaymentsRes.json());
+      if (fleetRes?.ok) setVehicles(await fleetRes.json());
+      if (fuelRes?.ok) setFuelLogs(await fuelRes.json());
+      if (billingRes?.ok) setInvoices(await billingRes.json());
+      if (pettyRes?.ok) setVouchers(await pettyRes.json());
+      if (marketPodRes?.ok) setMarketPodEntries(await marketPodRes.json());
+      if (pettyCashAdvancesRes?.ok) setPettyCashAdvances(await pettyCashAdvancesRes.json());
+      if (maintRes?.ok) setRecords(await maintRes.json());
+      if (maintenanceServiceStationsRes?.ok) setMaintenanceServiceStations(await maintenanceServiceStationsRes.json());
+      if (breakdownReportsRes?.ok) setBreakdownReports(await breakdownReportsRes.json());
+      if (vehicleServiceSchedulesRes?.ok) setVehicleServiceSchedules(await vehicleServiceSchedulesRes.json());
+      if (vehicleMaintenanceReferencesRes?.ok) setVehicleMaintenanceReferences(await vehicleMaintenanceReferencesRes.json());
+      if (driverPettyCashAdvanceVouchersRes?.ok) setDriverPettyCashAdvanceVouchers(await driverPettyCashAdvanceVouchersRes.json());
+      if (warehouseRateOverridesRes?.ok) setWarehouseRateOverrides(await warehouseRateOverridesRes.json());
+      if (tireBrandsRes?.ok) setTireBrands(await tireBrandsRes.json());
+      if (tireRecordsRes?.ok) setTireRecords(await tireRecordsRes.json());
+      if (batteryRecordsRes?.ok) setBatteryRecords(await batteryRecordsRes.json());
+      if (toolsChecklistRecordsRes?.ok) setToolsChecklistRecords(await toolsChecklistRecordsRes.json());
+      if (serviceStationSparePartsRes?.ok) setServiceStationSpareParts(await serviceStationSparePartsRes.json());
+      if (serviceStationInspectionsRes?.ok) setServiceStationInspections(await serviceStationInspectionsRes.json());
+      if (acctRes?.ok) setEntries(await acctRes.json());
+      if (hrRes?.ok) setEmployees(await hrRes.json());
+      if (notifRes?.ok) setNotifications(await notifRes.json());
+      if (warehouseRes?.ok) setWarehouseEntries(await warehouseRes.json());
+      if (mileageRes?.ok) setMileageReports(await mileageRes.json());
+      if (fuelVendorsRes?.ok) setFuelVendors(await fuelVendorsRes.json());
+      if (vehicleMileagesRes?.ok) setVehicleMileages(await vehicleMileagesRes.json());
+      if (vendorsRes?.ok) setVendors(await vendorsRes.json());
+      if (driversRes?.ok) setDrivers(await driversRes.json());
+      if (driverVehicleLookupRes?.ok) setDriverVehicleLookup(await driverVehicleLookupRes.json());
+      if (vehicleLoansRes?.ok) setVehicleLoans(await vehicleLoansRes.json());
+      if (vehicleIncidentsRes?.ok) setVehicleIncidents(await vehicleIncidentsRes.json());
+      if (businessLoansRes?.ok) setBusinessLoans(await businessLoansRes.json());
+      if (dieselBunkAccountsRes?.ok) setDieselBunkAccounts(await dieselBunkAccountsRes.json());
+      if (dieselBunkPaymentsRes?.ok) setDieselBunkPayments(await dieselBunkPaymentsRes.json());
     } catch (err) {
       console.error('Failed to populate core ledgers:', err);
     }
@@ -264,6 +303,17 @@ export default function App() {
       body: JSON.stringify(log)
     });
     if (res.ok) {
+      // Applied directly from this response - it already carries the full,
+      // freshly-saved Fuel Log list (see POST /api/fuel's own response
+      // body), so the Fuel Management screen reflects this save
+      // immediately and reliably without depending on fetchAllData()'s own
+      // ~34-endpoint refresh (still called right after, for everything
+      // else a new entry can affect, e.g. a linked Mileage Report)
+      // succeeding in full - one unrelated endpoint hiccuping during that
+      // broader refresh no longer makes this specific save look like it
+      // silently never went through.
+      const body = await res.json().catch(() => null);
+      if (body?.data) setFuelLogs(body.data);
       await fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
@@ -921,6 +971,12 @@ export default function App() {
       body: JSON.stringify(log)
     });
     if (res.ok) {
+      // See handleAddFuelLog above - applied directly from this response so
+      // an edit is reflected immediately/reliably regardless of whether
+      // fetchAllData()'s much broader refresh (still called right after)
+      // fully succeeds.
+      const body = await res.json().catch(() => null);
+      if (body?.data) setFuelLogs(body.data);
       await fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
@@ -937,6 +993,9 @@ export default function App() {
       body: JSON.stringify({ rqId })
     });
     if (res.ok) {
+      // See handleAddFuelLog above.
+      const body = await res.json().catch(() => null);
+      if (body?.data) setFuelLogs(body.data);
       await fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
@@ -1319,7 +1378,9 @@ export default function App() {
       setToken(sessionToken);
       setSessionToken(sessionToken);
     }
-    await fetchAllData();
+    // Explicit loggedInUser, not the default `user` state param - see
+    // fetchAllData's own comment above.
+    await fetchAllData(loggedInUser);
   };
 
   const handleLogout = () => {
