@@ -27,30 +27,47 @@
 // its own 002). Each (bunk name, calendar month, enteredBy) combination now
 // keeps its own independent run, matching each bunk's own manually-typed
 // starting number exactly as the office actually uses it.
+//
+// 2026-09-18: further scoped per Location too - the same bunk BRAND (e.g.
+// HPCL) can exist at several different physical locations (see
+// LOCATION_BUNK_MAP/BUNK_LOCATION_MAP in FuelManagement.tsx), each with its
+// own real, independently-numbered paper register. Without this, HPCL at
+// Bangalore and HPCL at Chennai would silently share one indent sequence,
+// exactly the bug class the bunk-name fix above already closed once for
+// bunk name alone.
 import { extractLeadingNumber } from './sort';
 
 interface IndentableFuelLog {
   id?: string; // only needed by findDuplicateFuelIndentNumber's excludeId check below
   bunkOrCard?: string;
   bunkName?: string;
+  location?: string;
   date?: string;
   enteredBy?: string;
   indentNumber?: string;
 }
 
 const normBunkName = (name: string | undefined) => (name || '').trim().toLowerCase();
+const normLocation = (name: string | undefined) => (name || '').trim().toLowerCase();
 
 // Bunk: plain numeric string (e.g. "6412"), continuing within the entry's
-// own Date's calendar month AND its own bunk name. The first entry of a new
-// (bunk, month) combination has nothing to continue from (returns null), so
-// the office types a fresh starting number by hand; every entry after that,
-// same bunk, same month, auto-continues from the highest one already saved
-// for that exact bunk.
-export function nextBunkFuelIndentNumber(logs: IndentableFuelLog[], refDate: string, bunkName: string | undefined, enteredBy: string | undefined): string | null {
+// own Date's calendar month, its own bunk name, AND its own location. The
+// first entry of a new (bunk, location, month) combination has nothing to
+// continue from (returns null), so the office types a fresh starting number
+// by hand; every entry after that, same bunk, same location, same month,
+// auto-continues from the highest one already saved for that exact
+// (bunk, location) pair.
+export function nextBunkFuelIndentNumber(logs: IndentableFuelLog[], refDate: string, bunkName: string | undefined, location: string | undefined, enteredBy: string | undefined): string | null {
   const monthKey = (refDate || '').slice(0, 7);
   if (!monthKey) return null;
   const monthNumbers = logs
-    .filter(l => (l.bunkOrCard || 'Bunk') === 'Bunk' && (l.date || '').slice(0, 7) === monthKey && normBunkName(l.bunkName) === normBunkName(bunkName) && (l.enteredBy || '') === (enteredBy || ''))
+    .filter(l =>
+      (l.bunkOrCard || 'Bunk') === 'Bunk' &&
+      (l.date || '').slice(0, 7) === monthKey &&
+      normBunkName(l.bunkName) === normBunkName(bunkName) &&
+      normLocation(l.location) === normLocation(location) &&
+      (l.enteredBy || '') === (enteredBy || '')
+    )
     .map(l => extractLeadingNumber(l.indentNumber))
     .filter(n => n > 0);
   if (monthNumbers.length === 0) return null;
@@ -95,7 +112,7 @@ export function nextCardFuelIndentNumber(logs: IndentableFuelLog[], enteredBy: s
 export function findDuplicateFuelIndentNumber(
   logs: IndentableFuelLog[],
   indentNumber: string | undefined,
-  candidate: { bunkOrCard?: string; bunkName?: string; date?: string; enteredBy?: string },
+  candidate: { bunkOrCard?: string; bunkName?: string; location?: string; date?: string; enteredBy?: string },
   excludeId?: string
 ): boolean {
   const target = (indentNumber || '').trim().toUpperCase();
@@ -104,13 +121,15 @@ export function findDuplicateFuelIndentNumber(
   const candidateClass = classify(candidate.bunkOrCard);
   const monthKey = (candidate.date || '').slice(0, 7);
   const bunkNameKey = normBunkName(candidate.bunkName);
+  const locationKey = normLocation(candidate.location);
   return logs.some(l => {
     if (l.id === excludeId) return false;
     if ((l.indentNumber || '').trim().toUpperCase() !== target) return false;
     if ((l.enteredBy || '') !== (candidate.enteredBy || '')) return false; // separate sequence per person
     if (classify(l.bunkOrCard) !== candidateClass) return false;
-    if (candidateClass !== 'Bunk') return true; // Card/Petty Cash: one sequence per person, no month/bunk scoping
+    if (candidateClass !== 'Bunk') return true; // Card/Petty Cash: one sequence per person, no month/bunk/location scoping
     if (normBunkName(l.bunkName) !== bunkNameKey) return false; // separate sequence per bunk
+    if (normLocation(l.location) !== locationKey) return false; // separate sequence per location too (see nextBunkFuelIndentNumber)
     return (l.date || '').slice(0, 7) === monthKey;
   });
 }

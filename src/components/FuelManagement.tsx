@@ -51,7 +51,7 @@ const BUNK_NAMES = [
   'Tejashri', 'Vayuputra', 'Visalakshi'
 ];
 
-const CLIENTS = ['KCM', 'Swiggy', 'Reliance', 'Market Vehicle', 'Shadowfax', 'One Time Vendor'];
+const CLIENTS = ['KCM', 'Swiggy', 'Reliance', 'Market Vehicle', 'Shadowfax', 'DHL', 'One Time Vendor'];
 
 // Requested By - search-as-you-type suggestions (2026-09-02), same native
 // list/datalist pattern already used for Bunk Name and Vehicle Number below:
@@ -270,6 +270,17 @@ export default function FuelManagement({
   // Bunk/Card filter - whichever payment method (Bunk vs Card) an entry was
   // logged under, independent of the Bunk Name filter above.
   const [bunkOrCardFilter, setBunkOrCardFilter] = useState<'All' | 'Bunk' | 'Card' | 'Petty Cash'>('All');
+  // All/Praveen/Chandan owner tab (2026-09-18 direct request) - separate
+  // dimension from Ledger's own All/Bunk/Card/Petty Cash above, and from
+  // the existing canSeeEnteredBy-gated Entered By filter further below
+  // (that one's for Super Admin/Vinod/Bhagya/Chandan's audit-style "any
+  // entrant" view; this one is specifically the Chandan<->Praveen mutual
+  // visibility pair). Defaults to the logged-in user's OWN name so each of
+  // them sees only their own entries on login, same as before this feature
+  // existed - never defaults to "All" for these two.
+  const [ownerTabFilter, setOwnerTabFilter] = useState<'All' | 'praveenkumar' | 'chandanreddy'>(
+    () => (user.username === 'praveenkumar' || user.username === 'chandanreddy') ? user.username : 'All'
+  );
   // Entered By filter (2026-09-04) - Super Admin/Principal only, same
   // Excel-style "show just this person's rows" ask as Mileage Report below.
   const [enteredByFilter, setEnteredByFilter] = useState<string>('All');
@@ -387,6 +398,31 @@ export default function FuelManagement({
   // location that also happens to satisfy LOCATION_BUNK_MAP/BUNK_LOCATION_MAP.
   const skipLocationAutoFillRef = useRef(false);
   const skipBunkAutoFillRef = useRef(false);
+  // Set by startEdit right before it loads a log's own linked-mileage-report
+  // driver fields, so the Driver ID auto-sync effect below (which now also
+  // CLEARS Driver ID when the current name has no match - see that effect's
+  // own comment) doesn't wipe a legitimately-loaded historical Driver ID
+  // just because that exact driver name no longer resolves in today's
+  // Driver Details (e.g. the driver has since left, or was renamed there).
+  const skipMileageDriverIdSyncRef = useRef(false);
+  // Set by startEdit right before it loads a log's own vendorName/
+  // vendorCode/vehicleNumber, so the Vendor auto-fill effect below (keyed
+  // off vehicleNumber) doesn't immediately recompute and overwrite the
+  // just-loaded historical vendor info for whatever this exact vehicle
+  // resolves to today (e.g. a Fleet vehicle now auto-filling "KCM" even
+  // though this old entry legitimately had a different vendor recorded).
+  const skipVendorAutoFillRef = useRef(false);
+  // Tracks the vehicle number the vendor auto-fill effect last actually
+  // derived Vendor Name/Code for - the effect only re-derives when this
+  // vehicle number ITSELF changes, not merely because one of its other
+  // dependencies (vehicles/vendorProfiles/logs) happened to get a fresh
+  // array reference from an unrelated background refresh (e.g. saving
+  // Mileage data elsewhere triggers fetchAllData(), which hands `logs` a
+  // new array reference on every single save across the whole app) - that
+  // previously re-ran this effect and, for a Fleet-owned vehicle, cleared
+  // Vendor Name/Code back to blank every time, even after the user had
+  // already set them.
+  const lastVendorAutoFillVehicleRef = useRef<string | null>(null);
   const [client, setClient] = useState('');
   const [entryType, setEntryType] = useState<'Vendor' | 'KCM'>('KCM');
   const [vendorName, setVendorName] = useState('');
@@ -403,6 +439,14 @@ export default function FuelManagement({
   const [mOpeningKm, setMOpeningKm] = useState('');
   const [mClosingKm, setMClosingKm] = useState('');
   const [mTotalKm, setMTotalKm] = useState('');
+  // 2026-09-18 direct request: lets Total KM be typed directly (e.g. from a
+  // GPS-reported distance) when there's no real Closing KM odometer reading
+  // for this trip - Closing KM is then derived as Opening KM + Total KM
+  // instead of the usual Total KM = Closing - Opening. See the two effects
+  // right below. Off by default - the normal Closing-KM-driven calculation
+  // is unaffected unless the office explicitly turns this on for a
+  // particular entry.
+  const [mTotalKmManualMode, setMTotalKmManualMode] = useState(false);
   const [mTotalLtrs, setMTotalLtrs] = useState(''); // Litres + Extra Fuel - see sumExtraFuelExpression
   const [mMileage, setMMileage] = useState('');
   const [mCostPerKm, setMCostPerKm] = useState('');
@@ -476,11 +520,20 @@ export default function FuelManagement({
     return driverVehicleLookup.find(d => matchIds.has(d.id));
   })();
 
-  // Auto-fills when a match is found; never clears an already-typed Driver ID
-  // just because the name stopped matching, so a manually-entered ID for a
-  // not-yet-registered driver is never silently wiped.
+  // Driver ID is a fully DERIVED field off Authorized Driver (mDriverName) -
+  // shared state between the Fuel Entry Details and Mileage tabs' own
+  // "Authorized Driver" inputs (both read/write the same mDriverName), so
+  // this effect already re-runs no matter which tab the change came from.
+  // Auto-fills when a match is found; explicitly CLEARS Driver ID when it
+  // stops matching (a driver switch to someone with no Driver Details
+  // record, or back to a multi-name value) - previously this only ever SET
+  // it and never cleared it, so switching away from a matched driver left
+  // that driver's stale ID showing under the new (unmatched) name. Skipped
+  // once right after startEdit loads a historical Driver ID from a linked
+  // Mileage Report - see skipMileageDriverIdSyncRef's own comment.
   useEffect(() => {
-    if (matchedMileageDriver) setMDriverId(matchedMileageDriver.id);
+    if (skipMileageDriverIdSyncRef.current) { skipMileageDriverIdSyncRef.current = false; return; }
+    setMDriverId(matchedMileageDriver ? matchedMileageDriver.id : '');
   }, [matchedMileageDriver]);
 
   // Every bunk name available to filter by - the fixed BUNK_NAMES list plus
@@ -624,15 +677,34 @@ export default function FuelManagement({
   ) : undefined;
   useEffect(() => {
     const trimmed = vehicleNumber.trim();
-    if (!trimmed) return;
+    if (!trimmed) { lastVendorAutoFillVehicleRef.current = null; return; }
+    if (skipVendorAutoFillRef.current) {
+      skipVendorAutoFillRef.current = false;
+      lastVendorAutoFillVehicleRef.current = trimmed;
+      return;
+    }
+    // Already derived Vendor Name/Code for this exact vehicle number - skip
+    // re-running just because vehicles/vendorProfiles/logs got a new array
+    // reference from an unrelated refresh elsewhere (see
+    // lastVendorAutoFillVehicleRef's own comment above). A genuine vehicle
+    // number CHANGE still always re-derives, below.
+    if (lastVendorAutoFillVehicleRef.current === trimmed) return;
+    lastVendorAutoFillVehicleRef.current = trimmed;
     if (matchedVendorByVehicle) {
       setVendorName(matchedVendorByVehicle.name);
       setVendorCode(matchedVendorByVehicle.code);
       return;
     }
+    // 2026-09-18 direct request: a Fleet & Vehicles-owned vehicle (KCM's own
+    // fleet, not a third-party vendor's) auto-fills "KCM"/"KCM" - previously
+    // this cleared both fields to blank instead, which is also the exact
+    // bug behind Vendor Name/Code seeming to "disappear": any unrelated
+    // save elsewhere (e.g. updating Mileage) refreshes `logs`, which used to
+    // re-run this whole effect and re-blank these fields even after they'd
+    // already been correctly set.
     if (isFleetVehicleNumber(trimmed)) {
-      setVendorName('');
-      setVendorCode('');
+      setVendorName('KCM');
+      setVendorCode('KCM');
       return;
     }
     // Not Fleet-owned and not registered in Vendor Management - fall back to
@@ -754,7 +826,7 @@ export default function FuelManagement({
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const params = new URLSearchParams({ bunkOrCard });
-    if (bunkOrCard === 'Bunk') { params.set('date', date); params.set('bunkName', bunkName); }
+    if (bunkOrCard === 'Bunk') { params.set('date', date); params.set('bunkName', bunkName); params.set('location', location); }
     setIndentNumberLoading(true);
 
     const MAX_ATTEMPTS = 3;
@@ -784,7 +856,7 @@ export default function FuelManagement({
           setIndentNumberLoading(false);
           const estimate = bunkOrCard === 'Card'
             ? nextCardFuelIndentNumber(logs, user.username)
-            : nextBunkFuelIndentNumber(logs, date, bunkName, user.username);
+            : nextBunkFuelIndentNumber(logs, date, bunkName, location, user.username);
           setIndentNumber(estimate || '');
           setIndentNumberIsLocalEstimate(true);
         });
@@ -792,7 +864,7 @@ export default function FuelManagement({
     attempt(0);
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bunkOrCard, date, bunkName, editingId, showSidebar, formResetToken]);
+  }, [bunkOrCard, date, bunkName, location, editingId, showSidebar, formResetToken]);
 
   // True once the preview above has actually finished loading, isn't a
   // failed-fetch local estimate, and still came back blank - i.e. this is
@@ -896,12 +968,32 @@ export default function FuelManagement({
     setMActualMileage(fixedMileageForVehicle != null ? String(fixedMileageForVehicle) : '0');
   }, [fixedMileageForVehicle]);
 
-  // Total KM = Closing KM - Opening KM
+  // Total KM = Closing KM - Opening KM (the usual case - a real odometer
+  // Closing KM reading is available). 2026-09-18 direct request: sometimes
+  // there's no real Closing KM to read (e.g. GPS-reported KM is used
+  // instead) - mTotalKmManualMode flips the relationship so Total KM
+  // becomes the typed source of truth and Closing KM derives from it
+  // instead (see the effect right below). Skipped entirely in that mode so
+  // it doesn't fight the manual value.
   useEffect(() => {
+    if (mTotalKmManualMode) return;
     const o = parseFloat(mOpeningKm) || 0;
     const c = parseFloat(mClosingKm) || 0;
     setMTotalKm(c >= o ? String(c - o) : '0');
-  }, [mOpeningKm, mClosingKm]);
+  }, [mOpeningKm, mClosingKm, mTotalKmManualMode]);
+
+  // Manual Total KM mode: Closing KM = Opening KM + Total KM instead of the
+  // usual Total KM = Closing - Opening - for when only a GPS-based total
+  // distance is available, not a real Closing KM odometer reading. Only
+  // this record's Closing KM is affected; every other calculation
+  // downstream (Mileage, Cost/KM, Fuel Audit) already reads mTotalKm/
+  // mClosingKm the same way regardless of which one was actually typed.
+  useEffect(() => {
+    if (!mTotalKmManualMode) return;
+    const o = parseFloat(mOpeningKm) || 0;
+    const t = parseFloat(mTotalKm) || 0;
+    setMClosingKm(String(o + t));
+  }, [mOpeningKm, mTotalKm, mTotalKmManualMode]);
 
   // Total Ltrs = Litres (from the Fuel Entry section above) + Extra Fuel -
   // the actual total fuel consumed this trip, including any mid-trip
@@ -1049,6 +1141,7 @@ export default function FuelManagement({
     setLinkedMileageReportId(null);
     setMOpeningKm('');
     setMClosingKm('');
+    setMTotalKmManualMode(false);
     setMDriverName('');
     setMDriverId('');
     setMRemarks('');
@@ -1111,6 +1204,7 @@ export default function FuelManagement({
     setBunkName(log.bunkName);
     setBunkOrCard(log.bunkOrCard || 'Bunk'); // pre-existing record saved before this field existed - see item 8 backward-compat note above
     setFuelPettyCashHolder(log.pettyCashHolderUsername || '');
+    skipVendorAutoFillRef.current = true;
     setVehicleNumber(log.vehicleNumber);
     setIndentNumber(log.indentNumber);
     setIndentNumberIsLocalEstimate(false);
@@ -1127,6 +1221,13 @@ export default function FuelManagement({
     setRqId(log.rqId || '');
     setEntryDocs(log.documents || []);
 
+    skipMileageDriverIdSyncRef.current = true;
+    // Always reopens in the normal Closing-KM-driven mode - there's no
+    // persisted "this was entered manually" flag (Closing/Opening/Total KM
+    // are always mutually consistent by construction either way), so
+    // there's nothing to restore; the office can turn manual mode back on
+    // again if this particular entry needs it.
+    setMTotalKmManualMode(false);
     const linkedReport = log.mileageReportId ? mileageReports.find(r => r.id === log.mileageReportId) : undefined;
     if (linkedReport) {
       setLinkedMileageReportId(linkedReport.id);
@@ -1274,17 +1375,20 @@ export default function FuelManagement({
         // Total Ltrs (Litres + Extra Fuel, e.g. "30+40" for two top-ups
         // during one trip) is what actually got consumed, not just the main
         // fill-up - Mileage/Cost-per-KM/the fuel-theft audit all key off it.
-        // EXCEPT when Extra Fuel is Paid by Petty Cash or Card (2026-09-10:
-        // Card follows the exact same rule): that fuel's cost/litres are
-        // tracked entirely outside this fuel entry instead, so totalLitres/
-        // totalAmount here fall back to the base litres/diesel amount only -
-        // not double-counted. extraFuel/ratePerLitreNew are still stored
-        // below either way, so the 20 L itself stays visible on the record.
+        // Always included here regardless of how Extra Fuel was paid for
+        // (Normal/Petty Cash/Card) - 2026-09-18 correction: this record's own
+        // totalLitres/totalAmount previously excluded Petty-Cash/Card-paid
+        // extra fuel entirely (on the theory that it's "tracked outside this
+        // entry"), which under-counted the vehicle's real total fuel/cost at
+        // the Mileage level. isPettyCashExtra/isCardExtra are still computed
+        // below and still drive extraFuelPaymentMode/pettyCashHolderUsername
+        // and the on-screen form preview (mTotalLitres/mTotalAmount, a
+        // separate calculation) exactly as before - only THIS saved
+        // record's totalLitres/totalAmount changed.
         const extra = sumExtraFuelExpression(mExtraFuel);
         const isPettyCashExtra = mExtraFuelPaymentMode === 'petty_cash' && extra > 0 && !!mPettyCashHolder.trim();
         const isCardExtra = mExtraFuelPaymentMode === 'card' && extra > 0;
-        const isExcludedExtra = isPettyCashExtra || isCardExtra;
-        const totalLitres = isExcludedExtra ? l : parseFloat((l + extra).toFixed(2));
+        const totalLitres = parseFloat((l + extra).toFixed(2));
         const calculatedMileage = totalLitres > 0 ? parseFloat((calculatedTotalKm / totalLitres).toFixed(2)) : 0;
         const calculatedCostPerKm = calculatedMileage > 0 ? parseFloat((r / calculatedMileage).toFixed(2)) : 0;
         const calculatedActualMileage = fixedMileageForVehicle || 0;
@@ -1297,7 +1401,7 @@ export default function FuelManagement({
         const baseMileageRemarks = [remarks.trim(), stripPreviousAuditNote(mRemarks)].filter(Boolean).join(' | ');
         const finalMileageRemarks = note ? `${baseMileageRemarks}${baseMileageRemarks ? ' ' : ''}(Fuel Audit: ${note})` : baseMileageRemarks;
         const rateNew = parseFloat(mRatePerLitreNew) || 0;
-        const calculatedTotalAmount = isExcludedExtra ? a : parseFloat((a + extra * rateNew).toFixed(2));
+        const calculatedTotalAmount = parseFloat((a + extra * rateNew).toFixed(2));
         const nextSlNo = mileageReports.length > 0 ? Math.max(...mileageReports.map(rep => rep.slNo || 0)) + 1 : 1;
 
         const mileagePayload = {
@@ -1437,6 +1541,7 @@ export default function FuelManagement({
       (bunkFilter === 'All' || log.bunkName === bunkFilter) &&
       (locationFilter === 'All' || log.location === locationFilter) &&
       (bunkOrCardFilter === 'All' || (log.bunkOrCard || 'Bunk') === bunkOrCardFilter) &&
+      (ownerTabFilter === 'All' || (ownerTabFilter === user.username ? !log.enteredBy || log.enteredBy === user.username : log.enteredBy === ownerTabFilter)) &&
       (!canSeeEnteredBy || enteredByFilter === 'All' || log.enteredBy === enteredByFilter) &&
       (
         (log?.vehicleNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -1515,12 +1620,24 @@ export default function FuelManagement({
   // Date, Location, Bunk Name, Vehicle Number, OIL, Indent No, Ltrs, Rate,
   // Amt, Client, (blank), Vendor Code, Vendor Name, Remarks - Location/Bunk
   // Name are included on every download.
+  // Driver ID (2026-09-18 direct request) - FuelLog carries no driver field
+  // of its own; the only link to a driver is via mileageReportId, which
+  // points at the Mileage tab's own linked MileageReport - that record's
+  // driverId is the actual Driver Details id, not just a name. A fuel entry
+  // with no linked mileage data has no driver to report - shown as "Not
+  // Assigned" rather than left blank, so it reads as a deliberate absence.
+  const driverIdForExport = (l: FuelLog): string => {
+    const linked = l.mileageReportId ? mileageReports.find(r => r.id === l.mileageReportId) : undefined;
+    return linked?.driverId || 'Not Assigned';
+  };
+
   const toFuelSheetRows = (rows: FuelLog[]) => {
     return rows.map(l => ({
       'Date': l.date,
       'Location': l.location,
       'Bunk Name': l.bunkName,
       'Vehicle Number': l.vehicleNumber,
+      'Driver ID': driverIdForExport(l),
       'OIL': '',
       'Indent No': l.indentNumber,
       'Ltrs': l.ltrs,
@@ -1584,7 +1701,7 @@ export default function FuelManagement({
       const totalLitres = groupLogs.reduce((s, l) => s + (l.ltrs || 0), 0);
       const totalAmount = groupLogs.reduce((s, l) => s + (l.amount || 0), 0);
       const summaryRow = {
-        'Date': '', 'Location': '', 'Bunk Name': '', 'Vehicle Number': 'TOTAL', 'OIL': '', 'Indent No': '',
+        'Date': '', 'Location': '', 'Bunk Name': '', 'Vehicle Number': 'TOTAL', 'Driver ID': '', 'OIL': '', 'Indent No': '',
         'Ltrs': totalLitres, 'Rate': '', 'Amt': totalAmount,
         'Client': '', ' ': '', 'Vendor Code': '', 'Vendor Name': '', 'Remarks': ''
       };
@@ -1617,7 +1734,7 @@ export default function FuelManagement({
     const totalLitres = groupLogs.reduce((s, l) => s + (l.ltrs || 0), 0);
     const totalAmount = groupLogs.reduce((s, l) => s + (l.amount || 0), 0);
     const summaryRow = {
-      'Date': '', 'Location': '', 'Bunk Name': '', 'Vehicle Number': 'TOTAL', 'OIL': '', 'Indent No': '',
+      'Date': '', 'Location': '', 'Bunk Name': '', 'Vehicle Number': 'TOTAL', 'Driver ID': '', 'OIL': '', 'Indent No': '',
       'Ltrs': totalLitres, 'Rate': '', 'Amt': totalAmount,
       'Client': '', ' ': '', 'Vendor Code': '', 'Vendor Name': '', 'Remarks': ''
     };
@@ -1931,6 +2048,38 @@ export default function FuelManagement({
             />
           )}
 
+          {/* All / Praveen / Chandan owner tab (2026-09-18 direct request) -
+              only shown to these two logins, above the Ledger filter below.
+              Each defaults to their own name on login (see ownerTabFilter's
+              initializer); clicking the other person's name shows their
+              entries View-only (see the row actions further below), never
+              Edit/Delete, regardless of any edit right the viewer might
+              otherwise have (e.g. Chandan's existing Mileage-only exception
+              on Praveen's rows) - that still applies normally under "All"
+              or your own name, unchanged. */}
+          {(user.username === 'praveenkumar' || user.username === 'chandanreddy') && (
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Entries:</span>
+              <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-bold">
+                {([['All', 'All'], ['praveenkumar', 'Praveen'], ['chandanreddy', 'Chandan']] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setOwnerTabFilter(key)}
+                    className={`px-3.5 py-1.5 rounded-md cursor-pointer transition-colors ${ownerTabFilter === key ? 'bg-white shadow-xs text-emerald-700' : 'text-slate-500'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {ownerTabFilter !== 'All' && ownerTabFilter !== user.username && (
+                <span className="text-[9px] uppercase font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                  Viewing {ownerTabFilter === 'praveenkumar' ? 'Praveen' : 'Chandan'}'s entries - View only
+                </span>
+              )}
+            </div>
+          )}
+
           {/* Bunk | Card - the two ledgers are clearly separated views over
               the same underlying entries (bunkOrCard on each FuelLog), not
               separate Add Entry forms - saving an entry as Bunk shows it
@@ -2055,7 +2204,14 @@ export default function FuelManagement({
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.location}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.bunkName}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">{log.bunkOrCard || 'Bunk'}</td>
-                      <td className="px-3 py-2.5 font-bold font-mono text-slate-900 uppercase tracking-wider whitespace-nowrap">{log.vehicleNumber}</td>
+                      {/* 2026-09-18 direct request: a light, non-white
+                          highlight on Vehicle No. flags any entry with no
+                          Mileage recorded yet - purely derived from
+                          log.mileageReportId, so it clears itself the
+                          instant Mileage is entered/updated (logs already
+                          re-fetches after that save), no separate tracking
+                          needed. */}
+                      <td className={`px-3 py-2.5 font-bold font-mono text-slate-900 uppercase tracking-wider whitespace-nowrap ${!log.mileageReportId ? 'bg-amber-100' : ''}`} title={!log.mileageReportId ? 'Mileage not entered for this entry yet' : undefined}>{log.vehicleNumber}</td>
                       <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{log.indentNumber}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-slate-800">{(log.ltrs || 0)} L</td>
                       <td className="px-3 py-2.5 text-right font-mono text-slate-500">₹{(log.rate || 0).toFixed(2)}</td>
@@ -2085,7 +2241,7 @@ export default function FuelManagement({
                         </td>
                       )}
                       <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                        {isRqIdOnlyUser || isViewOnlyUser ? (
+                        {isRqIdOnlyUser || isViewOnlyUser || (ownerTabFilter !== 'All' && ownerTabFilter !== user.username) ? (
                           <span className="text-slate-300 text-[10px] uppercase font-bold">View only</span>
                         ) : (
                           <div className="flex items-center justify-end gap-1.5">
@@ -2202,23 +2358,56 @@ export default function FuelManagement({
                         </p>
                       </div>
                       <div>
-                        <label className="block font-semibold text-slate-600 mb-1">Closing KM</label>
+                        <label className="block font-semibold text-slate-600 mb-1">
+                          Closing KM {mTotalKmManualMode && <span className="text-slate-400 font-normal normal-case">(auto = Opening + Total KM)</span>}
+                        </label>
                         <input
                           type="number"
                           placeholder="Current reading"
                           value={mClosingKm}
                           onChange={(e) => setMClosingKm(e.target.value)}
-                          className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
+                          readOnly={mTotalKmManualMode}
+                          className={`w-full border rounded-lg p-2 font-mono font-bold ${mTotalKmManualMode ? 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed' : 'bg-white border-slate-200 text-slate-800'}`}
                         />
                       </div>
                     </div>
 
-                    <div className="p-2.5 bg-white rounded-lg border border-pink-100 flex items-center justify-between font-mono">
-                      <div>
-                        <span className="text-[9px] text-slate-400 uppercase font-bold block">Total KM (auto)</span>
-                        <span className="text-xs font-black text-pink-700">{mTotalKm || 0} Kilometers</span>
+                    {/* Total KM manual override (2026-09-18 direct request) -
+                        for when there's no real Closing KM odometer reading
+                        for this trip, only a GPS-reported total distance.
+                        Toggling this on makes Total KM the typed value and
+                        derives Closing KM = Opening + Total KM instead of
+                        the usual Total KM = Closing - Opening (see the two
+                        effects above) - every other calculation downstream
+                        is unaffected either way. */}
+                    <div className="p-2.5 bg-white rounded-lg border border-pink-100 space-y-1.5 font-mono">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <span className="text-[9px] text-slate-400 uppercase font-bold block">
+                            Total KM {mTotalKmManualMode ? '(manual)' : '(auto)'}
+                          </span>
+                          {mTotalKmManualMode ? (
+                            <input
+                              type="number"
+                              placeholder="e.g. from GPS"
+                              value={mTotalKm}
+                              onChange={(e) => setMTotalKm(e.target.value)}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-1.5 mt-0.5 font-mono font-black text-pink-700"
+                            />
+                          ) : (
+                            <span className="text-xs font-black text-pink-700">{mTotalKm || 0} Kilometers</span>
+                          )}
+                        </div>
+                        <ArrowRightLeft className="w-4 h-4 text-pink-300 shrink-0 ml-2" />
                       </div>
-                      <ArrowRightLeft className="w-4 h-4 text-pink-300" />
+                      <label className="flex items-center gap-1.5 text-[9px] text-slate-500 font-sans cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={mTotalKmManualMode}
+                          onChange={(e) => setMTotalKmManualMode(e.target.checked)}
+                        />
+                        No Closing KM reading available - enter Total KM manually (e.g. from GPS)
+                      </label>
                     </div>
 
                     {/* Vehicle Mileage Master mini-manager */}
@@ -2846,22 +3035,29 @@ export default function FuelManagement({
                         className="w-full bg-white border border-slate-200 rounded-lg p-2 text-slate-800"
                       />
                       <datalist id="fuel-vendors-datalist">
+                        <option value="KCM" />
                         <option value="One Time Vendor" />
                         {vendorProfiles.map((v) => <option key={v.id} value={v.name} />)}
                       </datalist>
                       <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                        Type a name registered in Vendor Management, pick "One Time Vendor" for a one-off (auto-sets Vendor Code to "Vendor"), or enter one manually if not found. Also auto-fills from Vehicle Number above when that vehicle belongs to a registered vendor, or was last logged as One Time Vendor.
+                        Type a name registered in Vendor Management, pick "KCM" for KCM's own Fleet vehicles (auto-fills when the Vehicle No. above is Fleet-owned), "One Time Vendor" for a one-off (auto-sets Vendor Code to "Vendor"), or enter one manually if not found. Also auto-fills from Vehicle Number above when that vehicle belongs to a registered vendor, or was last logged as One Time Vendor.
                       </p>
                     </div>
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1">Vendor Code (auto)</label>
                       <input
                         type="text"
+                        list="fuel-vendor-codes-datalist"
                         value={vendorCode}
                         onChange={(e) => setVendorCode(e.target.value)}
                         autoComplete="off"
                         className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono text-slate-800"
                       />
+                      <datalist id="fuel-vendor-codes-datalist">
+                        <option value="KCM" />
+                        <option value="Vendor" />
+                        {vendorProfiles.map((v) => <option key={v.id} value={v.code} />)}
+                      </datalist>
                     </div>
                   </div>
 

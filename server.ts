@@ -512,7 +512,12 @@ const PETTY_CASH_FULL_VIEW_EMAILS: string[] = [];
 // - Chethan/Anand aren't listed here since they're real Super Admins
 // already and get full view+edit through that, not this tier. Bhagya
 // (2026-09-08 direct request) added to the same tier.
-const PETTY_CASH_VIEW_ONLY_EMAILS = ['finance@kcmlogistics.in', 'prathiba@kcmlogistics.in', 'divya@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'bhagya@kcmlogistics.in'];
+// vinod@kcmlogistics.in (2026-09-18) - Vehicle Financial Performance needs
+// his session to read every handler's Petty Cash rows (vehicle-linked
+// deductions); write is still separately gated by canModifyPettyCashRow/
+// canModifyAdvance below, neither of which consult this list, so he still
+// can't create/edit/delete anything here.
+const PETTY_CASH_VIEW_ONLY_EMAILS = ['finance@kcmlogistics.in', 'prathiba@kcmlogistics.in', 'divya@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'bhagya@kcmlogistics.in', 'vinod@kcmlogistics.in'];
 
 function canModifyPettyCashRow(row: { enteredBy?: string } | undefined, sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): boolean {
   if (sessionUser && PETTY_CASH_FULL_VIEW_EMAILS.includes(sessionUser.email || '')) return true;
@@ -545,15 +550,26 @@ async function requirePettyCashAccess(req: express.Request, res: express.Respons
 // place to widen it further to other roles later). Vinod was previously
 // included here too but had that access removed 2026-09-05 (direct
 // request), his own Petty Cash/Fleet-focused role no longer needing it.
+// GET-only exception (2026-09-18, Vehicle Financial Performance) - lets
+// Vinod's session pull Warehouse Revenue figures into that module, WITHOUT
+// restoring his general Warehouse Details access (removed 2026-09-05 above)
+// or its UI tab (Administration.tsx's own hasAccess('warehouse') is
+// untouched, so the tab itself stays hidden for him) - create/edit/delete
+// still 403 for him exactly as before.
+const WAREHOUSE_VIEW_ONLY_EMAILS = ['vinod@kcmlogistics.in'];
+
 async function requireWarehouseAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
-  if (sessionUser.department !== 'super_admin' && sessionUser.email !== 'bhagya@kcmlogistics.in') {
-    return res.status(403).json({ error: 'You do not have access to Warehouse Details.' });
+  if (sessionUser.department === 'super_admin' || sessionUser.email === 'bhagya@kcmlogistics.in') {
+    return next();
   }
-  next();
+  if (req.method === 'GET' && WAREHOUSE_VIEW_ONLY_EMAILS.includes(sessionUser.email || '')) {
+    return next();
+  }
+  return res.status(403).json({ error: 'You do not have access to Warehouse Details.' });
 }
 
 // Customer Billings had no server-side gate at all - unlike every other
@@ -598,15 +614,25 @@ async function requirePaymentsAccess(req: express.Request, res: express.Response
 // also allowed here.
 const LOAN_ACCESS_EMAILS = ['finance@kcmlogistics.in'];
 
+// GET-only exception (2026-09-18, Vehicle Financial Performance) - lets
+// Bhagya's and Vinod's sessions pull EMI/Loan figures into that module
+// without granting the actual Loan Management module/tab or any write
+// access - Administration.tsx's own hasAccess('loans') is untouched, so
+// the tab stays hidden for both; create/edit/delete still 403 for them.
+const LOAN_VIEW_ONLY_EMAILS = ['bhagya@kcmlogistics.in', 'vinod@kcmlogistics.in'];
+
 async function requireLoanAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
   if (!sessionUser) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
-  if (sessionUser.department !== 'super_admin' && !LOAN_ACCESS_EMAILS.includes(sessionUser.email || '')) {
-    return res.status(403).json({ error: 'You do not have access to Loan Management.' });
+  if (sessionUser.department === 'super_admin' || LOAN_ACCESS_EMAILS.includes(sessionUser.email || '')) {
+    return next();
   }
-  next();
+  if (req.method === 'GET' && LOAN_VIEW_ONLY_EMAILS.includes(sessionUser.email || '')) {
+    return next();
+  }
+  return res.status(403).json({ error: 'You do not have access to Loan Management.' });
 }
 
 const VENDOR_MANAGEMENT_EMAILS = ['divya@kcmlogistics.in', 'finance@kcmlogistics.in'];
@@ -1114,8 +1140,31 @@ function filterFuelOrMileageRowsForViewer<T extends { enteredBy?: string }>(rows
     .map(r => r.enteredBy === sessionUser.username ? (({ enteredBy, ...rest }) => rest as T)(r) : r);
 }
 
+// Bidirectional VIEW-only cross-visibility (2026-09-18 direct request) -
+// separate from and unrelated to FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS above
+// (a one-way Chandan-can-EDIT-Praveen's-Mileage exception). This one only
+// ever grants read access, surfaced via a dedicated All/Praveen/Chandan
+// filter tab in FuelManagement.tsx - canModifyEntryRow/buildFuelLogUpdateForViewer
+// are untouched, so a row reaching the client this way still can never be
+// edited/deleted by anyone but its own entrant (or a super admin).
+const FUEL_CROSS_VIEW_ONLY_USERNAMES: Record<string, string[]> = {
+  chandanreddy: ['praveenkumar'],
+  praveenkumar: ['chandanreddy'],
+};
+
 function filterFuelLogsForViewer(rows: FuelLog[], sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): FuelLog[] {
-  return filterFuelOrMileageRowsForViewer(rows, sessionUser, [...FUEL_RQ_ID_ONLY_EMAILS, ...FUEL_VIEW_ONLY_EMAILS]);
+  const base = filterFuelOrMileageRowsForViewer(rows, sessionUser, [...FUEL_RQ_ID_ONLY_EMAILS, ...FUEL_VIEW_ONLY_EMAILS]);
+  if (!sessionUser || sessionUser.department === 'super_admin') return base;
+  const crossUsernames = FUEL_CROSS_VIEW_ONLY_USERNAMES[sessionUser.username] || [];
+  if (crossUsernames.length === 0) return base;
+  // Praveen's own view of Chandan's rows isn't already covered by the
+  // mileage-only exception above (that one only ever runs the other way),
+  // so it's added here - deduped against `base` so Chandan (who already
+  // gets Praveen's rows via that exception, enteredBy intact) never sees
+  // the same row twice.
+  const alreadyIncludedIds = new Set(base.map(r => r.id));
+  const crossRows = rows.filter(r => crossUsernames.includes(r.enteredBy || '') && !alreadyIncludedIds.has(r.id));
+  return [...base, ...crossRows];
 }
 
 // Mileage Report's own version of the above (2026-09-08 bug fix) - a Mileage
@@ -2682,8 +2731,9 @@ async function startServer() {
       const bunkOrCard = req.query.bunkOrCard === 'Card' ? 'Card' : 'Bunk';
       const date = typeof req.query.date === 'string' ? req.query.date : '';
       const bunkName = typeof req.query.bunkName === 'string' ? req.query.bunkName : '';
+      const location = typeof req.query.location === 'string' ? req.query.location : '';
       const logs = await getFuelLogs();
-      const indentNumber = bunkOrCard === 'Card' ? nextCardFuelIndentNumber(logs, sessionUser?.username) : nextBunkFuelIndentNumber(logs, date, bunkName, sessionUser?.username);
+      const indentNumber = bunkOrCard === 'Card' ? nextCardFuelIndentNumber(logs, sessionUser?.username) : nextBunkFuelIndentNumber(logs, date, bunkName, location, sessionUser?.username);
       res.json({ indentNumber });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });

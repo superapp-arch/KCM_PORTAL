@@ -528,11 +528,20 @@ export default function PettyCash({
   // prefix is fixed/shown separately and never part of what they type.
   const [manualEntryNoSeq, setManualEntryNoSeq] = useState('');
   const [categoryInput, setCategoryInput] = useState('');
-  // Market Driver Payment (2026-09-10 direct request) - Driver ID and
-  // Receiver Name are hidden entirely for this category, not just optional:
-  // it pays a one-off market driver who isn't in Driver Details and has no
-  // separate "receiver" to name.
+  // Market Driver Payment (2026-09-10 direct request) - Driver ID stays
+  // hidden entirely for this category: it pays a one-off market driver who
+  // isn't in Driver Details, so there's no ID to attach. Receiver Name
+  // (2026-09-18 direct request, reversing an earlier 2026-09-10 "hide it
+  // too" decision for this same category) is shown again, but positioned
+  // directly below Vehicle Number instead of its usual spot further down
+  // the form - see the two Receiver Name blocks below.
   const isMarketDriverPayment = categoryInput.trim().toUpperCase() === 'MARKET DRIVER PAYMENT';
+  // Office Maintenance (2026-09-18 direct request) - a pure office expense,
+  // never tied to any vehicle/vendor, so the whole Vehicle/Vendor Identity
+  // block (KCM Vehicle vs Vendor Vehicle toggle, Vehicle Number, Driver ID,
+  // Vendor Vehicle Number, Vendor ID) is hidden entirely for this category
+  // only - every other category keeps that block exactly as before.
+  const isOfficeMaintenance = categoryInput.trim().toUpperCase() === 'OFFICE MAINTENANCE';
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
   const [location, setLocation] = useState('');
   const [clientName, setClientName] = useState('Swiggy');
@@ -2575,7 +2584,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                     solid, brighter, on-brand teal now replaces it
                     everywhere in this file, so header labels stand out
                     immediately rather than needing to be picked out. */}
-                <thead className="bg-teal-700 border-b-2 border-teal-800 text-white font-sans font-bold tracking-wide uppercase text-[9px] sticky top-0 z-10">
+                <thead className="bg-gradient-to-r from-teal-800 via-cyan-700 to-teal-800 border-b-2 border-cyan-400 text-white font-sans font-bold tracking-wide uppercase text-[9px] sticky top-0 z-10">
                   <tr>
                     <th className="px-3 py-2.5"><ColumnFilterHeader label="Date" type="date" value={columnFilters.date} onChange={f => setColumnFilter('date', f)} /></th>
                     <th className="px-3 py-2.5"><ColumnFilterHeader label="Entry No" type="text" values={mergedLedgerRowsUnsorted.map(r => ledgerRowColumnValue(r, 'entryNo'))} value={columnFilters.entryNo} onChange={f => setColumnFilter('entryNo', f)} sortKey="entryNo" sort={sort} onSort={handleSort} sortType="numeric" /></th>
@@ -2837,9 +2846,9 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
           {/* Matrix table with horizontal scroll */}
           <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-2xs max-h-[500px]">
             <table className="w-full text-left text-xs border-collapse">
-              <thead className="bg-teal-700 text-white font-bold text-[9px] uppercase tracking-wider sticky top-0 z-15 divide-x divide-teal-800">
+              <thead className="bg-gradient-to-r from-teal-800 via-cyan-700 to-teal-800 text-white font-bold text-[9px] uppercase tracking-wider sticky top-0 z-15 divide-x divide-cyan-600 border-b-2 border-cyan-400">
                 <tr>
-                  <th rowSpan={2} className="px-3 py-3 text-white font-sans font-bold uppercase tracking-widest min-w-[200px] align-middle sticky left-0 bg-teal-700 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.3)]">
+                  <th rowSpan={2} className="px-3 py-3 text-white font-sans font-bold uppercase tracking-widest min-w-[200px] align-middle sticky left-0 bg-teal-800 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.3)]">
                     Expense Category
                   </th>
                   {MONTHS.map((m, idx) => (
@@ -2948,7 +2957,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-teal-700 text-white font-bold uppercase text-[9px] tracking-wider">
+                  <thead className="bg-gradient-to-r from-teal-800 via-cyan-700 to-teal-800 text-white font-bold uppercase text-[9px] tracking-wider border-b-2 border-cyan-400">
                     <tr>
                       <th className="px-3 py-2">Handler</th>
                       <th className="px-3 py-2 text-right">Float (Total Received)</th>
@@ -3012,7 +3021,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
             </div>
             <div className="overflow-x-auto max-h-[420px]">
               <table className="w-full text-left text-xs">
-                <thead className="bg-teal-700 text-white font-bold uppercase text-[9px] tracking-wider sticky top-0 z-10">
+                <thead className="bg-gradient-to-r from-teal-800 via-cyan-700 to-teal-800 text-white font-bold uppercase text-[9px] tracking-wider sticky top-0 z-10 border-b-2 border-cyan-400">
                   <tr>
                     <th className="px-3 py-2">Date</th>
                     <th className="px-3 py-2">Source</th>
@@ -3186,7 +3195,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   low-visibility bg-[#0f172a] to the same vivid gradient
                   other modules (e.g. Fleet & Vehicles) already use, so it
                   actually stands out instead of blending into the page. */}
-              <thead className="bg-teal-700 border-b-2 border-teal-800 text-white font-sans font-bold tracking-wide uppercase text-[9px] sticky top-0 z-10">
+              <thead className="bg-gradient-to-r from-teal-800 via-cyan-700 to-teal-800 border-b-2 border-cyan-400 text-white font-sans font-bold tracking-wide uppercase text-[9px] sticky top-0 z-10">
                 <tr>
                   <th className="px-3 py-2.5"><ColumnFilterHeader label="Date" type="date" value={mpColumnFilters.date} onChange={f => setMpColumnFilter('date', f)} /></th>
                   <th className="px-3 py-2.5"><ColumnFilterHeader label="Entry No" type="text" values={marketPodEntries.map(e => e.entryNo)} value={mpColumnFilters.entryNo} onChange={f => setMpColumnFilter('entryNo', f)} sortKey="entryNo" sort={mpSort} onSort={handleMpSort} sortType="numeric" /></th>
@@ -3375,7 +3384,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
             <div className="p-6 overflow-y-auto flex-1 bg-slate-50/50">
               <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
                 <table className="w-full text-left text-xs border-collapse">
-                  <thead className="bg-teal-700 text-white text-[10px] uppercase font-bold tracking-wider border-b-2 border-teal-800">
+                  <thead className="bg-gradient-to-r from-teal-800 via-cyan-700 to-teal-800 text-white text-[10px] uppercase font-bold tracking-wider border-b-2 border-cyan-400">
                     <tr>
                       <th className="px-4 py-2.5">Date</th>
                       <th className="px-4 py-2.5">Entry No</th>
@@ -3757,7 +3766,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   <p className="text-slate-400 text-[11px] py-8 text-center">No Amount Received entries logged yet.</p>
                 ) : (
                   <table className="w-full text-left text-xs">
-                    <thead className="bg-teal-700 text-white font-bold uppercase text-[9.5px] tracking-wide sticky top-0">
+                    <thead className="bg-gradient-to-r from-teal-800 via-cyan-700 to-teal-800 text-white font-bold uppercase text-[9.5px] tracking-wide sticky top-0 border-b-2 border-cyan-400">
                       <tr>
                         <th className="px-3 py-2">Date</th>
                         <th className="px-3 py-2">Account</th>
@@ -3965,7 +3974,10 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       switchVehicleMode) - placed above Location since
                       selecting a Vehicle Number can auto-fill Location (see
                       the auto-fill effect above: dedicated fleet vehicles /
-                      TN-registered vehicles). */}
+                      TN-registered vehicles). Hidden entirely for Office
+                      Maintenance (2026-09-18 direct request) - a pure office
+                      expense never tied to any vehicle/vendor. */}
+                  {!isOfficeMaintenance && (
                   <div className="border border-slate-200 rounded-lg p-2.5 bg-slate-50/50 space-y-2.5">
                     <div className="flex gap-2">
                       <button type="button" onClick={() => switchVehicleMode('vehicle')}
@@ -3997,6 +4009,32 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                           </datalist>
                           <p className="text-[9px] text-slate-400 font-mono mt-0.5">Live from Fleet &amp; Vehicles - type to search.</p>
                         </div>
+                        {/* 2026-09-18 direct request: for Market Driver
+                            Payment specifically, Receiver Name sits directly
+                            below Vehicle Number instead of Driver ID's usual
+                            spot (Driver ID stays inapplicable/hidden for
+                            this category, see below) - the generic Receiver
+                            Name field further down the form stays hidden for
+                            this category as before, so it's never shown
+                            twice. Reuses the exact same receiver/
+                            handleReceiverChange state as that field. */}
+                        {isMarketDriverPayment && (
+                          <div>
+                            <label className="block font-semibold text-slate-700 mb-1">Receiver Name</label>
+                            <input
+                              type="text"
+                              list="petty-cash-receiver-name-datalist"
+                              placeholder="Cash recipient (optional)"
+                              value={receiver}
+                              onChange={(e) => handleReceiverChange(e.target.value)}
+                              autoComplete="off"
+                              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                            />
+                            <datalist id="petty-cash-receiver-name-datalist">
+                              {receiverNameOptions.map(name => <option key={name} value={name} />)}
+                            </datalist>
+                          </div>
+                        )}
                         {/* Driver ID not applicable for Market Driver Payment
                             (2026-09-10 direct request) - that category pays a
                             one-off market driver who isn't in Driver Details
@@ -4062,6 +4100,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                       </div>
                     )}
                   </div>
+                  )}
 
                   {/* Receiver Name (2026-09-04: sits right after the Vehicle/
                       Vendor Identity block and before Location, same field

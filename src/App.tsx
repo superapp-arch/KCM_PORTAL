@@ -152,8 +152,17 @@ export default function App() {
       // silently hide real driver data from someone who should see it,
       // which is a far worse outcome than one harmless extra 403.
       const hasBillingAccess = forUser?.department === 'super_admin' || forUser?.department === 'billing' || forUser?.email === 'bhagya@kcmlogistics.in';
-      const hasWarehouseAccess = forUser?.department === 'super_admin' || forUser?.email === 'bhagya@kcmlogistics.in';
-      const hasLoanAccess = forUser?.department === 'super_admin' || forUser?.email === 'finance@kcmlogistics.in';
+      // Vinod's own GET-only exception (see requireWarehouseAccess in
+      // server.ts) is for Vehicle Financial Performance's Warehouse Revenue
+      // figure only - his actual Warehouse Details tab stays hidden
+      // (Administration.tsx's own hasAccess('warehouse') is untouched), but
+      // this fetch must still run for him or that figure would silently
+      // read 0 despite the server now allowing it.
+      const hasWarehouseAccess = forUser?.department === 'super_admin' || forUser?.email === 'bhagya@kcmlogistics.in' || forUser?.email === 'vinod@kcmlogistics.in';
+      // Bhagya/Vinod's own GET-only exception (see requireLoanAccess in
+      // server.ts) - same reasoning, for Vehicle Financial Performance's
+      // EMI/Loan figure; their Loan Management tab stays hidden.
+      const hasLoanAccess = forUser?.department === 'super_admin' || forUser?.email === 'finance@kcmlogistics.in' || forUser?.email === 'bhagya@kcmlogistics.in' || forUser?.email === 'vinod@kcmlogistics.in';
       const hasHrAccess = forUser?.department === 'super_admin' || forUser?.email === 'bhagya@kcmlogistics.in' || forUser?.email === 'vinod@kcmlogistics.in';
       const [
         fleetRes,

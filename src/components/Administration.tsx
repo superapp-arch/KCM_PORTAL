@@ -44,6 +44,7 @@ import Billing from './Billing';
 import PettyCash from './PettyCash';
 import Maintenance from './Maintenance';
 import Reports from './Reports';
+import VehicleFinancialPerformance from './VehicleFinancialPerformance';
 import AuditTrail from './AuditTrail';
 import Accounts from './Accounts';
 import HR from './HR';
@@ -60,7 +61,7 @@ import {
   LogOut, ShieldAlert, FileSpreadsheet, Fuel, FileText, Landmark,
   Settings, DollarSign, Contact, Bell, Mail, RefreshCw, CheckCircle, Clock,
   KeyRound, Cpu, Terminal, Copy, Check, Eye, EyeOff, Warehouse, Gauge, X,
-  Truck, Building2, HandCoins, Menu, BarChart3, History, CreditCard, AlertTriangle
+  Truck, Building2, HandCoins, Menu, BarChart3, History, CreditCard, AlertTriangle, TrendingUp
 } from 'lucide-react';
 
 // Driver Details module gate - mirrors server.ts's DRIVER_LOCATION_SCOPES
@@ -551,6 +552,14 @@ export default function Administration({
     if (tabName === 'drivers' && DRIVER_ACCESS_EMAILS.includes(user.email || '')) return true;
     // Loan Management mirrors server.ts's LOAN_ACCESS_EMAILS.
     if (tabName === 'loans' && user.email === 'finance@kcmlogistics.in') return true;
+    // Vehicle Financial Performance (2026-09-18 direct request) - Bhagya
+    // and Vinod, on top of Super Admin. Server-side, their sessions also
+    // gained narrow GET-only exceptions on Loan Management/Warehouse
+    // Details/Petty Cash (see requireLoanAccess/requireWarehouseAccess/
+    // PETTY_CASH_VIEW_ONLY_EMAILS in server.ts) so this module's own
+    // figures aren't silently 0 for them - those modules' own tabs stay
+    // exactly as gated above, unaffected by this.
+    if (tabName === 'vehicle-pnl' && (user.email === 'bhagya@kcmlogistics.in' || user.email === 'vinod@kcmlogistics.in')) return true;
     return false;
   };
 
@@ -604,6 +613,12 @@ export default function Administration({
     // matches 'reports', so this is never reachable by any other role. This
     // now surfaces Payroll/salary data, so keep it that way.
     { id: 'reports', label: 'Reports & Analytics', icon: BarChart3, iconColor: 'text-violet-400', active: 'bg-gradient-to-r from-violet-500/20 to-purple-500/20 text-violet-300 border-l-4 border-violet-500', visible: hasAccess('reports') },
+    // Vehicle Financial Performance (2026-09-18) - Super Admin / Principal
+    // only, same reasoning as Reports & Analytics above (surfaces
+    // cross-module financial figures, standalone module per direct
+    // instruction, not yet wired into Reports & Analytics or Accounts &
+    // Finance).
+    { id: 'vehicle-pnl', label: 'Vehicle Financial Performance', icon: TrendingUp, iconColor: 'text-emerald-400', active: 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-300 border-l-4 border-emerald-500', visible: hasAccess('vehicle-pnl') },
     // Super Admin / Principal only, same reasoning as Reports & Analytics
     // above - hasAccess('audit') has no dedicated branch, so it only ever
     // resolves true via the department === 'super_admin' check at the top
@@ -1281,6 +1296,21 @@ export default function Administration({
               toolsChecklistRecords={toolsChecklistRecords}
               serviceStationSpareParts={serviceStationSpareParts}
               serviceStationInspections={serviceStationInspections}
+            />
+          )}
+
+          {activeTab === 'vehicle-pnl' && hasAccess('vehicle-pnl') && (
+            <VehicleFinancialPerformance
+              user={user}
+              vehicles={vehicles}
+              fuelLogs={fuelLogs}
+              mileageReports={mileageReports}
+              vouchers={vouchers}
+              warehouseEntries={warehouseEntries}
+              vehicleLoans={vehicleLoans}
+              records={records}
+              drivers={drivers}
+              driverPettyCashAdvanceVouchers={driverPettyCashAdvanceVouchers}
             />
           )}
 

@@ -133,9 +133,29 @@ const MAINTENANCE_SUBMODULE_OPTIONS = [
   'Battery', 'Tools Checklist', 'Breakdown/Workshop/Electrical'
 ];
 
+// Fuel's own Bunk Location filter (2026-09-18 direct request) - stored as
+// 'ALL' (the default - every bunk included, today's existing behavior) or a
+// JSON array of "location|||bunkName" composite keys (bunk names can repeat
+// across different locations, e.g. HPCL at both Bangalore and Chennai - a
+// bare bunk-name Set alone couldn't tell those apart). Kept as a single
+// string so it still fits CardFilterState's plain Record<string, string>
+// shape - no need to widen that type for one module's one extra dimension.
+const FUEL_BUNK_FILTER_ALL = 'ALL';
+const fuelBunkKey = (location: string, bunkName: string) => `${location || 'Unknown'}|||${bunkName || 'Unknown'}`;
+function parseFuelBunkSelection(raw: string | undefined): Set<string> | 'ALL' {
+  if (!raw || raw === FUEL_BUNK_FILTER_ALL) return 'ALL';
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? new Set(arr) : 'ALL';
+  } catch {
+    return 'ALL';
+  }
+}
+
 const defaultFilterState = (key: ModuleKey): CardFilterState => {
   switch (key) {
-    case 'fuel': case 'mileage': return { source: 'All' };
+    case 'fuel': return { source: 'All', bunks: FUEL_BUNK_FILTER_ALL };
+    case 'mileage': return { source: 'All' };
     case 'hr': return { employeeType: 'All' };
     case 'billing': return { entity: 'KCM Insta' };
     case 'pettycash': return { holder: 'All', reportType: 'Vouchers' };
@@ -358,9 +378,31 @@ function buildReport(
       // pill filter reads - "Download full" is simply the 'All' selection,
       // already unfiltered by construction.
       const source = filter.source || 'All';
-      const logsInRange = props.fuelLogs.filter(f => isDateInRange(f.date, range) && (source === 'All' || (f.bunkOrCard || 'Bunk') === source));
+      // Bunk Location filter (2026-09-18) - 'ALL' (default) includes every
+      // bunk, unchanged from before this filter existed; a specific
+      // selection narrows to only entries at one of the selected
+      // (location, bunk) pairs, combined with the Source pill and date
+      // range above as an AND condition (all three must pass).
+      const bunkSelection = parseFuelBunkSelection(filter.bunks);
+      const logsInRange = props.fuelLogs.filter(f =>
+        isDateInRange(f.date, range) &&
+        (source === 'All' || (f.bunkOrCard || 'Bunk') === source) &&
+        (bunkSelection === 'ALL' || bunkSelection.has(fuelBunkKey(f.location, f.bunkName)))
+      );
       const totalAmount = logsInRange.reduce((s, f) => s + (f.amount || 0), 0);
       const totalLtrs = logsInRange.reduce((s, f) => s + (f.ltrs || 0), 0);
+      // Driver ID (2026-09-18 direct request) - FuelLog carries no driver
+      // field of its own; the only link to a driver is via mileageReportId,
+      // which points at the Mileage tab's own linked MileageReport (see
+      // FuelManagement.tsx) - that record's driverId is the actual Driver
+      // Details id, not just a name. A fuel entry with no linked mileage
+      // data (Mileage tab never filled in) has no driver to report - shown
+      // as "Not Assigned" rather than left blank, so it reads as a real,
+      // deliberate absence rather than a missing/broken value.
+      const driverIdByMileageReportId = new Map<string, string>();
+      props.mileageReports.forEach(m => { if (m.driverId) driverIdByMileageReportId.set(m.id, m.driverId); });
+      const driverIdFor = (f: FuelLog): string =>
+        (f.mileageReportId && driverIdByMileageReportId.get(f.mileageReportId)) || 'Not Assigned';
       return {
         summary: [
           { label: 'Total Fuel Amount', value: money(totalAmount) },
@@ -370,8 +412,8 @@ function buildReport(
         ],
         sections: [
           {
-            heading: 'Fuel Entries', columns: ['Date', 'Vehicle', 'Source', 'Bunk', 'Litres', 'Rate', 'Amount', 'Client', 'Type'],
-            rows: logsInRange.map(f => [f.date, f.vehicleNumber, f.bunkOrCard || 'Bunk', f.bunkName || '-', f.ltrs || 0, f.rate || 0, f.amount || 0, f.client, f.type])
+            heading: 'Fuel Entries', columns: ['Date', 'Vehicle', 'Driver ID', 'Source', 'Bunk', 'Litres', 'Rate', 'Amount', 'Client', 'Type'],
+            rows: logsInRange.map(f => [f.date, f.vehicleNumber, driverIdFor(f), f.bunkOrCard || 'Bunk', f.bunkName || '-', f.ltrs || 0, f.rate || 0, f.amount || 0, f.client, f.type])
           }
         ]
       };
@@ -702,6 +744,145 @@ function FilterPillRow({ options, selected, onSelect, theme }: {
   );
 }
 
+// Fuel Management's own Bunk Location filter (2026-09-18 direct request) -
+// a multi-select of every (location, bunk) pair actually used in Fuel
+// Management, grouped by location with per-group expand/collapse and
+// "select all", plus a top-level "Select All Bunks". Distinct from the
+// existing Source (Bunk/Card/Petty Cash) pill row above it on the card -
+// that narrows HOW the fuel was paid for, this narrows WHICH physical
+// bunk(s) to include - combined as an AND condition in buildReport's own
+// 'fuel' case.
+function FuelBunkLocationFilter({ fuelLogs, value, onChange, theme }: {
+  fuelLogs: FuelLog[];
+  value: string;
+  onChange: (raw: string) => void;
+  theme: { btn: string };
+}) {
+  const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  // Every (location, bunk) pair actually used in Fuel Management, grouped
+  // by location and sorted for a stable, scannable list - not a fixed
+  // master list, so a bunk stops appearing here only if it's genuinely
+  // never been logged.
+  const groups = React.useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    fuelLogs.forEach(f => {
+      const loc = f.location || 'Unknown';
+      const bunk = f.bunkName || 'Unknown';
+      if (!map.has(loc)) map.set(loc, new Set());
+      map.get(loc)!.add(bunk);
+    });
+    return Array.from(map.entries())
+      .map(([location, bunks]) => ({ location, bunks: Array.from(bunks).sort() }))
+      .sort((a, b) => a.location.localeCompare(b.location));
+  }, [fuelLogs]);
+
+  const allKeys = React.useMemo(() => groups.flatMap(g => g.bunks.map(b => fuelBunkKey(g.location, b))), [groups]);
+  const selection = parseFuelBunkSelection(value);
+  const selectedKeys = selection === 'ALL' ? new Set(allKeys) : selection;
+  const selectedCount = selectedKeys.size;
+  const totalCount = allKeys.length;
+  const isAllSelected = selection === 'ALL' || (totalCount > 0 && selectedCount === totalCount);
+
+  // Collapses back to the plain 'ALL' sentinel whenever every known bunk
+  // ends up selected, so a brand new bunk that shows up later (a fresh
+  // location/bunk typed on a new entry) is automatically included rather
+  // than silently excluded because it didn't exist yet when "select all"
+  // was last clicked.
+  const commit = (keys: Set<string>) => {
+    onChange(keys.size === totalCount ? FUEL_BUNK_FILTER_ALL : JSON.stringify(Array.from(keys)));
+  };
+
+  const toggleAll = () => onChange(isAllSelected ? JSON.stringify([]) : FUEL_BUNK_FILTER_ALL);
+
+  const toggleGroup = (location: string, bunks: string[]) => {
+    const keys = bunks.map(b => fuelBunkKey(location, b));
+    const groupFullySelected = keys.every(k => selectedKeys.has(k));
+    const next = new Set(selectedKeys);
+    keys.forEach(k => groupFullySelected ? next.delete(k) : next.add(k));
+    commit(next);
+  };
+
+  const toggleOne = (key: string) => {
+    const next = new Set(selectedKeys);
+    next.has(key) ? next.delete(key) : next.add(key);
+    commit(next);
+  };
+
+  const toggleExpand = (location: string) => setExpanded(prev => {
+    const next = new Set(prev);
+    next.has(location) ? next.delete(location) : next.add(location);
+    return next;
+  });
+
+  return (
+    <div className="relative" ref={panelRef}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className={`w-full flex items-center justify-between px-2 py-1.5 rounded-md font-semibold text-[10px] border cursor-pointer transition-colors ${
+          isAllSelected ? 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50' : `${theme.btn} text-white border-transparent`
+        }`}
+      >
+        <span>Bunk Filter: {isAllSelected ? `All Bunks (${totalCount})` : `${selectedCount} of ${totalCount} bunks selected`}</span>
+        <span className="text-[9px]">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="absolute left-0 right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-lg shadow-lg max-h-64 overflow-y-auto p-2 space-y-1 text-slate-700">
+          <label className="flex items-center gap-1.5 px-1 py-1 font-bold cursor-pointer border-b border-slate-100 pb-1.5 mb-1">
+            <input type="checkbox" checked={isAllSelected} onChange={toggleAll} />
+            Select All Bunks ({totalCount})
+          </label>
+          {groups.length === 0 && <p className="px-1 py-1 text-slate-400 font-mono">No fuel entries logged yet.</p>}
+          {groups.map(g => {
+            const keys = g.bunks.map(b => fuelBunkKey(g.location, b));
+            const groupSelectedCount = keys.filter(k => selectedKeys.has(k)).length;
+            const groupAllSelected = groupSelectedCount === keys.length;
+            const isExpanded = expanded.has(g.location);
+            return (
+              <div key={g.location} className="border-t border-slate-50 pt-1">
+                <div className="flex items-center gap-1">
+                  <button type="button" onClick={() => toggleExpand(g.location)} className="p-0.5 text-slate-400 hover:text-slate-600 cursor-pointer">
+                    {isExpanded ? '▾' : '▸'}
+                  </button>
+                  <label className="flex items-center gap-1.5 flex-1 py-0.5 font-semibold cursor-pointer">
+                    <input type="checkbox" checked={groupAllSelected} onChange={() => toggleGroup(g.location, g.bunks)} />
+                    {g.location} <span className="text-slate-400 font-normal">({groupSelectedCount}/{keys.length})</span>
+                  </label>
+                </div>
+                {isExpanded && (
+                  <div className="pl-6 space-y-0.5 mt-0.5">
+                    {g.bunks.map(b => {
+                      const key = fuelBunkKey(g.location, b);
+                      return (
+                        <label key={key} className="flex items-center gap-1.5 py-0.5 cursor-pointer">
+                          <input type="checkbox" checked={selectedKeys.has(key)} onChange={() => toggleOne(key)} />
+                          {b}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const PETTY_CASH_HOLDER_PILL_OPTIONS = [
   { value: 'All', label: 'All' },
   ...PETTY_CASH_USERS.map(u => ({ value: u.username, label: u.label }))
@@ -813,7 +994,13 @@ export default function Reports(props: ReportsProps) {
   const filterLabelFor = (key: ModuleKey): string | null => {
     const f = cardFilters[key];
     switch (key) {
-      case 'fuel': case 'mileage': return f.source && f.source !== 'All' ? f.source : null;
+      case 'fuel': {
+        const sourceLabel = f.source && f.source !== 'All' ? f.source : null;
+        const bunkSelection = parseFuelBunkSelection(f.bunks);
+        const bunkLabel = bunkSelection === 'ALL' ? null : `${bunkSelection.size}Bunks`;
+        return [sourceLabel, bunkLabel].filter(Boolean).join('_') || null;
+      }
+      case 'mileage': return f.source && f.source !== 'All' ? f.source : null;
       case 'hr': return f.employeeType && f.employeeType !== 'All' ? f.employeeType : null;
       case 'billing': return BILLING_ENTITY_OPTIONS.find(o => o.value === f.entity)?.label || null;
       case 'pettycash': {
@@ -877,6 +1064,11 @@ export default function Reports(props: ReportsProps) {
 
   const viewingMeta = viewingModule ? MODULES.find(m => m.key === viewingModule)! : null;
   const viewingReport = viewingModule ? reportFor(viewingModule) : null;
+  // See isFuelBlocked's own comment in the card grid below.
+  const viewingFuelBlocked = viewingMeta?.key === 'fuel' && (() => {
+    const s = parseFuelBunkSelection(cardFilters.fuel.bunks);
+    return s !== 'ALL' && s.size === 0;
+  })();
 
   return (
     <div className="space-y-6" id="reports-view-wrapper">
@@ -907,6 +1099,15 @@ export default function Reports(props: ReportsProps) {
           const c = cardRanges[meta.key];
           const range = rangeFor(meta.key);
           const Icon = meta.icon;
+          // Fuel's Bunk Location filter (2026-09-18 direct request):
+          // Download/Share become active only once at least one bunk is
+          // selected - an explicit empty selection ({size: 0}, as opposed
+          // to the 'ALL' default) means "nothing to report yet", not
+          // "everything".
+          const isFuelBlocked = meta.key === 'fuel' && (() => {
+            const s = parseFuelBunkSelection(cardFilters.fuel.bunks);
+            return s !== 'ALL' && s.size === 0;
+          })();
           return (
             <div key={meta.key} className={`rounded-2xl border ${theme.border} ${theme.bg} p-4 flex flex-col gap-3 text-xs shadow-xs`}>
               <div className="flex items-center gap-2">
@@ -954,6 +1155,16 @@ export default function Reports(props: ReportsProps) {
                   options={FUEL_SOURCE_OPTIONS.map(v => ({ value: v, label: v }))}
                   selected={cardFilters[meta.key].source}
                   onSelect={(source) => updateCardFilter(meta.key, { source })}
+                />
+              )}
+              {/* Bunk Location filter (2026-09-18 direct request) - Fuel
+                  Management only, combined with Source above as an AND. */}
+              {meta.key === 'fuel' && (
+                <FuelBunkLocationFilter
+                  theme={theme}
+                  fuelLogs={props.fuelLogs}
+                  value={cardFilters.fuel.bunks}
+                  onChange={(bunks) => updateCardFilter('fuel', { bunks })}
                 />
               )}
               {meta.key === 'hr' && (
@@ -1006,9 +1217,10 @@ export default function Reports(props: ReportsProps) {
                 </button>
                 <div className="relative">
                   <button
-                    onClick={() => setOpenMenu(openMenu?.key === meta.key && openMenu.kind === 'download' ? null : { key: meta.key, kind: 'download' })}
-                    className="p-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors"
-                    title="Download"
+                    onClick={() => !isFuelBlocked && setOpenMenu(openMenu?.key === meta.key && openMenu.kind === 'download' ? null : { key: meta.key, kind: 'download' })}
+                    disabled={isFuelBlocked}
+                    className={`p-1.5 rounded-lg transition-colors border ${isFuelBlocked ? 'bg-slate-100 border-slate-200 text-slate-300 cursor-not-allowed' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer'}`}
+                    title={isFuelBlocked ? 'Select at least one bunk first' : 'Download'}
                   >
                     <FileText className="w-3.5 h-3.5" />
                   </button>
@@ -1025,9 +1237,10 @@ export default function Reports(props: ReportsProps) {
                 </div>
                 <div className="relative">
                   <button
-                    onClick={() => setOpenMenu(openMenu?.key === meta.key && openMenu.kind === 'share' ? null : { key: meta.key, kind: 'share' })}
-                    className="p-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors"
-                    title="Share"
+                    onClick={() => !isFuelBlocked && setOpenMenu(openMenu?.key === meta.key && openMenu.kind === 'share' ? null : { key: meta.key, kind: 'share' })}
+                    disabled={isFuelBlocked}
+                    className={`p-1.5 rounded-lg transition-colors border ${isFuelBlocked ? 'bg-slate-100 border-slate-200 text-slate-300 cursor-not-allowed' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer'}`}
+                    title={isFuelBlocked ? 'Select at least one bunk first' : 'Share'}
                   >
                     <Share2 className="w-3.5 h-3.5" />
                   </button>
@@ -1058,9 +1271,9 @@ export default function Reports(props: ReportsProps) {
                 <span className="text-[10px] font-mono font-normal opacity-80">({exportMetaFor(viewingMeta).subtitle})</span>
               </h3>
               <div className="flex items-center gap-1.5">
-                <button onClick={() => handleDownload(viewingMeta, 'excel')} className="p-1.5 bg-white/15 hover:bg-white/25 rounded-lg cursor-pointer transition-colors" title="Download Excel"><FileSpreadsheet className="w-4 h-4" /></button>
-                <button onClick={() => handleDownload(viewingMeta, 'pdf')} className="p-1.5 bg-white/15 hover:bg-white/25 rounded-lg cursor-pointer transition-colors" title="Download PDF"><FileText className="w-4 h-4" /></button>
-                <button onClick={() => handleShare(viewingMeta, 'pdf')} className="p-1.5 bg-white/15 hover:bg-white/25 rounded-lg cursor-pointer transition-colors" title="Share PDF"><Share2 className="w-4 h-4" /></button>
+                <button onClick={() => !viewingFuelBlocked && handleDownload(viewingMeta, 'excel')} disabled={viewingFuelBlocked} className={`p-1.5 rounded-lg transition-colors ${viewingFuelBlocked ? 'bg-white/5 text-white/30 cursor-not-allowed' : 'bg-white/15 hover:bg-white/25 cursor-pointer'}`} title={viewingFuelBlocked ? 'Select at least one bunk first' : 'Download Excel'}><FileSpreadsheet className="w-4 h-4" /></button>
+                <button onClick={() => !viewingFuelBlocked && handleDownload(viewingMeta, 'pdf')} disabled={viewingFuelBlocked} className={`p-1.5 rounded-lg transition-colors ${viewingFuelBlocked ? 'bg-white/5 text-white/30 cursor-not-allowed' : 'bg-white/15 hover:bg-white/25 cursor-pointer'}`} title={viewingFuelBlocked ? 'Select at least one bunk first' : 'Download PDF'}><FileText className="w-4 h-4" /></button>
+                <button onClick={() => !viewingFuelBlocked && handleShare(viewingMeta, 'pdf')} disabled={viewingFuelBlocked} className={`p-1.5 rounded-lg transition-colors ${viewingFuelBlocked ? 'bg-white/5 text-white/30 cursor-not-allowed' : 'bg-white/15 hover:bg-white/25 cursor-pointer'}`} title={viewingFuelBlocked ? 'Select at least one bunk first' : 'Share PDF'}><Share2 className="w-4 h-4" /></button>
                 <button onClick={() => setViewingModule(null)} className="p-1.5 bg-white/15 hover:bg-white/25 rounded-lg cursor-pointer transition-colors"><X className="w-4 h-4" /></button>
               </div>
             </div>
