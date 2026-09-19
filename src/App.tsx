@@ -1222,7 +1222,18 @@ export default function App() {
     });
     if (res.ok) {
       const data = await res.json();
-      await fetchAllData();
+      // Applied directly from this response (see handleAddFuelLog's own
+      // comment for the full reasoning) - fetchAllData is fired in the
+      // background, not awaited. This matters even more here than for Fuel
+      // Management's own save: FuelManagement.tsx's combined Add/Edit Entry
+      // form awaits onAddMileageReport FIRST, then separately awaits
+      // onAddLog/onUpdateLog right after (2026-09-19 fix) - with BOTH of
+      // those blocking on their own full ~34-endpoint refresh, a single
+      // "Commit Entry" with Mileage data filled in was paying for two
+      // full refreshes back-to-back in sequence, reported as the whole
+      // save taking up to ~30 seconds.
+      if (data?.data) setMileageReports(data.data);
+      fetchAllData();
       return data.id as string | undefined;
     }
     const body = await res.json().catch(() => ({}));
@@ -1236,7 +1247,10 @@ export default function App() {
       body: JSON.stringify({ ...report, id })
     });
     if (res.ok) {
-      await fetchAllData();
+      // See handleAddMileageReport above.
+      const body = await res.json().catch(() => null);
+      if (body?.data) setMileageReports(body.data);
+      fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to update mileage report.');
@@ -1248,7 +1262,10 @@ export default function App() {
       method: 'DELETE'
     });
     if (res.ok) {
-      await fetchAllData();
+      // See handleAddMileageReport above.
+      const body = await res.json().catch(() => null);
+      if (body?.data) setMileageReports(body.data);
+      fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to delete mileage report.');

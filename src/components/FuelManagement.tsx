@@ -254,6 +254,21 @@ export default function FuelManagement({
   // signal - see server.ts's own comment on filterFuelLogsForViewer.
   const isForeignEntry = (log: FuelLog): boolean => !isSuperAdmin && !isRqIdOnlyUser && !isViewOnlyUser && !!log.enteredBy;
 
+  // One-directional Mileage-only exception, Chandan -> Praveen ONLY, never
+  // the reverse (2026-09-19 direct request) - mirrors server.ts's own
+  // FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS exactly. isForeignEntry() above is
+  // direction-blind by design (true for EITHER direction, since it only
+  // ever means "not my own row" - still correct for locking the Details
+  // section either way) and must never be used on its own to decide whether
+  // Mileage is editable on a foreign row; only this helper may grant that.
+  // Without this, Praveen viewing Chandan's rows (via the All tab, or the
+  // Chandan tab - see ownerTabFilter) would see the same "Fill in Mileage"
+  // affordance Chandan legitimately gets on Praveen's rows, even though the
+  // server would already reject that write - a confusing dead-end save
+  // attempt rather than the row simply reading View only like every other
+  // field on it already does.
+  const canEditForeignMileage = (log: FuelLog): boolean => user.username === 'chandanreddy' && log.enteredBy === 'praveenkumar';
+
   const [searchTerm, setSearchTerm] = useState('');
   // Bunk Name filter - shared between the on-screen ledger, the Download
   // Fuel Report panel, and Bunk Summary's own download (picking a bunk to
@@ -405,6 +420,17 @@ export default function FuelManagement({
   // just because that exact driver name no longer resolves in today's
   // Driver Details (e.g. the driver has since left, or was renamed there).
   const skipMileageDriverIdSyncRef = useRef(false);
+  // Tracks the last (editingId, vehicleNumber) pair the Authorized Driver
+  // auto-fill effect below has already evaluated - see that effect's own
+  // comment (2026-09-19 bug fix) for why: without this, the effect used
+  // mDriverName ITSELF to guess "is this still the same edit session",
+  // which broke the moment the office deliberately cleared Authorized
+  // Driver (now-blank mDriverName looked identical to "never had one"), and
+  // got MUCH more likely to actually fire mid-edit once fetchAllData()
+  // became non-blocking (a save elsewhere refreshing mileageReports/logs/
+  // driverVehicleLookup in the background no longer waits for the form to
+  // be done, so it can now land while the office is still editing).
+  const driverAutoFillKeyRef = useRef<string | null>(null);
   // Set by startEdit right before it loads a log's own vendorName/
   // vendorCode/vehicleNumber, so the Vendor auto-fill effect below (keyed
   // off vehicleNumber) doesn't immediately recompute and overwrite the
@@ -939,6 +965,17 @@ export default function FuelManagement({
   // the separate matchedMileageDriver effect further below.
   useEffect(() => {
     if (!vehicleNumber) return;
+    // While editing an existing entry, only ever evaluate auto-fill ONCE
+    // per (entry, vehicle) - a later re-render of this effect for the SAME
+    // pair (e.g. mileageReports/logs/driverVehicleLookup refreshing in the
+    // background while the office is still editing) must never re-run this
+    // and silently restore a driver name they may have just deliberately
+    // cleared. Switching to a genuinely different vehicle mid-edit (or
+    // starting a brand new entry, editingId null) still re-evaluates fresh,
+    // same as always.
+    const autoFillKey = editingId ? `${editingId}:${vehicleNumber}` : null;
+    if (autoFillKey && driverAutoFillKeyRef.current === autoFillKey) return;
+    if (autoFillKey) driverAutoFillKeyRef.current = autoFillKey;
     const editingSameVehicleWithDriver =
       editingId && logs.find(l => l.id === editingId)?.vehicleNumber === vehicleNumber && mDriverName;
     if (editingSameVehicleWithDriver) return;
@@ -1007,7 +1044,7 @@ export default function FuelManagement({
   // and mExtraFuelCardAmount is the Card slice - both count.
   useEffect(() => {
     const l = parseFloat(ltrs) || 0;
-    const extra = sumExtraFuelExpression(mExtraFuel) + (mExtraFuelPaymentMode === 'both' ? (parseFloat(mExtraFuelCardAmount) || 0) : 0);
+    const extra = sumExtraFuelExpression(mExtraFuel) + (mExtraFuelPaymentMode === 'both' ? sumExtraFuelExpression(mExtraFuelCardAmount) : 0);
     setMTotalLtrs(String(parseFloat((l + extra).toFixed(2))));
   }, [ltrs, mExtraFuel, mExtraFuelCardAmount, mExtraFuelPaymentMode]);
 
@@ -1033,7 +1070,7 @@ export default function FuelManagement({
   // (Petty Cash + Card) are charged at the same new Rate.
   useEffect(() => {
     const diesel = parseFloat(amount) || 0;
-    const extra = sumExtraFuelExpression(mExtraFuel) + (mExtraFuelPaymentMode === 'both' ? (parseFloat(mExtraFuelCardAmount) || 0) : 0);
+    const extra = sumExtraFuelExpression(mExtraFuel) + (mExtraFuelPaymentMode === 'both' ? sumExtraFuelExpression(mExtraFuelCardAmount) : 0);
     const rateNew = parseFloat(mRatePerLitreNew) || 0;
     setMTotalAmount(String(parseFloat((diesel + extra * rateNew).toFixed(2))));
   }, [amount, mExtraFuel, mExtraFuelCardAmount, mRatePerLitreNew, mExtraFuelPaymentMode]);
@@ -1097,6 +1134,7 @@ export default function FuelManagement({
   const resetForm = (keepOpen = false) => {
     setEditingId(null);
     setFormResetToken(t => t + 1);
+    driverAutoFillKeyRef.current = null; // next open (add or edit) gets a fresh Authorized Driver auto-fill evaluation
     setPeriod(new Date().toISOString().slice(0, 7));
     // Date/Location/Bunk Name/Bunk-Card are left untouched when keepOpen is
     // true (back-to-back logging, sidebar staying open for "add another") -
@@ -1198,6 +1236,7 @@ export default function FuelManagement({
 
   const startEdit = (log: FuelLog) => {
     setEditingId(log.id);
+    driverAutoFillKeyRef.current = null; // fresh Authorized Driver auto-fill evaluation for this newly-opened edit session
     setPeriod(log.period);
     setDate(log.date);
     setLocation(log.location);
@@ -1237,15 +1276,28 @@ export default function FuelManagement({
       setMDriverName(linkedReport.driverName || '');
       setMDriverId(linkedReport.driverId || '');
       setMRemarks(stripPreviousAuditNote(linkedReport.remarks || ''));
-      setMExtraFuel(String(linkedReport.extraFuel || ''));
+      // In 'both' mode, linkedReport.extraFuel is the GRAND TOTAL (both
+      // slices summed - see types.ts's own comment on extraFuel/
+      // extraFuelCardAmount for why it's kept that way for every other
+      // reader of the field). The form's mExtraFuel, though, is only ever
+      // the Petty Cash PORTION - so it must be loaded as the total minus
+      // the Card slice, not the raw total itself (2026-09-19 bug fix: this
+      // used to load the raw total here, so reopening a saved 'both' entry
+      // showed the Petty Cash field as the full combined amount instead of
+      // just its own slice, and re-saving would then double-count the Card
+      // portion into the new total on top of itself).
+      const isBothMode = linkedReport.extraFuelPaymentMode === 'both';
+      const cardSlice = isBothMode ? (linkedReport.extraFuelCardAmount || 0) : 0;
+      const pettyCashOrWholeSlice = (linkedReport.extraFuel || 0) - cardSlice;
+      setMExtraFuel(pettyCashOrWholeSlice ? String(pettyCashOrWholeSlice) : '');
       setMRatePerLitreNew(String(linkedReport.ratePerLitreNew || ''));
       setMExtraFuelPaymentMode(
         linkedReport.extraFuelPaymentMode === 'petty_cash' ? 'petty_cash'
           : linkedReport.extraFuelPaymentMode === 'card' ? 'card'
-          : linkedReport.extraFuelPaymentMode === 'both' ? 'both'
+          : isBothMode ? 'both'
           : 'normal'
       );
-      setMExtraFuelCardAmount(linkedReport.extraFuelPaymentMode === 'both' && linkedReport.extraFuelCardAmount ? String(linkedReport.extraFuelCardAmount) : '');
+      setMExtraFuelCardAmount(isBothMode && cardSlice ? String(cardSlice) : '');
       setMPettyCashHolder(linkedReport.pettyCashHolderUsername || '');
     } else {
       setLinkedMileageReportId(null);
@@ -1261,15 +1313,31 @@ export default function FuelManagement({
       setMPettyCashHolder('');
     }
 
-    // A foreign entry (Chandan opening one of Praveen's) opens straight on
-    // the Mileage tab, since Details is locked read-only for him there - no
-    // reason to land him on a tab he can't do anything with.
-    setEntrySection(isForeignEntry(log) ? 'mileage' : 'details');
+    // A foreign entry Chandan can actually edit Mileage on (one of
+    // Praveen's) opens straight on the Mileage tab, since Details is locked
+    // read-only for him there - no reason to land him on a tab he can't do
+    // anything with. Any other foreign entry (including Praveen opening one
+    // of Chandan's, purely to view it) just opens on Details like normal -
+    // both tabs are read-only for him anyway, see the Mileage tab's own
+    // disabling below.
+    setEntrySection(isForeignEntry(log) && canEditForeignMileage(log) ? 'mileage' : 'details');
     setShowSidebar(true);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Defense-in-depth (2026-09-19): the UI no longer offers an Edit button
+    // at all for a foreign entry the viewer can't touch (see the row
+    // actions' isForeignEntry/canEditForeignMileage gating), and the
+    // Mileage tab's own fieldset is disabled for one they can only view -
+    // but a disabled fieldset doesn't block the Save button itself, which
+    // lives outside it. Block the whole submit outright for that case
+    // rather than relying only on the server's own rejection, matching
+    // "no input, no save option" exactly for Praveen viewing Chandan's rows.
+    if (editingIsForeign && !(editingLog && canEditForeignMileage(editingLog))) {
+      triggerNotif('You cannot modify this entry.');
+      return;
+    }
     // Location/Bunk Name are not applicable when the whole amount is paid
     // from Petty Cash (2026-09-10 direct request) - there's no company
     // Bunk/Card account involved, so nothing to require there.
@@ -1330,16 +1398,20 @@ export default function FuelManagement({
     // In 'both' mode each slice needs its own actual value - two ticked
     // boxes with only one real top-up typed in is almost certainly a
     // mistake (the office meant single-mode, not a genuine two-top-up trip).
-    if (mExtraFuelPaymentMode === 'both' && (sumExtraFuelExpression(mExtraFuel) <= 0 || (parseFloat(mExtraFuelCardAmount) || 0) <= 0)) {
+    if (mExtraFuelPaymentMode === 'both' && (sumExtraFuelExpression(mExtraFuel) <= 0 || sumExtraFuelExpression(mExtraFuelCardAmount) <= 0)) {
       triggerNotif('Both a Petty Cash Extra Fuel amount and a Card Extra Fuel amount are required when both are ticked.');
       setEntrySection('mileage');
       return;
     }
     // Mileage is optional - plenty of vehicles only ever get a fuel entry,
     // with no trip/mileage data at all. Only treat the Mileage tab as filled
-    // in (and validate/save it) when Opening KM, Closing KM, and Authorized
-    // Driver are all present; otherwise the fuel entry commits on its own.
-    const hasMileageData = !!(mOpeningKm && mClosingKm && mDriverName);
+    // in (and validate/save it) when Opening KM and Closing KM are both
+    // present; otherwise the fuel entry commits on its own. Authorized
+    // Driver is NOT required here (2026-09-19 direct request) - a fuel
+    // entry's Mileage details (Opening/Closing KM, litres, cost/KM, etc.)
+    // are real and worth recording even when nobody's noted the driver yet;
+    // it can always be filled in later by editing this same entry.
+    const hasMileageData = !!(mOpeningKm && mClosingKm);
     // 2026-09-09 bug fix: on a foreign entry (editingIsForeign - Chandan
     // completing one of Praveen's), Details is locked read-only, so Mileage
     // is the ONLY thing this save could possibly be for. Without this guard,
@@ -1349,7 +1421,7 @@ export default function FuelManagement({
     // looked like it worked but never actually recorded any mileage data,
     // reported as "shows saved but never shows up in Mileage Report."
     if (editingIsForeign && !hasMileageData) {
-      triggerNotif('Enter Opening KM, Closing KM, and Authorized Driver to save mileage for this entry.');
+      triggerNotif('Enter Opening KM and Closing KM to save mileage for this entry.');
       setEntrySection('mileage');
       return;
     }
@@ -2063,11 +2135,13 @@ export default function FuelManagement({
               only shown to these two logins, above the Ledger filter below.
               Each defaults to their own name on login (see ownerTabFilter's
               initializer); clicking the other person's name shows their
-              entries View-only (see the row actions further below), never
-              Edit/Delete, regardless of any edit right the viewer might
-              otherwise have (e.g. Chandan's existing Mileage-only exception
-              on Praveen's rows) - that still applies normally under "All"
-              or your own name, unchanged. */}
+              entries. What's actually editable on a foreign row (whether
+              reached via this pill or the All tab) is decided per-row by
+              isForeignEntry/canEditForeignMileage below, NOT by which pill
+              is selected (2026-09-19 fix - selecting the Praveen tab used to
+              force strict View-only even for Chandan, incorrectly
+              overriding his one-directional Mileage exception; the pill is
+              now purely a filter, never itself a permission). */}
           {(user.username === 'praveenkumar' || user.username === 'chandanreddy') && (
             <div className="flex flex-wrap items-center gap-2 mb-3">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Entries:</span>
@@ -2085,7 +2159,8 @@ export default function FuelManagement({
               </div>
               {ownerTabFilter !== 'All' && ownerTabFilter !== user.username && (
                 <span className="text-[9px] uppercase font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
-                  Viewing {ownerTabFilter === 'praveenkumar' ? 'Praveen' : 'Chandan'}'s entries - View only
+                  Viewing {ownerTabFilter === 'praveenkumar' ? 'Praveen' : 'Chandan'}'s entries
+                  {user.username === 'chandanreddy' && ownerTabFilter === 'praveenkumar' ? ' - View only, except Mileage' : ' - View only'}
                 </span>
               )}
             </div>
@@ -2252,7 +2327,22 @@ export default function FuelManagement({
                         </td>
                       )}
                       <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                        {isRqIdOnlyUser || isViewOnlyUser || (ownerTabFilter !== 'All' && ownerTabFilter !== user.username) ? (
+                        {/* 2026-09-19 fix: gating this by ownerTabFilter
+                            (which pill is selected) used to force View-only
+                            even for Chandan looking at Praveen's own rows,
+                            wrongly blocking his one-directional Mileage
+                            exception whenever he used the Praveen tab
+                            specifically (it worked fine under All). Gating
+                            per-row on isForeignEntry/canEditForeignMileage
+                            instead is correct regardless of which pill got
+                            this row on screen - and also closes the
+                            opposite gap this same condition used to leave
+                            open under the All tab: Praveen viewing
+                            Chandan's rows there used to see the same "Fill
+                            in Mileage" affordance Chandan legitimately
+                            gets, even though the server always rejected
+                            that write. */}
+                        {isRqIdOnlyUser || isViewOnlyUser || (isForeignEntry(log) && !canEditForeignMileage(log)) ? (
                           <span className="text-slate-300 text-[10px] uppercase font-bold">View only</span>
                         ) : (
                           <div className="flex items-center justify-end gap-1.5">
@@ -2344,7 +2434,10 @@ export default function FuelManagement({
                       Tracker entry from this same submission. None of this
                       shows up in the Fuel Entry ledger above. */}
                   {entrySection === 'mileage' && (
-                  <div className="p-3 bg-pink-50/40 rounded-xl border border-pink-200 space-y-3">
+                  <fieldset
+                    disabled={editingIsForeign && !(editingLog && canEditForeignMileage(editingLog))}
+                    className="p-3 bg-pink-50/40 rounded-xl border border-pink-200 space-y-3 disabled:opacity-60"
+                  >
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-black text-pink-700 uppercase tracking-wider flex items-center gap-1">
                         <Gauge className="w-3.5 h-3.5" /> Mileage
@@ -2353,6 +2446,11 @@ export default function FuelManagement({
                         {vehicleNumber ? `for ${vehicleNumber}` : 'select Vehicle Number below'}
                       </span>
                     </div>
+                    {editingIsForeign && !(editingLog && canEditForeignMileage(editingLog)) && (
+                      <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 font-semibold">
+                        This entry was logged by {editingLog?.enteredBy} - view only.
+                      </p>
+                    )}
 
                     <div className="grid grid-cols-2 gap-3">
                       <div>
@@ -2648,11 +2746,14 @@ export default function FuelManagement({
                               type="text"
                               inputMode="decimal"
                               required
-                              placeholder="e.g. 40"
+                              placeholder="e.g. 40, or 30+10 for two Card top-ups"
                               value={mExtraFuelCardAmount}
                               onChange={(e) => setMExtraFuelCardAmount(e.target.value)}
                               className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
                             />
+                            <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                              Multiple Card top-ups this trip? Type them as e.g. "30+10" - added up automatically, same as the Petty Cash portion above.
+                            </p>
                           </div>
                         )}
                         {(mExtraFuelPaymentMode === 'petty_cash' || mExtraFuelPaymentMode === 'both') && (
@@ -2685,7 +2786,7 @@ export default function FuelManagement({
                         )}
                         {mExtraFuelPaymentMode === 'both' && (
                           <p className="text-[9px] text-indigo-500 font-mono mt-1">
-                            Card portion: {parseFloat(mExtraFuelCardAmount) || 0} L - ₹{((parseFloat(mExtraFuelCardAmount) || 0) * (parseFloat(mRatePerLitreNew) || 0)).toLocaleString('en-IN')} paid by Card - included in Total Ltrs/Total Amount below (display/tracking tag only).
+                            Card portion: {sumExtraFuelExpression(mExtraFuelCardAmount)} L - ₹{(sumExtraFuelExpression(mExtraFuelCardAmount) * (parseFloat(mRatePerLitreNew) || 0)).toLocaleString('en-IN')} paid by Card - included in Total Ltrs/Total Amount below (display/tracking tag only).
                           </p>
                         )}
                       </div>
@@ -2696,7 +2797,7 @@ export default function FuelManagement({
                     <div className="p-2.5 bg-white rounded-lg border border-pink-100 flex items-center justify-between font-mono">
                       <div>
                         <span className="text-[9px] text-slate-400 uppercase font-bold block">
-                          Total Amount {(sumExtraFuelExpression(mExtraFuel) > 0 || (parseFloat(mExtraFuelCardAmount) || 0) > 0) ? '(Diesel + Extra Fuel)' : '(auto)'}
+                          Total Amount {(sumExtraFuelExpression(mExtraFuel) > 0 || sumExtraFuelExpression(mExtraFuelCardAmount) > 0) ? '(Diesel + Extra Fuel)' : '(auto)'}
                         </span>
                         <span className="text-xs font-black text-pink-700">₹{mTotalAmount || 0}</span>
                       </div>
@@ -2750,7 +2851,7 @@ export default function FuelManagement({
                         className="w-full bg-white border border-slate-200 rounded-lg p-2 h-14 text-slate-800"
                       />
                     </div>
-                  </div>
+                  </fieldset>
                   )}
 
                   {/* Fuel Entry Details tab - everything except the Mileage
