@@ -1466,7 +1466,14 @@ export default function FuelManagement({
         // one Card), mExtraFuel is the Petty-Cash slice and
         // mExtraFuelCardAmount is the Card slice - both count.
         const pettyCashOrNormalSlice = sumExtraFuelExpression(mExtraFuel);
-        const cardSlice = mExtraFuelPaymentMode === 'both' ? (parseFloat(mExtraFuelCardAmount) || 0) : 0;
+        // 2026-09-19 bug fix: this specific line (the one that actually
+        // computes what gets SAVED) was still using plain parseFloat, which
+        // silently truncates at the first "+" (parseFloat("10+30") === 10) -
+        // every other Card-portion read already went through
+        // sumExtraFuelExpression, so the on-screen preview correctly showed
+        // 40, but the record that actually got saved/shown in Mileage
+        // Report still only ever had 10.
+        const cardSlice = mExtraFuelPaymentMode === 'both' ? sumExtraFuelExpression(mExtraFuelCardAmount) : 0;
         const extra = pettyCashOrNormalSlice + cardSlice;
         const isPettyCashExtra = (mExtraFuelPaymentMode === 'petty_cash' || mExtraFuelPaymentMode === 'both') && pettyCashOrNormalSlice > 0 && !!mPettyCashHolder.trim();
         const isCardExtra = (mExtraFuelPaymentMode === 'card' && pettyCashOrNormalSlice > 0) || (mExtraFuelPaymentMode === 'both' && cardSlice > 0);
