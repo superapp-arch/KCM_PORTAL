@@ -24,3 +24,26 @@ input[type="number"],
 .no-spinner {
   -moz-appearance: textfield;
 }
+
+/* Old-browser color fallback (2026-09-19 - "highlight not showing on an
+   old MacBook") - Tailwind v4's default palette defines every color
+   (--color-amber-100 etc.) as an oklch() value. A browser too old to
+   understand oklch() (Safari <16.4/macOS <13.3 Ventura, Chrome <111,
+   Firefox <113) treats that whole custom-property declaration as invalid,
+   so anything using it - bg-amber-100, the "Mileage not entered yet"
+   highlight on Fuel Management's Vehicle No. column - silently renders
+   with NO background at all instead of a visibly different color, rather
+   than erroring. Redefining just this one token with its plain-hex
+   Tailwind v3-era equivalent, inside a feature query, only ever takes
+   effect on a browser that can't parse oklch() in the first place - every
+   modern browser keeps Tailwind's real OKLCH value untouched.
+   NOTE: this app uses dozens of other Tailwind colors that have the exact
+   same failure mode on an old browser - amber-100 is fixed here because
+   it's the one specifically reported; if other colors also look washed
+   out/missing on that same machine, the rest of the palette needs the same
+   treatment (ask what else looks off before doing a wholesale pass). */
+@supports not (color: oklch(0% 0 0)) {
+  :root {
+    --color-amber-100: #fef3c7;
+  }
+}
