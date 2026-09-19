@@ -35,6 +35,7 @@ import {
   mileageReports,
   fuelVendors,
   vehicleMileage,
+  gpsVehicleMappings,
   vendors,
   driverEmployees,
   driverAttendance,
@@ -117,6 +118,7 @@ import {
   AuditLog,
   AuditAction
 } from '../types.ts';
+import { GpsVehicleMapping } from '../services/gps/gpsTypes.ts';
 
 // Default Users Seed
 export const DEFAULT_USERS = [
@@ -2638,6 +2640,50 @@ export async function deleteVehicleMileage(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteVehicleMileage:", error);
     throw new Error("Failed to delete vehicle mileage.", { cause: error });
+  }
+}
+
+// --- GPS / LIVE TRACKING: KCM VEHICLE <-> PROVIDER MAPPING (2026-09-19,
+// WheelsEye integration prep - see docs/wheelseye-integration.md) ---
+export async function getGpsVehicleMappings(): Promise<GpsVehicleMapping[]> {
+  try {
+    const rows = await db.select().from(gpsVehicleMappings);
+    return rows.map(r => JSON.parse(r.data));
+  } catch (error) {
+    console.error("Database query failed in getGpsVehicleMappings:", error);
+    throw new Error("Failed to retrieve GPS vehicle mappings.", { cause: error });
+  }
+}
+
+export async function saveGpsVehicleMapping(mapping: GpsVehicleMapping) {
+  try {
+    // One mapping per KCM vehicle - id is always the KCM vehicle number
+    // itself (never a separately generated id) so a re-save of the same
+    // vehicle's mapping is always an update, never a duplicate row.
+    const id = mapping.kcmVehicleNumber.trim().toUpperCase();
+    const completeMapping: GpsVehicleMapping = { ...mapping, id, kcmVehicleNumber: id, updatedAt: new Date().toISOString() };
+    const dataString = JSON.stringify(completeMapping);
+
+    const existing = await db.select().from(gpsVehicleMappings).where(eq(gpsVehicleMappings.id, id));
+    if (existing.length > 0) {
+      await db.update(gpsVehicleMappings).set({ data: dataString }).where(eq(gpsVehicleMappings.id, id));
+    } else {
+      await db.insert(gpsVehicleMappings).values({ id, data: dataString });
+    }
+    return await getGpsVehicleMappings();
+  } catch (error) {
+    console.error("Database action failed in saveGpsVehicleMapping:", error);
+    throw new Error("Failed to save GPS vehicle mapping.", { cause: error });
+  }
+}
+
+export async function deleteGpsVehicleMapping(id: string) {
+  try {
+    await db.delete(gpsVehicleMappings).where(eq(gpsVehicleMappings.id, id));
+    return await getGpsVehicleMappings();
+  } catch (error) {
+    console.error("Database action failed in deleteGpsVehicleMapping:", error);
+    throw new Error("Failed to delete GPS vehicle mapping.", { cause: error });
   }
 }
 

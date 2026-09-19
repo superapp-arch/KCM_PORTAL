@@ -45,6 +45,7 @@ import PettyCash from './PettyCash';
 import Maintenance from './Maintenance';
 import Reports from './Reports';
 import VehicleFinancialPerformance from './VehicleFinancialPerformance';
+import GpsLiveTracking from './GpsLiveTracking';
 import AuditTrail from './AuditTrail';
 import Accounts from './Accounts';
 import HR from './HR';
@@ -61,7 +62,7 @@ import {
   LogOut, ShieldAlert, FileSpreadsheet, Fuel, FileText, Landmark,
   Settings, DollarSign, Contact, Bell, Mail, RefreshCw, CheckCircle, Clock,
   KeyRound, Cpu, Terminal, Copy, Check, Eye, EyeOff, Warehouse, Gauge, X,
-  Truck, Building2, HandCoins, Menu, BarChart3, History, CreditCard, AlertTriangle, TrendingUp
+  Truck, Building2, HandCoins, Menu, BarChart3, History, CreditCard, AlertTriangle, TrendingUp, Satellite
 } from 'lucide-react';
 
 // Driver Details module gate - mirrors server.ts's DRIVER_LOCATION_SCOPES
@@ -529,6 +530,10 @@ export default function Administration({
     if (tabName === 'fuel' && FUEL_RQ_ID_ONLY_EMAILS.includes(user.email || '')) return true;
     if (tabName === 'payments' && PAYMENTS_ACCESS_EMAILS.includes(user.email || '')) return true;
     if (tabName === 'fleet' && (user.department === 'vehicle_manager' || user.email === 'bhagya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in' || user.email === 'vinod@kcmlogistics.in')) return true;
+    // GPS / Live Tracking (2026-09-19, WheelsEye integration prep) - same
+    // access as Fleet & Vehicles for now, since it's fleet-adjacent
+    // visibility; widen/narrow once real usage patterns are clear.
+    if (tabName === 'gps' && (user.department === 'vehicle_manager' || user.email === 'bhagya@kcmlogistics.in' || user.email === 'finance@kcmlogistics.in' || user.email === 'vinod@kcmlogistics.in')) return true;
     if (tabName === 'billing' && (user.department === 'billing' || user.email === 'bhagya@kcmlogistics.in')) return true;
     // Rakshina (finance@kcmlogistics.in) gets full Petty Cash access - not
     // one of the 3 handler logins above, an Accounts & Finance oversight
@@ -626,6 +631,7 @@ export default function Administration({
     // this on every request (see server.ts's requireAuditAccess).
     { id: 'audit', label: 'Audit Trail', icon: History, iconColor: 'text-rose-400', active: 'bg-gradient-to-r from-rose-500/20 to-pink-500/20 text-rose-300 border-l-4 border-rose-500', visible: hasAccess('audit') },
     { id: 'fleet', label: 'Fleet & Vehicles', icon: FileSpreadsheet, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fleet') },
+    { id: 'gps', label: 'GPS / Live Tracking', icon: Satellite, iconColor: 'text-cyan-400', active: 'bg-gradient-to-r from-cyan-500/20 to-sky-500/20 text-cyan-300 border-l-4 border-cyan-500', visible: hasAccess('gps') },
     { id: 'fuel', label: 'Fuel Management', icon: Fuel, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fuel') },
     { id: 'mileage', label: 'Mileage Report', icon: Gauge, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('mileage') },
     { id: 'payments', label: 'Diesel Payments', icon: CreditCard, iconColor: 'text-emerald-400', active: 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-300 border-l-4 border-emerald-500', visible: hasAccess('payments') },
@@ -1169,6 +1175,10 @@ export default function Administration({
               onUpdateVehicleIncident={onUpdateVehicleIncident}
               onDeleteVehicleIncident={onDeleteVehicleIncident}
             />
+          )}
+
+          {activeTab === 'gps' && hasAccess('gps') && (
+            <GpsLiveTracking user={user} vehicles={vehicles} />
           )}
 
           {activeTab === 'fuel' && hasAccess('fuel') && (

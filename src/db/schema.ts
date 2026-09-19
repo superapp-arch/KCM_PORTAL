@@ -246,6 +246,17 @@ export const vehicleMileage = pgTable('vehicle_mileage', {
   data: text('data').notNull(), // JSON string representing the full VehicleMileage object
 });
 
+// GPS / Live Tracking - KCM Vehicle Number <-> GPS provider (WheelsEye)
+// vehicle/device identifier mapping (2026-09-19, WheelsEye integration prep
+// - see docs/wheelseye-integration.md). Deliberately its own small table,
+// not new columns on `vehicles` - GPS is a separate visibility/monitoring
+// source, never part of the core Vehicle Master. id = kcmVehicleNumber, one
+// mapping per KCM vehicle.
+export const gpsVehicleMappings = pgTable('gps_vehicle_mappings', {
+  id: text('id').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full GpsVehicleMapping object
+});
+
 // Vendor Management table (full KYC/bank registry, separate from fuelVendors)
 export const vendors = pgTable('vendors', {
   id: text('id').primaryKey(),

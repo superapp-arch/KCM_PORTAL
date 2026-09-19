@@ -18,6 +18,7 @@ import { istTimestamp, istDateKey, istHour, istMonthDayKey } from './src/auth/ti
 import { computeDueDateRaw } from './src/utils/loanDates.ts';
 import { extractTrailingNumber } from './src/utils/sort.ts';
 import { nextBunkFuelIndentNumber, nextCardFuelIndentNumber, findDuplicateFuelIndentNumber } from './src/utils/fuelIndentNumber.ts';
+import { getGpsProvider, computeFleetSummary } from './src/services/gps/index.ts';
 import {
   WASHING_CYCLE_DAYS, isWashingEligible,
   AC_SERVICE_CYCLE_DAYS, isAcServiceEligible,
@@ -218,6 +219,9 @@ import {
   getVehicleMileages,
   saveVehicleMileage,
   deleteVehicleMileage,
+  getGpsVehicleMappings,
+  saveGpsVehicleMapping,
+  deleteGpsVehicleMapping,
   getVendors,
   saveVendor,
   deleteVendor,
@@ -2454,6 +2458,111 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // ===== GPS / LIVE TRACKING (2026-09-19, WheelsEye integration prep - see
+  // docs/wheelseye-integration.md) =====
+  //
+  // These are KCM's OWN API routes, not WheelsEye endpoints - the actual
+  // provider call (when one exists) happens entirely inside getGpsProvider()'s
+  // returned provider (src/services/gps/). Every route below only ever talks
+  // to that GpsProvider interface, never a concrete provider class, and
+  // never returns anything WheelsEye-specific (no raw provider payloads, no
+  // provider credentials) to the client - always the provider-independent
+  // gpsTypes.ts shapes.
+  //
+  // GPS is treated as sensitive operational data (per direct instruction) -
+  // every route below requires a valid KCM session, which is already
+  // stricter than /api/fleet's own routes (no server-side auth at all,
+  // client-gated only). Write access (the vehicle/device mapping) is
+  // further restricted to the same roles Fleet & Vehicles' own tab already
+  // trusts with fleet data (see Administration.tsx's hasAccess('fleet')),
+  // since registering a KCM<->provider mapping is fleet configuration, not
+  // day-to-day monitoring.
+  async function requireGpsAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+    const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+    if (!sessionUser) return res.status(401).json({ error: 'Authentication required.' });
+    (req as any).gpsSessionUser = sessionUser;
+    next();
+  }
+  async function requireGpsMappingWriteAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+    const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+    if (!sessionUser) return res.status(401).json({ error: 'Authentication required.' });
+    const allowed = sessionUser.department === 'super_admin' || sessionUser.department === 'vehicle_manager' ||
+      ['bhagya@kcmlogistics.in', 'finance@kcmlogistics.in', 'vinod@kcmlogistics.in'].includes(sessionUser.email || '');
+    if (!allowed) return res.status(403).json({ error: 'You do not have access to GPS vehicle mapping.' });
+    next();
+  }
+  app.use('/api/gps', requireGpsAuth);
+
+  // Resolves KCM's own Reg. No./id for a Vehicle record - same "either key"
+  // fallback used throughout this file (see /api/fleet's own POST handler
+  // above) - kept local to this section since GPS never touches any other
+  // Vehicle field.
+  const gpsRegNoOf = (v: Vehicle): string => (v['Reg. No.'] || v.regNo || v.id || '').toString();
+
+  app.get('/api/gps/status', async (req, res) => {
+    try {
+      const provider = getGpsProvider();
+      res.json(await provider.getStatus());
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/gps/vehicles', async (req, res) => {
+    try {
+      const [fleet, mappings] = await Promise.all([getVehicles(), getGpsVehicleMappings()]);
+      const kcmVehicleNumbers = fleet.filter((v: Vehicle) => v.active !== false).map(gpsRegNoOf).filter(Boolean);
+      const provider = getGpsProvider(kcmVehicleNumbers);
+      const vehicles = await provider.getVehicles(mappings);
+      const summary = provider.getFleetSummary ? await provider.getFleetSummary(mappings) : computeFleetSummary(vehicles);
+      res.json({ vehicles, summary });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/gps/vehicles/:vehicleNumber', async (req, res) => {
+    try {
+      const mappings = await getGpsVehicleMappings();
+      const provider = getGpsProvider();
+      const vehicle = await provider.getVehicle(req.params.vehicleNumber, mappings);
+      if (!vehicle) return res.status(404).json({ error: 'No GPS data for this vehicle.' });
+      res.json(vehicle);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/gps/vehicles/:vehicleNumber/history', async (req, res) => {
+    try {
+      const date = (req.query.date as string) || istDateKey();
+      const mappings = await getGpsVehicleMappings();
+      const provider = getGpsProvider();
+      const history = await provider.getVehicleHistory(req.params.vehicleNumber, date, mappings);
+      if (!history) return res.status(404).json({ error: 'No Route History for this vehicle/date.' });
+      res.json(history);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/api/gps/devices', async (req, res) => {
+    try {
+      const mappings = await getGpsVehicleMappings();
+      const provider = getGpsProvider();
+      res.json(await provider.getDevices(mappings));
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // KCM Vehicle Number <-> provider vehicle/device mapping - prepared ahead
+  // of the real integration so mappings can be registered as soon as
+  // WheelsEye's own identifiers are known, without waiting on the API
+  // connection itself.
+  app.get('/api/gps/vehicle-mappings', async (req, res) => {
+    try { res.json(await getGpsVehicleMappings()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/gps/vehicle-mappings', requireGpsMappingWriteAccess, async (req, res) => {
+    try {
+      if (!req.body?.kcmVehicleNumber) return res.status(400).json({ error: 'KCM Vehicle Number is required.' });
+      res.json({ success: true, data: await saveGpsVehicleMapping({ ...req.body, provider: 'wheelseye' }) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/gps/vehicle-mappings/:id', requireGpsMappingWriteAccess, async (req, res) => {
+    try { res.json({ success: true, data: await deleteGpsVehicleMapping(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   // Fleet & Vehicles > Incidents & Claims (2026-09-08 incident history +
