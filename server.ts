@@ -160,6 +160,7 @@ import {
   deleteDieselBunkPayment,
   migrateLegacyMaintenanceProfiles,
   migrateMileageReportTotalLitres,
+  migrateMileageExtraFuelExclusionTotals,
   normalizePettyCashLocationNames,
   getAccountsEntries,
   saveAccountsEntry,
@@ -1372,6 +1373,11 @@ async function startServer() {
   // Mileage/Cost-per-KM now compute from - backfill it onto every
   // pre-existing row (no-op once every row has it).
   await migrateMileageReportTotalLitres();
+  // 2026-09-19 correction: Petty-Cash/Card-paid Extra Fuel used to be
+  // excluded from totalLitres/totalAmount entirely - now always included,
+  // same as a normal top-up. Backfills every row still saved under the old
+  // exclusion rule (no-op once every such row already reflects the new one).
+  await migrateMileageExtraFuelExclusionTotals();
   // One-time repair for Mileage Reports mis-attributed before the create-
   // path attribution fix existed (see repairMismatchedMileageReportAttribution's
   // own comment) - no-op once every report's enteredBy already matches its

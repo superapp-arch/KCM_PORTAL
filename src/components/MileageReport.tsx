@@ -506,7 +506,9 @@ export default function MileageReportModule({
       'Fixed Mileage': r.actualMileage || 0,
       'Difference (Litres)': r.difference ?? '',
       'Extra Fuel': r.extraFuel || 0,
-      'Extra Fuel Paid By': r.extraFuel && r.extraFuelPaymentMode === 'petty_cash'
+      'Extra Fuel Paid By': r.extraFuel && r.extraFuelPaymentMode === 'both'
+        ? `Petty Cash: ${((r.extraFuel || 0) - (r.extraFuelCardAmount || 0)).toFixed(2)}L${r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : ''} + Card: ${(r.extraFuelCardAmount || 0).toFixed(2)}L`
+        : r.extraFuel && r.extraFuelPaymentMode === 'petty_cash'
         ? `Petty Cash${r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : ''}`
         : r.extraFuel && r.extraFuelPaymentMode === 'card'
         ? 'Card'
@@ -882,21 +884,22 @@ export default function MileageReportModule({
                     </td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">
                       {r.extraFuel ? r.extraFuel.toFixed(2) : '-'}
-                      {r.extraFuel && r.extraFuelPaymentMode === 'petty_cash' && (
+                      {r.extraFuel != null && (r.extraFuelPaymentMode === 'petty_cash' || r.extraFuelPaymentMode === 'both') && (
                         <span
                           className="ml-1 px-1 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200 align-middle"
-                          title={`Paid by Petty Cash${r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : ''} - excluded from Total Litres/Total Amount`}
+                          title={`${r.extraFuelPaymentMode === 'both' ? `Petty Cash portion: ${((r.extraFuel || 0) - (r.extraFuelCardAmount || 0)).toFixed(2)} L` : 'Paid by Petty Cash'}${r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : ''} - included in Total Litres/Total Amount`}
                         >
                           PC
                         </span>
                       )}
-                      {/* "Paid by Card" badge (2026-09-10) - same exclusion
-                          rule as Petty Cash above, just a different payment
-                          method, so hovering tells the two apart. */}
-                      {r.extraFuel && r.extraFuelPaymentMode === 'card' && (
+                      {/* "Paid by Card" badge (2026-09-10; 'both' mode
+                          2026-09-19) - same accounting-tag-only treatment as
+                          Petty Cash above, just a different payment method,
+                          so hovering tells the two (or both, at once) apart. */}
+                      {r.extraFuel != null && (r.extraFuelPaymentMode === 'card' || r.extraFuelPaymentMode === 'both') && (
                         <span
                           className="ml-1 px-1 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-sky-50 text-sky-700 border border-sky-200 align-middle"
-                          title="Paid by Card - excluded from Total Litres/Total Amount"
+                          title={`${r.extraFuelPaymentMode === 'both' ? `Card portion: ${(r.extraFuelCardAmount || 0).toFixed(2)} L` : 'Paid by Card'} - included in Total Litres/Total Amount`}
                         >
                           CARD
                         </span>

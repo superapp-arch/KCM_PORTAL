@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import SplashScreen from './components/SplashScreen';
 import Login from './components/Login';
 import Administration from './components/Administration';
@@ -138,7 +138,23 @@ export default function App() {
   // these access checks would see the stale pre-login `user` (null) for
   // that one critical first fetch and wrongly skip Billing/Warehouse/Loans/
   // HR for every account, including Super Admins, until the next refresh.
+  // Guards against out-of-order responses: fetchAllData is called after
+  // EVERY save across the whole app (~70 call sites), so it's routinely
+  // still in flight (34 endpoints) when the next one starts - e.g. two
+  // quick saves in a row, or two different people saving around the same
+  // time. Without this, an OLDER call's response landing AFTER a NEWER
+  // call's response would silently overwrite fresh state with stale data -
+  // exactly the "I added an entry, it looked like it never saved, then a
+  // refresh showed it was there all along" symptom, since the stale
+  // overwrite (missing the newest save) would itself look freshly-loaded
+  // right up until the next real refresh replaced it. Each call captures
+  // its own sequence number and only applies its results if it's still the
+  // most recently STARTED call by the time its own Promise.all resolves -
+  // an older, slower call that resolves later is simply discarded instead
+  // of partially reverting the newer state.
+  const fetchAllDataSeqRef = useRef(0);
   const fetchAllData = async (forUser: User | null = user) => {
+    const seq = ++fetchAllDataSeqRef.current;
     try {
       // Skips a handful of endpoints this account's role can never access
       // anyway (mirrors each one's own requireXAccess check in server.ts) -
@@ -251,6 +267,12 @@ export default function App() {
         // everything else in the app to its old cached state too.
       ].map(p => p.catch(() => null)));
 
+      // A newer fetchAllData call has since started - its own results
+      // (whenever they land) are the authoritative ones; applying this
+      // older call's data now would only risk clobbering fresher state
+      // with something stale. See fetchAllDataSeqRef's own comment above.
+      if (seq !== fetchAllDataSeqRef.current) return;
+
       if (fleetRes?.ok) setVehicles(await fleetRes.json());
       if (fuelRes?.ok) setFuelLogs(await fuelRes.json());
       if (billingRes?.ok) setInvoices(await billingRes.json());
@@ -316,14 +338,23 @@ export default function App() {
       // freshly-saved Fuel Log list (see POST /api/fuel's own response
       // body), so the Fuel Management screen reflects this save
       // immediately and reliably without depending on fetchAllData()'s own
-      // ~34-endpoint refresh (still called right after, for everything
-      // else a new entry can affect, e.g. a linked Mileage Report)
-      // succeeding in full - one unrelated endpoint hiccuping during that
-      // broader refresh no longer makes this specific save look like it
-      // silently never went through.
+      // ~34-endpoint refresh (still kicked off right after, for everything
+      // else a new entry can affect, e.g. a linked Mileage Report) -
+      // one unrelated endpoint hiccuping during that broader refresh no
+      // longer makes this specific save look like it silently never went
+      // through.
+      //
+      // Deliberately NOT awaited (2026-09-19 fix) - this handler's caller
+      // (the Add Entry form) awaits this whole function before re-enabling
+      // its Save button/closing the form, so awaiting a ~34-endpoint
+      // refresh here made every single save feel slow, worse as more data
+      // accumulates - a real problem at this module's 100+ entries/day
+      // volume. The actual save is already fully reflected via the
+      // setFuelLogs above; fetchAllData just keeps everything ELSE
+      // (Mileage Report, etc.) in sync in the background.
       const body = await res.json().catch(() => null);
       if (body?.data) setFuelLogs(body.data);
-      await fetchAllData();
+      fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to add fuel log.');
@@ -981,12 +1012,13 @@ export default function App() {
     });
     if (res.ok) {
       // See handleAddFuelLog above - applied directly from this response so
-      // an edit is reflected immediately/reliably regardless of whether
-      // fetchAllData()'s much broader refresh (still called right after)
-      // fully succeeds.
+      // an edit is reflected immediately/reliably, and fetchAllData is
+      // fired in the background (not awaited) for the same reason: the
+      // Edit form shouldn't sit blocked on a ~34-endpoint refresh for data
+      // this specific save already fully reflects.
       const body = await res.json().catch(() => null);
       if (body?.data) setFuelLogs(body.data);
-      await fetchAllData();
+      fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to update fuel log.');
@@ -1005,7 +1037,7 @@ export default function App() {
       // See handleAddFuelLog above.
       const body = await res.json().catch(() => null);
       if (body?.data) setFuelLogs(body.data);
-      await fetchAllData();
+      fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to update fuel log RQ ID.');
@@ -1017,7 +1049,13 @@ export default function App() {
       method: 'DELETE'
     });
     if (res.ok) {
-      await fetchAllData();
+      // Same reasoning as handleAddFuelLog/handleUpdateFuelLog above -
+      // reflect the deletion immediately from this specific request instead
+      // of waiting on fetchAllData()'s full ~34-endpoint refresh, which is
+      // still fired in the background for everything else a deleted entry
+      // can affect (e.g. its linked Mileage Report).
+      setFuelLogs(prev => prev.filter(l => l.id !== id));
+      fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to delete fuel log.');

@@ -2503,6 +2503,64 @@ export async function migrateMileageReportTotalLitres() {
   }
 }
 
+// One-time migration (2026-09-19 correction): totalLitres/totalAmount on a
+// Petty-Cash-paid or Card-paid Extra Fuel row USED TO exclude that Extra
+// Fuel entirely (on the theory that its cost/litres are "tracked outside
+// this entry") - since corrected in FuelManagement.tsx's Mileage tab to
+// always include it, the same as a plain/normal top-up (see
+// MileageReport.extraFuelPaymentMode's own comment in types.ts). Backfills
+// every row saved under the old rule.
+//
+// Identifying an "old rule" row: totalLitres/totalAmount were computed
+// litres-only/diesel-only whenever extraFuelPaymentMode was petty_cash/card
+// - i.e. they still equal litres/dieselAmount even though extraFuel > 0 -
+// vs. a row already saved under the new rule (or a genuinely brand new
+// petty_cash/card row that just happens to already be correct), where
+// totalLitres already reflects litres + extraFuel. Comparing with a small
+// epsilon (not === ) since these are floats. Only ever recomputes a row
+// AWAY from the old (litres-only) value TOWARD the new (litres+extraFuel)
+// one - never the reverse - so it can't misfire on a row that's already
+// correct. 'both' mode is new as of this same fix, so no historical row can
+// have it - not matched here at all, nothing to migrate for it.
+//
+// Same reasoning as migrateMileageReportTotalLitres above for what this
+// deliberately does NOT touch: difference/fuelAuditNote/remarks (the
+// fuel-theft audit's payroll deduction/credit wording) keep whatever was
+// originally reported at entry time, since a past period's deduction/credit
+// may already have been acted on. Safe to call on every boot - a no-op
+// once every petty_cash/card row already reflects the new rule.
+export async function migrateMileageExtraFuelExclusionTotals() {
+  try {
+    const reports = await getMileageReports();
+    const EPSILON = 0.005;
+    const pending = reports.filter(r => {
+      if (r.extraFuelPaymentMode !== 'petty_cash' && r.extraFuelPaymentMode !== 'card') return false;
+      const extra = r.extraFuel || 0;
+      if (extra <= 0) return false;
+      const litres = r.litres || 0;
+      const storedTotalLitres = r.totalLitres ?? litres;
+      return Math.abs(storedTotalLitres - litres) < EPSILON; // still excludes extraFuel = old-rule row
+    });
+    if (pending.length === 0) return;
+
+    for (const r of pending) {
+      const litres = r.litres || 0;
+      const extra = r.extraFuel || 0;
+      const dieselAmount = r.dieselAmount || 0;
+      const rateNew = r.ratePerLitreNew || 0;
+      const totalLitres = parseFloat((litres + extra).toFixed(2));
+      const totalAmount = parseFloat((dieselAmount + extra * rateNew).toFixed(2));
+      const mileage = totalLitres > 0 ? parseFloat(((r.totalKm || 0) / totalLitres).toFixed(2)) : 0;
+      const costPerKm = mileage > 0 ? parseFloat(((r.ratePerLitre || 0) / mileage).toFixed(2)) : 0;
+      await saveMileageReport({ ...r, totalLitres, totalAmount, mileage, costPerKm });
+    }
+
+    console.log(`[MIGRATION] Backfilled totalLitres/totalAmount (old Petty-Cash/Card Extra Fuel exclusion rule) on ${pending.length} Mileage Report row(s).`);
+  } catch (error) {
+    console.error("Migration failed in migrateMileageExtraFuelExclusionTotals:", error);
+  }
+}
+
 // --- FUEL VENDOR (VENDOR MASTER) OPERATIONS ---
 export async function getFuelVendors(): Promise<FuelVendor[]> {
   try {
