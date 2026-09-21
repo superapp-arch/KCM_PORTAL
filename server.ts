@@ -519,12 +519,30 @@ const PETTY_CASH_FULL_VIEW_EMAILS: string[] = [];
 // - Chethan/Anand aren't listed here since they're real Super Admins
 // already and get full view+edit through that, not this tier. Bhagya
 // (2026-09-08 direct request) added to the same tier.
-// vinod@kcmlogistics.in (2026-09-18) - Vehicle Financial Performance needs
-// his session to read every handler's Petty Cash rows (vehicle-linked
-// deductions); write is still separately gated by canModifyPettyCashRow/
-// canModifyAdvance below, neither of which consult this list, so he still
-// can't create/edit/delete anything here.
-const PETTY_CASH_VIEW_ONLY_EMAILS = ['finance@kcmlogistics.in', 'prathiba@kcmlogistics.in', 'divya@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'bhagya@kcmlogistics.in', 'vinod@kcmlogistics.in'];
+//
+// vinod@kcmlogistics.in was added here 2026-09-18 so Vehicle Financial
+// Performance could read every handler's Petty Cash rows for its
+// vehicle-linked/non-vehicle-linked cost figures - REMOVED again
+// 2026-09-21 (direct request): Vinod is also one of the 3 real Petty Cash
+// handler logins (username 'vinoda'), and this tier being keyed on the
+// exact same email as his own login meant Petty Cash itself started
+// treating his OWN entries the same way it treats a cross-handler
+// observer's - filterEntryRowsForViewer/filterAdvancesForViewer stopped
+// stripping enteredBy off his own rows (since he now matched the "full
+// view" branch), which broke canEditPettyCashRow's "no enteredBy = my own
+// row" heuristic for every one of his own entries (no edit control
+// anywhere), and mixed all 3 handlers' amounts into what should have been
+// only his own "Total Received Float" card. Petty Cash is his actual job
+// function; that correctness matters far more than Vehicle Financial
+// Performance's convenience here. KNOWN TRADE-OFF: Vehicle Financial
+// Performance's Petty Cash (vehicle-linked)/Non-Vehicle Petty Cash figures
+// are now incomplete again when VIEWED BY VINOD specifically (his own
+// session only ever sees his own Petty Cash rows, same as any regular
+// handler) - fixing that properly needs a dedicated server-side aggregate
+// endpoint that returns only computed totals (never raw rows) so VFP
+// doesn't depend on the viewer's own row-level Petty Cash access at all;
+// not implemented here since it wasn't asked for this round.
+const PETTY_CASH_VIEW_ONLY_EMAILS = ['finance@kcmlogistics.in', 'prathiba@kcmlogistics.in', 'divya@kcmlogistics.in', 'praveenkumar@kcmlogistics.in', 'bhagya@kcmlogistics.in'];
 
 function canModifyPettyCashRow(row: { enteredBy?: string } | undefined, sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): boolean {
   if (sessionUser && PETTY_CASH_FULL_VIEW_EMAILS.includes(sessionUser.email || '')) return true;
