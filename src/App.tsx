@@ -375,6 +375,20 @@ export default function App() {
     }
   };
 
+  // 2026-09-21 perf fix (direct request - Vinod: ~50+ Petty Cash entries/day,
+  // each one taking 25-30 sec to save). Root cause: every Petty Cash/Market
+  // POD/Amount Received handler below `await`ed the full ~34-endpoint
+  // fetchAllData() refresh before returning - so the Save button stayed
+  // disabled and the form stayed open for the ENTIRE app-wide refetch, not
+  // just this one save, on every single entry. Same class of bug already
+  // fixed for Fuel Management on 2026-09-19 (see its own handleAddFuelLog
+  // comment) - applied here identically: every one of these routes already
+  // returns the full, freshly-saved list as `data` in its response body, so
+  // that's applied to local state immediately (the save is what the user is
+  // actually waiting on), and fetchAllData() is kicked off in the
+  // background, NOT awaited, only to catch side effects a single response
+  // can't carry (e.g. a Market Trip save also touching the linked Amount
+  // Received/Advances ledger via syncMarketPodPettyCashLinks).
   const handleAddVoucher = async (voucher: Omit<PettyCashVoucher, 'id'>) => {
     const res = await authFetch('/api/petty-cash', {
       method: 'POST',
@@ -382,7 +396,9 @@ export default function App() {
       body: JSON.stringify(voucher)
     });
     if (res.ok) {
-      await fetchAllData();
+      const body = await res.json().catch(() => null);
+      if (body?.data) setVouchers(body.data);
+      fetchAllData();
     } else {
       // Surface the server's message (e.g. a duplicate Entry No. rejection)
       // to the caller instead of failing silently - PettyCash.tsx's
@@ -399,7 +415,9 @@ export default function App() {
       body: JSON.stringify(voucher)
     });
     if (res.ok) {
-      await fetchAllData();
+      const body = await res.json().catch(() => null);
+      if (body?.data) setVouchers(body.data);
+      fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to save the voucher.');
@@ -411,7 +429,9 @@ export default function App() {
       method: 'DELETE'
     });
     if (res.ok) {
-      await fetchAllData();
+      const body = await res.json().catch(() => null);
+      if (body?.data) setVouchers(body.data);
+      fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to delete voucher.');
@@ -425,7 +445,9 @@ export default function App() {
       body: JSON.stringify(entry)
     });
     if (res.ok) {
-      await fetchAllData();
+      const body = await res.json().catch(() => null);
+      if (body?.data) setMarketPodEntries(body.data);
+      fetchAllData();
     } else {
       // Surface the server's message (e.g. a duplicate Entry No. rejection)
       // to the caller instead of failing silently - PettyCash.tsx's
@@ -442,7 +464,9 @@ export default function App() {
       body: JSON.stringify(entry)
     });
     if (res.ok) {
-      await fetchAllData();
+      const body = await res.json().catch(() => null);
+      if (body?.data) setMarketPodEntries(body.data);
+      fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to save the Market Trip entry.');
@@ -454,7 +478,9 @@ export default function App() {
       method: 'DELETE'
     });
     if (res.ok) {
-      await fetchAllData();
+      const body = await res.json().catch(() => null);
+      if (body?.data) setMarketPodEntries(body.data);
+      fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to delete market pod entry.');
@@ -470,7 +496,9 @@ export default function App() {
       body: JSON.stringify({ amount, date })
     });
     if (res.ok) {
-      await fetchAllData();
+      const body = await res.json().catch(() => null);
+      if (body?.data) setMarketPodEntries(body.data);
+      fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to record the balance receipt.');
@@ -480,7 +508,9 @@ export default function App() {
   const handleDeleteMarketPodBalanceReceipt = async (id: string, receiptId: string) => {
     const res = await authFetch(`/api/market-pod/${id}/balance-receipt/${receiptId}`, { method: 'DELETE' });
     if (res.ok) {
-      await fetchAllData();
+      const body = await res.json().catch(() => null);
+      if (body?.data) setMarketPodEntries(body.data);
+      fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to delete the balance receipt.');
@@ -494,7 +524,9 @@ export default function App() {
       body: JSON.stringify(advance)
     });
     if (res.ok) {
-      await fetchAllData();
+      const body = await res.json().catch(() => null);
+      if (body?.data) setPettyCashAdvances(body.data);
+      fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to add petty cash advance.');
@@ -506,7 +538,9 @@ export default function App() {
       method: 'DELETE'
     });
     if (res.ok) {
-      await fetchAllData();
+      const body = await res.json().catch(() => null);
+      if (body?.data) setPettyCashAdvances(body.data);
+      fetchAllData();
     } else {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to delete petty cash advance.');

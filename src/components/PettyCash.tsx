@@ -41,7 +41,7 @@ import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilte
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
 import { PETTY_CASH_CANONICAL_LOCATIONS, normalizeLocationName } from '../utils/pettyCashLocations';
 import { exportReportToExcel, exportReportToPdf, ReportTableSection } from '../utils/reportExport';
-import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
+import { DeleteConfirmationModal } from './ConfirmationModal';
 import { PETTY_CASH_USERS } from '../utils/pettyCashUsers';
 
 // 2026-09-04: display-only simplification of the Entry No format (drop the
@@ -440,12 +440,16 @@ export default function PettyCash({
   const isVinod = user.username === 'vinoda' || user.email === 'vinod@kcmlogistics.in';
   const [activeTab, setActiveTab] = useState<'ledger' | 'summary' | 'marketpod'>('ledger');
   const [notif, setNotif] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
-  // Big, centered save/delete confirmation (see ConfirmationModal.tsx),
-  // shared across every Petty Cash sub-module (Ledger vouchers, Market POD
-  // trips, Amount Received) - `label`/`identifier` are set per sub-module at
-  // the call site, `key` increments on every save/delete so React remounts
-  // it fresh each time.
-  const [saveConfirmation, setSaveConfirmation] = useState<{ label: string; identifier: string; key: number } | null>(null);
+  // 2026-09-21 direct request (Vinod): the big, centered, click-to-dismiss
+  // save confirmation (see ConfirmationModal.tsx) added real friction at
+  // this module's 50+ entries/day volume - every save required an extra
+  // manual "Done" click/tap before the next entry could start, on top of
+  // the separate fetchAllData()-blocking slowness fixed the same day (see
+  // App.tsx's handleAddVoucher and friends). Replaced with the same
+  // lightweight, auto-dismissing `triggerNotif` toast already used for
+  // every error/info message in this module - still confirms the save,
+  // never blocks the next one. Delete keeps the bigger modal (a delete is
+  // rarer and more consequential; not what was reported as slow here).
   const [deleteConfirmation, setDeleteConfirmation] = useState<{ label: string; identifier: string; key: number } | null>(null);
 
   // Fullscreen state
@@ -676,7 +680,7 @@ export default function PettyCash({
     setMpBalanceReceiptSubmitting(true);
     try {
       await onMarketPodBalanceReceipt(mpEditingId, amt, mpBalanceReceiptDate);
-      setSaveConfirmation({ label: 'Balance receipt', identifier: `₹${amt.toLocaleString('en-IN')} on ${mpBalanceReceiptDate}`, key: Date.now() });
+      triggerNotif(`Balance receipt of ₹${amt.toLocaleString('en-IN')} recorded.`, 'success');
       setMpBalanceReceiptAmount('');
     } catch (err) {
       triggerNotif(err instanceof Error ? err.message : 'Failed to record the balance receipt.', 'error');
@@ -876,7 +880,7 @@ export default function PettyCash({
       } else {
         await onAddMarketPodEntry(payload);
       }
-      setSaveConfirmation({ label: 'Market trip', identifier: `Entry no. ${payload.entryNo}`, key: Date.now() });
+      triggerNotif(`Market trip entry no. ${payload.entryNo} saved.`, 'success');
       resetMarketPodForm();
     } catch (err) {
       console.error(err);
@@ -1272,7 +1276,7 @@ export default function PettyCash({
       } else {
         await onAddVoucher(voucherData);
       }
-      setSaveConfirmation({ label: 'Entry', identifier: `Entry no. ${displayEntryNo(voucherData.entryNo)}`, key: Date.now() });
+      triggerNotif(`Entry no. ${displayEntryNo(voucherData.entryNo)} saved.`, 'success');
 
       resetVoucherForm();
       setShowSidebar(false);
@@ -1472,7 +1476,7 @@ export default function PettyCash({
         account: advanceAccount,
         remarks: advanceRemarks.trim()
       });
-      setSaveConfirmation({ label: 'Amount Received', identifier: `₹${parseFloat(advanceAmount).toLocaleString('en-IN')} on ${advanceDate}`, key: Date.now() });
+      triggerNotif(`Amount Received of ₹${parseFloat(advanceAmount).toLocaleString('en-IN')} logged.`, 'success');
       setAdvanceAmount('');
       setAdvanceRemarks('');
     } catch (err) {
@@ -4648,17 +4652,14 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
         )}
       </AnimatePresence>
 
-      {/* Big, centered save/delete confirmation (see ConfirmationModal.tsx),
-          shared by every Petty Cash sub-module (Ledger vouchers, Market POD
-          trips, Amount Received, Balance receipts) - keyed by .key so each
-          fully remounts (fresh confetti/shake) on every save/delete. */}
-      <SaveConfirmationModal
-        key={saveConfirmation?.key}
-        open={!!saveConfirmation}
-        label={saveConfirmation?.label || 'Entry'}
-        identifier={saveConfirmation?.identifier}
-        onDone={() => setSaveConfirmation(null)}
-      />
+      {/* Delete confirmation only (see ConfirmationModal.tsx) - the save-side
+          equivalent was removed 2026-09-21 (direct request): at 50+ entries/
+          day, a big modal requiring a manual "Done" click after every single
+          save was pure friction; a save is now confirmed via the same
+          lightweight, auto-dismissing triggerNotif toast every other
+          message in this module already uses (see handleVoucherSubmit,
+          handleMarketPodSubmit, etc.) - keyed by .key so it fully remounts
+          (fresh shake) on every delete. */}
       <DeleteConfirmationModal
         key={deleteConfirmation?.key}
         open={!!deleteConfirmation}
