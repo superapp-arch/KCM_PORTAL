@@ -127,7 +127,7 @@ export const DEFAULT_USERS = [
   { username: 'chandana', name: 'Chandana LN', department: 'vehicle_manager', departmentLabel: 'Vehicle Data Manager', email: 'ln.chandana@kcmlogistics.in', pass: 'KCM@chandana923' },
   { username: 'divya', name: 'Divya', department: 'billing', departmentLabel: 'Billing Dept', email: 'divya@kcmlogistics.in', pass: 'KCM@divya741' },
   { username: 'bhagya', name: 'Bhagya S', department: 'billing', departmentLabel: 'MIS & Billing / HR Admin', email: 'bhagya@kcmlogistics.in', pass: 'KCM@bhagya308' },
-  { username: 'praveenkumar', name: 'Praveen Kumar DP', department: 'fuel_management', departmentLabel: 'Fuel Management', email: 'praveenkumar@kcmlogistics.in', pass: 'KCM@praveen652' },
+  { username: 'praveenkumar', name: 'Praveen Kumar VP', department: 'fuel_management', departmentLabel: 'Fuel Management', email: 'praveenkumar@kcmlogistics.in', pass: 'KCM@praveen652' },
   { username: 'chandanreddy', name: 'Chandan Reddy', department: 'fuel_management', departmentLabel: 'Fuel Management', email: 'chandanreddy@kcmlogistics.in', pass: 'KCM@chandan580' },
   { username: 'vinoda', name: 'Vinoda', department: 'petty_cash', departmentLabel: 'Petty Cash Desk', email: 'vinod@kcmlogistics.in', pass: 'KCM@vinod194' },
   { username: 'ramesh', name: 'Ramesh', department: 'petty_cash', departmentLabel: 'Petty Cash Desk', email: 'ramesh@kcmlogistics.in', pass: 'KCM@ramesh273' },
@@ -457,6 +457,26 @@ export async function getUsers() {
     // seedDatabase above), never as a live fallback.
     console.error("Database query failed in getUsers:", error);
     throw new Error("Failed to retrieve users.", { cause: error });
+  }
+}
+
+// One-time rename (2026-09-21 direct request): "Praveen Kumar DP" ->
+// "Praveen Kumar VP". DEFAULT_USERS is only ever consulted for one-time
+// seeding of a username that doesn't exist yet (see seedDatabase) - since
+// `praveenkumar` was already seeded long ago under the old name, simply
+// editing DEFAULT_USERS above does nothing for his already-existing row;
+// this directly updates it. Safe to call on every boot - a no-op once the
+// row already has the new name.
+export async function renamePraveenKumarDisplayName() {
+  try {
+    const rows = await db.select().from(users).where(eq(users.username, 'praveenkumar'));
+    const row = rows[0];
+    if (row && row.name !== 'Praveen Kumar VP') {
+      await db.update(users).set({ name: 'Praveen Kumar VP' }).where(eq(users.username, 'praveenkumar'));
+      console.log(`[MIGRATION] renamePraveenKumarDisplayName: "${row.name}" -> "Praveen Kumar VP"`);
+    }
+  } catch (error) {
+    console.error("Migration failed in renamePraveenKumarDisplayName:", error);
   }
 }
 

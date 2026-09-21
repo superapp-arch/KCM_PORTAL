@@ -7,7 +7,7 @@ import ColumnFilterHeader from './ColumnFilterHeader';
 import PaginationFooter, { paginateRows } from './PaginationFooter';
 import { SortState, SortDirection, extractLeadingNumber, compareText, compareNumber } from '../utils/sort';
 import { handleVehicleNumberEnterKey } from '../utils/vehicleNumberSearch';
-import { nextBunkFuelIndentNumber, nextCardFuelIndentNumber } from '../utils/fuelIndentNumber';
+import { nextBunkFuelIndentNumber, nextCardFuelIndentNumber, findDuplicateFuelIndentNumber } from '../utils/fuelIndentNumber';
 import { ColumnFiltersMap, ColumnFilterState, matchesColumnFilter, isColumnFilterActive } from '../utils/columnFilter';
 import {
   Fuel,
@@ -965,6 +965,22 @@ export default function FuelManagement({
     ? new Date(`${date}T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
     : '';
 
+  // Live duplicate check (2026-09-21 direct request) - runs the EXACT same
+  // check the server will run on submit (findDuplicateFuelIndentNumber),
+  // so a collision (which can legitimately happen - the same paper bill
+  // book can repeat a number across different books/months) shows up as a
+  // clear on-screen warning WHILE still filling the form, not only as a
+  // rejection after clicking Save. enteredBy matches editingLog's own
+  // enteredBy when editing an existing entry (whoever originally logged
+  // it - relevant when a Super Admin edits someone else's entry), or the
+  // current user's own username for a brand-new entry.
+  const duplicateIndentWarning = !!indentNumber.trim() && findDuplicateFuelIndentNumber(
+    logs,
+    indentNumber,
+    { bunkOrCard, bunkName, location, date, enteredBy: editingLog?.enteredBy ?? user.username },
+    editingId || undefined
+  );
+
   // --- Mileage section calculations - identical rules to the old standalone
   // Trip Details form (see MileageReport.tsx), just keyed off this form's own
   // Vehicle Number/Date/Rate/Ltrs/Amount instead of re-entering them. ---
@@ -1393,7 +1409,7 @@ export default function FuelManagement({
     // rather than relying only on the server's own rejection, matching
     // "no input, no save option" exactly for Praveen viewing Chandan's rows.
     if (editingIsForeign && !(editingLog && canEditForeignMileage(editingLog))) {
-      triggerNotif('You cannot modify this entry.');
+      triggerNotif('You cannot modify this entry.', 'error');
       return;
     }
     // Location/Bunk Name are not applicable when the whole amount is paid
@@ -1401,7 +1417,7 @@ export default function FuelManagement({
     // Bunk/Card account involved, so nothing to require there.
     const isPettyCashEntry = bunkOrCard === 'Petty Cash';
     if (!period || !date || (!isPettyCashEntry && (!location || !bunkName)) || !vehicleNumber || !ltrs || !rate || !client) {
-      triggerNotif('Please complete all required fields (*)');
+      triggerNotif('Please complete all required fields (*)', 'error');
       return;
     }
     // `!ltrs`/`!rate` above only catch a blank field - the string "0" is
@@ -1410,11 +1426,11 @@ export default function FuelManagement({
     // Ltrs/Rate <= 0. A zero-litre or zero-rate manual entry would silently
     // save (Amount auto-calculating to 0) and skew ledger totals.
     if (!(parseFloat(ltrs) > 0)) {
-      triggerNotif('Litres must be greater than 0.');
+      triggerNotif('Litres must be greater than 0.', 'error');
       return;
     }
     if (!(parseFloat(rate) > 0)) {
-      triggerNotif('Rate must be greater than 0.');
+      triggerNotif('Rate must be greater than 0.', 'error');
       return;
     }
     // FuelLog.indentNumber is a required field (types.ts) and the import
@@ -1426,11 +1442,19 @@ export default function FuelManagement({
     // No, breaking the Bunk/Card auto-continue sequence and duplicate
     // detection for every entry after it that month.
     if (!indentNumber.trim()) {
-      triggerNotif('Indent Number is required.');
+      triggerNotif('Indent Number is required.', 'error');
+      return;
+    }
+    // Same check the server will run (see duplicateIndentWarning above,
+    // already shown live under the field) - caught here too so a duplicate
+    // never even reaches the network round trip, and always shows with the
+    // exact same message/styling as the live warning.
+    if (duplicateIndentWarning) {
+      triggerNotif(`Indent No. ${indentNumber.trim()} already exists in your ${bunkOrCard === 'Card' ? 'Card' : bunkOrCard === 'Petty Cash' ? 'Petty Cash' : 'Bunk'} sequence.`, 'error');
       return;
     }
     if (bunkOrCard === 'Petty Cash' && !fuelPettyCashHolder.trim()) {
-      triggerNotif('Petty Cash Paid By is required when Bunk/Card is Petty Cash.');
+      triggerNotif('Petty Cash Paid By is required when Bunk/Card is Petty Cash.', 'error');
       return;
     }
     // Rate per Ltr (new) is only mandatory once Extra Fuel actually has a
@@ -1440,7 +1464,7 @@ export default function FuelManagement({
     // Fuel Entry Details - switching them there so the field they need to
     // fix is actually visible.
     if (totalExtraFuelAmount() > 0 && !mRatePerLitreNew.trim()) {
-      triggerNotif('Rate per Ltr (new) is required when Extra Fuel has a value.');
+      triggerNotif('Rate per Ltr (new) is required when Extra Fuel has a value.', 'error');
       setEntrySection('mileage');
       return;
     }
@@ -1449,7 +1473,7 @@ export default function FuelManagement({
     // just via `required`" reasoning as Rate per Ltr (new) above (the
     // Mileage tab can be unmounted at submit time).
     if (mExtraFuelModes.includes('petty_cash') && !mPettyCashHolder.trim()) {
-      triggerNotif('Petty Cash Paid By is required when Extra Fuel is Paid by Petty Cash.');
+      triggerNotif('Petty Cash Paid By is required when Extra Fuel is Paid by Petty Cash.', 'error');
       setEntrySection('mileage');
       return;
     }
@@ -1457,7 +1481,7 @@ export default function FuelManagement({
     // box with nothing typed in is almost certainly a mistake (the office
     // meant single-mode, not a genuine multi-way-split trip).
     if (mExtraFuelModes.length >= 2 && mExtraFuelModes.some(m => sumExtraFuelExpression(extraFuelFieldFor(m)) <= 0)) {
-      triggerNotif('Every ticked Extra Fuel payment mode needs its own amount.');
+      triggerNotif('Every ticked Extra Fuel payment mode needs its own amount.', 'error');
       setEntrySection('mileage');
       return;
     }
@@ -1479,7 +1503,7 @@ export default function FuelManagement({
     // looked like it worked but never actually recorded any mileage data,
     // reported as "shows saved but never shows up in Mileage Report."
     if (editingIsForeign && !hasMileageData) {
-      triggerNotif('Enter Opening KM and Closing KM to save mileage for this entry.');
+      triggerNotif('Enter Opening KM and Closing KM to save mileage for this entry.', 'error');
       setEntrySection('mileage');
       return;
     }
@@ -1489,7 +1513,7 @@ export default function FuelManagement({
       oKm = parseFloat(mOpeningKm);
       cKm = parseFloat(mClosingKm);
       if (cKm < oKm) {
-        triggerNotif('Closing KM cannot be less than Opening KM.');
+        triggerNotif('Closing KM cannot be less than Opening KM.', 'error');
         return;
       }
     }
@@ -1658,8 +1682,14 @@ export default function FuelManagement({
       // Surfaces the server's actual message (e.g. a duplicate Indent No.
       // rejection - see findDuplicateFuelIndentNumber in server.ts) instead
       // of a generic failure notice, so the office can see exactly why and
-      // correct the Indent No.
-      triggerNotif(err instanceof Error ? err.message : 'Failed to save fuel entry.');
+      // correct the Indent No. 2026-09-21 bug fix: this was missing the
+      // 'error' type argument, so triggerNotif's own default ('success')
+      // rendered a real rejection (e.g. "Indent No. X already exists...")
+      // with a GREEN background and a checkmark icon - visually
+      // indistinguishable from an actual success toast, auto-dismissing
+      // after 4 seconds. That's why a genuine save failure looked like it
+      // had gone through - it was only ever visible by opening DevTools.
+      triggerNotif(err instanceof Error ? err.message : 'Failed to save fuel entry.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -1833,7 +1863,7 @@ export default function FuelManagement({
   // per-bunk-per-location diesel summary workbook.
   const handleDownloadFuelEntryReport = () => {
     if (!downloadDate) {
-      triggerNotif('Please pick a reference date first.');
+      triggerNotif('Please pick a reference date first.', 'error');
       return;
     }
     const { start, end } = getPeriodDateRange(downloadPeriod, downloadDate);
@@ -1842,7 +1872,7 @@ export default function FuelManagement({
       && (locationFilter === 'All' || l.location === locationFilter));
 
     if (periodLogs.length === 0) {
-      triggerNotif('No fuel entries found for the selected period/bunk.');
+      triggerNotif('No fuel entries found for the selected period/bunk.', 'error');
       return;
     }
 
@@ -1887,7 +1917,7 @@ export default function FuelManagement({
       (bunkSummaryPeriod === 'day' ? l.date === today : l.date.slice(0, 7) === nowMonth)
     );
     if (groupLogs.length === 0) {
-      triggerNotif('No fuel entries found for this bunk in the selected period.');
+      triggerNotif('No fuel entries found for this bunk in the selected period.', 'error');
       return;
     }
     const totalLitres = groupLogs.reduce((s, l) => s + (l.ltrs || 0), 0);
@@ -3196,8 +3226,17 @@ export default function FuelManagement({
                       value={indentNumber}
                       onChange={(e) => setIndentNumber(e.target.value)}
                       autoComplete="off"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800"
+                      className={`w-full bg-slate-50 border rounded-lg p-2 text-slate-800 ${duplicateIndentWarning ? 'border-rose-400 ring-1 ring-rose-200' : 'border-slate-200'}`}
                     />
+                    {duplicateIndentWarning && (
+                      <p className="text-[10px] text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1.5 mt-1 flex items-start gap-1.5 font-semibold">
+                        <AlertCircle className="w-3 h-3 shrink-0 mt-px" />
+                        <span>
+                          Indent No. {indentNumber.trim()} already exists in your {bunkOrCard === 'Card' ? 'Card' : bunkOrCard === 'Petty Cash' ? 'Petty Cash' : 'Bunk'} sequence
+                          {bunkOrCard === 'Bunk' && bunkName ? ` for ${bunkName}${location ? `, ${location}` : ''} this month` : ''} - Save will be rejected until this is changed.
+                        </span>
+                      </p>
+                    )}
                     <p className="text-[9px] text-slate-400 font-mono mt-0.5">
                       {bunkOrCard === 'Petty Cash'
                         ? 'Petty Cash has its own separate sequence - type the Indent No yourself, it never auto-fills.'

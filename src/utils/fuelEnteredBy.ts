@@ -7,7 +7,7 @@
 // here.
 export const FUEL_ENTERED_BY_LABELS: Record<string, string> = {
   chandanreddy: 'Chandan Reddy',
-  praveenkumar: 'Praveen Kumar',
+  praveenkumar: 'Praveen Kumar VP', // renamed from "Praveen Kumar DP" 2026-09-21 direct request
   ramesh: 'Ramesh',
   vinoda: 'Vinod'
 };
