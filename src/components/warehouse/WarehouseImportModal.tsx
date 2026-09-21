@@ -2,7 +2,9 @@ import React from 'react';
 import { WarehouseEntry, Vehicle, WarehouseRateOverride } from '../../types';
 import {
   downloadWarehouseImportTemplate, parseWarehouseImportFile, buildWarehouseEntryFromImportRow,
-  exportWarehouseImportErrorRows, ParsedWarehouseImportRow
+  exportWarehouseImportErrorRows, ParsedWarehouseImportRow,
+  downloadWarehouse12HrTemplate, downloadWarehouse24HrDedicatedTemplate, downloadWarehouse24HrReeferWalkesTemplate,
+  downloadWarehouse24HrAdHocTemplate, downloadWarehouseHybridTemplate
 } from '../../utils/warehouseImportExport';
 import ImportWizardModal from '../ImportWizardModal';
 
@@ -41,6 +43,21 @@ export default function WarehouseImportModal({ entries, vehicles, warehouseRateO
         </>
       }
       onDownloadTemplate={downloadWarehouseImportTemplate}
+      // Per-rate-type templates (2026-09-21 direct request) - the combined
+      // template above has all 28 columns regardless of which rate rule
+      // actually applies to a row, which is exactly how a wrong/blank
+      // Vehicle Category or Deployment Type silently resolves the wrong
+      // rate table instead of erroring. Each of these five is scoped to
+      // only the columns that specific rule reads, with the type-defining
+      // fields pre-filled - still imported through this same wizard/parser,
+      // just less to get wrong filling it in.
+      extraTemplateOptions={[
+        { label: '12Hr Dedicated', onClick: downloadWarehouse12HrTemplate },
+        { label: '24Hr Dedicated (Dry)', onClick: downloadWarehouse24HrDedicatedTemplate },
+        { label: '24Hr Reefer & Walkes', onClick: downloadWarehouse24HrReeferWalkesTemplate },
+        { label: '24Hr Ad-hoc Route', onClick: downloadWarehouse24HrAdHocTemplate },
+        { label: 'Hybrid (Manual)', onClick: downloadWarehouseHybridTemplate }
+      ]}
       onParseFile={(file) => parseWarehouseImportFile(file, entries, vehicles, warehouseRateOverrides)}
       previewColumns={['Row', 'Date', 'Warehouse', 'Vehicle No', 'Deployment', 'Grand Total']}
       renderPreviewRow={(r) => [

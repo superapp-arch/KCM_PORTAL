@@ -46,6 +46,12 @@ export interface ImportWizardModalProps<T extends ImportWizardRow> {
     variant?: 'pills' | 'dropdown';
   };
   onDownloadTemplate: () => void;
+  // Optional additional per-type template downloads (2026-09-21, Warehouse
+  // Details' 12Hr/24Hr Dedicated/Reefer-Walkes/Ad-hoc/Hybrid split) -
+  // rendered as extra buttons right next to the main one above, only when
+  // provided. Purely additive: a module that doesn't pass this (Billing,
+  // etc.) renders exactly as before.
+  extraTemplateOptions?: { label: string; onClick: () => void }[];
   onParseFile: (file: File) => Promise<{ headerValid: boolean; missingHeaders: string[]; rows: T[] }>;
   previewColumns: string[]; // module-specific data columns only - this component appends its own trailing Status column
   renderPreviewRow: (row: T) => (string | number)[]; // must have the same length/order as previewColumns
@@ -64,7 +70,7 @@ export interface ImportWizardModalProps<T extends ImportWizardRow> {
 }
 
 export default function ImportWizardModal<T extends ImportWizardRow>({
-  title, infoText, scopeToggle, onDownloadTemplate, onParseFile, previewColumns, renderPreviewRow,
+  title, infoText, scopeToggle, onDownloadTemplate, extraTemplateOptions, onParseFile, previewColumns, renderPreviewRow,
   renderRowAction, onImportRow, onDownloadErrorRows, itemNounSingular, itemNounPlural, onClose, onImported
 }: ImportWizardModalProps<T>) {
   const [stage, setStage] = useState<Stage>('idle');
@@ -181,10 +187,18 @@ export default function ImportWizardModal<T extends ImportWizardRow>({
                 <FileSpreadsheet className="w-4 h-4 shrink-0 mt-0.5" />
                 <div>{infoText}</div>
               </div>
-              <button type="button" onClick={onDownloadTemplate}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 font-bold cursor-pointer">
-                <Download className="w-3.5 h-3.5" /> Download Template
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={onDownloadTemplate}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 font-bold cursor-pointer">
+                  <Download className="w-3.5 h-3.5" /> Download Template
+                </button>
+                {extraTemplateOptions?.map(opt => (
+                  <button key={opt.label} type="button" onClick={opt.onClick}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700 font-semibold cursor-pointer text-[11px]">
+                    <Download className="w-3 h-3" /> {opt.label}
+                  </button>
+                ))}
+              </div>
               {fileError && (
                 <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg flex items-start gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /> <span>{fileError}</span>

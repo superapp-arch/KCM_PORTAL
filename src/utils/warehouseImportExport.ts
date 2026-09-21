@@ -128,6 +128,114 @@ export function downloadWarehouseImportTemplate(): void {
   XLSX.writeFile(wb, 'KCM_Warehouse_Import_Template.xlsx');
 }
 
+// --- Per-rate-type templates (2026-09-21 direct request) ---------------------
+// The single generic template above has all 28 columns at once regardless of
+// which rate rule actually applies to a given row - easy to fill in the
+// wrong combination (e.g. leaving Vehicle Category blank on a Reefer/Walkes
+// row, which silently falls through to the Dry Dedicated table instead - see
+// lookup24hrDedicatedRate's own category check) and get a real but wrong
+// number back with no error, since a wrong-but-plausible rate isn't
+// something the validator can catch. Each function below produces a
+// single-sheet file scoped to ONLY the columns that rule actually reads,
+// with the type-defining fields pre-filled in the sample row and a remark
+// spelling out exactly what's required/ignored - importable as-is through
+// the SAME parseWarehouseImportFile as the generic template (nothing about
+// parsing changes; this only narrows what's asked for up front so there's
+// less to get wrong).
+interface RateTypeTemplateSpec {
+  filename: string;
+  sheetName: string;
+  headers: string[];
+  sample: Record<string, string | number>;
+}
+
+function writeSingleSheetTemplate(spec: RateTypeTemplateSpec): void {
+  const ws = XLSX.utils.json_to_sheet([spec.sample], { header: spec.headers });
+  ws['!cols'] = spec.headers.map(h => ({ wch: Math.max(14, h.length + 2) }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, spec.sheetName);
+  XLSX.writeFile(wb, spec.filename);
+}
+
+const COMMON_HEADERS = ['Date', 'Warehouse Name', 'Warehouse City', 'Vehicle Number', 'Vehicle Type', 'Vehicle Category', 'POD Name', 'POD City', 'Toll Charges', 'Parking Cost', 'Vendor Remarks'];
+
+export function downloadWarehouse12HrTemplate(): void {
+  writeSingleSheetTemplate({
+    filename: 'KCM_Warehouse_Import_12Hr_Dedicated.xlsx',
+    sheetName: '12Hr Dedicated',
+    headers: ['Deployment Type', 'Fixed Hours', 'KM Slab', ...COMMON_HEADERS, 'Opening KM', 'Closing KM', 'Extra KM', 'Rate Per Extra KM', 'Add Hour', 'Rate Per Extra Hour', 'Working Days'],
+    sample: {
+      'Deployment Type': 'regular', 'Fixed Hours': 12, 'KM Slab': 2000,
+      'Date': '2026-09-01', 'Warehouse Name': 'BLR IM1', 'Warehouse City': 'Bangalore', 'Vehicle Number': 'KA01AB1234',
+      'Vehicle Type': '14 FT', 'Vehicle Category': 'Dry', 'POD Name': '', 'POD City': '', 'Toll Charges': 0, 'Parking Cost': 0,
+      'Opening KM': 10000, 'Closing KM': 10120, 'Extra KM': 0, 'Rate Per Extra KM': 0, 'Add Hour': 0, 'Rate Per Extra Hour': 0,
+      'Working Days': '',
+      'Vendor Remarks': '12Hr DEDICATED - Deployment Type must be "regular", Fixed Hours must be 12. KM Slab MUST be exactly 2000, 2500, or 3000 - this is what selects the Scheduled Rate from the Warehouse Group + Vehicle Type table (Vehicle Category is NOT part of this lookup, any value is fine). Vehicle Type must be one of: Tata Ace, 207 (or Bolero), 407, 14 FT, 17 FT, 20 FT. Working Days: leave blank to auto-use the calendar month\'s day count, or type a number to override it. Base Rate = Scheduled Rate / Working Days (KM Utilised is tracked but does NOT affect Base Rate for 12Hr). Extra KM/Rate Per Extra KM and Add Hour/Rate Per Extra Hour are optional add-ons on top.'
+    }
+  });
+}
+
+export function downloadWarehouse24HrDedicatedTemplate(): void {
+  writeSingleSheetTemplate({
+    filename: 'KCM_Warehouse_Import_24Hr_Dedicated_Dry.xlsx',
+    sheetName: '24Hr Dedicated Dry',
+    headers: ['Deployment Type', 'Fixed Hours', ...COMMON_HEADERS, 'Opening KM', 'Closing KM', 'Extra KM', 'Rate Per Extra KM', 'Add Hour', 'Rate Per Extra Hour', 'Working Days'],
+    sample: {
+      'Deployment Type': 'regular', 'Fixed Hours': 24,
+      'Date': '2026-09-01', 'Warehouse Name': 'BLR IM1', 'Warehouse City': 'Bangalore', 'Vehicle Number': 'KA01AB1234',
+      'Vehicle Type': '14 FT', 'Vehicle Category': 'Dry', 'POD Name': '', 'POD City': '', 'Toll Charges': 0, 'Parking Cost': 0,
+      'Opening KM': 10000, 'Closing KM': 10180, 'Extra KM': 0, 'Rate Per Extra KM': 0, 'Add Hour': 0, 'Rate Per Extra Hour': 0,
+      'Working Days': '',
+      'Vendor Remarks': '24Hr DEDICATED (DRY) - Deployment Type must be "regular", Fixed Hours must be 24. Vehicle Category MUST be "Dry" (or blank) - "Reefer"/"Walkes" here route to the DIFFERENT Reefer & Walkes table instead (use that template for those). Warehouse Name must belong to a configured group (any BLR entity, Vizag, or HYD IM4); Vehicle Type one of 207/407/14 FT/17 FT/20 FT (Tata Ace not configured for 24Hr Dedicated). No KM Slab here - Base Rate = (Fixed / Working Days) + (KM Utilised x Variable), where KM Utilised = Closing KM - Opening KM, so those two ARE required and DO affect the total (unlike 12Hr).'
+    }
+  });
+}
+
+export function downloadWarehouse24HrReeferWalkesTemplate(): void {
+  writeSingleSheetTemplate({
+    filename: 'KCM_Warehouse_Import_24Hr_Reefer_Walkes.xlsx',
+    sheetName: '24Hr Reefer-Walkes',
+    headers: ['Deployment Type', 'Fixed Hours', ...COMMON_HEADERS, 'Opening KM', 'Closing KM', 'Extra KM', 'Rate Per Extra KM', 'Add Hour', 'Rate Per Extra Hour', 'Hybrid Reefer Cost', 'Working Days'],
+    sample: {
+      'Deployment Type': 'regular', 'Fixed Hours': 24,
+      'Date': '2026-09-01', 'Warehouse Name': 'BLR IM1', 'Warehouse City': 'Bangalore', 'Vehicle Number': 'KA01AB1234',
+      'Vehicle Type': '14 FT', 'Vehicle Category': 'Reefer', 'POD Name': '', 'POD City': '', 'Toll Charges': 0, 'Parking Cost': 0,
+      'Opening KM': 10000, 'Closing KM': 10180, 'Extra KM': 0, 'Rate Per Extra KM': 0, 'Add Hour': 0, 'Rate Per Extra Hour': 0,
+      'Hybrid Reefer Cost': 0, 'Working Days': '',
+      'Vendor Remarks': '24Hr REEFER & WALKES - Deployment Type "regular", Fixed Hours 24. Vehicle Category MUST be exactly "Reefer" or "Walkes" (spelled exactly like that) - this is REQUIRED, not optional, and is exactly what tells this apart from the plain Dry Dedicated table. Vehicle Type: "14 FT" for Reefer or Walkes; "207" (or V70) for Walkes only - no 207 Reefer rate exists. Warehouse City must resolve to BLR/Chennai/HYD/Vizag/Goa (Goa only has a Walkes rate, no Reefer). Base Rate = (FC / Working Days) + (KM Utilised x VC), same shape as Dry Dedicated but its own FC/VC figures. "Hybrid Reefer Cost" is an optional extra amount added on top of the whole Grand Total, not part of the FC/VC formula itself.'
+    }
+  });
+}
+
+export function downloadWarehouse24HrAdHocTemplate(): void {
+  writeSingleSheetTemplate({
+    filename: 'KCM_Warehouse_Import_24Hr_AdHoc_Route.xlsx',
+    sheetName: '24Hr Ad-hoc Route',
+    headers: ['Deployment Type', 'Fixed Hours', 'From City (Ad-hoc)', 'To City (Ad-hoc)', ...COMMON_HEADERS],
+    sample: {
+      'Deployment Type': 'ad-hoc', 'Fixed Hours': 24, 'From City (Ad-hoc)': 'Bangalore', 'To City (Ad-hoc)': 'Mysore',
+      'Date': '2026-09-01', 'Warehouse Name': 'BLR IM1', 'Warehouse City': 'Bangalore', 'Vehicle Number': 'KA01AB1234',
+      'Vehicle Type': '407', 'Vehicle Category': 'Dry', 'POD Name': '', 'POD City': '', 'Toll Charges': 0, 'Parking Cost': 0,
+      'Vendor Remarks': '24Hr AD-HOC ROUTE - Deployment Type MUST be "ad-hoc", Fixed Hours 24. This is a FLAT round-trip rate looked up directly by From City (Ad-hoc) + To City (Ad-hoc) + Vehicle Type - NOT a formula, so Opening/Closing KM, KM Slab, and Working Days are all irrelevant here and left out of this template entirely (leave them blank if using the combined generic template instead). From/To City must exactly match a configured route (see the Rates tab for the full route list) or nothing will auto-resolve. For a Hybrid-category vehicle, set Vehicle Category to "Hybrid" instead of a Vehicle Type match - that selects the route\'s own separate "Hybrid Vehicle" rate column.'
+    }
+  });
+}
+
+export function downloadWarehouseHybridTemplate(): void {
+  writeSingleSheetTemplate({
+    filename: 'KCM_Warehouse_Import_Hybrid_Manual.xlsx',
+    sheetName: 'Hybrid (Manual)',
+    headers: ['Deployment Type', 'Fixed Hours', ...COMMON_HEADERS, 'Scheduled Rate', 'Hybrid Reefer Cost'],
+    sample: {
+      'Deployment Type': 'hybrid', 'Fixed Hours': 12,
+      'Date': '2026-09-01', 'Warehouse Name': 'BLR IM1', 'Warehouse City': 'Bangalore', 'Vehicle Number': 'KA01AB1234',
+      'Vehicle Type': '14 FT', 'Vehicle Category': 'Hybrid', 'POD Name': '', 'POD City': '', 'Toll Charges': 0, 'Parking Cost': 0,
+      'Scheduled Rate': 20000, 'Hybrid Reefer Cost': 0,
+      'Vendor Remarks': 'HYBRID DEPLOYMENT - Deployment Type "hybrid" has NO rate table/auto-lookup at all (unlike every other type above) - Scheduled Rate here is used directly as the Base Rate (divided by Working Days, defaulting to the calendar month), and Fuel Cost/Grand Total compute from that. Opening/Closing KM are not tracked for Hybrid (same as Ad-hoc). If you don\'t know the right Base Rate/Grand Total for this trip, check with whoever set the rate before importing - there is nothing here to auto-verify it against.'
+    }
+  });
+}
+
 export interface ParsedWarehouseImportRow {
   rowNumber: number; // 1-based, matches the spreadsheet row (header is row 1)
   errors: string[];
