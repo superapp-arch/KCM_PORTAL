@@ -740,6 +740,66 @@ export async function normalizePettyCashLocationNames() {
   }
 }
 
+// One-time cleanup (2026-09-21 direct request) for Fuel Management's own
+// Location field, same class of bug as normalizePettyCashLocationNames
+// above - a free-typed "Vljayawada" (via the Location "Other" field) sat as
+// a second, near-duplicate value alongside the real "Vijayawada" in the
+// Location filter dropdown, and - more seriously - silently split that
+// bunk's (Tejashri/HPCL) entries across two different Location values, so
+// entries genuinely saved under the typo'd spelling looked like they'd
+// vanished/never saved when the office filtered/looked under the correct
+// "Vijayawada" spelling. Rewrites both FuelLog.location and
+// MileageReport.location (a Mileage Report saved via Fuel Management's own
+// Mileage tab copies the same Location) wherever normalizeLocationName's
+// alias/canonical list actually differs from what's stored - see
+// src/utils/pettyCashLocations.ts (shared, despite the filename, across
+// every module that logs a free-typed Location). Safe to call on every
+// boot - a no-op once every row already matches its own normalized value.
+export async function normalizeFuelLocationNames() {
+  try {
+    const renameCounts = new Map<string, number>();
+    const bump = (from: string, to: string) => {
+      const key = `"${from}" -> "${to}"`;
+      renameCounts.set(key, (renameCounts.get(key) || 0) + 1);
+    };
+
+    await db.transaction(async (tx) => {
+      const fuelRows = await tx.select().from(fuelLogs);
+      for (const row of fuelRows) {
+        const log = JSON.parse(row.data);
+        const normalized = normalizeLocationName(log.location || '');
+        if (normalized && normalized !== log.location) {
+          bump(log.location, normalized);
+          await tx.update(fuelLogs)
+            .set({ data: JSON.stringify({ ...log, location: normalized }) })
+            .where(eq(fuelLogs.id, row.id));
+        }
+      }
+
+      const mileageRows = await tx.select().from(mileageReports);
+      for (const row of mileageRows) {
+        const report = JSON.parse(row.data);
+        const normalized = normalizeLocationName(report.location || '');
+        if (normalized && normalized !== report.location) {
+          bump(report.location, normalized);
+          await tx.update(mileageReports)
+            .set({ data: JSON.stringify({ ...report, location: normalized }) })
+            .where(eq(mileageReports.id, row.id));
+        }
+      }
+    });
+
+    if (renameCounts.size > 0) {
+      console.log(`[MIGRATION] normalizeFuelLocationNames: applied ${renameCounts.size} distinct rename(s):`);
+      for (const [rename, count] of renameCounts) {
+        console.log(`  ${rename} (${count} row${count === 1 ? '' : 's'})`);
+      }
+    }
+  } catch (error) {
+    console.error("Migration failed in normalizeFuelLocationNames:", error);
+  }
+}
+
 export async function deletePettyCashVoucher(id: string) {
   try {
     await db.delete(pettyCashVouchers).where(eq(pettyCashVouchers.id, id));

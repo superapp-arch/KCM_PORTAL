@@ -163,6 +163,7 @@ import {
   migrateMileageReportTotalLitres,
   migrateMileageExtraFuelExclusionTotals,
   normalizePettyCashLocationNames,
+  normalizeFuelLocationNames,
   getAccountsEntries,
   saveAccountsEntry,
   deleteAccountsEntry,
@@ -1397,6 +1398,11 @@ async function startServer() {
   // already matches its own canonical spelling. Logs exactly what it
   // renamed on the run that actually changes anything.
   await normalizePettyCashLocationNames();
+  // Same cleanup for Fuel Management/Mileage Report's own Location field
+  // (2026-09-21) - a free-typed "Vljayawada" was silently splitting that
+  // bunk's entries away from the real "Vijayawada" everywhere else reads/
+  // filters by. No-op once every row already matches its canonical spelling.
+  await normalizeFuelLocationNames();
   // Fuel Indent No has no equivalent boot-time or on-delete sweep (removed
   // 2026-09-11, see DELETE /api/fuel/:id's own comment) - a real, physical-
   // paper-matching Indent No an employee has typed in must never be

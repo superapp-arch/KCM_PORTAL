@@ -55,23 +55,37 @@ const normLocation = (name: string | undefined) => (name || '').trim().toLowerCa
 // first entry of a new (bunk, location, month) combination has nothing to
 // continue from (returns null), so the office types a fresh starting number
 // by hand; every entry after that, same bunk, same location, same month,
-// auto-continues from the highest one already saved for that exact
-// (bunk, location) pair.
+// auto-continues from the MOST RECENTLY DATED entry already saved for that
+// exact (bunk, location) pair - NOT the highest number ever seen this month
+// (2026-09-21 fix). A high-volume "pillar" bunk logs continuously off a
+// physical paper book/register whose own printed numbering can legitimately
+// restart lower when the office switches to a fresh book mid-month (e.g.
+// book 1 ends at 587, book 2 starts at 002) - the very next real entry after
+// that switch is manually typed as "002", and every entry after THAT must
+// keep following book 2's own numbering (003, 004, ...), not jump back to
+// "588" just because 587 is still the highest number this bunk/location/
+// month has ever recorded. Ties on the same date fall back to whichever
+// entry's own id sorts last (ids are timestamp-based - see saveFuelLog's own
+// fallback - so this is "whichever was actually saved most recently").
 export function nextBunkFuelIndentNumber(logs: IndentableFuelLog[], refDate: string, bunkName: string | undefined, location: string | undefined, enteredBy: string | undefined): string | null {
   const monthKey = (refDate || '').slice(0, 7);
   if (!monthKey) return null;
-  const monthNumbers = logs
+  const monthEntries = logs
     .filter(l =>
       (l.bunkOrCard || 'Bunk') === 'Bunk' &&
       (l.date || '').slice(0, 7) === monthKey &&
       normBunkName(l.bunkName) === normBunkName(bunkName) &&
       normLocation(l.location) === normLocation(location) &&
-      (l.enteredBy || '') === (enteredBy || '')
-    )
-    .map(l => extractLeadingNumber(l.indentNumber))
-    .filter(n => n > 0);
-  if (monthNumbers.length === 0) return null;
-  return String(Math.max(...monthNumbers) + 1);
+      (l.enteredBy || '') === (enteredBy || '') &&
+      extractLeadingNumber(l.indentNumber) > 0
+    );
+  if (monthEntries.length === 0) return null;
+  const latest = [...monthEntries].sort((a, b) => {
+    const dateCmp = (b.date || '').localeCompare(a.date || '');
+    if (dateCmp !== 0) return dateCmp;
+    return (b.id || '').localeCompare(a.id || '');
+  })[0];
+  return String(extractLeadingNumber(latest.indentNumber) + 1);
 }
 
 // Card: zero-padded 5-digit string (e.g. "00001"), one single continuously-

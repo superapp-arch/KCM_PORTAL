@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { MileageReport, Vehicle, User, VehicleMileage, StaffEmployee } from '../types';
 import { PETTY_CASH_USERS } from '../utils/pettyCashUsers';
+import { ExtraFuelMode, EXTRA_FUEL_MODE_LABELS, resolveExtraFuelModes, extraFuelSlices } from '../utils/extraFuelModes';
 import { fuelEnteredByLabel } from '../utils/fuelEnteredBy';
 import {
   Gauge,
@@ -506,13 +507,18 @@ export default function MileageReportModule({
       'Fixed Mileage': r.actualMileage || 0,
       'Difference (Litres)': r.difference ?? '',
       'Extra Fuel': r.extraFuel || 0,
-      'Extra Fuel Paid By': r.extraFuel && r.extraFuelPaymentMode === 'both'
-        ? `Petty Cash: ${((r.extraFuel || 0) - (r.extraFuelCardAmount || 0)).toFixed(2)}L${r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : ''} + Card: ${(r.extraFuelCardAmount || 0).toFixed(2)}L`
-        : r.extraFuel && r.extraFuelPaymentMode === 'petty_cash'
-        ? `Petty Cash${r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : ''}`
-        : r.extraFuel && r.extraFuelPaymentMode === 'card'
-        ? 'Card'
-        : '',
+      'Extra Fuel Paid By': !r.extraFuel ? '' : (() => {
+        const modes = resolveExtraFuelModes(r);
+        if (modes.length === 0) return '';
+        const slices = extraFuelSlices(r);
+        return modes.map(m => {
+          const amount = slices[m] || 0;
+          const suffix = m === 'petty_cash' && r.pettyCashHolderUsername
+            ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})`
+            : '';
+          return modes.length >= 2 ? `${EXTRA_FUEL_MODE_LABELS[m]}: ${amount.toFixed(2)}L${suffix}` : `${EXTRA_FUEL_MODE_LABELS[m]}${suffix}`;
+        }).join(' + ');
+      })(),
       'Rate per Ltr (new)': r.ratePerLitreNew || 0,
       'Total Amount': r.totalAmount || 0,
       'Authorized Driver': r.driverName,
@@ -884,26 +890,35 @@ export default function MileageReportModule({
                     </td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">
                       {r.extraFuel ? r.extraFuel.toFixed(2) : '-'}
-                      {r.extraFuel != null && (r.extraFuelPaymentMode === 'petty_cash' || r.extraFuelPaymentMode === 'both') && (
-                        <span
-                          className="ml-1 px-1 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200 align-middle"
-                          title={`${r.extraFuelPaymentMode === 'both' ? `Petty Cash portion: ${((r.extraFuel || 0) - (r.extraFuelCardAmount || 0)).toFixed(2)} L` : 'Paid by Petty Cash'}${r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : ''} - included in Total Litres/Total Amount`}
-                        >
-                          PC
-                        </span>
-                      )}
-                      {/* "Paid by Card" badge (2026-09-10; 'both' mode
-                          2026-09-19) - same accounting-tag-only treatment as
-                          Petty Cash above, just a different payment method,
-                          so hovering tells the two (or both, at once) apart. */}
-                      {r.extraFuel != null && (r.extraFuelPaymentMode === 'card' || r.extraFuelPaymentMode === 'both') && (
-                        <span
-                          className="ml-1 px-1 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-sky-50 text-sky-700 border border-sky-200 align-middle"
-                          title={`${r.extraFuelPaymentMode === 'both' ? `Card portion: ${(r.extraFuelCardAmount || 0).toFixed(2)} L` : 'Paid by Card'} - included in Total Litres/Total Amount`}
-                        >
-                          CARD
-                        </span>
-                      )}
+                      {/* One badge per active mode (2026-09-21: generalized
+                          from an exclusive/two-mode choice to any
+                          combination of Bunk/Petty Cash/Card) - purely an
+                          accounting tag, same as always; hovering shows
+                          that mode's own portion when 2+ are active. */}
+                      {r.extraFuel != null && (() => {
+                        const modes = resolveExtraFuelModes(r);
+                        if (modes.length === 0) return null;
+                        const slices = extraFuelSlices(r);
+                        const badgeStyle: Record<ExtraFuelMode, string> = {
+                          bunk: 'bg-amber-50 text-amber-700 border-amber-200',
+                          petty_cash: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+                          card: 'bg-sky-50 text-sky-700 border-sky-200'
+                        };
+                        const badgeText: Record<ExtraFuelMode, string> = { bunk: 'BUNK', petty_cash: 'PC', card: 'CARD' };
+                        return modes.map(m => {
+                          const portionNote = modes.length >= 2 ? `${EXTRA_FUEL_MODE_LABELS[m]} portion: ${(slices[m] || 0).toFixed(2)} L` : `Paid by ${EXTRA_FUEL_MODE_LABELS[m]}`;
+                          const holderNote = m === 'petty_cash' && r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : '';
+                          return (
+                            <span
+                              key={m}
+                              className={`ml-1 px-1 py-0.5 rounded text-[8px] font-black uppercase tracking-wider border align-middle ${badgeStyle[m]}`}
+                              title={`${portionNote}${holderNote} - included in Total Litres/Total Amount`}
+                            >
+                              {badgeText[m]}
+                            </span>
+                          );
+                        });
+                      })()}
                     </td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{r.ratePerLitreNew ? `₹${r.ratePerLitreNew.toFixed(2)}` : '-'}</td>
                     <td className="px-3 py-2 text-right font-mono text-slate-600">{(r.totalLitres ?? r.litres ?? 0).toFixed(2)} L</td>

@@ -37,6 +37,8 @@ import { authFetch } from '../authFetch';
 import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
 import { PETTY_CASH_USERS } from '../utils/pettyCashUsers';
 import { fuelEnteredByLabel } from '../utils/fuelEnteredBy';
+import { normalizeLocationName } from '../utils/pettyCashLocations';
+import { ExtraFuelMode, EXTRA_FUEL_MODE_LABELS, resolveExtraFuelModes, extraFuelSlices, legacyExtraFuelPaymentMode } from '../utils/extraFuelModes';
 import FuelBunkImportModal from './fuel/FuelBunkImportModal';
 import FuelCardImportModal from './fuel/FuelCardImportModal';
 
@@ -483,16 +485,66 @@ export default function FuelManagement({
   const [mExtraFuel, setMExtraFuel] = useState('');
   const [mRatePerLitreNew, setMRatePerLitreNew] = useState('');
   const [mTotalAmount, setMTotalAmount] = useState('');
-  // "Paid by Petty Cash"/"Paid by Card" for Extra Fuel - see
-  // MileageReport.extraFuelPaymentMode. Purely an accounting tag (2026-09-19
+  // "Paid by Bunk"/"Paid by Petty Cash"/"Paid by Card" for Extra Fuel - see
+  // MileageReport.extraFuelModes. Purely an accounting tag (2026-09-19
   // correction) - Extra Fuel always folds fully into Total Ltrs/Total
   // Amount below regardless of mode; nothing here is excluded or routed
-  // anywhere else. 'both' (2026-09-19) covers two separate top-ups this
-  // trip paid two different ways - mExtraFuel is then the Petty-Cash-paid
-  // slice and mExtraFuelCardAmount is the Card-paid slice.
-  const [mExtraFuelPaymentMode, setMExtraFuelPaymentMode] = useState<'normal' | 'petty_cash' | 'card' | 'both'>('normal');
+  // anywhere else. Any combination of the three can be active at once
+  // (2026-09-21 - a trip can have separate top-ups paid separate ways).
+  // With 0 or 1 mode active, mExtraFuel is the WHOLE amount (today's
+  // original single-field behavior, unchanged); with 2+ active,
+  // mExtraFuel/mExtraFuelBunkAmount/mExtraFuelCardAmount become each
+  // individually-active mode's own portion instead - see
+  // toggleExtraFuelMode below for how values move between these as modes
+  // are ticked/unticked.
+  const [mExtraFuelModes, setMExtraFuelModes] = useState<ExtraFuelMode[]>([]);
+  const [mExtraFuelBunkAmount, setMExtraFuelBunkAmount] = useState('');
   const [mExtraFuelCardAmount, setMExtraFuelCardAmount] = useState('');
   const [mPettyCashHolder, setMPettyCashHolder] = useState('');
+
+  // Toggles one Extra Fuel payment mode on/off, moving amounts between the
+  // single mExtraFuel field and the per-mode fields as the count of active
+  // modes crosses the 1<->2 boundary, so ticking/unticking a second/third
+  // box never silently discards what was already typed (2026-09-21).
+  const extraFuelFieldFor = (mode: ExtraFuelMode) => mode === 'bunk' ? mExtraFuelBunkAmount : mode === 'card' ? mExtraFuelCardAmount : mExtraFuel;
+  const setExtraFuelFieldFor = (mode: ExtraFuelMode, value: string) => {
+    if (mode === 'bunk') setMExtraFuelBunkAmount(value);
+    else if (mode === 'card') setMExtraFuelCardAmount(value);
+    else setMExtraFuel(value);
+  };
+  const toggleExtraFuelMode = (mode: ExtraFuelMode) => {
+    setMExtraFuelModes(prev => {
+      const wasChecked = prev.includes(mode);
+      const next = wasChecked ? prev.filter(m => m !== mode) : [...prev, mode];
+      if (!wasChecked && prev.length <= 1 && next.length >= 2) {
+        // Single-mode (or none) -> multi-mode: carry whatever was in the
+        // single mExtraFuel field into the mode that was already active
+        // (if any) before it starts meaning something different.
+        const soleMode = prev[0];
+        if (soleMode && soleMode !== mode) setExtraFuelFieldFor(soleMode, mExtraFuel);
+      } else if (wasChecked && prev.length >= 2 && next.length === 1) {
+        // Multi-mode -> single remaining mode: carry that mode's own slice
+        // back into the single mExtraFuel field, then clear the per-mode
+        // fields so they don't linger with stale values.
+        const remaining = next[0];
+        setMExtraFuel(extraFuelFieldFor(remaining));
+        setMExtraFuelBunkAmount('');
+        setMExtraFuelCardAmount('');
+      } else if (wasChecked && next.length === 0) {
+        setMExtraFuelBunkAmount('');
+        setMExtraFuelCardAmount('');
+      }
+      if (mode === 'petty_cash' && wasChecked) setMPettyCashHolder('');
+      return next;
+    });
+  };
+  // Grand total across every currently-active Extra Fuel mode - the single
+  // source both the on-screen preview (mTotalLtrs/mTotalAmount) and the
+  // actual save computation read, so they can never disagree.
+  const totalExtraFuelAmount = (): number =>
+    mExtraFuelModes.length <= 1
+      ? sumExtraFuelExpression(mExtraFuel)
+      : mExtraFuelModes.reduce((sum, m) => sum + sumExtraFuelExpression(extraFuelFieldFor(m)), 0);
   const [showMileageManager, setShowMileageManager] = useState(false);
   const [mileageFormVehicleNo, setMileageFormVehicleNo] = useState('');
   const [mileageFormValue, setMileageFormValue] = useState('');
@@ -572,8 +624,11 @@ export default function FuelManagement({
   // Same "known list + anything actually used" union as usedBunks above -
   // real historical data can include a location not in the hardcoded
   // LOCATIONS list, so this never hides one just because it's missing from
-  // that seed list.
-  const usedLocations = Array.from(new Set([...LOCATIONS, ...logs.map(l => l.location).filter(Boolean)])).sort();
+  // that seed list. Each log's location is canonicalized first (2026-09-21 -
+  // see normalizeLocationName) so a lingering unnormalized row (e.g. from
+  // before the one-time migration runs, or a raw API write bypassing this
+  // UI) can't still split into a second near-duplicate dropdown entry.
+  const usedLocations = Array.from(new Set([...LOCATIONS, ...logs.map(l => normalizeLocationName(l.location)).filter(Boolean)])).sort();
 
   // Cascading Bunk options for the ledger's own Location filter - same
   // "Location narrows Bunk" relationship the Add/Edit Entry form already
@@ -1037,16 +1092,15 @@ export default function FuelManagement({
   // Total Ltrs = Litres (from the Fuel Entry section above) + Extra Fuel -
   // the actual total fuel consumed this trip, including any mid-trip
   // top-up(s), ALWAYS (2026-09-19 correction - see MileageReport.
-  // extraFuelPaymentMode's own comment for why the old Petty-Cash/Card
-  // exclusion was removed). Extra Fuel accepts a sum expression like
-  // "30+40" - see sumExtraFuelExpression. In 'both' mode (two separate
-  // top-ups, one Petty Cash + one Card), mExtraFuel is the Petty-Cash slice
-  // and mExtraFuelCardAmount is the Card slice - both count.
+  // extraFuelModes' own comment for why the old Petty-Cash/Card exclusion
+  // was removed). Extra Fuel accepts a sum expression like "30+40" - see
+  // sumExtraFuelExpression. Every active mode's own portion counts (2+
+  // modes active at once - see totalExtraFuelAmount above).
   useEffect(() => {
     const l = parseFloat(ltrs) || 0;
-    const extra = sumExtraFuelExpression(mExtraFuel) + (mExtraFuelPaymentMode === 'both' ? sumExtraFuelExpression(mExtraFuelCardAmount) : 0);
+    const extra = totalExtraFuelAmount();
     setMTotalLtrs(String(parseFloat((l + extra).toFixed(2))));
-  }, [ltrs, mExtraFuel, mExtraFuelCardAmount, mExtraFuelPaymentMode]);
+  }, [ltrs, mExtraFuel, mExtraFuelBunkAmount, mExtraFuelCardAmount, mExtraFuelModes]);
 
   // Mileage (this trip, real achieved efficiency) = Total KM / Total Ltrs -
   // NOT the bare Litres field, since fuel topped up mid-trip is fuel that
@@ -1066,14 +1120,14 @@ export default function FuelManagement({
 
   // Total Amount = Diesel Amount (from Fuel Entry) + (Extra Fuel * new Rate)
   // - ALWAYS (2026-09-19 correction, same reasoning as Total Ltrs above),
-  // regardless of Extra Fuel's payment mode. In 'both' mode both slices
-  // (Petty Cash + Card) are charged at the same new Rate.
+  // regardless of Extra Fuel's payment mode(s). Every active mode's own
+  // portion is charged at the same new Rate.
   useEffect(() => {
     const diesel = parseFloat(amount) || 0;
-    const extra = sumExtraFuelExpression(mExtraFuel) + (mExtraFuelPaymentMode === 'both' ? sumExtraFuelExpression(mExtraFuelCardAmount) : 0);
+    const extra = totalExtraFuelAmount();
     const rateNew = parseFloat(mRatePerLitreNew) || 0;
     setMTotalAmount(String(parseFloat((diesel + extra * rateNew).toFixed(2))));
-  }, [amount, mExtraFuel, mExtraFuelCardAmount, mRatePerLitreNew, mExtraFuelPaymentMode]);
+  }, [amount, mExtraFuel, mExtraFuelBunkAmount, mExtraFuelCardAmount, mExtraFuelModes, mRatePerLitreNew]);
 
   const AUDIT_NOTE_PATTERN = /\s*\(Fuel Audit:[^)]*\)\s*$/;
   const stripPreviousAuditNote = (text: string) => text.replace(AUDIT_NOTE_PATTERN, '').trim();
@@ -1185,7 +1239,8 @@ export default function FuelManagement({
     setMRemarks('');
     setMExtraFuel('');
     setMRatePerLitreNew('');
-    setMExtraFuelPaymentMode('normal');
+    setMExtraFuelModes([]);
+    setMExtraFuelBunkAmount('');
     setMExtraFuelCardAmount('');
     setMPettyCashHolder('');
     setFuelPettyCashHolder('');
@@ -1276,28 +1331,30 @@ export default function FuelManagement({
       setMDriverName(linkedReport.driverName || '');
       setMDriverId(linkedReport.driverId || '');
       setMRemarks(stripPreviousAuditNote(linkedReport.remarks || ''));
-      // In 'both' mode, linkedReport.extraFuel is the GRAND TOTAL (both
-      // slices summed - see types.ts's own comment on extraFuel/
-      // extraFuelCardAmount for why it's kept that way for every other
-      // reader of the field). The form's mExtraFuel, though, is only ever
-      // the Petty Cash PORTION - so it must be loaded as the total minus
-      // the Card slice, not the raw total itself (2026-09-19 bug fix: this
-      // used to load the raw total here, so reopening a saved 'both' entry
-      // showed the Petty Cash field as the full combined amount instead of
-      // just its own slice, and re-saving would then double-count the Card
-      // portion into the new total on top of itself).
-      const isBothMode = linkedReport.extraFuelPaymentMode === 'both';
-      const cardSlice = isBothMode ? (linkedReport.extraFuelCardAmount || 0) : 0;
-      const pettyCashOrWholeSlice = (linkedReport.extraFuel || 0) - cardSlice;
-      setMExtraFuel(pettyCashOrWholeSlice ? String(pettyCashOrWholeSlice) : '');
+      // (2026-09-21) Resolves cleanly for a record from ANY era - legacy
+      // single mode, the old two-mode-only 'both', or the current
+      // any-combination extraFuelModes - via the shared resolver, so
+      // reopening a saved entry always shows each mode's own portion
+      // (never the raw combined total - see extraFuelSlices' own comment
+      // for the 2026-09-19 bug this originally fixed for 'both' specifically).
+      {
+        const modes = resolveExtraFuelModes(linkedReport);
+        const slices = extraFuelSlices(linkedReport);
+        setMExtraFuelModes(modes);
+        if (modes.length === 0) {
+          setMExtraFuel('');
+        } else if (modes.length === 1) {
+          setMExtraFuel(String(slices[modes[0]] || ''));
+        } else {
+          // 2+ modes: mExtraFuel only ever carries the Petty Cash portion
+          // in this shape (see mExtraFuelModes' own comment) - unused/blank
+          // when Petty Cash isn't one of the active modes.
+          setMExtraFuel(modes.includes('petty_cash') ? String(slices.petty_cash || '') : '');
+        }
+        setMExtraFuelBunkAmount(modes.length >= 2 && modes.includes('bunk') ? String(slices.bunk || '') : '');
+        setMExtraFuelCardAmount(modes.length >= 2 && modes.includes('card') ? String(slices.card || '') : '');
+      }
       setMRatePerLitreNew(String(linkedReport.ratePerLitreNew || ''));
-      setMExtraFuelPaymentMode(
-        linkedReport.extraFuelPaymentMode === 'petty_cash' ? 'petty_cash'
-          : linkedReport.extraFuelPaymentMode === 'card' ? 'card'
-          : isBothMode ? 'both'
-          : 'normal'
-      );
-      setMExtraFuelCardAmount(isBothMode && cardSlice ? String(cardSlice) : '');
       setMPettyCashHolder(linkedReport.pettyCashHolderUsername || '');
     } else {
       setLinkedMileageReportId(null);
@@ -1308,7 +1365,8 @@ export default function FuelManagement({
       setMRemarks('');
       setMExtraFuel('');
       setMRatePerLitreNew('');
-      setMExtraFuelPaymentMode('normal');
+      setMExtraFuelModes([]);
+      setMExtraFuelBunkAmount('');
       setMExtraFuelCardAmount('');
       setMPettyCashHolder('');
     }
@@ -1381,25 +1439,25 @@ export default function FuelManagement({
     // sub-tab can be unmounted at submit time if the user is currently on
     // Fuel Entry Details - switching them there so the field they need to
     // fix is actually visible.
-    if ((mExtraFuel.trim() || (mExtraFuelPaymentMode === 'both' && mExtraFuelCardAmount.trim())) && !mRatePerLitreNew.trim()) {
+    if (totalExtraFuelAmount() > 0 && !mRatePerLitreNew.trim()) {
       triggerNotif('Rate per Ltr (new) is required when Extra Fuel has a value.');
       setEntrySection('mileage');
       return;
     }
     // Petty Cash Paid By is mandatory the moment "Paid by Petty Cash" is
-    // checked (single mode, or as one half of 'both') - same "checked here,
-    // not just via `required`" reasoning as Rate per Ltr (new) above (the
+    // checked (alone, or alongside Bunk/Card) - same "checked here, not
+    // just via `required`" reasoning as Rate per Ltr (new) above (the
     // Mileage tab can be unmounted at submit time).
-    if ((mExtraFuelPaymentMode === 'petty_cash' || mExtraFuelPaymentMode === 'both') && !mPettyCashHolder.trim()) {
+    if (mExtraFuelModes.includes('petty_cash') && !mPettyCashHolder.trim()) {
       triggerNotif('Petty Cash Paid By is required when Extra Fuel is Paid by Petty Cash.');
       setEntrySection('mileage');
       return;
     }
-    // In 'both' mode each slice needs its own actual value - two ticked
-    // boxes with only one real top-up typed in is almost certainly a
-    // mistake (the office meant single-mode, not a genuine two-top-up trip).
-    if (mExtraFuelPaymentMode === 'both' && (sumExtraFuelExpression(mExtraFuel) <= 0 || sumExtraFuelExpression(mExtraFuelCardAmount) <= 0)) {
-      triggerNotif('Both a Petty Cash Extra Fuel amount and a Card Extra Fuel amount are required when both are ticked.');
+    // With 2+ modes ticked, each one needs its own actual value - a ticked
+    // box with nothing typed in is almost certainly a mistake (the office
+    // meant single-mode, not a genuine multi-way-split trip).
+    if (mExtraFuelModes.length >= 2 && mExtraFuelModes.some(m => sumExtraFuelExpression(extraFuelFieldFor(m)) <= 0)) {
+      triggerNotif('Every ticked Extra Fuel payment mode needs its own amount.');
       setEntrySection('mileage');
       return;
     }
@@ -1459,24 +1517,26 @@ export default function FuelManagement({
         // Total Ltrs (Litres + Extra Fuel, e.g. "30+40" for two top-ups
         // during one trip) is what actually got consumed, not just the main
         // fill-up - Mileage/Cost-per-KM/the fuel-theft audit all key off it.
-        // Always included here regardless of how Extra Fuel was paid for
-        // (Normal/Petty Cash/Card/Both - 2026-09-19: the on-screen preview
-        // above now matches this exactly too, see mTotalLtrs's own effect).
-        // In 'both' mode (two separate top-ups this trip, one Petty Cash +
-        // one Card), mExtraFuel is the Petty-Cash slice and
-        // mExtraFuelCardAmount is the Card slice - both count.
-        const pettyCashOrNormalSlice = sumExtraFuelExpression(mExtraFuel);
-        // 2026-09-19 bug fix: this specific line (the one that actually
-        // computes what gets SAVED) was still using plain parseFloat, which
-        // silently truncates at the first "+" (parseFloat("10+30") === 10) -
-        // every other Card-portion read already went through
-        // sumExtraFuelExpression, so the on-screen preview correctly showed
-        // 40, but the record that actually got saved/shown in Mileage
-        // Report still only ever had 10.
-        const cardSlice = mExtraFuelPaymentMode === 'both' ? sumExtraFuelExpression(mExtraFuelCardAmount) : 0;
-        const extra = pettyCashOrNormalSlice + cardSlice;
-        const isPettyCashExtra = (mExtraFuelPaymentMode === 'petty_cash' || mExtraFuelPaymentMode === 'both') && pettyCashOrNormalSlice > 0 && !!mPettyCashHolder.trim();
-        const isCardExtra = (mExtraFuelPaymentMode === 'card' && pettyCashOrNormalSlice > 0) || (mExtraFuelPaymentMode === 'both' && cardSlice > 0);
+        // Always included here regardless of how Extra Fuel was paid for -
+        // any combination of Bunk/Petty Cash/Card (2026-09-19: the
+        // on-screen preview above already matches this exactly, see
+        // mTotalLtrs's own effect; totalExtraFuelAmount is the one shared
+        // computation both read, so they can never disagree - see the
+        // 2026-09-19 bug this fixed, where a plain parseFloat here silently
+        // truncated a "10+30" sum-expression to just 10 even though the
+        // preview correctly showed 40).
+        const extra = totalExtraFuelAmount();
+        const bunkSlice = mExtraFuelModes.length >= 2 && mExtraFuelModes.includes('bunk') ? sumExtraFuelExpression(mExtraFuelBunkAmount) : 0;
+        const pettyCashSlice = mExtraFuelModes.length === 0 ? 0 : mExtraFuelModes.includes('petty_cash') ? sumExtraFuelExpression(extraFuelFieldFor('petty_cash')) : 0;
+        const cardSlice = mExtraFuelModes.length >= 2 && mExtraFuelModes.includes('card') ? sumExtraFuelExpression(mExtraFuelCardAmount) : 0;
+        const isBunkExtra = mExtraFuelModes.includes('bunk') && (mExtraFuelModes.length === 1 ? extra > 0 : bunkSlice > 0);
+        const isPettyCashExtra = mExtraFuelModes.includes('petty_cash') && (mExtraFuelModes.length === 1 ? extra > 0 : pettyCashSlice > 0) && !!mPettyCashHolder.trim();
+        const isCardExtra = mExtraFuelModes.includes('card') && (mExtraFuelModes.length === 1 ? extra > 0 : cardSlice > 0);
+        const activeExtraFuelModes: ExtraFuelMode[] = [
+          ...(isBunkExtra ? (['bunk'] as const) : []),
+          ...(isPettyCashExtra ? (['petty_cash'] as const) : []),
+          ...(isCardExtra ? (['card'] as const) : [])
+        ];
         const totalLitres = parseFloat((l + extra).toFixed(2));
         const calculatedMileage = totalLitres > 0 ? parseFloat((calculatedTotalKm / totalLitres).toFixed(2)) : 0;
         const calculatedCostPerKm = calculatedMileage > 0 ? parseFloat((r / calculatedMileage).toFixed(2)) : 0;
@@ -1508,7 +1568,11 @@ export default function FuelManagement({
           costPerKm: calculatedCostPerKm,
           driverName: mDriverName.trim(),
           driverId: mDriverId.trim() || undefined,
-          location: location.trim(),
+          // Defensive re-normalization at save time (2026-09-21) - the
+          // "Other" field's own onBlur already does this, but a submit
+          // that never blurred the field (e.g. Enter key straight from it)
+          // must not be able to slip an un-normalized spelling through.
+          location: normalizeLocationName(location.trim()),
           remarks: finalMileageRemarks,
           actualMileage: calculatedActualMileage,
           difference,
@@ -1516,9 +1580,14 @@ export default function FuelManagement({
           extraFuel: extra,
           ratePerLitreNew: rateNew,
           totalAmount: calculatedTotalAmount,
-          extraFuelPaymentMode: (isPettyCashExtra && isCardExtra) ? 'both' as const : isPettyCashExtra ? 'petty_cash' as const : isCardExtra ? 'card' as const : 'normal' as const,
+          extraFuelModes: activeExtraFuelModes.length > 0 ? activeExtraFuelModes : undefined,
+          // Best-effort legacy equivalent, kept for any code that only
+          // reads the older singular field - see legacyExtraFuelPaymentMode.
+          extraFuelPaymentMode: legacyExtraFuelPaymentMode(activeExtraFuelModes),
           pettyCashHolderUsername: isPettyCashExtra ? mPettyCashHolder : undefined,
-          extraFuelCardAmount: (isPettyCashExtra && isCardExtra) ? cardSlice : undefined,
+          extraFuelBunkAmount: activeExtraFuelModes.length >= 2 && isBunkExtra ? bunkSlice : undefined,
+          extraFuelPettyCashAmount: activeExtraFuelModes.length >= 2 && isPettyCashExtra ? pettyCashSlice : undefined,
+          extraFuelCardAmount: activeExtraFuelModes.length >= 2 && isCardExtra ? cardSlice : undefined,
           // 2026-09-08 bug fix: filling in Mileage on one of Praveen's own
           // fuel entries (editingIsForeign - see isForeignEntry above) used
           // to silently attribute the new Mileage Report to whoever's
@@ -1550,7 +1619,7 @@ export default function FuelManagement({
         entryNumber: editingId ? logs.find(lg => lg.id === editingId)?.entryNumber || nextEntryNumber : nextEntryNumber,
         period,
         date,
-        location: location.trim(),
+        location: normalizeLocationName(location.trim()),
         bunkName: bunkName.trim(),
         bunkOrCard,
         pettyCashHolderUsername: bunkOrCard === 'Petty Cash' ? fuelPettyCashHolder : undefined,
@@ -2304,7 +2373,38 @@ export default function FuelManagement({
                           instant Mileage is entered/updated (logs already
                           re-fetches after that save), no separate tracking
                           needed. */}
-                      <td className={`px-3 py-2.5 font-bold font-mono text-slate-900 uppercase tracking-wider whitespace-nowrap ${!log.mileageReportId ? 'bg-amber-100' : ''}`} title={!log.mileageReportId ? 'Mileage not entered for this entry yet' : undefined}>{log.vehicleNumber}</td>
+                      {(() => {
+                        // 2026-09-19 direct request: clicking Vehicle No.
+                        // jumps straight to editing this entry's Mileage
+                        // tab, instead of Actions -> Edit -> Mileage tab -
+                        // this is exactly the row the amber highlight above
+                        // is telling the office to go fill in, so the
+                        // highlight itself is now the shortcut to it. Same
+                        // permission gate as the Actions column's own edit
+                        // button (isRqIdOnlyUser/isViewOnlyUser have no edit
+                        // access at all here; a foreign row only clicks
+                        // through when canEditForeignMileage allows it) -
+                        // anyone who can't act on this row still just sees
+                        // plain text, same as before.
+                        const canJumpToMileage = !isRqIdOnlyUser && !isViewOnlyUser && (!isForeignEntry(log) || canEditForeignMileage(log));
+                        const highlight = !log.mileageReportId;
+                        const cellClass = `px-3 py-2.5 font-bold font-mono text-slate-900 uppercase tracking-wider whitespace-nowrap ${highlight ? 'bg-amber-100' : ''} ${canJumpToMileage ? 'cursor-pointer hover:underline' : ''}`;
+                        const cellTitle = canJumpToMileage
+                          ? (highlight ? 'Click to enter Mileage for this entry' : 'Click to edit Mileage for this entry')
+                          : (highlight ? 'Mileage not entered for this entry yet' : undefined);
+                        if (!canJumpToMileage) {
+                          return <td className={cellClass} title={cellTitle}>{log.vehicleNumber}</td>;
+                        }
+                        return (
+                          <td
+                            className={cellClass}
+                            title={cellTitle}
+                            onClick={() => { startEdit(log); setEntrySection('mileage'); }}
+                          >
+                            {log.vehicleNumber}
+                          </td>
+                        );
+                      })()}
                       <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{log.indentNumber}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-slate-800">{(log.ltrs || 0)} L</td>
                       <td className="px-3 py-2.5 text-right font-mono text-slate-500">₹{(log.rate || 0).toFixed(2)}</td>
@@ -2663,9 +2763,10 @@ export default function FuelManagement({
                       <div>
                         <label className="block font-semibold text-slate-600 mb-1">
                           Extra Fuel
-                          {mExtraFuelPaymentMode === 'both' && <span className="text-indigo-600 font-bold"> (Petty Cash portion)</span>}
-                          {mExtraFuelPaymentMode === 'petty_cash' && <span className="text-indigo-600 font-bold"> (Paid by Petty Cash)</span>}
-                          {mExtraFuelPaymentMode === 'card' && <span className="text-indigo-600 font-bold"> (Paid by Card)</span>}
+                          {mExtraFuelModes.length >= 2 && mExtraFuelModes.includes('petty_cash') && <span className="text-indigo-600 font-bold"> (Petty Cash portion)</span>}
+                          {mExtraFuelModes.length === 1 && mExtraFuelModes[0] === 'bunk' && <span className="text-indigo-600 font-bold"> (Paid by Bunk)</span>}
+                          {mExtraFuelModes.length === 1 && mExtraFuelModes[0] === 'petty_cash' && <span className="text-indigo-600 font-bold"> (Paid by Petty Cash)</span>}
+                          {mExtraFuelModes.length === 1 && mExtraFuelModes[0] === 'card' && <span className="text-indigo-600 font-bold"> (Paid by Card)</span>}
                         </label>
                         <input
                           type="text"
@@ -2681,70 +2782,72 @@ export default function FuelManagement({
                       </div>
                       <div>
                         <label className="block font-semibold text-slate-600 mb-1">
-                          Rate per Ltr (new){(mExtraFuel.trim() || mExtraFuelCardAmount.trim()) && <span className="text-rose-500"> *</span>}
+                          Rate per Ltr (new){totalExtraFuelAmount() > 0 && <span className="text-rose-500"> *</span>}
                         </label>
                         <input
                           type="number"
                           step="0.01"
-                          required={!!(mExtraFuel.trim() || mExtraFuelCardAmount.trim())}
+                          required={totalExtraFuelAmount() > 0}
                           placeholder="e.g. 96.50"
                           value={mRatePerLitreNew}
                           onChange={(e) => setMRatePerLitreNew(e.target.value)}
                           className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
                         />
-                        {(mExtraFuel.trim() || mExtraFuelCardAmount.trim()) && !mRatePerLitreNew.trim() && (
+                        {totalExtraFuelAmount() > 0 && !mRatePerLitreNew.trim() && (
                           <p className="text-[9px] text-rose-500 font-mono mt-0.5">Required since Extra Fuel has a value.</p>
                         )}
                       </div>
                     </div>
 
-                    {/* "Paid by Petty Cash" / "Paid by Card" (2026-09-19:
-                        no longer mutually exclusive - a trip can have two
-                        separate top-ups paid two different ways, so both may
-                        be ticked at once; a second "Card portion" amount
-                        input then appears so each slice has its own value.
-                        This is purely an accounting tag either way - Extra
-                        Fuel always folds fully into Total Ltrs/Total Amount
-                        below regardless of mode (2026-09-19 correction).
+                    {/* "Paid by Bunk" / "Paid by Petty Cash" / "Paid by
+                        Card" (2026-09-21: generalized to any combination of
+                        the three, not just Petty Cash+Card - a trip can have
+                        separate top-ups paid separate ways). Ticking a 2nd
+                        or 3rd box reveals that mode's own amount field so
+                        each portion has its own value. Purely an accounting
+                        tag either way - Extra Fuel always folds fully into
+                        Total Ltrs/Total Amount below regardless of mode.
                         Only Petty Cash additionally asks which handler's
                         float it's charged against. Only relevant once Extra
-                        Fuel actually has a value; unmounted (state stays but
-                        stops mattering) otherwise so it doesn't sit there
-                        with nothing to apply to. */}
-                    {(sumExtraFuelExpression(mExtraFuel) > 0 || mExtraFuelPaymentMode !== 'normal') && (
+                        Fuel actually has a value or a mode is already
+                        ticked; unmounted (state stays but stops mattering)
+                        otherwise so it doesn't sit there with nothing to
+                        apply to. */}
+                    {(sumExtraFuelExpression(mExtraFuel) > 0 || mExtraFuelModes.length > 0) && (
                       <div className="p-2.5 bg-indigo-50/60 rounded-lg border border-indigo-100 space-y-2">
-                        <div className="flex items-center gap-4">
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={mExtraFuelPaymentMode === 'petty_cash' || mExtraFuelPaymentMode === 'both'}
-                              onChange={(e) => {
-                                const cardAlsoChecked = mExtraFuelPaymentMode === 'card' || mExtraFuelPaymentMode === 'both';
-                                setMExtraFuelPaymentMode(e.target.checked ? (cardAlsoChecked ? 'both' : 'petty_cash') : (cardAlsoChecked ? 'card' : 'normal'));
-                                if (!e.target.checked) setMPettyCashHolder('');
-                              }}
-                              className="cursor-pointer"
-                            />
-                            <span className="font-semibold text-indigo-800">Paid by Petty Cash</span>
-                          </label>
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={mExtraFuelPaymentMode === 'card' || mExtraFuelPaymentMode === 'both'}
-                              onChange={(e) => {
-                                const pettyCashAlsoChecked = mExtraFuelPaymentMode === 'petty_cash' || mExtraFuelPaymentMode === 'both';
-                                setMExtraFuelPaymentMode(e.target.checked ? (pettyCashAlsoChecked ? 'both' : 'card') : (pettyCashAlsoChecked ? 'petty_cash' : 'normal'));
-                                if (!e.target.checked) setMExtraFuelCardAmount('');
-                              }}
-                              className="cursor-pointer"
-                            />
-                            <span className="font-semibold text-indigo-800">Paid by Card</span>
-                          </label>
+                        <div className="flex items-center gap-4 flex-wrap">
+                          {(['bunk', 'petty_cash', 'card'] as ExtraFuelMode[]).map(mode => (
+                            <label key={mode} className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={mExtraFuelModes.includes(mode)}
+                                onChange={() => toggleExtraFuelMode(mode)}
+                                className="cursor-pointer"
+                              />
+                              <span className="font-semibold text-indigo-800">Paid by {EXTRA_FUEL_MODE_LABELS[mode]}</span>
+                            </label>
+                          ))}
                         </div>
                         <p className="text-[9px] text-slate-400 font-mono">
-                          Two separate top-ups this trip, paid differently? Tick both - a Card amount field appears below so each portion has its own value.
+                          Two or three separate top-ups this trip, paid differently? Tick all that apply - an amount field appears below for each so every portion has its own value.
                         </p>
-                        {mExtraFuelPaymentMode === 'both' && (
+                        {mExtraFuelModes.length >= 2 && mExtraFuelModes.includes('bunk') && (
+                          <div>
+                            <label className="block font-semibold text-slate-600 mb-1">
+                              Extra Fuel (Bunk portion) <span className="text-rose-500">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              required
+                              placeholder="e.g. 20, or 10+10 for two Bunk top-ups"
+                              value={mExtraFuelBunkAmount}
+                              onChange={(e) => setMExtraFuelBunkAmount(e.target.value)}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
+                            />
+                          </div>
+                        )}
+                        {mExtraFuelModes.length >= 2 && mExtraFuelModes.includes('card') && (
                           <div>
                             <label className="block font-semibold text-slate-600 mb-1">
                               Extra Fuel (Card portion) <span className="text-rose-500">*</span>
@@ -2759,15 +2862,20 @@ export default function FuelManagement({
                               className="w-full bg-white border border-slate-200 rounded-lg p-2 font-mono font-bold text-slate-800"
                             />
                             <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                              Multiple Card top-ups this trip? Type them as e.g. "30+10" - added up automatically, same as the Petty Cash portion above.
+                              Multiple top-ups this trip, same method? Type them as e.g. "30+10" - added up automatically, same as every other portion here.
                             </p>
                           </div>
                         )}
-                        {(mExtraFuelPaymentMode === 'petty_cash' || mExtraFuelPaymentMode === 'both') && (
+                        {mExtraFuelModes.includes('petty_cash') && (
                           <div>
                             <label className="block font-semibold text-slate-600 mb-1">
                               Petty Cash Paid By <span className="text-rose-500">*</span>
                             </label>
+                            {mExtraFuelModes.length >= 2 && (
+                              <p className="text-[9px] text-slate-400 font-mono mb-1">
+                                The Petty Cash portion's amount is the "Extra Fuel (Petty Cash portion)" field above - just pick who it's charged against here.
+                              </p>
+                            )}
                             <select
                               required
                               value={mPettyCashHolder}
@@ -2786,14 +2894,14 @@ export default function FuelManagement({
                             </p>
                           </div>
                         )}
-                        {mExtraFuelPaymentMode === 'card' && (
+                        {mExtraFuelModes.length === 1 && mExtraFuelModes[0] === 'card' && (
                           <p className="text-[9px] text-indigo-500 font-mono mt-1">
                             Extra Fuel: {sumExtraFuelExpression(mExtraFuel)} L - ₹{(sumExtraFuelExpression(mExtraFuel) * (parseFloat(mRatePerLitreNew) || 0)).toLocaleString('en-IN')} paid by Card - included in Total Ltrs/Total Amount below (display/tracking tag only).
                           </p>
                         )}
-                        {mExtraFuelPaymentMode === 'both' && (
+                        {mExtraFuelModes.length === 1 && mExtraFuelModes[0] === 'bunk' && (
                           <p className="text-[9px] text-indigo-500 font-mono mt-1">
-                            Card portion: {sumExtraFuelExpression(mExtraFuelCardAmount)} L - ₹{(sumExtraFuelExpression(mExtraFuelCardAmount) * (parseFloat(mRatePerLitreNew) || 0)).toLocaleString('en-IN')} paid by Card - included in Total Ltrs/Total Amount below (display/tracking tag only).
+                            Extra Fuel: {sumExtraFuelExpression(mExtraFuel)} L - ₹{(sumExtraFuelExpression(mExtraFuel) * (parseFloat(mRatePerLitreNew) || 0)).toLocaleString('en-IN')} paid by Bunk - included in Total Ltrs/Total Amount below (display/tracking tag only).
                           </p>
                         )}
                       </div>
@@ -2804,7 +2912,7 @@ export default function FuelManagement({
                     <div className="p-2.5 bg-white rounded-lg border border-pink-100 flex items-center justify-between font-mono">
                       <div>
                         <span className="text-[9px] text-slate-400 uppercase font-bold block">
-                          Total Amount {(sumExtraFuelExpression(mExtraFuel) > 0 || sumExtraFuelExpression(mExtraFuelCardAmount) > 0) ? '(Diesel + Extra Fuel)' : '(auto)'}
+                          Total Amount {totalExtraFuelAmount() > 0 ? '(Diesel + Extra Fuel)' : '(auto)'}
                         </span>
                         <span className="text-xs font-black text-pink-700">₹{mTotalAmount || 0}</span>
                       </div>
@@ -2915,6 +3023,14 @@ export default function FuelManagement({
                             required={bunkOrCard !== 'Petty Cash'}
                             value={location}
                             onChange={(e) => setLocation(e.target.value)}
+                            // Snaps to a known canonical spelling on blur
+                            // (2026-09-21 - same fix Petty Cash's own
+                            // Location field already has, see
+                            // normalizeLocationName) - a free-typed
+                            // "Vljayawada" here used to silently split that
+                            // bunk's entries away from the real "Vijayawada"
+                            // everywhere else in the app reads/filters by.
+                            onBlur={() => { const n = normalizeLocationName(location); if (n !== location) setLocation(n); }}
                             placeholder="Type the new location"
                             autoComplete="off"
                             className="w-full bg-indigo-50 border border-indigo-200 rounded-lg p-2 text-slate-800"

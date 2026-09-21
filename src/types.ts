@@ -1144,41 +1144,49 @@ export interface MileageReport {
   // comment for why). totalLitres follows the exact same rule: always
   // litres + extraFuel, whichever mode(s) paid for it.
   totalAmount?: number;
-  // "Paid by Petty Cash"/"Paid by Card" for Extra Fuel (see
-  // FuelManagement.tsx's Mileage tab) - undefined/'normal' (the default) is
-  // a plain top-up through the normal fuel/vendor account, with nothing
-  // further to attribute. 'petty_cash'/'card' tag the WHOLE of `extraFuel`
-  // as paid outside the normal account instead - shown as a badge (see
+  // "Paid by Bunk"/"Paid by Petty Cash"/"Paid by Card" for Extra Fuel (see
+  // FuelManagement.tsx's Mileage tab) - undefined/[] (the default) is a
+  // plain top-up through the normal fuel/vendor account (implicitly
+  // "Bunk"), with nothing further to attribute. Any ONE mode tags the WHOLE
+  // of `extraFuel` as paid that way instead - shown as a badge (see
   // FuelManagement.tsx and MileageReport.tsx) purely for accounting
-  // traceability. 'both' (2026-09-19) covers a trip with two separate
-  // top-ups paid two different ways (e.g. one via Petty Cash, one via Card)
-  // - `extraFuel` stays the GRAND TOTAL of both slices (same meaning it's
-  // always had everywhere else this field is read - list columns/exports
-  // that just show "Extra Fuel: X L" are never short-changed for a 'both'
-  // row), and extraFuelCardAmount below carves the Card-paid slice back out
-  // of it; the remainder (extraFuel - extraFuelCardAmount) is the
-  // Petty-Cash-paid slice, charged against pettyCashHolderUsername.
-  //
-  // 2026-09-19 correction: totalLitres/totalAmount above USED TO exclude
-  // whichever slice was petty-cash/card-paid entirely (on the theory that
-  // its cost/litres are "tracked outside this entry"). That under-counted
-  // the vehicle's real total fuel/cost at the Mileage level - every mode
-  // now always folds fully into totalLitres/totalAmount; this field is
-  // purely an accounting tag on top of that, never a calculation branch.
-  // Older rows saved under the old exclusion rule are backfilled once on
-  // server startup - see migrateMileageExtraFuelTotals in src/db/service.ts.
+  // traceability, never a calculation branch (see totalAmount's own
+  // comment above). 2026-09-21: generalized from an exclusive single choice
+  // to ANY combination of the three (a trip can have separate top-ups paid
+  // separate ways) - `extraFuel` stays the GRAND TOTAL across every active
+  // mode (same meaning it's always had everywhere else this field is read -
+  // list columns/exports that just show "Extra Fuel: X L" are never
+  // short-changed), and extraFuelBunkAmount/extraFuelPettyCashAmount/
+  // extraFuelCardAmount below carve each mode's own slice back out of it
+  // when 2+ modes are active. Every reader goes through
+  // resolveExtraFuelModes/extraFuelSlices (src/utils/extraFuelModes.ts)
+  // rather than this field directly, so a record from any era (single
+  // legacy mode, the old two-mode-only 'both', or the current
+  // any-combination shape) always resolves the same way.
+  extraFuelModes?: ('bunk' | 'petty_cash' | 'card')[];
+  // Legacy singular form of extraFuelModes above - 'normal' | 'petty_cash' |
+  // 'card' | 'both' (Petty Cash+Card only). Still written on every save (a
+  // best-effort equivalent - see legacyExtraFuelPaymentMode) so any code
+  // that only reads this older field degrades gracefully instead of
+  // breaking, but never read directly anywhere in this app anymore - always
+  // go through resolveExtraFuelModes, which prefers extraFuelModes and only
+  // falls back to translating this field for a record saved before
+  // extraFuelModes existed.
   extraFuelPaymentMode?: 'normal' | 'petty_cash' | 'card' | 'both';
   // Which of the 3 Petty Cash logins (see utils/pettyCashUsers.ts) this
   // extra fuel's Petty-Cash-paid slice is charged against - required
-  // whenever extraFuelPaymentMode is 'petty_cash' or 'both' (never set for
-  // 'card'). Display-only (the "(PC) - Ramesh" badge); does not affect any
-  // Petty Cash balance.
+  // whenever 'petty_cash' is one of the active modes. Display-only (the
+  // "(PC) - Ramesh" badge); does not affect any Petty Cash balance.
   pettyCashHolderUsername?: string;
-  // The Card-paid slice of `extraFuel`, in litres - ONLY set when
-  // extraFuelPaymentMode is 'both' (two separate top-ups this trip, one
-  // Petty Cash, one Card); `extraFuel` (the grand total) minus this is the
-  // Petty-Cash-paid slice. Absent for every other mode, where `extraFuel`
-  // alone is that mode's entire amount, as before.
+  // Per-mode slices of `extraFuel` (the grand total) - ONLY set when 2+
+  // modes are active at once (see extraFuelModes above); with 0 or 1 mode
+  // active, `extraFuel` alone is that single mode's entire amount, exactly
+  // as before extraFuelModes existed. Use extraFuelSlices() rather than
+  // reading these three directly - it also recovers the Petty Cash slice
+  // correctly for a legacy 'both' (Petty Cash+Card) record saved before
+  // extraFuelPettyCashAmount existed.
+  extraFuelBunkAmount?: number;
+  extraFuelPettyCashAmount?: number;
   extraFuelCardAmount?: number;
   // Legacy - a linked-voucher mechanism that used to exist here was removed;
   // never populated by new saves. Kept only so old rows that already have a
