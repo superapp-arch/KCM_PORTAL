@@ -54,6 +54,107 @@ const getPeriodDateRange = (period: 'day' | 'month' | 'year', refDate: string): 
   return { start: `${refDate.slice(0, 4)}-01-01`, end: refDate };
 };
 
+// 2026-09-22 direct request (vehicle drill-down): the "Calculated Totals
+// Mini Grid" - Total KM, Total Litres, Total Amount, Avg Mileage, and the
+// Difference Mileage Amount - used to be inlined once, hardcoded to
+// `filteredReports`. Extracted here, UNCHANGED formula-for-formula, into its
+// own component that takes whatever row array it's given - the main list
+// below still feeds it the full filtered ledger (exactly as before, so
+// nothing on that screen changes), and the new per-vehicle detail view feeds
+// it just that one vehicle's own complete history. Same calculation, same
+// code, just run against a different (always correctly scoped) input -
+// never a second copy of the math.
+function MileageSummaryGrid({ rows }: { rows: MileageReport[] }) {
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 pt-2 text-xs">
+      <div className="bg-slate-50 p-1.5 rounded-lg border border-slate-200">
+        <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Total KM Accumulated</span>
+        <div className="text-[11px] font-black text-slate-800 font-mono mt-0.5">
+          {rows.reduce((s, r) => s + (r.totalKm || 0), 0).toLocaleString('en-IN')} KM
+        </div>
+      </div>
+      {/* Total Litres - sums the Total Litres column (Litres + Extra
+          Fuel), same value the table's own column shows, not the bare
+          Litres field. */}
+      <div className="bg-slate-50 p-1.5 rounded-lg border border-slate-200">
+        <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Total Litres</span>
+        <div className="text-[11px] font-black text-slate-800 font-mono mt-0.5">
+          {rows.reduce((s, r) => s + (r.totalLitres ?? r.litres ?? 0), 0).toLocaleString('en-IN')} L
+        </div>
+      </div>
+      {/* Total Amount - sums the Total Amount column (Diesel Amount +
+          Extra Fuel*new rate), falling back to Diesel Amount only for
+          any row that never had Extra Fuel/a new rate. */}
+      <div className="bg-teal-50/40 p-1.5 rounded-lg border border-teal-100">
+        <span className="text-[8.5px] text-teal-600 font-bold uppercase block">Total Amount</span>
+        <div className="text-[11px] font-black text-teal-800 font-mono mt-0.5">
+          ₹{rows.reduce((s, r) => s + (r.totalAmount ?? r.dieselAmount ?? 0), 0).toLocaleString('en-IN')}
+        </div>
+      </div>
+      <div className="bg-pink-50/40 p-1.5 rounded-lg border border-pink-100">
+        <span className="text-[8.5px] text-pink-600 font-bold uppercase block">Avg Segmented Mileage</span>
+        <div className="text-[11px] font-black text-pink-700 font-mono mt-0.5">
+          {rows.length > 0
+            ? (rows.reduce((s, r) => s + (r.mileage || 0), 0) / rows.length).toFixed(2)
+            : '0.00'} KM/L
+        </div>
+      </div>
+      {/* Difference Mileage Amount - cumulative rupee value of the
+          Difference (L) column: each row's difference (litres, +saved/
+          -wasted) x its own Rate/Litre, summed across every row here.
+          Green when the total is fuel saved (>= 0), red when it's net
+          wasted (< 0) - same sign convention the Difference (L) column
+          itself already uses. */}
+      {(() => {
+        const differenceAmount = rows.reduce((s, r) => s + (r.difference ?? 0) * (r.ratePerLitre || 0), 0);
+        return (
+          <div className={`p-1.5 rounded-lg border ${differenceAmount >= 0 ? 'bg-emerald-50/40 border-emerald-100' : 'bg-rose-50/40 border-rose-100'}`}>
+            <span className={`text-[8.5px] font-bold uppercase block ${differenceAmount >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>Difference Mileage Amount</span>
+            <div className={`text-[11px] font-black font-mono mt-0.5 ${differenceAmount >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+              {differenceAmount >= 0 ? '+' : '-'}₹{Math.abs(differenceAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+// 2026-09-22 direct request (vehicle drill-down) - the exact same
+// column-by-column comparator the main ledger's sort dropdown/column headers
+// already used, extracted so it can be reused for the new one-row-per-
+// vehicle list (sorting "each vehicle's latest entry" the same way the old
+// full ledger sorted every entry) without duplicating the switch statement.
+function sortMileageRows(rows: MileageReport[], sort: SortState | null): MileageReport[] {
+  if (!sort) return rows;
+  return [...rows].sort((a, b) => {
+    let cmp = 0;
+    switch (sort.key) {
+      case 'driverName': cmp = compareText(a.driverName, b.driverName); break;
+      case 'difference': cmp = compareNumber(a.difference, b.difference); break;
+      case 'openingKm': cmp = compareNumber(a.openingKm, b.openingKm); break;
+      case 'closingKm': cmp = compareNumber(a.closingKm, b.closingKm); break;
+      case 'totalKm': cmp = compareNumber(a.totalKm, b.totalKm); break;
+      case 'ratePerLitre': cmp = compareNumber(a.ratePerLitre, b.ratePerLitre); break;
+      case 'litres': cmp = compareNumber(a.litres, b.litres); break;
+      case 'totalLitres': cmp = compareNumber(a.totalLitres ?? a.litres, b.totalLitres ?? b.litres); break;
+      case 'dieselAmount': cmp = compareNumber(a.dieselAmount, b.dieselAmount); break;
+      case 'mileage': cmp = compareNumber(a.mileage, b.mileage); break;
+      case 'costPerKm': cmp = compareNumber(a.costPerKm, b.costPerKm); break;
+      case 'actualMileage': cmp = compareNumber(a.actualMileage, b.actualMileage); break;
+      case 'extraFuel': cmp = compareNumber(a.extraFuel, b.extraFuel); break;
+      case 'ratePerLitreNew': cmp = compareNumber(a.ratePerLitreNew, b.ratePerLitreNew); break;
+      case 'totalAmount': cmp = compareNumber(a.totalAmount, b.totalAmount); break;
+      case 'location': cmp = compareText(a.location, b.location); break;
+      case 'vehicleNo': cmp = extractLeadingNumber(a.vehicleNo) - extractLeadingNumber(b.vehicleNo); break;
+      // Ties (same date) break on Vehicle No so the order stays stable.
+      case 'date': cmp = a.date === b.date ? extractLeadingNumber(a.vehicleNo) - extractLeadingNumber(b.vehicleNo) : (a.date < b.date ? -1 : 1); break;
+      default: cmp = extractLeadingNumber(a.vehicleNo) - extractLeadingNumber(b.vehicleNo);
+    }
+    return sort.direction === 'asc' ? cmp : -cmp;
+  });
+}
+
 interface MileageReportModuleProps {
   user: User;
   reports: MileageReport[];
@@ -104,8 +205,15 @@ export default function MileageReportModule({
   // to keep in sync.
   const [selectedVehicleFilter, setSelectedVehicleFilter] = useState('');
   // Entered By filter (2026-09-04, Super Admin/Principal only) - see its own
-  // comment near the dropdown below.
-  const [selectedEnteredByFilter, setSelectedEnteredByFilter] = useState('All');
+  // comment near the dropdown below. 2026-09-22 direct request: Chandan and
+  // Praveen also get this dropdown now (they can see each other's Mileage
+  // history - see the server-side cross-view fix), defaulting to their OWN
+  // login's entries rather than "All" so they're never confused whose rows
+  // they're looking at - the dropdown itself still lets them switch to the
+  // other's, or to All, same as before for everyone else.
+  const [selectedEnteredByFilter, setSelectedEnteredByFilter] = useState<string>(() =>
+    (user.username === 'chandanreddy' || user.username === 'praveenkumar') ? user.username : 'All'
+  );
   const [searchTerm, setSearchTerm] = useState('');
   // Defaults to oldest-first by Date (Mileage Report-specific - unlike the
   // Petty Cash Ledger/Market POD tables, which default newest-first) - still
@@ -175,11 +283,19 @@ export default function MileageReportModule({
   };
 
   const isSuperAdmin = user.department === 'super_admin';
-  // Entered By is visible to Super Admin/Principal and to Vinod's/Bhagya's
+  // 2026-09-22 direct request: Chandan and Praveen can now see each other's
+  // Mileage Report entries (server-side cross-view fix, mirrors Fuel
+  // Management's own existing Chandan<->Praveen visibility) - so they need
+  // the Entered By dropdown too, to tell whose rows are whose. Own rows
+  // arrive with enteredBy stripped (same convention Fuel Management already
+  // uses for this exact pair - see filterFuelOrMileageRowsForViewer in
+  // server.ts), only the other person's cross-viewed rows keep it.
+  const isChandanOrPraveen = user.username === 'chandanreddy' || user.username === 'praveenkumar';
+  // Entered By is visible to Super Admin/Principal, Vinod's/Bhagya's
   // read-only view (2026-09-05 and 2026-09-08 direct requests - same as Fuel
-  // Management's own copy of this) - everyone else never sees who entered
-  // what.
-  const canSeeEnteredBy = isSuperAdmin || user.email === 'vinod@kcmlogistics.in' || user.email === 'bhagya@kcmlogistics.in';
+  // Management's own copy of this), and now Chandan/Praveen - everyone else
+  // never sees who entered what.
+  const canSeeEnteredBy = isSuperAdmin || user.email === 'vinod@kcmlogistics.in' || user.email === 'bhagya@kcmlogistics.in' || isChandanOrPraveen;
 
   // Auto Calculations
   // 1. Fetch Previous Entry Closing KM for selected vehicle
@@ -541,13 +657,25 @@ export default function MileageReportModule({
   // Filtering: by view scope, location, vehicle number, and keyword search.
   // Entered By filter's own options (2026-09-04) - only usernames that
   // actually appear in this report data, Excel-column-filter style.
-  const enteredByOptions = Array.from(new Set(reports.map(r => r.enteredBy).filter((x): x is string => !!x))).sort();
+  // 2026-09-22: Chandan/Praveen get a fixed 2-person list instead - their
+  // OWN username never actually appears as a value in `reports` (it's
+  // stripped off their own rows server-side, same convention as Fuel
+  // Management), so deriving options the normal way would never let them
+  // pick back "their own" after switching to the other's - only "All" would
+  // remain, mixing both together.
+  const enteredByOptions = isChandanOrPraveen
+    ? ['chandanreddy', 'praveenkumar']
+    : Array.from(new Set(reports.map(r => r.enteredBy).filter((x): x is string => !!x))).sort();
 
   const filteredReports = reports.filter(r => {
     const matchesView = viewPeriod === 'all' || (r.date >= viewStart && r.date <= viewEnd);
     const matchesLocation = selectedLocationFilter === 'All' || (r.location || '').toUpperCase() === selectedLocationFilter.toUpperCase();
     const matchesVehicle = !selectedVehicleFilter || (r.vehicleNo || '').trim().toUpperCase() === selectedVehicleFilter.trim().toUpperCase();
-    const matchesEnteredBy = !canSeeEnteredBy || selectedEnteredByFilter === 'All' || r.enteredBy === selectedEnteredByFilter;
+    // Selecting "your own username" (Chandan/Praveen's default) must match
+    // your own rows even though they arrive with enteredBy stripped - see
+    // enteredByOptions' own comment above.
+    const matchesEnteredBy = !canSeeEnteredBy || selectedEnteredByFilter === 'All' ||
+      (selectedEnteredByFilter === user.username ? (!r.enteredBy || r.enteredBy === user.username) : r.enteredBy === selectedEnteredByFilter);
     const matchesKeyword =
       searchTerm === '' ||
       (r.driverName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -581,34 +709,26 @@ export default function MileageReportModule({
     return true;
   });
 
-  const sortedReports = sort
-    ? [...filteredReports].sort((a, b) => {
-        let cmp = 0;
-        switch (sort.key) {
-          case 'driverName': cmp = compareText(a.driverName, b.driverName); break;
-          case 'difference': cmp = compareNumber(a.difference, b.difference); break;
-          case 'openingKm': cmp = compareNumber(a.openingKm, b.openingKm); break;
-          case 'closingKm': cmp = compareNumber(a.closingKm, b.closingKm); break;
-          case 'totalKm': cmp = compareNumber(a.totalKm, b.totalKm); break;
-          case 'ratePerLitre': cmp = compareNumber(a.ratePerLitre, b.ratePerLitre); break;
-          case 'litres': cmp = compareNumber(a.litres, b.litres); break;
-          case 'totalLitres': cmp = compareNumber(a.totalLitres ?? a.litres, b.totalLitres ?? b.litres); break;
-          case 'dieselAmount': cmp = compareNumber(a.dieselAmount, b.dieselAmount); break;
-          case 'mileage': cmp = compareNumber(a.mileage, b.mileage); break;
-          case 'costPerKm': cmp = compareNumber(a.costPerKm, b.costPerKm); break;
-          case 'actualMileage': cmp = compareNumber(a.actualMileage, b.actualMileage); break;
-          case 'extraFuel': cmp = compareNumber(a.extraFuel, b.extraFuel); break;
-          case 'ratePerLitreNew': cmp = compareNumber(a.ratePerLitreNew, b.ratePerLitreNew); break;
-          case 'totalAmount': cmp = compareNumber(a.totalAmount, b.totalAmount); break;
-          case 'location': cmp = compareText(a.location, b.location); break;
-          case 'vehicleNo': cmp = extractLeadingNumber(a.vehicleNo) - extractLeadingNumber(b.vehicleNo); break;
-          // Ties (same date) break on Vehicle No so the order stays stable.
-          case 'date': cmp = a.date === b.date ? extractLeadingNumber(a.vehicleNo) - extractLeadingNumber(b.vehicleNo) : (a.date < b.date ? -1 : 1); break;
-          default: cmp = extractLeadingNumber(a.vehicleNo) - extractLeadingNumber(b.vehicleNo);
-        }
-        return sort.direction === 'asc' ? cmp : -cmp;
-      })
-    : filteredReports;
+  // 2026-09-22 direct request (vehicle drill-down): one row per vehicle for
+  // the main list - each vehicle's row is its own LATEST entry (by date)
+  // among the currently filtered/segmented entries, so narrowing to a
+  // location/period/vehicle/search also narrows which vehicles appear (and
+  // which of their entries counts as "latest" within that scope) - e.g.
+  // typing a specific Vehicle Number above naturally collapses this to that
+  // one vehicle's single row. Sorted with the exact same comparator as the
+  // old full ledger (sortMileageRows above), just applied to this one-row-
+  // per-vehicle set instead of every entry.
+  const latestPerVehicleRows = (() => {
+    const byVehicle = new Map<string, MileageReport>();
+    filteredReports.forEach(r => {
+      const key = (r.vehicleNo || '').trim().toUpperCase();
+      if (!key) return;
+      const existing = byVehicle.get(key);
+      if (!existing || r.date > existing.date) byVehicle.set(key, r);
+    });
+    return Array.from(byVehicle.values());
+  })();
+  const sortedVehicleRows = sortMileageRows(latestPerVehicleRows, sort);
 
   // Pagination footer (2026-09-09 direct request) - same component/copy/
   // behavior as Petty Cash's own Ledger pagination, see PaginationFooter.tsx.
@@ -617,7 +737,142 @@ export default function MileageReportModule({
   useEffect(() => {
     setPage(1);
   }, [viewPeriod, viewDate, selectedLocationFilter, selectedVehicleFilter, selectedEnteredByFilter, searchTerm, columnFilters]);
-  const paginatedReports = paginateRows(sortedReports, page, PAGE_SIZE);
+  const paginatedVehicleRows = paginateRows(sortedVehicleRows, page, PAGE_SIZE);
+
+  // 2026-09-22 direct request - vehicle drill-down. Clicking a vehicle
+  // number in the list above (styled/behaving like Fleet & Vehicles' own
+  // clickable Reg. No.) opens a dedicated detail view for that one vehicle:
+  // its COMPLETE history (every entry ever logged for it, not just the
+  // latest, and not limited by whatever list-level filters got you there -
+  // "the office asked to see the history" per direct request), sorted
+  // oldest-first same as this module's own default. One reusable
+  // component/query, not vehicle-specific logic - purely driven by
+  // `detailVehicleNo`, works identically for any vehicle number.
+  const [detailVehicleNo, setDetailVehicleNo] = useState<string | null>(null);
+  const detailVehicleReports = detailVehicleNo
+    ? reports
+        .filter(r => (r.vehicleNo || '').trim().toUpperCase() === detailVehicleNo)
+        .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+    : [];
+
+  // 2026-09-22 direct request (vehicle drill-down) - one row-rendering
+  // function shared by BOTH the main list (one row per vehicle) and the
+  // vehicle detail view (every entry for one vehicle), so the two tables can
+  // never drift apart column-for-column. `displayIndex` is just the Sl. No
+  // shown (1-based, already accounting for pagination on the list); `asLink`
+  // makes the Vehicle No. cell a clickable drill-down (list only - already
+  // redundant once you're inside a single vehicle's own detail view).
+  const renderMileageRow = (r: MileageReport, displayIndex: number, asLink: boolean) => (
+    <tr key={r.id} className="hover:bg-slate-50/70 transition-colors text-[11px]">
+      <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{displayIndex}</td>
+      <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">{r.date}</td>
+      {asLink ? (
+        <td
+          className="px-3 py-2 font-bold font-mono text-slate-900 whitespace-nowrap cursor-pointer hover:underline hover:text-pink-700"
+          onClick={() => setDetailVehicleNo((r.vehicleNo || '').trim().toUpperCase())}
+          title={`View complete Mileage history for ${r.vehicleNo}`}
+        >
+          {r.vehicleNo}
+        </td>
+      ) : (
+        <td className="px-3 py-2 font-bold font-mono text-slate-900 whitespace-nowrap">{r.vehicleNo}</td>
+      )}
+      <td className="px-3 py-2 text-right font-mono text-slate-600">{r.openingKm != null ? `${r.openingKm.toLocaleString('en-IN')} KM` : '-'}</td>
+      <td className="px-3 py-2 text-right font-mono text-slate-600">{r.closingKm != null ? `${r.closingKm.toLocaleString('en-IN')} KM` : '-'}</td>
+      <td className="px-3 py-2 text-right font-mono font-bold bg-slate-50 text-slate-900">{(r.totalKm || 0).toLocaleString('en-IN')} KM</td>
+      <td className="px-3 py-2 text-right font-mono text-slate-600">₹{(r.ratePerLitre || 0).toFixed(2)}</td>
+      <td className="px-3 py-2 text-right font-mono text-slate-600">{(r.litres || 0).toFixed(2)} L</td>
+      <td className="px-3 py-2 text-right font-mono font-bold text-teal-700 bg-teal-50/20">₹{(r.dieselAmount || 0).toLocaleString('en-IN')}</td>
+      <td className="px-3 py-2 text-right font-mono font-bold text-pink-700 bg-pink-50/20">{(r.mileage || 0).toFixed(2)} KM/L</td>
+      <td className="px-3 py-2 text-right font-mono font-bold text-amber-700 bg-amber-50/20">{r.costPerKm ? `₹${r.costPerKm.toFixed(2)}` : '-'}</td>
+      <td className="px-3 py-2 text-right font-mono font-bold text-purple-700 bg-purple-50/20">{r.actualMileage ? `${r.actualMileage.toFixed(2)} KM/L` : '-'}</td>
+      <td className={`px-3 py-2 text-right font-mono font-bold ${r.difference == null ? 'text-slate-400' : r.difference > 0 ? 'text-emerald-600' : r.difference < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
+        {r.difference == null ? '-' : `${r.difference > 0 ? '+' : ''}${r.difference.toFixed(2)} L`}
+      </td>
+      <td className="px-3 py-2 text-right font-mono text-slate-600">
+        {r.extraFuel ? r.extraFuel.toFixed(2) : '-'}
+        {/* One badge per active mode (2026-09-21: generalized from an
+            exclusive/two-mode choice to any combination of Bunk/Petty
+            Cash/Card) - purely an accounting tag, same as always;
+            hovering shows that mode's own portion when 2+ are active. */}
+        {r.extraFuel != null && (() => {
+          const modes = resolveExtraFuelModes(r);
+          if (modes.length === 0) return null;
+          const slices = extraFuelSlices(r);
+          const badgeStyle: Record<ExtraFuelMode, string> = {
+            bunk: 'bg-amber-50 text-amber-700 border-amber-200',
+            petty_cash: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+            card: 'bg-sky-50 text-sky-700 border-sky-200'
+          };
+          const badgeText: Record<ExtraFuelMode, string> = { bunk: 'BUNK', petty_cash: 'PC', card: 'CARD' };
+          return modes.map(m => {
+            const portionNote = modes.length >= 2 ? `${EXTRA_FUEL_MODE_LABELS[m]} portion: ${(slices[m] || 0).toFixed(2)} L` : `Paid by ${EXTRA_FUEL_MODE_LABELS[m]}`;
+            const holderNote = m === 'petty_cash' && r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : '';
+            return (
+              <span
+                key={m}
+                className={`ml-1 px-1 py-0.5 rounded text-[8px] font-black uppercase tracking-wider border align-middle ${badgeStyle[m]}`}
+                title={`${portionNote}${holderNote} - included in Total Litres/Total Amount`}
+              >
+                {badgeText[m]}
+              </span>
+            );
+          });
+        })()}
+      </td>
+      <td className="px-3 py-2 text-right font-mono text-slate-600">{r.ratePerLitreNew ? `₹${r.ratePerLitreNew.toFixed(2)}` : '-'}</td>
+      <td className="px-3 py-2 text-right font-mono text-slate-600">{(r.totalLitres ?? r.litres ?? 0).toFixed(2)} L</td>
+      <td className="px-3 py-2 text-right font-mono font-bold text-teal-700 bg-teal-50/20">{r.totalAmount ? `₹${r.totalAmount.toLocaleString('en-IN')}` : '-'}</td>
+      <td className="px-3 py-2 text-slate-800 whitespace-nowrap font-semibold">{r.driverName}</td>
+      <td className="px-3 py-2 whitespace-nowrap">
+        <span className="bg-slate-100 text-slate-800 border border-slate-200 px-2 py-0.5 rounded text-[9.5px] font-bold">
+          {r.location}
+        </span>
+      </td>
+      <td className="px-3 py-2 text-slate-500 max-w-xs truncate" title={r.remarks}>{r.remarks || '-'}</td>
+      {canSeeEnteredBy && (
+        <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">
+          {r.enteredBy ? fuelEnteredByLabel(r.enteredBy) : '-'}
+        </td>
+      )}
+      {!readOnly && (
+        <td className="px-3 py-2 whitespace-nowrap text-center">
+          <div className="flex items-center justify-center gap-1.5">
+            <button
+              onClick={() => startEdit(r)}
+              className="text-pink-600 hover:text-pink-800 bg-pink-50 hover:bg-pink-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+              title="Edit this entry"
+            >
+              <Edit2 className="w-3 h-3" />
+            </button>
+            <button
+              onClick={async () => {
+                if (!window.confirm(`Are you sure you want to delete this mileage report entry?`)) return;
+                try {
+                  await onDeleteReport(r.id);
+                  triggerNotif('Entry deleted successfully!', 'success');
+                } catch (err) {
+                  console.error(err);
+                  triggerNotif(err instanceof Error ? err.message : 'Failed to delete mileage report entry.', 'error');
+                }
+              }}
+              className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
+              title="Delete this entry"
+            >
+              <Trash2 className="w-3 h-3" />
+            </button>
+          </div>
+        </td>
+      )}
+    </tr>
+  );
+
+  // Same table header cells, shared by both the main list and the vehicle
+  // detail view - column-filter/sort headers only make sense on the main
+  // list (there's nothing left to filter once you're already scoped to one
+  // vehicle), so the detail view gets a plainer, non-interactive header
+  // instead of a second copy of the ColumnFilterHeader wiring.
+  const mileageTableColSpan = 21 + (canSeeEnteredBy ? 1 : 0) + (readOnly ? 0 : 1);
 
   return (
     <div className="space-y-6 text-xs text-slate-800 relative min-h-screen">
@@ -668,7 +923,82 @@ export default function MileageReportModule({
         </div>
       )}
 
-      {/* Main Workspace split: Filters + Action Bar + Table */}
+      {/* 2026-09-22 direct request (vehicle drill-down) - the vehicle detail
+          view takes over this whole workspace area in place of the normal
+          list/filters/table, exactly like Fleet & Vehicles opens a dedicated
+          view for one vehicle rather than a small inline popup. Driven
+          entirely by `detailVehicleNo` - one reusable view, not a
+          per-vehicle branch. */}
+      {detailVehicleNo ? (
+        <div className="bg-white rounded-2xl shadow-xs border border-slate-200 p-5 flex flex-col space-y-4">
+          <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div>
+              <button
+                type="button"
+                onClick={() => setDetailVehicleNo(null)}
+                className="text-[11px] font-bold text-pink-600 hover:text-pink-800 flex items-center gap-1 cursor-pointer mb-1"
+              >
+                ← Back to Vehicle List
+              </button>
+              <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                <Car className="w-5 h-5 text-pink-600" />
+                {detailVehicleNo} — Complete Mileage History
+              </h2>
+              <p className="text-[11px] text-slate-500 font-semibold mt-0.5">
+                Every entry ever logged for this vehicle, oldest to newest - {detailVehicleReports.length} {detailVehicleReports.length === 1 ? 'entry' : 'entries'} total.
+              </p>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-2xs">
+            <table className="w-full text-left border-collapse">
+              <thead className="bg-slate-900 text-slate-200 font-sans tracking-wide uppercase text-[9px]">
+                <tr>
+                  <th className="px-3 py-2.5">Sl. No</th>
+                  <th className="px-3 py-2.5">Date</th>
+                  <th className="px-3 py-2.5">Vehicle No</th>
+                  <th className="px-3 py-2.5 text-right">Opening KM</th>
+                  <th className="px-3 py-2.5 text-right">Closing KM</th>
+                  <th className="px-3 py-2.5 text-right bg-slate-800">Total KM</th>
+                  <th className="px-3 py-2.5 text-right">Rate / Litre</th>
+                  <th className="px-3 py-2.5 text-right">Litres</th>
+                  <th className="px-3 py-2.5 text-right text-teal-400">Diesel Amount</th>
+                  <th className="px-3 py-2.5 text-right text-pink-400">Mileage</th>
+                  <th className="px-3 py-2.5 text-right text-amber-400">Cost/KM</th>
+                  <th className="px-3 py-2.5 text-right text-purple-400">Fixed Mileage</th>
+                  <th className="px-3 py-2.5 text-right">Difference (L)</th>
+                  <th className="px-3 py-2.5 text-right">Extra Fuel</th>
+                  <th className="px-3 py-2.5 text-right">Rate/Ltr (new)</th>
+                  <th className="px-3 py-2.5 text-right">Total Litres</th>
+                  <th className="px-3 py-2.5 text-right text-teal-400">Total Amount</th>
+                  <th className="px-3 py-2.5">Authorized Driver</th>
+                  <th className="px-3 py-2.5">Location</th>
+                  <th className="px-3 py-2.5 max-w-xs">Remarks</th>
+                  {canSeeEnteredBy && <th className="px-3 py-2.5">Entered By</th>}
+                  {!readOnly && <th className="px-3 py-2.5 text-center">Actions</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y-2 divide-slate-400 font-medium text-slate-700 bg-white">
+                {detailVehicleReports.length === 0 ? (
+                  <tr>
+                    <td colSpan={mileageTableColSpan} className="text-center py-20 text-slate-400 font-mono text-xs">
+                      🚫 NO MILEAGE ENTRIES LOGGED YET FOR {detailVehicleNo}.
+                    </td>
+                  </tr>
+                ) : (
+                  detailVehicleReports.map((r, i) => renderMileageRow(r, i + 1, false))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Same reused summary component/math as the main list's own
+              totals grid above - just fed this one vehicle's complete
+              history instead of the whole filtered ledger (requirement:
+              reuse the exact same calculation logic, not a new formula). */}
+          <MileageSummaryGrid rows={detailVehicleReports} />
+        </div>
+      ) : (
       <div className="bg-white rounded-2xl shadow-xs border border-slate-200 p-5 flex flex-col space-y-4">
         {/* Ledger CSV/Excel Operations */}
         <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs">
@@ -861,9 +1191,9 @@ export default function MileageReportModule({
                 feedback, now divide-y-2 divide-slate-400 for a genuinely
                 bold, unmissable line between entries. */}
             <tbody className="divide-y-2 divide-slate-400 font-medium text-slate-700 bg-white">
-              {filteredReports.length === 0 ? (
+              {paginatedVehicleRows.length === 0 ? (
                 <tr>
-                  <td colSpan={21 + (canSeeEnteredBy ? 1 : 0) + (readOnly ? 0 : 1)} className="text-center py-20 text-slate-400 font-mono text-xs">
+                  <td colSpan={mileageTableColSpan} className="text-center py-20 text-slate-400 font-mono text-xs">
                     🚫 NO REGISTERED MILEAGE ENTRIES DISCOVERED FOR THIS SEGMENT.
                     <div className="text-[10px] text-slate-400 font-sans mt-1">
                       {readOnly ? 'Entries are logged from the Mileage section of the Fuel Entry form in Fuel Management.' : 'Use the "Add Details" sidebar button to authorize new mileage and fuel log books.'}
@@ -871,162 +1201,24 @@ export default function MileageReportModule({
                   </td>
                 </tr>
               ) : (
-                paginatedReports.map((r, i) => (
-                  <tr key={r.id} className="hover:bg-slate-50/70 transition-colors text-[11px]">
-                    <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{(page - 1) * PAGE_SIZE + i + 1}</td>
-                    <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">{r.date}</td>
-                    <td className="px-3 py-2 font-bold font-mono text-slate-900 whitespace-nowrap">{r.vehicleNo}</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-600">{r.openingKm != null ? `${r.openingKm.toLocaleString('en-IN')} KM` : '-'}</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-600">{r.closingKm != null ? `${r.closingKm.toLocaleString('en-IN')} KM` : '-'}</td>
-                    <td className="px-3 py-2 text-right font-mono font-bold bg-slate-50 text-slate-900">{(r.totalKm || 0).toLocaleString('en-IN')} KM</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-600">₹{(r.ratePerLitre || 0).toFixed(2)}</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-600">{(r.litres || 0).toFixed(2)} L</td>
-                    <td className="px-3 py-2 text-right font-mono font-bold text-teal-700 bg-teal-50/20">₹{(r.dieselAmount || 0).toLocaleString('en-IN')}</td>
-                    <td className="px-3 py-2 text-right font-mono font-bold text-pink-700 bg-pink-50/20">{(r.mileage || 0).toFixed(2)} KM/L</td>
-                    <td className="px-3 py-2 text-right font-mono font-bold text-amber-700 bg-amber-50/20">{r.costPerKm ? `₹${r.costPerKm.toFixed(2)}` : '-'}</td>
-                    <td className="px-3 py-2 text-right font-mono font-bold text-purple-700 bg-purple-50/20">{r.actualMileage ? `${r.actualMileage.toFixed(2)} KM/L` : '-'}</td>
-                    <td className={`px-3 py-2 text-right font-mono font-bold ${r.difference == null ? 'text-slate-400' : r.difference > 0 ? 'text-emerald-600' : r.difference < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
-                      {r.difference == null ? '-' : `${r.difference > 0 ? '+' : ''}${r.difference.toFixed(2)} L`}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-600">
-                      {r.extraFuel ? r.extraFuel.toFixed(2) : '-'}
-                      {/* One badge per active mode (2026-09-21: generalized
-                          from an exclusive/two-mode choice to any
-                          combination of Bunk/Petty Cash/Card) - purely an
-                          accounting tag, same as always; hovering shows
-                          that mode's own portion when 2+ are active. */}
-                      {r.extraFuel != null && (() => {
-                        const modes = resolveExtraFuelModes(r);
-                        if (modes.length === 0) return null;
-                        const slices = extraFuelSlices(r);
-                        const badgeStyle: Record<ExtraFuelMode, string> = {
-                          bunk: 'bg-amber-50 text-amber-700 border-amber-200',
-                          petty_cash: 'bg-indigo-50 text-indigo-700 border-indigo-200',
-                          card: 'bg-sky-50 text-sky-700 border-sky-200'
-                        };
-                        const badgeText: Record<ExtraFuelMode, string> = { bunk: 'BUNK', petty_cash: 'PC', card: 'CARD' };
-                        return modes.map(m => {
-                          const portionNote = modes.length >= 2 ? `${EXTRA_FUEL_MODE_LABELS[m]} portion: ${(slices[m] || 0).toFixed(2)} L` : `Paid by ${EXTRA_FUEL_MODE_LABELS[m]}`;
-                          const holderNote = m === 'petty_cash' && r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : '';
-                          return (
-                            <span
-                              key={m}
-                              className={`ml-1 px-1 py-0.5 rounded text-[8px] font-black uppercase tracking-wider border align-middle ${badgeStyle[m]}`}
-                              title={`${portionNote}${holderNote} - included in Total Litres/Total Amount`}
-                            >
-                              {badgeText[m]}
-                            </span>
-                          );
-                        });
-                      })()}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-600">{r.ratePerLitreNew ? `₹${r.ratePerLitreNew.toFixed(2)}` : '-'}</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-600">{(r.totalLitres ?? r.litres ?? 0).toFixed(2)} L</td>
-                    <td className="px-3 py-2 text-right font-mono font-bold text-teal-700 bg-teal-50/20">{r.totalAmount ? `₹${r.totalAmount.toLocaleString('en-IN')}` : '-'}</td>
-                    <td className="px-3 py-2 text-slate-800 whitespace-nowrap font-semibold">{r.driverName}</td>
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      <span className="bg-slate-100 text-slate-800 border border-slate-200 px-2 py-0.5 rounded text-[9.5px] font-bold">
-                        {r.location}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-slate-500 max-w-xs truncate" title={r.remarks}>{r.remarks || '-'}</td>
-                    {canSeeEnteredBy && (
-                      <td className="px-3 py-2 whitespace-nowrap text-slate-500 font-mono text-[10px]">
-                        {r.enteredBy ? fuelEnteredByLabel(r.enteredBy) : '-'}
-                      </td>
-                    )}
-                    {!readOnly && (
-                      <td className="px-3 py-2 whitespace-nowrap text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button
-                            onClick={() => startEdit(r)}
-                            className="text-pink-600 hover:text-pink-800 bg-pink-50 hover:bg-pink-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
-                            title="Edit this entry"
-                          >
-                            <Edit2 className="w-3 h-3" />
-                          </button>
-                          <button
-                            onClick={async () => {
-                              if (!window.confirm(`Are you sure you want to delete mileage report entry sl.no ${i + 1}?`)) return;
-                              try {
-                                await onDeleteReport(r.id);
-                                triggerNotif('Entry deleted successfully!', 'success');
-                              } catch (err) {
-                                console.error(err);
-                                triggerNotif(err instanceof Error ? err.message : 'Failed to delete mileage report entry.', 'error');
-                              }
-                            }}
-                            className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-md transition-colors font-bold text-[10px] cursor-pointer"
-                            title="Delete this entry"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                ))
+                paginatedVehicleRows.map((r, i) => renderMileageRow(r, (page - 1) * PAGE_SIZE + i + 1, true))
               )}
             </tbody>
           </table>
         </div>
-        <PaginationFooter page={page} totalCount={sortedReports.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
+        <PaginationFooter page={page} totalCount={sortedVehicleRows.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
 
         {/* Calculated Totals Mini Grid - deliberately compact (small
             padding/text) since these get screenshotted on their own a lot -
-            the old size ran off a typical phone screenshot. */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 pt-2 text-xs">
-          <div className="bg-slate-50 p-1.5 rounded-lg border border-slate-200">
-            <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Total KM Accumulated</span>
-            <div className="text-[11px] font-black text-slate-800 font-mono mt-0.5">
-              {filteredReports.reduce((s, r) => s + (r.totalKm || 0), 0).toLocaleString('en-IN')} KM
-            </div>
-          </div>
-          {/* Total Litres - sums the Total Litres column (Litres + Extra
-              Fuel), same value the table's own column shows, not the bare
-              Litres field. */}
-          <div className="bg-slate-50 p-1.5 rounded-lg border border-slate-200">
-            <span className="text-[8.5px] text-slate-400 font-bold uppercase block">Total Litres</span>
-            <div className="text-[11px] font-black text-slate-800 font-mono mt-0.5">
-              {filteredReports.reduce((s, r) => s + (r.totalLitres ?? r.litres ?? 0), 0).toLocaleString('en-IN')} L
-            </div>
-          </div>
-          {/* Total Amount - sums the Total Amount column (Diesel Amount +
-              Extra Fuel*new rate), falling back to Diesel Amount only for
-              any row that never had Extra Fuel/a new rate. */}
-          <div className="bg-teal-50/40 p-1.5 rounded-lg border border-teal-100">
-            <span className="text-[8.5px] text-teal-600 font-bold uppercase block">Total Amount</span>
-            <div className="text-[11px] font-black text-teal-800 font-mono mt-0.5">
-              ₹{filteredReports.reduce((s, r) => s + (r.totalAmount ?? r.dieselAmount ?? 0), 0).toLocaleString('en-IN')}
-            </div>
-          </div>
-          <div className="bg-pink-50/40 p-1.5 rounded-lg border border-pink-100">
-            <span className="text-[8.5px] text-pink-600 font-bold uppercase block">Avg Segmented Mileage</span>
-            <div className="text-[11px] font-black text-pink-700 font-mono mt-0.5">
-              {filteredReports.length > 0
-                ? (filteredReports.reduce((s, r) => s + (r.mileage || 0), 0) / filteredReports.length).toFixed(2)
-                : '0.00'} KM/L
-            </div>
-          </div>
-          {/* Difference Mileage Amount - cumulative rupee value of the
-              Difference (L) column: each row's difference (litres, +saved/
-              -wasted) x its own Rate/Litre, summed across every filtered
-              row. Green when the total is fuel saved (>= 0), red when it's
-              net wasted (< 0) - same sign convention the Difference (L)
-              column itself already uses. */}
-          {(() => {
-            const differenceAmount = filteredReports.reduce((s, r) => s + (r.difference ?? 0) * (r.ratePerLitre || 0), 0);
-            return (
-              <div className={`p-1.5 rounded-lg border ${differenceAmount >= 0 ? 'bg-emerald-50/40 border-emerald-100' : 'bg-rose-50/40 border-rose-100'}`}>
-                <span className={`text-[8.5px] font-bold uppercase block ${differenceAmount >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>Difference Mileage Amount</span>
-                <div className={`text-[11px] font-black font-mono mt-0.5 ${differenceAmount >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                  {differenceAmount >= 0 ? '+' : '-'}₹{Math.abs(differenceAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </div>
-              </div>
-            );
-          })()}
-        </div>
+            the old size ran off a typical phone screenshot. Still totals the
+            full filtered LEDGER (every entry, not just the one-row-per-
+            vehicle list above) - unchanged from before the vehicle
+            drill-down (2026-09-22); see MileageSummaryGrid above, which is
+            this exact same markup/math, just reused on the vehicle detail
+            view below too. */}
+        <MileageSummaryGrid rows={filteredReports} />
       </div>
+      )}
 
       {/* Slide-out Sidebar Modal Overlay for adding/editing details */}
       <AnimatePresence>

@@ -452,6 +452,19 @@ export default function PettyCash({
   // rarer and more consequential; not what was reported as slow here).
   const [deleteConfirmation, setDeleteConfirmation] = useState<{ label: string; identifier: string; key: number } | null>(null);
 
+  // 2026-09-22 direct request: the top-of-page `notif` toast above wasn't
+  // where anyone was actually looking right after clicking Commit - by the
+  // time it appeared, the sidebar had already closed and their eyes were
+  // still on where the button used to be. Each of the 3 save flows below
+  // (Ledger entry, Market Trip entry, Amount Received) now shows its own
+  // "saved successfully" line directly under its own Commit button instead,
+  // for the ~1s the sidebar stays open before auto-closing - error toasts
+  // are unaffected (still top-of-page via triggerNotif; the form staying
+  // open on an error already keeps their attention there).
+  const [ledgerSavedInline, setLedgerSavedInline] = useState<string | null>(null);
+  const [marketPodSavedInline, setMarketPodSavedInline] = useState<string | null>(null);
+  const [advanceSavedInline, setAdvanceSavedInline] = useState<string | null>(null);
+
   // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -804,7 +817,12 @@ export default function PettyCash({
     return `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
   };
 
-  const resetMarketPodForm = () => {
+  // `close` defaults to true (every existing caller - Cancel, the [X],
+  // backdrop click - still closes immediately). The submit success path
+  // below passes false so it can reset the fields right away but keep the
+  // sidebar open just long enough to show its own inline confirmation
+  // (2026-09-22 direct request), then close it itself on a short delay.
+  const resetMarketPodForm = (close: boolean = true) => {
     setMpEditingId(null);
     setMpVehicleNumber('');
     setMpDate(new Date().toISOString().slice(0, 10));
@@ -821,7 +839,7 @@ export default function PettyCash({
     setMpRemarks('');
     setMpBalanceReceiptAmount('');
     setMpBalanceReceiptDate(new Date().toISOString().slice(0, 10));
-    setShowMarketPodSidebar(false);
+    if (close) setShowMarketPodSidebar(false);
   };
 
   const handleStartEditMarketPod = (entry: MarketPodEntry) => {
@@ -880,8 +898,12 @@ export default function PettyCash({
       } else {
         await onAddMarketPodEntry(payload);
       }
-      triggerNotif(`Market trip entry no. ${payload.entryNo} saved.`, 'success');
-      resetMarketPodForm();
+      resetMarketPodForm(false);
+      setMarketPodSavedInline(`Market trip entry no. ${payload.entryNo} saved successfully.`);
+      setTimeout(() => {
+        setShowMarketPodSidebar(false);
+        setMarketPodSavedInline(null);
+      }, 1100);
     } catch (err) {
       console.error(err);
       triggerNotif(err instanceof Error ? err.message : 'Failed to save Market Trip entry.', 'error');
@@ -1276,10 +1298,17 @@ export default function PettyCash({
       } else {
         await onAddVoucher(voucherData);
       }
-      triggerNotif(`Entry no. ${displayEntryNo(voucherData.entryNo)} saved.`, 'success');
 
       resetVoucherForm();
-      setShowSidebar(false);
+      // Shown directly under the Commit button (see the sidebar footer JSX)
+      // for a beat before the sidebar auto-closes - so the confirmation
+      // lands exactly where the office was already looking, not at the top
+      // of a screen that's about to close.
+      setLedgerSavedInline(`Entry no. ${displayEntryNo(voucherData.entryNo)} saved successfully.`);
+      setTimeout(() => {
+        setShowSidebar(false);
+        setLedgerSavedInline(null);
+      }, 1100);
     } catch (err) {
       console.error(err);
       triggerNotif(err instanceof Error ? err.message : 'Failed to write voucher to ledger.', 'error');
@@ -1476,7 +1505,8 @@ export default function PettyCash({
         account: advanceAccount,
         remarks: advanceRemarks.trim()
       });
-      triggerNotif(`Amount Received of ₹${parseFloat(advanceAmount).toLocaleString('en-IN')} logged.`, 'success');
+      setAdvanceSavedInline(`Amount Received of ₹${parseFloat(advanceAmount).toLocaleString('en-IN')} logged successfully.`);
+      setTimeout(() => setAdvanceSavedInline(null), 2500);
       setAdvanceAmount('');
       setAdvanceRemarks('');
     } catch (err) {
@@ -3685,6 +3715,12 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 >
                   {advanceIsSubmitting ? 'Saving...' : 'Log Amount Received'}
                 </button>
+                {advanceSavedInline && (
+                  <div className="flex items-center gap-1.5 text-[10px] font-bold text-teal-700 bg-teal-50 border border-teal-200 rounded-lg px-2.5 py-1.5 animate-fade-in">
+                    <Check className="w-3 h-3 shrink-0" />
+                    {advanceSavedInline}
+                  </div>
+                )}
               </form>
 
               {/* History for whichever user is selected above */}
@@ -4254,38 +4290,49 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 </form>
               </div>
 
-              <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-2">
-                <button
-                  type="button"
-                  onClick={handleCancelEdit}
-                  className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 transition-colors uppercase text-[10px] cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  form="petty-cash-entry-form"
-                  disabled={isSubmitting || isDuplicateManualEntryNo}
-                  title={isDuplicateManualEntryNo ? 'This Entry No already exists - enter a different number before saving.' : undefined}
-                  className="flex-1 bg-gradient-to-r from-teal-600 to-emerald-700 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md transition-all uppercase text-[10px] flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      Saving...
-                    </>
-                  ) : editingId ? (
-                    <>
-                      <Check className="w-3.5 h-3.5" />
-                      Update Voucher
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="w-3.5 h-3.5" />
-                      Commit Voucher Entry
-                    </>
-                  )}
-                </button>
+              <div className="p-4 border-t border-slate-100 bg-slate-50 flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCancelEdit}
+                    className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 transition-colors uppercase text-[10px] cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    form="petty-cash-entry-form"
+                    disabled={isSubmitting || isDuplicateManualEntryNo}
+                    title={isDuplicateManualEntryNo ? 'This Entry No already exists - enter a different number before saving.' : undefined}
+                    className="flex-1 bg-gradient-to-r from-teal-600 to-emerald-700 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md transition-all uppercase text-[10px] flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Saving...
+                      </>
+                    ) : editingId ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        Update Voucher
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-3.5 h-3.5" />
+                        Commit Voucher Entry
+                      </>
+                    )}
+                  </button>
+                </div>
+                {/* 2026-09-22 direct request: confirms right under the button
+                    that was just clicked, not at the top of the page behind
+                    a sidebar that's about to close. */}
+                {ledgerSavedInline && (
+                  <div className="flex items-center gap-1.5 text-[10px] font-bold text-teal-700 bg-teal-50 border border-teal-200 rounded-lg px-2.5 py-1.5 animate-fade-in">
+                    <Check className="w-3 h-3 shrink-0" />
+                    {ledgerSavedInline}
+                  </div>
+                )}
               </div>
             </motion.div>
           </div>
@@ -4296,7 +4343,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
       <AnimatePresence>
         {showMarketPodSidebar && (
           <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex justify-end z-50">
-            <div className="absolute inset-0" onClick={resetMarketPodForm} />
+            <div className="absolute inset-0" onClick={() => resetMarketPodForm()} />
             <motion.div
               initial={{ x: '100%' }}
               animate={{ x: 0 }}
@@ -4309,7 +4356,7 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                   {mpEditingId ? <CheckCircle2 className="w-4 h-4 text-amber-400" /> : <Plus className="w-4 h-4 text-teal-400" />}
                   {mpEditingId ? 'Edit Market Trip' : 'Add Market Trip'}
                 </h3>
-                <button onClick={resetMarketPodForm} className="p-1.5 rounded-lg hover:bg-white/10 text-slate-200 hover:text-white cursor-pointer">
+                <button onClick={() => resetMarketPodForm()} className="p-1.5 rounded-lg hover:bg-white/10 text-slate-200 hover:text-white cursor-pointer">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -4615,37 +4662,45 @@ Shared on ${new Date().toLocaleDateString('en-IN')}`;
                 </form>
               </div>
 
-              <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-2">
-                <button
-                  type="button"
-                  onClick={resetMarketPodForm}
-                  className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 transition-colors uppercase text-[10px] cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  form="market-pod-entry-form"
-                  disabled={mpIsSubmitting}
-                  className="flex-1 bg-gradient-to-r from-teal-600 to-emerald-700 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md transition-all uppercase text-[10px] flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  {mpIsSubmitting ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      Saving...
-                    </>
-                  ) : mpEditingId ? (
-                    <>
-                      <Check className="w-3.5 h-3.5" />
-                      Update Trip
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="w-3.5 h-3.5" />
-                      Commit Trip Entry
-                    </>
-                  )}
-                </button>
+              <div className="p-4 border-t border-slate-100 bg-slate-50 flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => resetMarketPodForm()}
+                    className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 transition-colors uppercase text-[10px] cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    form="market-pod-entry-form"
+                    disabled={mpIsSubmitting}
+                    className="flex-1 bg-gradient-to-r from-teal-600 to-emerald-700 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md transition-all uppercase text-[10px] flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    {mpIsSubmitting ? (
+                      <>
+                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Saving...
+                      </>
+                    ) : mpEditingId ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        Update Trip
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-3.5 h-3.5" />
+                        Commit Trip Entry
+                      </>
+                    )}
+                  </button>
+                </div>
+                {marketPodSavedInline && (
+                  <div className="flex items-center gap-1.5 text-[10px] font-bold text-teal-700 bg-teal-50 border border-teal-200 rounded-lg px-2.5 py-1.5 animate-fade-in">
+                    <Check className="w-3 h-3 shrink-0" />
+                    {marketPodSavedInline}
+                  </div>
+                )}
               </div>
             </motion.div>
           </div>

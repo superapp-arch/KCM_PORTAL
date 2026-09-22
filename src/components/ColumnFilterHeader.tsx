@@ -38,6 +38,11 @@ interface ColumnFilterHeaderProps {
   sortType?: 'text' | 'numeric';
   sortLabels?: { asc: string; desc: string };
   align?: 'left' | 'right';
+  // Optional custom Yes/No wording for a 'boolean' filter's panel (2026-09-22)
+  // - e.g. "Highlighted"/"Not Highlighted" instead of the generic default,
+  // when the raw true/false value means something more specific than a
+  // plain yes/no. Ignored for every other type; defaults to "Yes"/"No".
+  boolLabels?: { yes: string; no: string };
 }
 
 const NUMBER_OPS: { value: NumberFilterOp; label: string }[] = [
@@ -58,7 +63,7 @@ const DATE_OPS: { value: DateFilterOp; label: string }[] = [
 
 export default function ColumnFilterHeader({
   label, type, values, value, onChange,
-  sortKey, sort, onSort, sortType = 'text', sortLabels, align = 'left'
+  sortKey, sort, onSort, sortType = 'text', sortLabels, align = 'left', boolLabels
 }: ColumnFilterHeaderProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -326,7 +331,7 @@ export default function ColumnFilterHeader({
 
           {type === 'boolean' && (
             <div className="px-3 space-y-1">
-              {([[undefined, 'All'], ['yes', 'Yes'], ['no', 'No']] as const).map(([v, l]) => (
+              {([[undefined, 'All'], ['yes', boolLabels?.yes || 'Yes'], ['no', boolLabels?.no || 'No']] as const).map(([v, l]) => (
                 <button
                   key={l}
                   type="button"

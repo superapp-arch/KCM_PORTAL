@@ -271,6 +271,20 @@ export default function FuelManagement({
   // field on it already does.
   const canEditForeignMileage = (log: FuelLog): boolean => user.username === 'chandanreddy' && log.enteredBy === 'praveenkumar';
 
+  // 2026-09-18/22 direct requests - whether an entry's Vehicle No. gets the
+  // amber "Mileage not entered" highlight: missing a linked Mileage Report,
+  // UNLESS it's a Vendor-type entry for a non-KCM vehicle (Type = "Vendor"
+  // and Vendor Name isn't "KCM" - e.g. "One Time Vendor" or any hired
+  // vehicle), which never gets a Mileage entry at all since only KCM's own
+  // fleet is mileage-tracked. Shared by the row's own highlight styling AND
+  // the "Mileage" column filter next to Vehicle No below, so the two can
+  // never drift apart (filtering to "Highlighted" always means exactly the
+  // rows that are actually shown highlighted).
+  const isMileageHighlighted = (log: FuelLog): boolean => {
+    const mileageNotApplicable = log.type === 'Vendor' && (log.vendorName || '').trim().toUpperCase() !== 'KCM';
+    return !log.mileageReportId && !mileageNotApplicable;
+  };
+
   const [searchTerm, setSearchTerm] = useState('');
   // Bunk Name filter - shared between the on-screen ledger, the Download
   // Fuel Report panel, and Bunk Summary's own download (picking a bunk to
@@ -1446,11 +1460,14 @@ export default function FuelManagement({
       return;
     }
     // Same check the server will run (see duplicateIndentWarning above,
-    // already shown live under the field) - caught here too so a duplicate
-    // never even reaches the network round trip, and always shows with the
-    // exact same message/styling as the live warning.
+    // already shown live under the field, red border and all, the moment
+    // the office types a colliding number) - caught here too so a duplicate
+    // never even reaches the network round trip. 2026-09-22 direct request:
+    // no separate toast on top of that anymore (it repeated the exact same
+    // thing the field is already showing) - the Commit button below is now
+    // disabled instead while a duplicate is showing, same as the live
+    // warning already tells them why.
     if (duplicateIndentWarning) {
-      triggerNotif(`Indent No. ${indentNumber.trim()} already exists in your ${bunkOrCard === 'Card' ? 'Card' : bunkOrCard === 'Petty Cash' ? 'Petty Cash' : 'Bunk'} sequence.`, 'error');
       return;
     }
     if (bunkOrCard === 'Petty Cash' && !fuelPettyCashHolder.trim()) {
@@ -1747,6 +1764,10 @@ export default function FuelManagement({
     if (!matchesColumnFilter(log.bunkName, columnFilters.bunkName, 'text')) return false;
     if (!matchesColumnFilter(log.bunkOrCard || 'Bunk', columnFilters.bunkOrCard, 'text')) return false;
     if (!matchesColumnFilter(log.vehicleNumber, columnFilters.vehicleNumber, 'text')) return false;
+    // 2026-09-22 direct request - lets the office isolate just the rows
+    // still missing a Mileage entry (or the opposite), instead of scanning
+    // for amber cells by eye, in case any got missed.
+    if (!matchesColumnFilter(isMileageHighlighted(log), columnFilters.mileageHighlight, 'boolean')) return false;
     if (!matchesColumnFilter(log.indentNumber, columnFilters.indentNumber, 'text')) return false;
     if (!matchesColumnFilter(log.ltrs, columnFilters.ltrs, 'number')) return false;
     if (!matchesColumnFilter(log.rate, columnFilters.rate, 'number')) return false;
@@ -2364,7 +2385,17 @@ export default function FuelManagement({
                   <th className="px-3 py-2.5"><ColumnFilterHeader label="Location" type="text" values={logs.map(l => l.location)} value={columnFilters.location} onChange={f => setColumnFilter('location', f)} sortKey="location" sort={sort} onSort={handleSort} /></th>
                   <th className="px-3 py-2.5"><ColumnFilterHeader label="Bunk Name" type="text" values={logs.map(l => l.bunkName)} value={columnFilters.bunkName} onChange={f => setColumnFilter('bunkName', f)} sortKey="bunkName" sort={sort} onSort={handleSort} /></th>
                   <th className="px-3 py-2.5"><ColumnFilterHeader label="Bunk/Card" type="text" values={logs.map(l => l.bunkOrCard || 'Bunk')} value={columnFilters.bunkOrCard} onChange={f => setColumnFilter('bunkOrCard', f)} sortKey="bunkOrCard" sort={sort} onSort={handleSort} /></th>
-                  <th className="px-3 py-2.5"><ColumnFilterHeader label="Vehicle No" type="text" values={logs.map(l => l.vehicleNumber)} value={columnFilters.vehicleNumber} onChange={f => setColumnFilter('vehicleNumber', f)} sortKey="vehicleNumber" sort={sort} onSort={handleSort} sortType="numeric" /></th>
+                  <th className="px-3 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <ColumnFilterHeader label="Vehicle No" type="text" values={logs.map(l => l.vehicleNumber)} value={columnFilters.vehicleNumber} onChange={f => setColumnFilter('vehicleNumber', f)} sortKey="vehicleNumber" sort={sort} onSort={handleSort} sortType="numeric" />
+                      {/* 2026-09-22 direct request - isolate rows still
+                          missing a Mileage entry (or the opposite), same
+                          amber-highlight rule as the cell itself uses (see
+                          isMileageHighlighted) - so a missed one can be
+                          found by filtering instead of scanning by eye. */}
+                      <ColumnFilterHeader label="Mileage" type="boolean" value={columnFilters.mileageHighlight} onChange={f => setColumnFilter('mileageHighlight', f)} boolLabels={{ yes: 'Highlighted', no: 'Not Highlighted' }} />
+                    </div>
+                  </th>
                   <th className="px-3 py-2.5"><ColumnFilterHeader label="Indent No" type="text" values={logs.map(l => l.indentNumber)} value={columnFilters.indentNumber} onChange={f => setColumnFilter('indentNumber', f)} sortKey="indentNumber" sort={sort} onSort={handleSort} sortType="numeric" /></th>
                   <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Ltrs" type="number" value={columnFilters.ltrs} onChange={f => setColumnFilter('ltrs', f)} sortKey="ltrs" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
                   <th className="px-3 py-2.5 text-right"><ColumnFilterHeader label="Rate" type="number" value={columnFilters.rate} onChange={f => setColumnFilter('rate', f)} sortKey="rate" sort={sort} onSort={handleSort} sortType="numeric" align="right" /></th>
@@ -2402,7 +2433,19 @@ export default function FuelManagement({
                           log.mileageReportId, so it clears itself the
                           instant Mileage is entered/updated (logs already
                           re-fetches after that save), no separate tracking
-                          needed. */}
+                          needed.
+                          2026-09-22 refinement (direct request): a
+                          Vendor-type entry (Type = "Vendor" - a hired/one-off
+                          vehicle, not one of KCM's own fleet) never gets a
+                          Mileage entry in the first place, since Mileage
+                          tracking only applies to KCM-owned vehicles - so
+                          those rows are excluded from the highlight
+                          regardless of missing mileageReportId. The
+                          vendorName !== 'KCM' check is a belt-and-suspenders
+                          guard against the unlikely case Type is "Vendor"
+                          but Vendor Name was still set to "KCM" - that
+                          combination should still be flagged as worth a
+                          second look, not silently excluded. */}
                       {(() => {
                         // 2026-09-19 direct request: clicking Vehicle No.
                         // jumps straight to editing this entry's Mileage
@@ -2417,7 +2460,7 @@ export default function FuelManagement({
                         // anyone who can't act on this row still just sees
                         // plain text, same as before.
                         const canJumpToMileage = !isRqIdOnlyUser && !isViewOnlyUser && (!isForeignEntry(log) || canEditForeignMileage(log));
-                        const highlight = !log.mileageReportId;
+                        const highlight = isMileageHighlighted(log);
                         const cellClass = `px-3 py-2.5 font-bold font-mono text-slate-900 uppercase tracking-wider whitespace-nowrap ${highlight ? 'bg-amber-100' : ''} ${canJumpToMileage ? 'cursor-pointer hover:underline' : ''}`;
                         const cellTitle = canJumpToMileage
                           ? (highlight ? 'Click to enter Mileage for this entry' : 'Click to edit Mileage for this entry')
@@ -3419,8 +3462,9 @@ export default function FuelManagement({
                 <button
                   type="submit"
                   form="fuel-entry-form"
-                  disabled={isSubmitting}
-                  className="flex-1 bg-gradient-to-r from-emerald-500 to-blue-600 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md transition-all uppercase text-[10px] flex items-center justify-center gap-1 cursor-pointer"
+                  disabled={isSubmitting || duplicateIndentWarning}
+                  title={duplicateIndentWarning ? 'This Indent No already exists - enter a different number before saving.' : undefined}
+                  className="flex-1 bg-gradient-to-r from-emerald-500 to-blue-600 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md transition-all uppercase text-[10px] flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isSubmitting ? (
                     <>

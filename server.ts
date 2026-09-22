@@ -1204,8 +1204,25 @@ function filterFuelLogsForViewer(rows: FuelLog[], sessionUser?: Awaited<ReturnTy
 // EMAILS, i.e. Vinod) - deliberately NOT FUEL_RQ_ID_ONLY_EMAILS too, since
 // Divya never had full Mileage Report visibility and this fix isn't the
 // place to grant it.
+//
+// 2026-09-22 direct request: Chandan and Praveen now also get the same
+// bidirectional VIEW-only cross-visibility here that Fuel Management's own
+// ledger already had (FUEL_CROSS_VIEW_ONLY_USERNAMES) - previously each of
+// them only ever saw their own Mileage Report entries (view-only exception
+// above is one-way, Chandan-into-Praveen's-rows, for editing purposes only),
+// so Chandan couldn't see Praveen's mileage history at all and vice versa.
+// canModifyMileageReport is untouched, so a row reaching either of them this
+// way still can never be edited/deleted except by its own entrant (or the
+// existing one-way Chandan-can-edit-Praveen's-Mileage exception, or a super
+// admin).
 function filterMileageReportsForViewer(rows: MileageReport[], sessionUser?: Awaited<ReturnType<typeof getSessionUser>>): MileageReport[] {
-  return filterFuelOrMileageRowsForViewer(rows, sessionUser, FUEL_VIEW_ONLY_EMAILS);
+  const base = filterFuelOrMileageRowsForViewer(rows, sessionUser, FUEL_VIEW_ONLY_EMAILS);
+  if (!sessionUser || sessionUser.department === 'super_admin') return base;
+  const crossUsernames = FUEL_CROSS_VIEW_ONLY_USERNAMES[sessionUser.username] || [];
+  if (crossUsernames.length === 0) return base;
+  const alreadyIncludedIds = new Set(base.map(r => r.id));
+  const crossRows = rows.filter(r => crossUsernames.includes(r.enteredBy || '') && !alreadyIncludedIds.has(r.id));
+  return [...base, ...crossRows];
 }
 
 // Mileage Report equivalent of canModifyEntryRow - a non-super-admin may
