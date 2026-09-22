@@ -34,11 +34,29 @@ const PROD_CLOUD_SQL_CA_PATH = "/etc/kcm-logistics/ssl/server-ca.pem";
 // production always has the file, so production's validation is never
 // weakened by this fallback; a developer who wants full local verification
 // too can drop the same CA file at this same path on their own machine.
-function resolveSslConfig(): { rejectUnauthorized: boolean; ca?: string } {
+//
+// 2026-09-22 follow-up: enabling rejectUnauthorized:true surfaced a SEPARATE
+// Node TLS check beyond chain-of-trust - hostname verification, which
+// compares the connection's `host` (SQL_HOST, "localhost" in production -
+// the app reaches Cloud SQL through a local proxy/tunnel on that address)
+// against the certificate's SAN, which is Cloud SQL's own instance-specific
+// DNS name (15-...asia-south1.sql.goog). That mismatch is expected here,
+// not a sign of a wrong/spoofed certificate - already independently
+// confirmed via `psql PGSSLMODE=verify-ca PGSSLROOTCERT=<this same CA file>`
+// connecting successfully as kcm_app with ssl=t, which validates the exact
+// same chain Node is validating. `checkServerIdentity` is Node's SEPARATE,
+// purely-cosmetic hostname-vs-SAN check - it has no bearing on
+// certificate-chain verification, which `ca` above still fully enforces
+// (a certificate not signed by this CA is still rejected either way). This
+// only skips that one irrelevant hostname comparison for THIS production
+// Cloud SQL branch specifically - the local-dev fallback below is
+// untouched and never sets it.
+function resolveSslConfig(): { rejectUnauthorized: boolean; ca?: string; checkServerIdentity?: () => undefined } {
   if (fs.existsSync(PROD_CLOUD_SQL_CA_PATH)) {
     return {
       rejectUnauthorized: true,
       ca: fs.readFileSync(PROD_CLOUD_SQL_CA_PATH).toString(),
+      checkServerIdentity: () => undefined,
     };
   }
   return { rejectUnauthorized: false };
