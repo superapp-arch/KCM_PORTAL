@@ -20,14 +20,19 @@ import { User } from '../types';
 // a hard cap from login time regardless of activity, so a token still can't
 // stay valid forever under continuous use - standard security hygiene, not
 // something to drop.
-// 2026-08-28: lowered from 12h to 4h - an employee who leaves the app open
-// and logged in but genuinely idle (no requests at all) for 4 hours should
-// be forced to log back in before entering anything further, rather than
-// typing into what looks like a live session but is actually about to 401
-// on save. Client-side, App.tsx's own idle timer mirrors this exact window
-// so the UI proactively logs them out the moment it elapses too, instead of
-// only reacting after a failed save.
-const SESSION_IDLE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours of inactivity
+// 2026-08-28: lowered from 12h to 4h; 2026-09-21 direct request: lowered
+// again to 1h - an employee who leaves the app open and logged in but
+// genuinely idle (no requests at all) for 1 hour should be forced to log
+// back in before entering anything further, rather than typing into what
+// looks like a live session but is actually about to 401 on save.
+// Client-side, App.tsx's own idle timer mirrors this exact window (tracking
+// real mouse/keyboard/touch/scroll interaction, not just requests) so the
+// UI proactively logs them out the moment it elapses too, instead of only
+// reacting after a failed save. A transient request failure (502/503/504/
+// network blip - see authFetch.ts) is never treated as either activity OR
+// inactivity here; only a session actually receiving no valid authenticated
+// request for a full hour expires.
+const SESSION_IDLE_TTL_MS = 60 * 60 * 1000; // 1 hour of inactivity
 const SESSION_ABSOLUTE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days from login, max, regardless of activity
 
 // Only persist a bumped lastActivityAt this often per session, not on every
@@ -145,6 +150,27 @@ export async function destroySession(token?: string): Promise<void> {
   if (!token) return;
   cache.delete(token);
   await deleteSessionRow(token);
+}
+
+// Invalidates every session belonging to one username, everywhere - both
+// this process's in-memory cache and the Postgres source of truth (so it
+// also reaches sessions created on/handed to a different PM2 worker this
+// process never cached). Used after a password change/reset (2026-09-21
+// security hardening): a stolen or already-open session token must stop
+// working the moment the password it was issued under is replaced,
+// otherwise a compromised token would keep granting access indefinitely
+// even after the legitimate owner "fixes" it by changing the password.
+// Deliberately scoped to just this one username - never touches any other
+// account's sessions.
+export async function destroySessionsForUser(username: string): Promise<void> {
+  for (const [token, session] of cache) {
+    if (session.user.username === username) cache.delete(token);
+  }
+  try {
+    await db.delete(sessions).where(eq(sessions.username, username));
+  } catch (error) {
+    console.error('Failed to invalidate sessions for user:', error);
+  }
 }
 
 export function extractBearerToken(authHeader?: string): string | undefined {

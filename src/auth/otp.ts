@@ -1,6 +1,8 @@
 // One-time-passcode store with expiry and a capped number of guesses, keyed
 // by lowercased email. Replaces a plain Record<string,string> that never
 // expired and accepted unlimited guesses.
+import { randomInt } from 'node:crypto';
+
 const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_ATTEMPTS = 5;
 
@@ -12,8 +14,14 @@ interface OtpRecord {
 
 const activeOtps = new Map<string, OtpRecord>();
 
+// 2026-09-21 security hardening: was Math.floor(100000 + Math.random() *
+// 900000) - Math.random() is not a cryptographically secure source (its
+// underlying PRNG is not designed to resist prediction), which matters for
+// anything used as a security credential, however short-lived. randomInt
+// uses Node's CSPRNG and produces the exact same 6-digit range/shape, so
+// nothing about the OTP's format, TTL, or attempt-limiting changes.
 export function issueOtp(email: string): string {
-  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const code = String(randomInt(100000, 1000000));
   activeOtps.set(email.trim().toLowerCase(), { code, expiresAt: Date.now() + OTP_TTL_MS, attempts: 0 });
   return code;
 }

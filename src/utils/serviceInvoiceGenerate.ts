@@ -111,7 +111,7 @@ export async function resolveOrGenerateInvoice(params: {
     const file = await buildServiceInvoiceFile(invoice);
     const formData = new FormData();
     formData.append('file', file);
-    const uploadRes = await fetch('/api/upload/service-invoices', { method: 'POST', body: formData });
+    const uploadRes = await authFetch('/api/upload/service-invoices', { method: 'POST', body: formData });
     const uploadResult = await uploadRes.json();
     if (uploadResult.success) invoice.pdfUrl = `/${uploadResult.path}`;
   } catch (err) {

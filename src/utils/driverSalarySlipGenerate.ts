@@ -130,7 +130,7 @@ export async function resolveOrGenerateDriverSlip(params: {
     const file = await buildDriverSalarySlipFile(slip);
     const formData = new FormData();
     formData.append('file', file);
-    const uploadRes = await fetch('/api/upload/driver-salary-slips', { method: 'POST', body: formData });
+    const uploadRes = await authFetch('/api/upload/driver-salary-slips', { method: 'POST', body: formData });
     const uploadResult = await uploadRes.json();
     if (uploadResult.success) slip.pdfUrl = `/${uploadResult.path}`;
   } catch (err) {

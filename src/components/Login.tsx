@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { Lock, Mail, KeyRound, ShieldAlert, CheckCircle2, ArrowRight, HelpCircle, Eye, EyeOff, RefreshCw, Undo2 } from 'lucide-react';
 import { User as UserType } from '../types';
+import { validatePasswordStrength, PASSWORD_POLICY_DESCRIPTION } from '../auth/passwordPolicy';
 import kcmLogo from '../assets/images/logo.png';
 import AnimatedLorry from './AnimatedLorry';
 import companyTruck from '../assets/images/kcm_vehicle_cutout.png';
@@ -33,6 +34,7 @@ export default function Login({ onLoginSuccess, initialNotice }: LoginProps) {
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotOtp, setForgotOtp] = useState('');
   const [forgotNewPassword, setForgotNewPassword] = useState('');
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
   const [forgotOtpSent, setForgotOtpSent] = useState(false);
 
   // Request standard OTP
@@ -104,6 +106,18 @@ export default function Login({ onLoginSuccess, initialNotice }: LoginProps) {
       setError('All fields are required.');
       return;
     }
+    // 2026-09-21 security hardening: same strength rule + confirm-match
+    // check as Administration.tsx's Change Password form - this endpoint
+    // previously accepted any newPassword at all, including blank.
+    const strengthError = validatePasswordStrength(forgotNewPassword);
+    if (strengthError) {
+      setError(strengthError);
+      return;
+    }
+    if (forgotNewPassword !== forgotConfirmPassword) {
+      setError('New password and confirmation do not match.');
+      return;
+    }
     setError(null);
     setSuccess(null);
     setIsLoading(true);
@@ -127,6 +141,9 @@ export default function Login({ onLoginSuccess, initialNotice }: LoginProps) {
         setPassword(forgotNewPassword);
         setIsForgotPassword(false);
         setForgotOtpSent(false);
+        setForgotOtp('');
+        setForgotNewPassword('');
+        setForgotConfirmPassword('');
         setOtp('');
         setOtpSentMsg(false);
       } else {
@@ -519,7 +536,28 @@ export default function Login({ onLoginSuccess, initialNotice }: LoginProps) {
                   required
                   value={forgotNewPassword}
                   onChange={(e) => setForgotNewPassword(e.target.value)}
-                  placeholder="At least 6 characters"
+                  placeholder={PASSWORD_POLICY_DESCRIPTION}
+                  className="w-full bg-slate-50 border border-purple-100 rounded-lg pl-10 pr-10 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500 focus:bg-white transition-all font-mono text-slate-800"
+                />
+              </div>
+              <p className="mt-1 text-[10px] text-slate-400">{PASSWORD_POLICY_DESCRIPTION}</p>
+            </div>
+
+            {/* Confirm New Password */}
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-purple-700 mb-1">
+                Confirm New Password
+              </label>
+              <div className="relative">
+                <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-purple-400 pointer-events-none">
+                  <Lock className="w-4 h-4" />
+                </span>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={forgotConfirmPassword}
+                  onChange={(e) => setForgotConfirmPassword(e.target.value)}
+                  placeholder="Re-enter the new password"
                   className="w-full bg-slate-50 border border-purple-100 rounded-lg pl-10 pr-10 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500 focus:bg-white transition-all font-mono text-slate-800"
                 />
               </div>

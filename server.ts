@@ -5,6 +5,7 @@ import { Resend } from "resend";
 import dotenv from "dotenv";
 import upload from "./src/upload/upload.ts";
 import multer from "multer";
+import helmet from "helmet";
 
 dotenv.config();
 
@@ -12,8 +13,10 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 import { createServer as createViteServer } from 'vite';
 import { verifyPassword } from './src/auth/password.ts';
-import { createSession, getSessionUser, destroySession, extractBearerToken, startSessionCleanup } from './src/auth/session.ts';
+import { createSession, getSessionUser, destroySession, destroySessionsForUser, extractBearerToken, startSessionCleanup } from './src/auth/session.ts';
 import { issueOtp, verifyOtp } from './src/auth/otp.ts';
+import { checkRateLimit, startRateLimitCleanup, LOGIN_IP_LIMIT, LOGIN_ACCOUNT_LIMIT, OTP_REQUEST_IP_LIMIT, OTP_REQUEST_ACCOUNT_LIMIT } from './src/auth/rateLimit.ts';
+import { validatePasswordStrength } from './src/auth/passwordPolicy.ts';
 import { istTimestamp, istDateKey, istHour, istMonthDayKey } from './src/auth/time.ts';
 import { computeDueDateRaw } from './src/utils/loanDates.ts';
 import { extractTrailingNumber } from './src/utils/sort.ts';
@@ -693,6 +696,80 @@ async function requireVendorManagementAccess(req: express.Request, res: express.
   }
   if (sessionUser.department !== 'super_admin' && !VENDOR_MANAGEMENT_EMAILS.includes(sessionUser.email || '')) {
     return res.status(403).json({ error: 'You do not have access to Vendor Management.' });
+  }
+  next();
+}
+
+// 2026-09-21 security hardening: Accounts & Finance had NO server-side
+// access control at all - GET/POST/PUT/DELETE /api/accounts were reachable
+// by anyone with a valid session (or, before the fleet/notifications-style
+// fix elsewhere, no session at all), even though the module's own source
+// comment already flagged this ("Accounts & Finance's API routes aren't
+// department-gated server-side today either" - see ACCOUNTS_VIEW_ONLY_EMAILS
+// in Administration.tsx). Mirrors hasAccess('accounts') exactly: full access
+// for department 'accounts_finance' and super admins, GET-only for Bhagya.
+const ACCOUNTS_VIEW_ONLY_EMAILS = ['bhagya@kcmlogistics.in'];
+async function requireAccountsAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (sessionUser.department === 'super_admin' || sessionUser.department === 'accounts_finance') {
+    return next();
+  }
+  if (req.method === 'GET' && ACCOUNTS_VIEW_ONLY_EMAILS.includes(sessionUser.email || '')) {
+    return next();
+  }
+  return res.status(403).json({ error: 'You do not have access to Accounts and Finance.' });
+}
+
+// 2026-09-21 security hardening: Fleet Maintenance's entire API surface (work
+// orders, tire/battery/tools/spare-parts/inspection sub-logs, service
+// invoices, breakdown reports, service schedules) had NO server-side access
+// control - same gap as Accounts above. Mirrors hasAccess('maintenance') and
+// Maintenance.tsx's own readOnly prop: full access for department
+// 'maintenance', Vinod, and super admins; GET-only for Bhagya.
+const MAINTENANCE_FULL_ACCESS_EMAILS = ['vinod@kcmlogistics.in'];
+const MAINTENANCE_VIEW_ONLY_EMAILS = ['bhagya@kcmlogistics.in'];
+async function requireMaintenanceAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (sessionUser.department === 'super_admin' || sessionUser.department === 'maintenance' || MAINTENANCE_FULL_ACCESS_EMAILS.includes(sessionUser.email || '')) {
+    return next();
+  }
+  if (req.method === 'GET' && MAINTENANCE_VIEW_ONLY_EMAILS.includes(sessionUser.email || '')) {
+    return next();
+  }
+  return res.status(403).json({ error: 'You do not have access to Fleet Maintenance.' });
+}
+
+// 2026-09-21 security hardening: /api/fleet and /api/vehicle-incidents had no
+// server-side auth at all (this was even called out in a comment on the GPS
+// routes below: "/api/fleet's own routes - no server-side auth at all,
+// client-gated only"). Fleet data is read broadly across many modules
+// (Fuel/Driver/Warehouse vehicle pickers, etc.), so GET only requires ANY
+// authenticated session, not a specific role - narrowing that further risks
+// breaking a legitimate consumer this audit didn't track down. Write access
+// (create/update/delete a vehicle or incident) is restricted to the same
+// roles Fleet & Vehicles' own tab already trusts (hasAccess('fleet') in
+// Administration.tsx).
+async function requireFleetReadAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  next();
+}
+const FLEET_WRITE_ACCESS_EMAILS = ['bhagya@kcmlogistics.in', 'finance@kcmlogistics.in', 'vinod@kcmlogistics.in'];
+async function requireFleetWriteAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (sessionUser.department !== 'super_admin' && sessionUser.department !== 'vehicle_manager' && !FLEET_WRITE_ACCESS_EMAILS.includes(sessionUser.email || '')) {
+    return res.status(403).json({ error: 'You do not have access to Fleet & Vehicles.' });
   }
   next();
 }
@@ -1389,6 +1466,26 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // Exactly one reverse proxy (Nginx, same host, proxy_pass to localhost:3000,
+  // sets X-Forwarded-For) sits in front of this app, and port 3000 is not
+  // publicly reachable - so trust one hop. Without this, req.ip is always
+  // Nginx's loopback address and every employee shares a single per-IP
+  // rate-limit bucket (see src/auth/rateLimit.ts). Must change if another
+  // proxy/CDN/load balancer is ever added in front of Nginx.
+  app.set('trust proxy', 1);
+
+  // 2026-09-21 security hardening: baseline HTTP security headers (clickjacking
+  // protection via X-Frame-Options/frame-ancestors, MIME-sniffing protection,
+  // HSTS, hiding the X-Powered-By header, etc.) - previously none were set at
+  // the application layer at all. contentSecurityPolicy is deliberately left
+  // OFF here: Helmet's default CSP is strict enough to plausibly break an
+  // existing inline style/script or a resource this app already loads that
+  // hasn't been individually verified against it, and getting a CSP wrong
+  // silently breaks the UI rather than failing loudly - exactly the kind of
+  // "blindly rewrite a security system" this audit was told not to do. A
+  // properly-tuned CSP is worth adding as a follow-up with dedicated testing,
+  // not bundled into this pass.
+  app.use(helmet({ contentSecurityPolicy: false }));
   app.use(express.json({ limit: '100mb' }));
   app.use(express.urlencoded({ limit: '100mb', extended: true }));
   app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
@@ -1401,6 +1498,7 @@ async function startServer() {
   // Not required for correctness (getSessionUser already rejects expired
   // sessions on lookup regardless of whether the row still exists).
   startSessionCleanup();
+  startRateLimitCleanup();
   // Fleet Maintenance rebuild: one-time conversion of any pre-existing
   // combined Vehicle Maintenance Profiles into the new Service Schedule /
   // Tire / Battery / Tools Checklist tables (no-op once already migrated).
@@ -2097,7 +2195,32 @@ async function startServer() {
   // generic server error page instead of a real "why did this fail"
   // message, which is exactly the kind of silent failure a save should
   // never leave the office guessing about.
-  app.post('/api/upload/:module', (req, res, next) => {
+  app.post('/api/upload/:module', async (req, res, next) => {
+    // 2026-09-21 security hardening: this endpoint had no authentication at
+    // all - anyone on the internet, logged in or not, could POST arbitrary
+    // files (up to 500MB each) to KCM's disk. Every real caller (Fleet
+    // documents, HR Aadhar/PAN, driver salary slips, service invoices, Petty
+    // Cash scanned receipts, etc.) is already a logged-in employee attaching
+    // a document from inside the app, so this only requires a valid
+    // session - no specific role/department, since DocumentAttachment is
+    // shared across nearly every module.
+    const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+    if (!sessionUser) {
+      return res.status(401).json({ success: false, message: 'Authentication required.' });
+    }
+    // 2026-09-21 security hardening: `:module` used to flow straight into
+    // the on-disk destination path (see src/upload/upload.ts's own
+    // destination callback) with no validation at all - a value like ".."
+    // (a perfectly valid single URL path segment) would make
+    // path.join(uploadsDir, moduleName) resolve OUTSIDE the intended
+    // uploads directory entirely (classic path traversal). Every real
+    // module name already in use is a plain word (vehicles, hr,
+    // driver-salary, petty-cash, etc.), so this allowlist can't break any
+    // legitimate upload - it only rejects the traversal characters
+    // (., /, \) themselves.
+    if (!/^[a-zA-Z0-9_-]+$/.test(req.params.module)) {
+      return res.status(400).json({ success: false, message: 'Invalid upload module.' });
+    }
     upload.single('file')(req, res, (err: unknown) => {
       if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
         return res.status(413).json({ success: false, message: 'File is too large - the maximum upload size is 500MB.' });
@@ -2132,12 +2255,31 @@ async function startServer() {
       }
       const cleanEmail = String(email).trim().toLowerCase();
 
+      // 2026-09-21 security hardening: rate limit before doing anything
+      // else - reachable with no authentication at all, so this is a real
+      // brute-force/email-bombing/enumeration-probing surface. Keyed on the
+      // raw typed email either way, same reasoning as the login limiter.
+      const requestOtpIp = req.ip || '127.0.0.1';
+      if (!checkRateLimit(`otp-req:ip:${requestOtpIp}`, OTP_REQUEST_IP_LIMIT) || !checkRateLimit(`otp-req:acct:${cleanEmail}`, OTP_REQUEST_ACCOUNT_LIMIT)) {
+        return res.status(429).json({ success: false, error: 'Too many OTP requests. Please wait a few minutes and try again.' });
+      }
+
       // getUsers(), not getUsersWithFallback() - see the login handler above.
       const usersList = await getUsers();
       const matchedUser = usersList.find((u: any) => u.email && u.email.toLowerCase() === cleanEmail);
 
+      // 2026-09-21 security hardening: this is reachable with no
+      // authentication at all (just an email address) - it used to return a
+      // distinct 404 "account not found" for an email that doesn't match
+      // any employee, which is a textbook enumeration oracle letting anyone
+      // probe which email addresses are real KCM accounts. Always responds
+      // the same way now regardless of whether a match was found; the OTP
+      // email itself is still only ever actually sent when there's a real
+      // account to send it to.
+      const GENERIC_OTP_REQUEST_RESPONSE = { success: true, message: `If an account exists for ${cleanEmail}, a 6-digit OTP has been sent. Please check your email.` };
+
       if (!matchedUser) {
-        return res.status(404).json({ success: false, error: 'Account with this email address not found.' });
+        return res.json(GENERIC_OTP_REQUEST_RESPONSE);
       }
 
       const code = issueOtp(cleanEmail);
@@ -2159,13 +2301,14 @@ async function startServer() {
         console.log(`[SECURE EMAIL SYSTEM] Sent OTP email to ${cleanEmail}`);
       } catch (emailError) {
         console.error('Failed to send OTP email:', emailError);
-        return res.status(500).json({ success: false, error: 'Failed to deliver OTP email. Please try again later.' });
+        // Deliberately still the generic response, not a distinct failure -
+        // an email-delivery outage on a real account must not read any
+        // differently than "no such account" to an outside caller. The
+        // real cause is fully visible in the server log above either way.
+        return res.json(GENERIC_OTP_REQUEST_RESPONSE);
       }
 
-      res.json({
-        success: true,
-        message: `A secure 6-digit OTP has been sent to ${matchedUser.email}. Please check your email.`,
-      });
+      res.json(GENERIC_OTP_REQUEST_RESPONSE);
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -2179,6 +2322,20 @@ async function startServer() {
       const cleanLoginId = String(username || '').trim().toLowerCase();
       const cleanPass = String(password || '').trim();
       const cleanOtp = String(otp || '').trim();
+
+      // 2026-09-21 security hardening: brute force/credential stuffing
+      // protection - two independent limits (see rateLimit.ts) so neither
+      // "one attacker hammering many accounts" nor "credential stuffing one
+      // account from many IPs/a botnet" slips through by only covering the
+      // other case. Keyed on the raw typed login id (not a resolved
+      // username) so the limit itself can never be used to tell a real
+      // account apart from a typo'd one. Deliberately generous - this is
+      // about slowing down a script, not locking out an employee for a
+      // handful of mistakes.
+      const clientIp = req.ip || '127.0.0.1';
+      if (!checkRateLimit(`login:ip:${clientIp}`, LOGIN_IP_LIMIT) || !checkRateLimit(`login:acct:${cleanLoginId}`, LOGIN_ACCOUNT_LIMIT)) {
+        return res.status(429).json({ success: false, error: 'Too many login attempts. Please wait a few minutes and try again.' });
+      }
 
       // Deliberately getUsers(), not getUsersWithFallback() - login must
       // never authenticate against the hardcoded DEFAULT_USERS seed list
@@ -2224,7 +2381,25 @@ async function startServer() {
         });
       };
 
+      // 2026-09-21 security hardening: "Account ... not found" vs "Incorrect
+      // password" used to be two different messages (and the "not found"
+      // branch returned immediately, skipping verifyPassword's bcrypt cost
+      // entirely) - both the message text and the response-time difference
+      // let an attacker enumerate valid usernames/emails one guess at a
+      // time. Both cases now return the exact same generic message, and
+      // verifyPassword always runs (against a fixed dummy hash when there's
+      // no real account to check) so a nonexistent account can't be told
+      // apart from a wrong password by timing either. The audit trail still
+      // records the real distinction server-side - only the caller-facing
+      // response is unified.
+      const GENERIC_LOGIN_ERROR = 'Incorrect username/email or password.';
+      // A syntactically valid bcrypt hash of a value nobody will ever type -
+      // exists purely so the "no such account" path still pays the same
+      // bcrypt cost as a real password check, never to actually match.
+      const DUMMY_HASH = '$2b$10$CwTycUXWue0Thq9StjUM0uJ8i6ZKR9HvKUdD.g2E7T.6Sax8QAo0e';
+
       if (!matchedUser) {
+        await verifyPassword(cleanPass, DUMMY_HASH);
         await createAuditLog({
           usernameOverride: cleanLoginId,
           action: 'ACCESS_DENIED',
@@ -2234,13 +2409,13 @@ async function startServer() {
           ipAddress: req.ip || '127.0.0.1',
           userAgent: req.headers['user-agent']
         });
-        return res.status(401).json({ success: false, error: 'Account with this email or username not found.' });
+        return res.status(401).json({ success: false, error: GENERIC_LOGIN_ERROR });
       }
 
       const passwordOk = await verifyPassword(cleanPass, matchedUser.pass);
       if (!passwordOk) {
         await recordFailedAttempt(`Invalid password attempt for account "${cleanLoginId}"`, 'Abnormal Login - Bad Credentials');
-        return res.status(401).json({ success: false, error: 'Incorrect password.' });
+        return res.status(401).json({ success: false, error: GENERIC_LOGIN_ERROR });
       }
 
       const otpProvided = otp !== undefined && String(otp).trim() !== '';
@@ -2305,12 +2480,25 @@ async function startServer() {
       }
       const cleanEmail = String(email).trim().toLowerCase();
 
+      // 2026-09-21 security hardening - same rate limiting as POST
+      // /api/request-otp above.
+      const resetReqIp = req.ip || '127.0.0.1';
+      if (!checkRateLimit(`otp-req:ip:${resetReqIp}`, OTP_REQUEST_IP_LIMIT) || !checkRateLimit(`otp-req:acct:${cleanEmail}`, OTP_REQUEST_ACCOUNT_LIMIT)) {
+        return res.status(429).json({ success: false, error: 'Too many requests. Please wait a few minutes and try again.' });
+      }
+
       // getUsers(), not getUsersWithFallback() - see the login handler above.
       const usersList = await getUsers();
       const matchedUser = usersList.find((u: any) => u.email && u.email.toLowerCase() === cleanEmail);
 
+      // 2026-09-21 security hardening - same reasoning as POST
+      // /api/request-otp above: reachable with no authentication at all, so
+      // it must never reveal whether an email belongs to a real account via
+      // either the response or whether an email actually goes out.
+      const GENERIC_RESET_REQUEST_RESPONSE = { success: true, message: `If an account exists for ${cleanEmail}, a password reset verification code has been sent. Please check your email.` };
+
       if (!matchedUser) {
-        return res.status(404).json({ success: false, error: 'No account found with this email address.' });
+        return res.json(GENERIC_RESET_REQUEST_RESPONSE);
       }
 
       const code = issueOtp(cleanEmail);
@@ -2332,13 +2520,10 @@ async function startServer() {
         console.log(`[SECURE RESET SYSTEM] Sent password reset OTP email to ${cleanEmail}`);
       } catch (emailError) {
         console.error('Failed to send reset OTP email:', emailError);
-        return res.status(500).json({ success: false, error: 'Failed to deliver reset OTP email. Please try again later.' });
+        return res.json(GENERIC_RESET_REQUEST_RESPONSE);
       }
 
-      res.json({
-        success: true,
-        message: `A secure verification code has been dispatched to ${matchedUser.email}. Please check your email.`,
-      });
+      res.json(GENERIC_RESET_REQUEST_RESPONSE);
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -2355,15 +2540,43 @@ async function startServer() {
       const cleanOtp = String(otp).trim();
       const cleanPass = String(newPassword).trim();
 
+      // 2026-09-21 security hardening - defense in depth on top of
+      // verifyOtp's own 5-attempts-then-invalidated cap: caps how many
+      // distinct OTP-guessing requests one IP can fire across ALL accounts
+      // in the window, same rate limiter config as the request endpoints
+      // above.
+      const resetIp = req.ip || '127.0.0.1';
+      if (!checkRateLimit(`otp-verify:ip:${resetIp}`, OTP_REQUEST_IP_LIMIT)) {
+        return res.status(429).json({ success: false, error: 'Too many attempts. Please wait a few minutes and try again.' });
+      }
+
       const otpResult = verifyOtp(cleanEmail, cleanOtp);
       if (!otpResult.valid) {
         return res.status(401).json({ success: false, error: otpResult.reason || 'Invalid or expired OTP code.' });
+      }
+
+      // 2026-09-21 security hardening: same strength rule as
+      // /api/change-password - previously totally unvalidated, so a Forgot
+      // Password reset (unlike the normal Change Password form) could set a
+      // blank or single-character password.
+      const strengthError = validatePasswordStrength(cleanPass);
+      if (strengthError) {
+        return res.status(400).json({ success: false, error: strengthError });
       }
 
       await updateUserPassword(cleanEmail, cleanPass);
       // getUsers(), not getUsersWithFallback() - see the login handler above.
       const usersList = await getUsers();
       const resetUser = usersList.find((u: any) => (u.email || '').toLowerCase() === cleanEmail);
+      // 2026-09-21 security hardening: invalidate every existing session for
+      // this account - the whole point of Forgot Password is that the
+      // account may have been compromised/the old password is no longer
+      // trusted, so any session issued under the OLD password (including one
+      // an attacker may already be holding) must stop working the instant
+      // it's replaced.
+      if (resetUser?.username) {
+        await destroySessionsForUser(resetUser.username);
+      }
       await createAuditLog({
         usernameOverride: resetUser?.username || cleanEmail,
         action: 'PASSWORD_CHANGE',
@@ -2381,6 +2594,19 @@ async function startServer() {
   });
 
   // Change Password for currently logged in session user
+  //
+  // 2026-09-21 security hardening: `oldPassword` used to be genuinely
+  // optional (the UI even labeled the field "Current Password (Optional/
+  // Override)") - a request that simply left it out changed the password
+  // with NO verification at all, meaning anyone holding a valid session
+  // token (a stolen/leaked token, a still-open tab on a shared machine, an
+  // XSS) could silently take over the account by setting a new password,
+  // with no proof they ever knew the old one. Current password is now
+  // REQUIRED and verified server-side on every call, matching the separate,
+  // no-old-password-needed Forgot Password flow below (which exists
+  // precisely so a genuinely-forgotten password has its own proper recovery
+  // path via OTP - this endpoint is only for an already-authenticated
+  // employee who still knows their current password).
   app.post('/api/change-password', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
@@ -2388,36 +2614,56 @@ async function startServer() {
         return res.status(401).json({ success: false, error: 'Unauthorized. No active session.' });
       }
       const { oldPassword, newPassword } = req.body;
-      if (!newPassword) {
+      const cleanOldPass = String(oldPassword || '').trim();
+      const cleanNewPass = String(newPassword || '').trim();
+      if (!cleanOldPass) {
+        return res.status(400).json({ success: false, error: 'Current password is required.' });
+      }
+      if (!cleanNewPass) {
         return res.status(400).json({ success: false, error: 'New password is required.' });
+      }
+      const strengthError = validatePasswordStrength(cleanNewPass);
+      if (strengthError) {
+        return res.status(400).json({ success: false, error: strengthError });
       }
 
       // getUsers(), not getUsersWithFallback() - see the login handler above.
       const usersList = await getUsers();
       const userObj = usersList.find((u: any) => u.username === sessionUser.username);
-      if (userObj) {
-        if (oldPassword) {
-          const oldPassOk = await verifyPassword(oldPassword, userObj.pass);
-          if (!oldPassOk) {
-            return res.status(400).json({ success: false, error: 'Incorrect current password.' });
-          }
-        }
-
-        await updateUserPassword(userObj.email || '', newPassword);
-        await createAuditLog({
-          user: sessionUser,
-          action: 'PASSWORD_CHANGE',
-          module: 'Authentication',
-          entityType: 'User',
-          entityId: sessionUser.username,
-          description: `${sessionUser.name} (${sessionUser.username}) changed their own password`,
-          ipAddress: req.ip || '127.0.0.1',
-          userAgent: req.headers['user-agent']
-        });
-        return res.json({ success: true, message: 'Password changed successfully and persisted.' });
-      } else {
-        return res.status(404).json({ success: false, error: 'User account not found.' });
+      if (!userObj) {
+        // Same generic wording as an incorrect password below - a session
+        // whose account no longer exists shouldn't read any differently
+        // than a wrong current password to whoever's holding the token.
+        return res.status(400).json({ success: false, error: 'Incorrect current password.' });
       }
+
+      const oldPassOk = await verifyPassword(cleanOldPass, userObj.pass);
+      if (!oldPassOk) {
+        return res.status(400).json({ success: false, error: 'Incorrect current password.' });
+      }
+
+      await updateUserPassword(userObj.email || '', cleanNewPass);
+      // Every other session this account is logged into elsewhere (another
+      // browser/device, or a still-open tab someone forgot to sign out of)
+      // must stop working the instant the password changes - otherwise a
+      // token an attacker already holds would keep granting access even
+      // after the legitimate owner "secures" the account this way. This
+      // request's OWN session is intentionally included (destroySessionsForUser
+      // has no way to spare it) - the client re-logs in with the new
+      // password immediately after a successful change, same as it already
+      // does today.
+      await destroySessionsForUser(sessionUser.username);
+      await createAuditLog({
+        user: sessionUser,
+        action: 'PASSWORD_CHANGE',
+        module: 'Authentication',
+        entityType: 'User',
+        entityId: sessionUser.username,
+        description: `${sessionUser.name} (${sessionUser.username}) changed their own password`,
+        ipAddress: req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent']
+      });
+      return res.json({ success: true, message: 'Password changed successfully. Please log in again with your new password.' });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -2442,6 +2688,11 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // Fleet & Vehicles + Incidents & Claims (2026-09-21 security hardening) -
+  // see requireFleetReadAccess/requireFleetWriteAccess above.
+  app.use('/api/fleet', requireFleetReadAccess);
+  app.use('/api/vehicle-incidents', requireFleetReadAccess);
+
   // Get Fleet Sheet
   app.get('/api/fleet', async (req, res) => {
     try {
@@ -2453,7 +2704,7 @@ async function startServer() {
   });
 
   // Save / Update vehicle
-  app.post('/api/fleet', async (req, res) => {
+  app.post('/api/fleet', requireFleetWriteAccess, async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const updatedVehicle: Vehicle = req.body;
@@ -2615,24 +2866,24 @@ async function startServer() {
   // per vehicle. GET returns the whole table in one query (same pattern as
   // every other maintenance sub-table - the Fleet list's per-vehicle
   // claimed/not-claimed counts are then computed client-side from this one
-  // fetch, avoiding N+1 per-vehicle requests). No server-side auth gating
-  // here, matching Fleet & Vehicles' own /api/fleet routes above (access
-  // control for this module is client-side only, same existing app
-  // behavior - see FleetSheet.tsx's canEdit).
+  // fetch, avoiding N+1 per-vehicle requests). 2026-09-21 security
+  // hardening: this used to have no server-side auth gating at all (see
+  // requireFleetReadAccess/requireFleetWriteAccess above and FleetSheet.tsx's
+  // own canEdit for the pre-existing client-side gate this now backs up).
   app.get('/api/vehicle-incidents', async (req, res) => {
     try { res.json(await getVehicleIncidents()); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
-  app.post('/api/vehicle-incidents', async (req, res) => {
+  app.post('/api/vehicle-incidents', requireFleetWriteAccess, async (req, res) => {
     try { res.json({ success: true, data: await saveVehicleIncident(req.body as VehicleIncident) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
-  app.put('/api/vehicle-incidents/:id', async (req, res) => {
+  app.put('/api/vehicle-incidents/:id', requireFleetWriteAccess, async (req, res) => {
     try { res.json({ success: true, data: await saveVehicleIncident({ ...req.body, id: req.params.id } as VehicleIncident) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
-  app.delete('/api/vehicle-incidents/:id', async (req, res) => {
+  app.delete('/api/vehicle-incidents/:id', requireFleetWriteAccess, async (req, res) => {
     try { res.json({ success: true, data: await deleteVehicleIncident(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  app.delete('/api/fleet/:id', async (req, res) => {
+  app.delete('/api/fleet/:id', requireFleetWriteAccess, async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
       const { id } = req.params;
@@ -2789,8 +3040,20 @@ async function startServer() {
   });
 
   // Fetch alerts for Super Admin
+  //
+  // 2026-09-21 security hardening: had no auth check at all - reachable by
+  // anyone on the internet, exposing every open security alert (abnormal
+  // login attempts, with IP addresses and account names) alongside
+  // compliance/maintenance data. Not called from the client anywhere today
+  // (see grep of src/ - only /api/notifications below is), so restricting it
+  // to Super Admin outright (matching this route's own pre-existing "Fetch
+  // alerts for Super Admin" comment) changes nothing observable.
   app.get('/api/alerts', async (req, res) => {
     try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser || sessionUser.department !== 'super_admin') {
+        return res.status(403).json({ error: 'Access denied.' });
+      }
       const notifs = await getNotifications();
       const [dynamic, maintenanceDynamic] = await Promise.all([calculateDynamicAlerts(), calculateMaintenanceDynamicAlerts()]);
       const sec = notifs.filter((n: any) => n.type === 'security');
@@ -2803,8 +3066,24 @@ async function startServer() {
   });
 
   // Notifications API endpoints
+  //
+  // 2026-09-21 security hardening: had no auth check at all, unlike
+  // /api/notifications/resolve right below it (whose own comment already
+  // says this feed is "Super-Admin-only"). Kept broader than that here
+  // deliberately - Administration.tsx's header badge ("Compliance alerts: N")
+  // renders this for every logged-in employee, not only Super Admin, so this
+  // now requires any authenticated session rather than narrowing to
+  // Super Admin outright (which would silently break that badge for
+  // everyone else). What DOES get narrowed: 'security'-type entries
+  // (abnormal login attempts - the exact same data GET /api/abnormal-logins
+  // restricts to Super Admin) are stripped for anyone who isn't one, closing
+  // the inconsistency of restricting that data one way and not the other.
   app.get('/api/notifications', async (req, res) => {
     try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser) {
+        return res.status(401).json({ error: 'Authentication required.' });
+      }
       const storedNotifs = await getNotifications();
       const [dynamicCompliance, dynamicMaintenance] = await Promise.all([calculateDynamicAlerts(), calculateMaintenanceDynamicAlerts()]);
       const dynamic = [...dynamicCompliance, ...dynamicMaintenance];
@@ -2820,7 +3099,10 @@ async function startServer() {
           allNotifs.push(dyn);
         }
       });
-      res.json(allNotifs);
+      const visibleNotifs = sessionUser.department === 'super_admin'
+        ? allNotifs
+        : allNotifs.filter((n: any) => n.type !== 'security');
+      res.json(visibleNotifs);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2853,7 +3135,15 @@ async function startServer() {
     }
   });
 
-  app.post('/api/trigger-email-simulation', (req, res) => {
+  // 2026-09-21 security hardening: this is a no-op test stub (it doesn't
+  // actually send anything - see the body below), but it had no auth check
+  // at all; gated to Super Admin for consistency with every other manual
+  // "send-now"/test trigger in this file.
+  app.post('/api/trigger-email-simulation', async (req, res) => {
+    const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+    if (!sessionUser || sessionUser.department !== 'super_admin') {
+      return res.status(403).json({ success: false, error: 'Only Super Admin can trigger this.' });
+    }
     res.json({ success: true, message: 'Emails dispatched successfully' });
   });
 
@@ -3349,6 +3639,26 @@ async function startServer() {
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
+  // Fleet Maintenance's whole API surface below (work orders through
+  // service-station-inspections) is gated as one block - see
+  // requireMaintenanceAccess above (2026-09-21 security hardening; this had
+  // no server-side access control at all before).
+  app.use('/api/maintenance', requireMaintenanceAccess);
+  app.use('/api/vehicle-maintenance-profiles', requireMaintenanceAccess);
+  app.use('/api/maintenance-service-stations', requireMaintenanceAccess);
+  app.use('/api/breakdown-reports', requireMaintenanceAccess);
+  app.use('/api/vehicle-service-schedules', requireMaintenanceAccess);
+  app.use('/api/vehicle-maintenance-reference', requireMaintenanceAccess);
+  app.use('/api/alert-settings', requireMaintenanceAccess);
+  app.use('/api/service-invoices', requireMaintenanceAccess);
+  app.use('/api/service-invoice-audit', requireMaintenanceAccess);
+  app.use('/api/tire-brands', requireMaintenanceAccess);
+  app.use('/api/tire-records', requireMaintenanceAccess);
+  app.use('/api/battery-records', requireMaintenanceAccess);
+  app.use('/api/tools-checklist-records', requireMaintenanceAccess);
+  app.use('/api/service-station-spare-parts', requireMaintenanceAccess);
+  app.use('/api/service-station-inspections', requireMaintenanceAccess);
+
   app.get('/api/maintenance', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
@@ -3668,6 +3978,11 @@ async function startServer() {
   app.delete('/api/service-station-inspections/:id', async (req, res) => {
     try { res.json({ success: true, data: await deleteServiceStationInspection(req.params.id) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
+
+  // Accounts & Finance (2026-09-21 security hardening) - see
+  // requireAccountsAccess above; this had no server-side access control at
+  // all before.
+  app.use('/api/accounts', requireAccountsAccess);
 
   app.get('/api/accounts', async (req, res) => {
     try { res.json(await getAccountsEntries()); } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -4011,27 +4326,64 @@ async function startServer() {
     try { res.json({ success: true, data: await saveSalarySlipAuditRecord(req.body) }); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
+  // 2026-09-21 security hardening: had no auth check at all - exposed every
+  // failed-login record (username, IP address, reason) to anyone on the
+  // internet, and let anyone silently clear the whole security dashboard.
+  // Not called from the client anywhere today (the same data reaches the
+  // UI through GET /api/notifications' 'security'-type entries instead, now
+  // itself restricted to Super Admin there too - see above), so gating this
+  // outright changes nothing observable.
   app.get('/api/abnormal-logins', async (req, res) => {
-    try { res.json(await getAbnormalLogins()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser) {
+        return res.status(401).json({ error: 'Authentication required.' });
+      }
+      if (sessionUser.department !== 'super_admin') {
+        return res.status(403).json({ error: 'Access denied.' });
+      }
+      res.json(await getAbnormalLogins());
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.post('/api/abnormal-logins/resolve', async (req, res) => {
     try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser) {
+        return res.status(401).json({ error: 'Authentication required.' });
+      }
+      if (sessionUser.department !== 'super_admin') {
+        return res.status(403).json({ error: 'Access denied.' });
+      }
       res.json({ success: true, data: await resolveAllAbnormalLogins() });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
+  // Called from Login.tsx BEFORE authentication (3+ consecutive failed
+  // logins) - must stay reachable with no session, same as /api/login
+  // itself. 2026-09-21 security hardening: this had no rate limit at all
+  // (unlike /api/login right above it), so it was an easy way to flood the
+  // AbnormalLogin/security-notification tables with arbitrary junk (any
+  // client-supplied username/reason string, no size cap) - rate-limited by
+  // IP the same as login, and both fields are now length-capped so this
+  // can't be used to write oversized rows either.
   app.post('/api/notify-abnormal', async (req, res) => {
     try {
+      const notifyIp = req.ip || '127.0.0.1';
+      if (!checkRateLimit(`notify-abnormal:ip:${notifyIp}`, LOGIN_IP_LIMIT)) {
+        return res.status(429).json({ error: 'Too many requests. Please wait a few minutes and try again.' });
+      }
       const { username, reason } = req.body;
+      const safeUsername = String(username || 'Anonymous').slice(0, 200);
+      const safeReason = String(reason || 'Suspicious login telemetry flagged').slice(0, 500);
       const log: AbnormalLogin = {
         id: String(Date.now()),
         timestamp: istTimestamp(),
-        username: String(username || 'Anonymous'),
+        username: safeUsername,
         ipAddress: req.ip || '127.0.0.1',
-        reason: String(reason || 'Suspicious login telemetry flagged'),
+        reason: safeReason,
         resolved: false
       };
       await saveAbnormalLogin(log);
@@ -4039,7 +4391,7 @@ async function startServer() {
       const secNotif: DashboardNotification = {
         id: String(Date.now() + 1),
         title: 'Suspicious Telemetry Flagged',
-        message: `Suspicious action by "${username}": ${reason}`,
+        message: `Suspicious action by "${safeUsername}": ${safeReason}`,
         type: 'security',
         timestamp: log.timestamp,
         read: false
@@ -5207,8 +5559,17 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+  // 2026-09-21 security hardening: dev-diagnostic leftover, had no auth
+  // check at all - anyone on the internet could repeatedly trigger a real
+  // outbound email send (Resend quota/cost) with no rate limit. Gated to
+  // Super Admin rather than removed, so the diagnostic capability itself is
+  // preserved.
   app.get("/api/test-email", async (req, res) => {
   try {
+    const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+    if (!sessionUser || sessionUser.department !== 'super_admin') {
+      return res.status(403).json({ error: 'Access denied.' });
+    }
     const response = await resend.emails.send({
       from: process.env.EMAIL_FROM!,
       to: "superapp@kcmlogistics.in",   // <-- Replace with your own email

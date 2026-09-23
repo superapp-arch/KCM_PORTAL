@@ -104,7 +104,7 @@ export async function resolveOrGenerateSlip(params: {
     const file = await buildSalarySlipFile(slip);
     const formData = new FormData();
     formData.append('file', file);
-    const uploadRes = await fetch('/api/upload/salary-slips', { method: 'POST', body: formData });
+    const uploadRes = await authFetch('/api/upload/salary-slips', { method: 'POST', body: formData });
     const uploadResult = await uploadRes.json();
     if (uploadResult.success) slip.pdfUrl = `/${uploadResult.path}`;
   } catch (err) {

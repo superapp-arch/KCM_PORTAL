@@ -14,6 +14,7 @@ import {
   Eye
 } from 'lucide-react';
 import { VehicleDocument } from '../types';
+import { authFetch } from '../authFetch';
 
 interface DocumentAttachmentProps {
   documents: VehicleDocument[] | undefined;
@@ -51,7 +52,7 @@ export default function DocumentAttachment({
         const formData = new FormData();
         formData.append('file', file);
 
-        const response = await fetch('/api/upload/vehicles', { method: 'POST', body: formData });
+        const response = await authFetch('/api/upload/vehicles', { method: 'POST', body: formData });
         const result = await response.json();
 
         if (!result.success) {

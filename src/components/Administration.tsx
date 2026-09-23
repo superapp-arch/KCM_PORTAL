@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { DriverSalaryAdvanceVoucherSlim } from '../utils/driverPettyCashAdvance';
+import { validatePasswordStrength, PASSWORD_POLICY_DESCRIPTION } from '../auth/passwordPolicy';
 import { parseFlexibleDate, formatDateDDMMYYYY } from '../utils/dateFormat';
 import {
   User as UserType,
@@ -154,6 +155,13 @@ interface AdministrationProps {
   user: UserType;
   token: string | null;
   onLogout: () => void;
+  // 2026-09-21 security hardening: a successful password change now
+  // invalidates every session for the account server-side, this tab's own
+  // session included - called instead of the old "show a success toast and
+  // just close the modal" behavior, so the employee is sent to a fresh
+  // login with a clear, accurate explanation. See App.tsx's
+  // handlePasswordChanged.
+  onPasswordChanged: () => void;
   vehicles: Vehicle[];
   fuelLogs: FuelLog[];
   invoices: BillingInvoice[];
@@ -276,6 +284,7 @@ export default function Administration({
   user,
   token,
   onLogout,
+  onPasswordChanged,
   vehicles,
   fuelLogs,
   invoices,
@@ -421,6 +430,7 @@ export default function Administration({
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [showPassInputs, setShowPassInputs] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
@@ -486,8 +496,22 @@ export default function Administration({
 
   const handlePasswordChangeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newPassword || newPassword.length < 5) {
-      setPasswordError('New password must be at least 5 characters long.');
+    // 2026-09-21 security hardening: current password is no longer optional
+    // (it used to be labeled "Optional/Override" and the server accepted a
+    // blank value with zero verification - see /api/change-password in
+    // server.ts) - both required here and re-verified server-side either
+    // way, since a client-side check alone is never real enforcement.
+    if (!oldPassword) {
+      setPasswordError('Current password is required.');
+      return;
+    }
+    const strengthError = validatePasswordStrength(newPassword);
+    if (strengthError) {
+      setPasswordError(strengthError);
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setPasswordError('New password and confirmation do not match.');
       return;
     }
     setPasswordError(null);
@@ -505,13 +529,15 @@ export default function Administration({
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setPasswordSuccess('Your security password has been changed successfully!');
         setOldPassword('');
         setNewPassword('');
-        setTimeout(() => {
-          setIsChangingPassword(false);
-          setPasswordSuccess(null);
-        }, 2200);
+        setConfirmNewPassword('');
+        setIsChangingPassword(false);
+        // Server invalidated every session for this account (this tab's own
+        // included) the moment the password changed - send the employee
+        // straight to a fresh login rather than leaving a now-dead session
+        // sitting in a UI that looks fully logged in.
+        onPasswordChanged();
       } else {
         setPasswordError(data.error || 'Failed to update password. Verify current password.');
       }
@@ -727,10 +753,11 @@ export default function Administration({
                 <form onSubmit={handlePasswordChangeSubmit} className="space-y-3">
                   <div>
                     <label className="block text-[10px] font-bold uppercase tracking-wider text-purple-700 mb-1">
-                      Current Password (Optional/Override)
+                      Current Password
                     </label>
                     <input
                       type="password"
+                      required
                       value={oldPassword}
                       onChange={(e) => setOldPassword(e.target.value)}
                       placeholder="Enter current password"
@@ -746,7 +773,21 @@ export default function Administration({
                       required
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="At least 5 characters"
+                      placeholder={PASSWORD_POLICY_DESCRIPTION}
+                      className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
+                    />
+                    <p className="mt-1 text-[10px] text-slate-400">{PASSWORD_POLICY_DESCRIPTION}</p>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-purple-700 mb-1">
+                      Confirm New Password
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      value={confirmNewPassword}
+                      onChange={(e) => setConfirmNewPassword(e.target.value)}
+                      placeholder="Re-enter the new password"
                       className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
                     />
                   </div>
@@ -754,7 +795,13 @@ export default function Administration({
                   <div className="flex items-center justify-end gap-2 pt-3">
                     <button
                       type="button"
-                      onClick={() => setIsChangingPassword(false)}
+                      onClick={() => {
+                        setIsChangingPassword(false);
+                        setOldPassword('');
+                        setNewPassword('');
+                        setConfirmNewPassword('');
+                        setPasswordError(null);
+                      }}
                       className="px-3 py-2 text-xs font-bold text-slate-500 hover:text-slate-700"
                     >
                       Cancel

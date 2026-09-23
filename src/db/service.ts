@@ -57,6 +57,7 @@ import {
   auditLogs
 } from './schema.ts';
 import { eq, ne, and, or, ilike, gte, lte, asc, desc, sql } from 'drizzle-orm';
+import { randomBytes } from 'node:crypto';
 import { hashPassword, isHashed } from '../auth/password.ts';
 import { istTimestamp } from '../auth/time.ts';
 import { redactSensitive } from './auditRedact.ts';
@@ -120,31 +121,67 @@ import {
 } from '../types.ts';
 import { GpsVehicleMapping } from '../services/gps/gpsTypes.ts';
 
+// 2026-09-21 security hardening: every one of these `pass` values used to be
+// each real employee's actual live committed-to-git plaintext password
+// (seedDatabase below inserts a user row verbatim the first time its
+// username doesn't yet exist - migratePlaintextPasswords then hashes it at
+// next startup, but the plaintext SOURCE VALUE itself remained permanently
+// readable by anyone with repo/git-history access, and stayed each account's
+// real password until that specific employee happened to use Change
+// Password or Forgot Password on their own). Hardcoded real passwords are
+// removed from source entirely - each seed row below now gets its own
+// cryptographically random password, generated fresh in memory every time
+// this module loads, never logged, never persisted anywhere but the
+// (immediately bcrypt-hashed) database row it seeds.
+//
+// This is SAFE for every account that already exists in the database
+// (i.e. all of production today): seedDatabase's own `missingUsers` filter
+// only ever inserts a username that doesn't already have a row, so this
+// change touches zero already-seeded accounts and rotates nobody's real,
+// currently-working password. It only changes what happens the ONE time a
+// brand-new, empty `users` table is seeded (a fresh environment, a
+// disaster-recovery restore) - previously that would silently recreate
+// every account under the exact same passwords anyone could already read
+// in this file/git history; now nobody (including whoever ran the seed)
+// knows the resulting password, so the ONLY way to actually get into a
+// freshly-seeded account is through Forgot Password (email OTP) or an
+// authorized Super Admin/HR-assisted recovery - see this file's own
+// changelog entry (2026-09-21) for the recommended design, not yet built.
+function generateRandomSeedPassword(): string {
+  // 24 random bytes, base64url-encoded (~32 chars, no +/= to worry about
+  // shell-escaping or copy/paste) - far longer/stronger than anything a
+  // human would have picked, and it never needs to be typed by anyone: the
+  // real, usable password for a freshly-seeded account is always set
+  // afterward via Forgot Password or admin-assisted recovery, never this
+  // value.
+  return randomBytes(24).toString('base64url');
+}
+
 // Default Users Seed
 export const DEFAULT_USERS = [
-  { username: 'anand', name: 'Anand.N', department: 'super_admin', departmentLabel: 'Super Administration', email: 'anand.n@kcmlogistics.in', pass: 'KCM@anand852' },
-  { username: 'chethan', name: 'Chethan KK', department: 'super_admin', departmentLabel: 'Super Administration', email: 'chethan@kcmlogistics.in', pass: 'KCM@chethan419' },
-  { username: 'chandana', name: 'Chandana LN', department: 'vehicle_manager', departmentLabel: 'Vehicle Data Manager', email: 'ln.chandana@kcmlogistics.in', pass: 'KCM@chandana923' },
-  { username: 'divya', name: 'Divya', department: 'billing', departmentLabel: 'Billing Dept', email: 'divya@kcmlogistics.in', pass: 'KCM@divya741' },
-  { username: 'bhagya', name: 'Bhagya S', department: 'billing', departmentLabel: 'MIS & Billing / HR Admin', email: 'bhagya@kcmlogistics.in', pass: 'KCM@bhagya308' },
-  { username: 'praveenkumar', name: 'Praveen Kumar VP', department: 'fuel_management', departmentLabel: 'Fuel Management', email: 'praveenkumar@kcmlogistics.in', pass: 'KCM@praveen652' },
-  { username: 'chandanreddy', name: 'Chandan Reddy', department: 'fuel_management', departmentLabel: 'Fuel Management', email: 'chandanreddy@kcmlogistics.in', pass: 'KCM@chandan580' },
-  { username: 'vinoda', name: 'Vinoda', department: 'petty_cash', departmentLabel: 'Petty Cash Desk', email: 'vinod@kcmlogistics.in', pass: 'KCM@vinod194' },
-  { username: 'ramesh', name: 'Ramesh', department: 'petty_cash', departmentLabel: 'Petty Cash Desk', email: 'ramesh@kcmlogistics.in', pass: 'KCM@ramesh273' },
-  { username: 'shashi', name: 'Shashi', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'shashikumar@kcmlogistics.in', pass: 'KCM@shashi642' },
-  { username: 'saneel', name: 'Saneel', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'saneel@kcmlogistics.in', pass: 'KCM@saneel105' },
-  { username: 'rajeshwar', name: 'Rajeshwar', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'rajeshwar@kcmlogistics.in', pass: 'KCM@rajeshwar498' },
-  { username: 'rakshina', name: 'Rakshina', department: 'accounts_finance', departmentLabel: 'Accounts & Finance', email: 'finance@kcmlogistics.in', pass: 'KCM@finance337' },
-  { username: 'nagaraju', name: 'Nagaraju Linga', department: 'maintenance', departmentLabel: 'Driver Coordination', email: 'nagaraju.linga@kcmlogistics.in', pass: 'KCM@nagaraju471' },
-  { username: 'hemanth', name: 'Hemanth', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'hemanth@kcmlogistics.in', pass: 'KCM@hemanth729' },
-  { username: 'ibrahim', name: 'Ibrahim', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'ibrahim@kcmlogistics.in', pass: 'KCM@ibrahim591' },
-  { username: 'super2', name: 'Super Admin Principal', department: 'super_admin', departmentLabel: 'Super Administration', email: 'superapp@kcmlogistics.in', pass: 'super123' },
+  { username: 'anand', name: 'Anand.N', department: 'super_admin', departmentLabel: 'Super Administration', email: 'anand.n@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'chethan', name: 'Chethan KK', department: 'super_admin', departmentLabel: 'Super Administration', email: 'chethan@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'chandana', name: 'Chandana LN', department: 'vehicle_manager', departmentLabel: 'Vehicle Data Manager', email: 'ln.chandana@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'divya', name: 'Divya', department: 'billing', departmentLabel: 'Billing Dept', email: 'divya@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'bhagya', name: 'Bhagya S', department: 'billing', departmentLabel: 'MIS & Billing / HR Admin', email: 'bhagya@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'praveenkumar', name: 'Praveen Kumar VP', department: 'fuel_management', departmentLabel: 'Fuel Management', email: 'praveenkumar@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'chandanreddy', name: 'Chandan Reddy', department: 'fuel_management', departmentLabel: 'Fuel Management', email: 'chandanreddy@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'vinoda', name: 'Vinoda', department: 'petty_cash', departmentLabel: 'Petty Cash Desk', email: 'vinod@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'ramesh', name: 'Ramesh', department: 'petty_cash', departmentLabel: 'Petty Cash Desk', email: 'ramesh@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'shashi', name: 'Shashi', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'shashikumar@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'saneel', name: 'Saneel', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'saneel@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'rajeshwar', name: 'Rajeshwar', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'rajeshwar@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'rakshina', name: 'Rakshina', department: 'accounts_finance', departmentLabel: 'Accounts & Finance', email: 'finance@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'nagaraju', name: 'Nagaraju Linga', department: 'maintenance', departmentLabel: 'Driver Coordination', email: 'nagaraju.linga@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'hemanth', name: 'Hemanth', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'hemanth@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'ibrahim', name: 'Ibrahim', department: 'maintenance', departmentLabel: 'Maintenance Garage', email: 'ibrahim@kcmlogistics.in', pass: generateRandomSeedPassword() },
+  { username: 'super2', name: 'Super Admin Principal', department: 'super_admin', departmentLabel: 'Super Administration', email: 'superapp@kcmlogistics.in', pass: generateRandomSeedPassword() },
   // New account (2026-09-05, direct request) - department 'administration' is
   // otherwise unused anywhere in the app (no hasAccess branch grants it
   // anything), so this carries zero automatic module access on its own;
   // her only real access is Petty Cash view-only, granted explicitly via
   // PETTY_CASH_VIEW_ONLY_EMAILS in server.ts.
-  { username: 'pratibha', name: 'Pratibha', department: 'administration', departmentLabel: 'Administration', email: 'prathiba@kcmlogistics.in', pass: 'KCM@prathiba463' },
+  { username: 'pratibha', name: 'Pratibha', department: 'administration', departmentLabel: 'Administration', email: 'prathiba@kcmlogistics.in', pass: generateRandomSeedPassword() },
 ];
 
 const initialVehicles = [

@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 import DateInput from './DateInput';
 import { computeMonthsCompleted, computeDueDate } from '../utils/loanDates';
+import { authFetch } from '../authFetch';
 
 interface FleetSheetProps {
   vehicles: Vehicle[];
@@ -579,7 +580,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
         'Reg. No.': editForm['Reg. No.'] || editForm.regNo
       };
 
-      const response = await fetch('/api/fleet', {
+      const response = await authFetch('/api/fleet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(finalVehicle)
@@ -1284,7 +1285,7 @@ export default function FleetSheet({ vehicles, userRole, userEmail, onUpdateVehi
                                               try {
                                                 const formData = new FormData();
                                                 formData.append('file', file);
-                                                const res = await fetch('/api/upload/vehicle', { method: 'POST', body: formData });
+                                                const res = await authFetch('/api/upload/vehicle', { method: 'POST', body: formData });
                                                 const result = await res.json();
                                                 if (!result.success) {
                                                   triggerNotif(result.message || 'Failed to upload document.', 'error');

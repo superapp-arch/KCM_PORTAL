@@ -14,6 +14,7 @@ import { DetectionConfidence } from '../../utils/scanner/documentDetector';
 import { QualityCheckResult } from '../../utils/scanner/qualityCheck';
 import ManualCropEditor from './ManualCropEditor';
 import LiveCameraCapture from './LiveCameraCapture';
+import { authFetch } from '../../authFetch';
 
 // Petty Cash > Actions > Docs > "Scan Invoice" (2026-09-08 direct request,
 // 2026-09-09 speed follow-up: ~100 invoices/day, the scanner must never
@@ -358,7 +359,7 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
       const formData = new FormData();
       formData.append('file', new File([blob], uploadName, { type: 'image/jpeg' }));
 
-      const response = await fetch('/api/upload/pettycash', { method: 'POST', body: formData });
+      const response = await authFetch('/api/upload/pettycash', { method: 'POST', body: formData });
       const result = await response.json().catch(() => ({ success: false }));
       if (!response.ok || !result.success) {
         throw new Error(result.message || 'Failed to upload the invoice. Please check your connection and try again.');

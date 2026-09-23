@@ -55,6 +55,12 @@ export default function App() {
   // in" rather than a blank form with no explanation. See
   // registerSessionExpiredHandler below.
   const [sessionExpiredNotice, setSessionExpiredNotice] = useState<string | null>(null);
+  // Non-destructive connectivity warning (2026-09-21 security/reliability
+  // hardening) - shown while still fully logged in, for a transient
+  // 502/503/504/network blip after authFetch's own retries are exhausted
+  // (see installBackendUnreachableGuard) - never logs the user out or
+  // reloads the page; clears itself the moment a request succeeds again.
+  const [connectionWarning, setConnectionWarning] = useState<string | null>(null);
 
   // Departmental Data Lists
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -180,6 +186,14 @@ export default function App() {
       // EMI/Loan figure; their Loan Management tab stays hidden.
       const hasLoanAccess = forUser?.department === 'super_admin' || forUser?.email === 'finance@kcmlogistics.in' || forUser?.email === 'bhagya@kcmlogistics.in' || forUser?.email === 'vinod@kcmlogistics.in';
       const hasHrAccess = forUser?.department === 'super_admin' || forUser?.email === 'bhagya@kcmlogistics.in' || forUser?.email === 'vinod@kcmlogistics.in';
+      // 2026-09-21 security hardening: Accounts & Finance and Fleet
+      // Maintenance API routes were entirely unauthenticated server-side
+      // (client-tab-hidden only - see server.ts's requireAccountsAccess/
+      // requireMaintenanceAccess, added alongside this) - these two mirror
+      // hasAccess('accounts')/hasAccess('maintenance') in Administration.tsx
+      // exactly, same reasoning as hasBillingAccess etc. above.
+      const hasAccountsAccess = forUser?.department === 'super_admin' || forUser?.department === 'accounts_finance' || forUser?.email === 'bhagya@kcmlogistics.in';
+      const hasMaintenanceAccess = forUser?.department === 'super_admin' || forUser?.department === 'maintenance' || forUser?.email === 'vinod@kcmlogistics.in' || forUser?.email === 'bhagya@kcmlogistics.in';
       const [
         fleetRes,
         fuelRes,
@@ -216,28 +230,46 @@ export default function App() {
         dieselBunkAccountsRes,
         dieselBunkPaymentsRes
       ] = await Promise.all([
-        fetch('/api/fleet'),
+        // 2026-09-21 security hardening: was a plain fetch() with no
+        // Authorization header - server.ts's GET /api/fleet now requires any
+        // authenticated session (previously no server-side auth at all, see
+        // requireFleetReadAccess), so this must carry the token too or every
+        // legitimate employee would silently stop seeing fleet data.
+        authFetch('/api/fleet'),
         authFetch('/api/fuel'),
         hasBillingAccess ? authFetch('/api/billing') : Promise.resolve(null),
         authFetch('/api/petty-cash'),
         authFetch('/api/market-pod'),
         authFetch('/api/petty-cash-advances'),
-        fetch('/api/maintenance'),
-        fetch('/api/maintenance-service-stations'),
-        fetch('/api/breakdown-reports'),
-        fetch('/api/vehicle-service-schedules'),
-        fetch('/api/vehicle-maintenance-reference'),
+        // 2026-09-21 security hardening: Fleet Maintenance's whole API
+        // surface (this and the 10 fetch()es below down to service-station-
+        // inspections) was completely unauthenticated server-side - see
+        // requireMaintenanceAccess in server.ts. Gated the same way
+        // hasBillingAccess/hasWarehouseAccess already are above.
+        hasMaintenanceAccess ? authFetch('/api/maintenance') : Promise.resolve(null),
+        hasMaintenanceAccess ? authFetch('/api/maintenance-service-stations') : Promise.resolve(null),
+        hasMaintenanceAccess ? authFetch('/api/breakdown-reports') : Promise.resolve(null),
+        hasMaintenanceAccess ? authFetch('/api/vehicle-service-schedules') : Promise.resolve(null),
+        hasMaintenanceAccess ? authFetch('/api/vehicle-maintenance-reference') : Promise.resolve(null),
         authFetch('/api/drivers/petty-cash-advances'),
         hasWarehouseAccess ? authFetch('/api/warehouse-rate-overrides') : Promise.resolve(null),
-        fetch('/api/tire-brands'),
-        fetch('/api/tire-records'),
-        fetch('/api/battery-records'),
-        fetch('/api/tools-checklist-records'),
-        fetch('/api/service-station-spare-parts'),
-        fetch('/api/service-station-inspections'),
-        fetch('/api/accounts'),
+        hasMaintenanceAccess ? authFetch('/api/tire-brands') : Promise.resolve(null),
+        hasMaintenanceAccess ? authFetch('/api/tire-records') : Promise.resolve(null),
+        hasMaintenanceAccess ? authFetch('/api/battery-records') : Promise.resolve(null),
+        hasMaintenanceAccess ? authFetch('/api/tools-checklist-records') : Promise.resolve(null),
+        hasMaintenanceAccess ? authFetch('/api/service-station-spare-parts') : Promise.resolve(null),
+        hasMaintenanceAccess ? authFetch('/api/service-station-inspections') : Promise.resolve(null),
+        // 2026-09-21 security hardening: /api/accounts had no server-side
+        // auth at all (see requireAccountsAccess in server.ts) - gated the
+        // same way as Billing/Warehouse/Loans/HR above.
+        hasAccountsAccess ? authFetch('/api/accounts') : Promise.resolve(null),
         hasHrAccess ? authFetch('/api/staff/employees') : Promise.resolve(null),
-        fetch('/api/notifications'),
+        // 2026-09-21 security hardening: was a plain fetch() with no
+        // Authorization header - GET /api/notifications and GET /api/alerts
+        // now require any authenticated session server-side (previously
+        // reachable with none at all, including the 'security'-type entries
+        // covering abnormal login attempts).
+        authFetch('/api/notifications'),
         hasWarehouseAccess ? authFetch('/api/warehouse') : Promise.resolve(null),
         authFetch('/api/mileage'),
         authFetch('/api/fuel-vendors'),
@@ -246,7 +278,10 @@ export default function App() {
         authFetch('/api/drivers/employees'),
         authFetch('/api/drivers/vehicle-lookup'),
         hasLoanAccess ? authFetch('/api/vehicle-loans') : Promise.resolve(null),
-        fetch('/api/vehicle-incidents'),
+        // 2026-09-21 security hardening: was a plain fetch() with no
+        // Authorization header - GET /api/vehicle-incidents now requires any
+        // authenticated session server-side (see requireFleetReadAccess).
+        authFetch('/api/vehicle-incidents'),
         hasLoanAccess ? authFetch('/api/business-loans') : Promise.resolve(null),
         authFetch('/api/diesel-bunk-accounts'),
         authFetch('/api/diesel-bunk-payments')
@@ -314,7 +349,7 @@ export default function App() {
 
   // State mutation wrappers to talk directly to server
   const handleUpdateVehicle = async (vehicle: Vehicle) => {
-    const res = await fetch('/api/fleet', {
+    const res = await authFetch('/api/fleet', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(vehicle)
@@ -548,7 +583,7 @@ export default function App() {
   };
 
   const handleAddMaintenanceRecord = async (record: Omit<MaintenanceRecord, 'id'>) => {
-    const res = await fetch('/api/maintenance', {
+    const res = await authFetch('/api/maintenance', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(record)
@@ -562,7 +597,7 @@ export default function App() {
   };
 
   const handleSaveVehicleServiceSchedule = async (schedule: VehicleServiceSchedule) => {
-    const res = await fetch('/api/vehicle-service-schedules', {
+    const res = await authFetch('/api/vehicle-service-schedules', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(schedule)
@@ -576,7 +611,7 @@ export default function App() {
   };
 
   const handleSaveVehicleMaintenanceReference = async (record: VehicleMaintenanceReference) => {
-    const res = await fetch('/api/vehicle-maintenance-reference', {
+    const res = await authFetch('/api/vehicle-maintenance-reference', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(record)
@@ -616,7 +651,7 @@ export default function App() {
   };
 
   const handleAddTireBrand = async (name: string) => {
-    const res = await fetch('/api/tire-brands', {
+    const res = await authFetch('/api/tire-brands', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name })
@@ -630,7 +665,7 @@ export default function App() {
   };
 
   const handleSaveTireRecord = async (record: TireRecord | Omit<TireRecord, 'id'>) => {
-    const res = await fetch('/api/tire-records', {
+    const res = await authFetch('/api/tire-records', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(record)
@@ -644,7 +679,7 @@ export default function App() {
   };
 
   const handleDeleteTireRecord = async (id: string) => {
-    const res = await fetch(`/api/tire-records/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/tire-records/${id}`, { method: 'DELETE' });
     if (res.ok) {
       await fetchAllData();
     } else {
@@ -654,7 +689,7 @@ export default function App() {
   };
 
   const handleSaveBatteryRecord = async (record: BatteryRecord | Omit<BatteryRecord, 'id'>) => {
-    const res = await fetch('/api/battery-records', {
+    const res = await authFetch('/api/battery-records', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(record)
@@ -668,7 +703,7 @@ export default function App() {
   };
 
   const handleDeleteBatteryRecord = async (id: string) => {
-    const res = await fetch(`/api/battery-records/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/battery-records/${id}`, { method: 'DELETE' });
     if (res.ok) {
       await fetchAllData();
     } else {
@@ -678,7 +713,7 @@ export default function App() {
   };
 
   const handleSaveToolsChecklistRecord = async (record: Omit<ToolsChecklistRecord, 'id'>) => {
-    const res = await fetch('/api/tools-checklist-records', {
+    const res = await authFetch('/api/tools-checklist-records', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(record)
@@ -692,7 +727,7 @@ export default function App() {
   };
 
   const handleDeleteToolsChecklistRecord = async (id: string) => {
-    const res = await fetch(`/api/tools-checklist-records/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/tools-checklist-records/${id}`, { method: 'DELETE' });
     if (res.ok) {
       await fetchAllData();
     } else {
@@ -702,7 +737,7 @@ export default function App() {
   };
 
   const handleSaveServiceStationSparePart = async (record: ServiceStationSparePart | Omit<ServiceStationSparePart, 'id'>) => {
-    const res = await fetch('/api/service-station-spare-parts', {
+    const res = await authFetch('/api/service-station-spare-parts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(record)
@@ -716,7 +751,7 @@ export default function App() {
   };
 
   const handleDeleteServiceStationSparePart = async (id: string) => {
-    const res = await fetch(`/api/service-station-spare-parts/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/service-station-spare-parts/${id}`, { method: 'DELETE' });
     if (res.ok) {
       await fetchAllData();
     } else {
@@ -726,7 +761,7 @@ export default function App() {
   };
 
   const handleSaveServiceStationInspection = async (record: ServiceStationInspection | Omit<ServiceStationInspection, 'id'>) => {
-    const res = await fetch('/api/service-station-inspections', {
+    const res = await authFetch('/api/service-station-inspections', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(record)
@@ -740,7 +775,7 @@ export default function App() {
   };
 
   const handleDeleteServiceStationInspection = async (id: string) => {
-    const res = await fetch(`/api/service-station-inspections/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/service-station-inspections/${id}`, { method: 'DELETE' });
     if (res.ok) {
       await fetchAllData();
     } else {
@@ -750,7 +785,7 @@ export default function App() {
   };
 
   const handleAddMaintenanceServiceStation = async (station: Omit<MaintenanceServiceStation, 'id'>) => {
-    const res = await fetch('/api/maintenance-service-stations', {
+    const res = await authFetch('/api/maintenance-service-stations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(station)
@@ -764,7 +799,7 @@ export default function App() {
   };
 
   const handleDeleteMaintenanceServiceStation = async (id: string) => {
-    const res = await fetch(`/api/maintenance-service-stations/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/maintenance-service-stations/${id}`, { method: 'DELETE' });
     if (res.ok) {
       await fetchAllData();
     } else {
@@ -774,7 +809,7 @@ export default function App() {
   };
 
   const handleAddBreakdownReport = async (report: Omit<BreakdownReport, 'id'>) => {
-    const res = await fetch('/api/breakdown-reports', {
+    const res = await authFetch('/api/breakdown-reports', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(report)
@@ -788,7 +823,7 @@ export default function App() {
   };
 
   const handleUpdateBreakdownReport = async (id: string, report: Partial<BreakdownReport>) => {
-    const res = await fetch(`/api/breakdown-reports/${id}`, {
+    const res = await authFetch(`/api/breakdown-reports/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(report)
@@ -802,7 +837,7 @@ export default function App() {
   };
 
   const handleDeleteBreakdownReport = async (id: string) => {
-    const res = await fetch(`/api/breakdown-reports/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/breakdown-reports/${id}`, { method: 'DELETE' });
     if (res.ok) {
       await fetchAllData();
     } else {
@@ -815,7 +850,7 @@ export default function App() {
   // claimed/not-claimed indicator) - same POST(create)/PUT(update)/DELETE
   // pattern as breakdown reports above.
   const handleAddVehicleIncident = async (incident: Omit<VehicleIncident, 'id' | 'createdAt'>) => {
-    const res = await fetch('/api/vehicle-incidents', {
+    const res = await authFetch('/api/vehicle-incidents', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(incident)
@@ -829,7 +864,7 @@ export default function App() {
   };
 
   const handleUpdateVehicleIncident = async (id: string, incident: Partial<VehicleIncident>) => {
-    const res = await fetch(`/api/vehicle-incidents/${id}`, {
+    const res = await authFetch(`/api/vehicle-incidents/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(incident)
@@ -843,7 +878,7 @@ export default function App() {
   };
 
   const handleDeleteVehicleIncident = async (id: string) => {
-    const res = await fetch(`/api/vehicle-incidents/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/vehicle-incidents/${id}`, { method: 'DELETE' });
     if (res.ok) {
       await fetchAllData();
     } else {
@@ -853,7 +888,7 @@ export default function App() {
   };
 
   const handleAddAccountsEntry = async (entry: Omit<AccountsEntry, 'id'>) => {
-    const res = await fetch('/api/accounts', {
+    const res = await authFetch('/api/accounts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(entry)
@@ -1027,7 +1062,7 @@ export default function App() {
   };
 
   const handleDeleteVehicle = async (id: string) => {
-    const res = await fetch(`/api/fleet/${encodeURIComponent(id)}`, {
+    const res = await authFetch(`/api/fleet/${encodeURIComponent(id)}`, {
       method: 'DELETE'
     });
     if (res.ok) {
@@ -1123,7 +1158,7 @@ export default function App() {
   };
 
   const handleUpdateMaintenanceRecord = async (id: string, record: Partial<MaintenanceRecord>) => {
-    const res = await fetch(`/api/maintenance/${id}`, {
+    const res = await authFetch(`/api/maintenance/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(record)
@@ -1137,7 +1172,7 @@ export default function App() {
   };
 
   const handleDeleteMaintenanceRecord = async (id: string) => {
-    const res = await fetch(`/api/maintenance/${id}`, {
+    const res = await authFetch(`/api/maintenance/${id}`, {
       method: 'DELETE'
     });
     if (res.ok) {
@@ -1149,7 +1184,7 @@ export default function App() {
   };
 
   const handleUpdateAccountsEntry = async (id: string, entry: Partial<AccountsEntry>) => {
-    const res = await fetch(`/api/accounts/${id}`, {
+    const res = await authFetch(`/api/accounts/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(entry)
@@ -1163,7 +1198,7 @@ export default function App() {
   };
 
   const handleDeleteAccountsEntry = async (id: string) => {
-    const res = await fetch(`/api/accounts/${id}`, {
+    const res = await authFetch(`/api/accounts/${id}`, {
       method: 'DELETE'
     });
     if (res.ok) {
@@ -1471,6 +1506,7 @@ export default function App() {
     setSessionExpiredNotice(null);
     resetSessionExpiredNotification(); // a fresh login can trigger the expiry flow again if it happens a second time
     resetBackendUnreachableNotification(); // likewise for a later, separate outage
+    setConnectionWarning(null);
     setUser(loggedInUser);
     if (sessionToken) {
       setToken(sessionToken);
@@ -1489,6 +1525,20 @@ export default function App() {
     localStorage.removeItem('kcm_session_token');
   };
 
+  // 2026-09-21 security hardening: a successful Change Password now
+  // invalidates every session for the account server-side (see
+  // /api/change-password in server.ts), this browser tab's own session
+  // included - so it must log out and send the employee back to a fresh
+  // login immediately, with a clear, accurate explanation (NOT the generic
+  // "session expired... was NOT saved" copy below, which would be
+  // misleading here - the password change itself did save). Same
+  // setNotice-then-handleLogout pattern as the two genuine-expiry handlers
+  // below.
+  const handlePasswordChanged = () => {
+    setSessionExpiredNotice('Password changed successfully. Please log in again with your new password.');
+    handleLogout();
+  };
+
   // Fires once, globally, the moment any authFetch call comes back 401 (see
   // authFetch.ts) - drops the user straight back to the login screen with a
   // clear explanation instead of letting whatever they were doing quietly
@@ -1501,42 +1551,48 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Deploy-gap safety net (2026-08-28): if the backend is unreachable or
-  // returns 502/503/504 (a deploy/restart mid-flight), log the employee out
-  // and force a full reload - see authFetch.ts's installBackendUnreachableGuard.
-  // The reload also picks up the freshly-built frontend bundle, so a stale
-  // tab left open across a deploy never keeps running old JS against a
-  // newly-shaped API. A short delay lets the message actually render before
-  // the reload wipes it.
+  // Deploy-gap / transient-network safety net (2026-09-21 security/
+  // reliability hardening - see authFetch.ts's installBackendUnreachableGuard
+  // for the full reasoning). A 502/503/504 or network-level failure - a
+  // deploy/restart mid-flight, a dropped Wi-Fi packet, a mobile network
+  // handover - is retried automatically there for GET requests; this only
+  // ever fires once those retries are exhausted (or immediately for a
+  // failed save, which is never auto-retried). It shows a plain warning and
+  // does nothing else: no logout, no reload, no loss of whatever the
+  // employee was typing. `recovered` clears the same warning the moment a
+  // subsequent request actually succeeds.
   useEffect(() => {
     installBackendUnreachableGuard();
-    registerBackendUnreachableHandler(() => {
-      setSessionExpiredNotice('The server is temporarily unavailable (a deployment or restart may be in progress). You have been logged out - anything in progress was NOT saved. Reloading...');
-      handleLogout();
-      setTimeout(() => window.location.reload(), 2500);
+    registerBackendUnreachableHandler((recovered) => {
+      setConnectionWarning(recovered ? null : 'Having trouble reaching the server - retrying automatically. Your work is not lost; you can keep typing.');
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Proactive idle logout (2026-08-28): mirrors src/auth/session.ts's own
-  // SESSION_IDLE_TTL_MS exactly (4 hours). Tracks real interaction (mouse/
-  // keyboard/touch/scroll), not just API activity, so a tab left open and
-  // genuinely untouched for 4 hours gets logged out client-side the moment
+  // Proactive idle logout (2026-08-28; window lowered 4h -> 1h on 2026-09-21
+  // direct request): mirrors src/auth/session.ts's own SESSION_IDLE_TTL_MS
+  // exactly. Tracks real interaction (mouse/keyboard/touch/scroll) - NOT API
+  // activity, and specifically NOT the connectivity-retry machinery in
+  // authFetch.ts/installBackendUnreachableGuard - so a tab left open and
+  // genuinely untouched for 1 hour gets logged out client-side the moment
   // it elapses, instead of only discovering the session died on the next
   // save attempt (which is what used to make an entry typed after a long
-  // idle stretch silently fail to save).
+  // idle stretch silently fail to save). A transient 502/503/504/network
+  // blip never resets or shortens this window either way - it isn't real
+  // user interaction, but it also isn't a reason to log out sooner; only
+  // this timer, or a genuine 401, ever ends the session client-side.
   useEffect(() => {
     if (!user) return;
-    const IDLE_LIMIT_MS = 4 * 60 * 60 * 1000;
+    const IDLE_LIMIT_MS = 60 * 60 * 1000; // 1 hour
     let lastActivity = Date.now();
     const markActive = () => { lastActivity = Date.now(); };
     const activityEvents: (keyof WindowEventMap)[] = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
     activityEvents.forEach(evt => window.addEventListener(evt, markActive, { passive: true }));
-    // Checked once a minute - the idle window is hours wide, a minute of
+    // Checked once a minute - the idle window is an hour wide, a minute of
     // imprecision here is invisible.
     const idleCheck = setInterval(() => {
       if (Date.now() - lastActivity >= IDLE_LIMIT_MS) {
-        setSessionExpiredNotice('You were logged out after 4 hours of inactivity. Please log in again to continue - anything unsaved was NOT saved.');
+        setSessionExpiredNotice('You were logged out after 1 hour of inactivity. Please log in again to continue - anything unsaved was NOT saved.');
         handleLogout();
       }
     }, 60 * 1000);
@@ -1569,10 +1625,19 @@ export default function App() {
 
   return (
     <>
+      {connectionWarning && (
+        <div
+          role="status"
+          className="fixed top-0 inset-x-0 z-[100] bg-amber-500 text-amber-950 text-xs font-semibold text-center py-1.5 px-3 shadow-md"
+        >
+          {connectionWarning}
+        </div>
+      )}
       <Administration
         user={user}
         token={token}
         onLogout={handleLogout}
+        onPasswordChanged={handlePasswordChanged}
         vehicles={vehicles}
         fuelLogs={fuelLogs}
         invoices={invoices}
