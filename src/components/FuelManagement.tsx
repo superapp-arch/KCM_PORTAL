@@ -2394,7 +2394,6 @@ export default function FuelManagement({
                           dropdown into Vehicle No's (extraBoolFilter) -
                           same mileageHighlight filter state/logic. */}
                       <ColumnFilterHeader label="Vehicle No" type="text" values={logs.map(l => l.vehicleNumber)} value={columnFilters.vehicleNumber} onChange={f => setColumnFilter('vehicleNumber', f)} sortKey="vehicleNumber" sort={sort} onSort={handleSort} sortType="numeric" extraBoolFilter={{ value: columnFilters.mileageHighlight, onChange: f => setColumnFilter('mileageHighlight', f), labels: { yes: 'Highlighted', no: 'Not Highlighted' } }} />
-                      <span className="normal-case tracking-normal font-bold">Mileage</span>
                     </div>
                   </th>
                   <th className="px-3 py-2.5"><ColumnFilterHeader label="Indent No" type="text" values={logs.map(l => l.indentNumber)} value={columnFilters.indentNumber} onChange={f => setColumnFilter('indentNumber', f)} sortKey="indentNumber" sort={sort} onSort={handleSort} sortType="numeric" /></th>
