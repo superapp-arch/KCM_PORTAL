@@ -43,6 +43,17 @@ interface ColumnFilterHeaderProps {
   // when the raw true/false value means something more specific than a
   // plain yes/no. Ignored for every other type; defaults to "Yes"/"No".
   boolLabels?: { yes: string; no: string };
+  // Optional second, independent All/Yes/No filter shown inside this same
+  // dropdown, between the sort options and this column's own filter panel
+  // (2026-09-23 direct request - Fuel Management's Highlighted/Not
+  // Highlighted filter moved into the Vehicle No dropdown). It has its own
+  // value/onChange, applies immediately on click like a 'boolean' panel, and
+  // is untouched by this column's own Apply/Clear Filter buttons.
+  extraBoolFilter?: {
+    value?: ColumnFilterState;
+    onChange: (next: ColumnFilterState | undefined) => void;
+    labels: { yes: string; no: string };
+  };
 }
 
 const NUMBER_OPS: { value: NumberFilterOp; label: string }[] = [
@@ -63,7 +74,7 @@ const DATE_OPS: { value: DateFilterOp; label: string }[] = [
 
 export default function ColumnFilterHeader({
   label, type, values, value, onChange,
-  sortKey, sort, onSort, sortType = 'text', sortLabels, align = 'left', boolLabels
+  sortKey, sort, onSort, sortType = 'text', sortLabels, align = 'left', boolLabels, extraBoolFilter
 }: ColumnFilterHeaderProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -137,6 +148,8 @@ export default function ColumnFilterHeader({
     : uniqueValues;
 
   const active = isColumnFilterActive(value);
+  const extraBoolValue = extraBoolFilter?.value?.boolValue;
+  const iconActive = active || (!!extraBoolFilter && isColumnFilterActive(extraBoolFilter.value));
 
   const toggleValue = (v: string) => {
     setDraftSelected(prev => {
@@ -200,9 +213,9 @@ export default function ColumnFilterHeader({
         type="button"
         onClick={() => (open ? setOpen(false) : openPanel())}
         title="Filter"
-        className={`inline-flex items-center cursor-pointer transition-colors ${active ? 'text-amber-400' : 'hover:text-white opacity-60 hover:opacity-100'}`}
+        className={`inline-flex items-center cursor-pointer transition-colors ${iconActive ? 'text-amber-400' : 'hover:text-white opacity-60 hover:opacity-100'}`}
       >
-        <FilterIcon className="w-2.5 h-2.5" fill={active ? 'currentColor' : 'none'} />
+        <FilterIcon className="w-2.5 h-2.5" fill={iconActive ? 'currentColor' : 'none'} />
       </button>
 
       {open && (
@@ -222,6 +235,25 @@ export default function ColumnFilterHeader({
                   >
                     {opt.label}
                     {isSortActive && sortDirection === opt.direction && <Check className="w-3 h-3 shrink-0" />}
+                  </button>
+                ))}
+              </div>
+              <div className="border-t border-slate-100 my-1" />
+            </>
+          )}
+
+          {extraBoolFilter && (
+            <>
+              <div className="px-3 pb-1.5 space-y-0.5">
+                {([[undefined, 'All'], ['yes', extraBoolFilter.labels.yes], ['no', extraBoolFilter.labels.no]] as const).map(([v, l]) => (
+                  <button
+                    key={l}
+                    type="button"
+                    onClick={() => extraBoolFilter.onChange(v ? { boolValue: v } : undefined)}
+                    className={`w-full text-left px-2 py-1 rounded hover:bg-slate-100 cursor-pointer flex items-center justify-between ${extraBoolValue === v ? 'text-pink-600 font-black' : ''}`}
+                  >
+                    {l}
+                    {extraBoolValue === v && <Check className="w-3 h-3 shrink-0" />}
                   </button>
                 ))}
               </div>

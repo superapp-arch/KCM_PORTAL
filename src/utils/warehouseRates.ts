@@ -5,7 +5,7 @@
 
 // Config, not hard-coded inline in the formula - change this one place if
 // the fuel cost percentage ever changes.
-export const FUEL_COST_PERCENT = 3.5;
+export const FUEL_COST_PERCENT = 4.75;
 
 export const KM_SLAB_SUGGESTIONS = [2000, 2500, 3000];
 

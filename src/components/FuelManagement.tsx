@@ -256,20 +256,18 @@ export default function FuelManagement({
   // signal - see server.ts's own comment on filterFuelLogsForViewer.
   const isForeignEntry = (log: FuelLog): boolean => !isSuperAdmin && !isRqIdOnlyUser && !isViewOnlyUser && !!log.enteredBy;
 
-  // One-directional Mileage-only exception, Chandan -> Praveen ONLY, never
-  // the reverse (2026-09-19 direct request) - mirrors server.ts's own
-  // FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS exactly. isForeignEntry() above is
-  // direction-blind by design (true for EITHER direction, since it only
+  // Mileage-only exception between Chandan and Praveen - originally one-way,
+  // Chandan -> Praveen (2026-09-19 direct request); symmetric since
+  // 2026-09-23 (direct request: Praveen gets the same Mileage-only access
+  // to Chandan's entries). Mirrors server.ts's own
+  // FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS exactly and stays scoped strictly to
+  // this pair. isForeignEntry() above is direction-blind by design (it only
   // ever means "not my own row" - still correct for locking the Details
-  // section either way) and must never be used on its own to decide whether
-  // Mileage is editable on a foreign row; only this helper may grant that.
-  // Without this, Praveen viewing Chandan's rows (via the All tab, or the
-  // Chandan tab - see ownerTabFilter) would see the same "Fill in Mileage"
-  // affordance Chandan legitimately gets on Praveen's rows, even though the
-  // server would already reject that write - a confusing dead-end save
-  // attempt rather than the row simply reading View only like every other
-  // field on it already does.
-  const canEditForeignMileage = (log: FuelLog): boolean => user.username === 'chandanreddy' && log.enteredBy === 'praveenkumar';
+  // section) and must never be used on its own to decide whether Mileage is
+  // editable on a foreign row; only this helper may grant that.
+  const canEditForeignMileage = (log: FuelLog): boolean =>
+    (user.username === 'chandanreddy' && log.enteredBy === 'praveenkumar') ||
+    (user.username === 'praveenkumar' && log.enteredBy === 'chandanreddy');
 
   // 2026-09-18/22 direct requests - whether an entry's Vehicle No. gets the
   // amber "Mileage not entered" highlight: missing a linked Mileage Report,
@@ -1401,13 +1399,12 @@ export default function FuelManagement({
       setMPettyCashHolder('');
     }
 
-    // A foreign entry Chandan can actually edit Mileage on (one of
-    // Praveen's) opens straight on the Mileage tab, since Details is locked
-    // read-only for him there - no reason to land him on a tab he can't do
-    // anything with. Any other foreign entry (including Praveen opening one
-    // of Chandan's, purely to view it) just opens on Details like normal -
-    // both tabs are read-only for him anyway, see the Mileage tab's own
-    // disabling below.
+    // A foreign entry the viewer can actually edit Mileage on (Chandan on one
+    // of Praveen's, or Praveen on one of Chandan's) opens straight on the
+    // Mileage tab, since Details is locked read-only there - no reason to
+    // land on a tab they can't do anything with. Any other foreign entry
+    // just opens on Details like normal - both tabs are read-only for them
+    // anyway, see the Mileage tab's own disabling below.
     setEntrySection(isForeignEntry(log) && canEditForeignMileage(log) ? 'mileage' : 'details');
     setShowSidebar(true);
   };
@@ -1421,7 +1418,8 @@ export default function FuelManagement({
     // but a disabled fieldset doesn't block the Save button itself, which
     // lives outside it. Block the whole submit outright for that case
     // rather than relying only on the server's own rejection, matching
-    // "no input, no save option" exactly for Praveen viewing Chandan's rows.
+    // "no input, no save option" for any foreign row the viewer has no
+    // Mileage-only exception on.
     if (editingIsForeign && !(editingLog && canEditForeignMileage(editingLog))) {
       triggerNotif('You cannot modify this entry.', 'error');
       return;
@@ -2287,7 +2285,7 @@ export default function FuelManagement({
               {ownerTabFilter !== 'All' && ownerTabFilter !== user.username && (
                 <span className="text-[9px] uppercase font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
                   Viewing {ownerTabFilter === 'praveenkumar' ? 'Praveen' : 'Chandan'}'s entries
-                  {user.username === 'chandanreddy' && ownerTabFilter === 'praveenkumar' ? ' - View only, except Mileage' : ' - View only'}
+                  {' - View only, except Mileage'}
                 </span>
               )}
             </div>
@@ -2387,13 +2385,16 @@ export default function FuelManagement({
                   <th className="px-3 py-2.5"><ColumnFilterHeader label="Bunk/Card" type="text" values={logs.map(l => l.bunkOrCard || 'Bunk')} value={columnFilters.bunkOrCard} onChange={f => setColumnFilter('bunkOrCard', f)} sortKey="bunkOrCard" sort={sort} onSort={handleSort} /></th>
                   <th className="px-3 py-2.5">
                     <div className="flex items-center gap-2">
-                      <ColumnFilterHeader label="Vehicle No" type="text" values={logs.map(l => l.vehicleNumber)} value={columnFilters.vehicleNumber} onChange={f => setColumnFilter('vehicleNumber', f)} sortKey="vehicleNumber" sort={sort} onSort={handleSort} sortType="numeric" />
                       {/* 2026-09-22 direct request - isolate rows still
                           missing a Mileage entry (or the opposite), same
                           amber-highlight rule as the cell itself uses (see
                           isMileageHighlighted) - so a missed one can be
-                          found by filtering instead of scanning by eye. */}
-                      <ColumnFilterHeader label="Mileage" type="boolean" value={columnFilters.mileageHighlight} onChange={f => setColumnFilter('mileageHighlight', f)} boolLabels={{ yes: 'Highlighted', no: 'Not Highlighted' }} />
+                          found by filtering instead of scanning by eye.
+                          2026-09-23: moved from the Mileage header's own
+                          dropdown into Vehicle No's (extraBoolFilter) -
+                          same mileageHighlight filter state/logic. */}
+                      <ColumnFilterHeader label="Vehicle No" type="text" values={logs.map(l => l.vehicleNumber)} value={columnFilters.vehicleNumber} onChange={f => setColumnFilter('vehicleNumber', f)} sortKey="vehicleNumber" sort={sort} onSort={handleSort} sortType="numeric" extraBoolFilter={{ value: columnFilters.mileageHighlight, onChange: f => setColumnFilter('mileageHighlight', f), labels: { yes: 'Highlighted', no: 'Not Highlighted' } }} />
+                      <span className="normal-case tracking-normal font-bold">Mileage</span>
                     </div>
                   </th>
                   <th className="px-3 py-2.5"><ColumnFilterHeader label="Indent No" type="text" values={logs.map(l => l.indentNumber)} value={columnFilters.indentNumber} onChange={f => setColumnFilter('indentNumber', f)} sortKey="indentNumber" sort={sort} onSort={handleSort} sortType="numeric" /></th>

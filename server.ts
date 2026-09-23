@@ -1213,13 +1213,18 @@ function canModifyEntryRow(row: { enteredBy?: string } | undefined, sessionUser?
   return !!row && row.enteredBy === sessionUser.username;
 }
 
-// One-way exception on top of Fuel Management's usual "only see your own
-// entries" rule: Chandan can also see Praveen's fuel entries (never the
-// reverse - Praveen still only ever sees his own), so he can fill in the
+// Exception on top of Fuel Management's usual "only see your own entries"
+// rule: Chandan can also see Praveen's fuel entries, so he can fill in the
 // Mileage section on an entry Praveen left it blank on. Keyed by username
 // (matches enteredBy), not email.
+// 2026-09-23 direct request: now symmetric - Praveen gets the exact same
+// Mileage-only access to Chandan's entries. Scoped strictly to this pair;
+// every rule reading this map (buildFuelLogUpdateForViewer's
+// mileageReportId-only write, canModifyMileageReport, Mileage Report
+// attribution) applies identically in both directions.
 const FUEL_MILEAGE_ONLY_VISIBLE_ENTRANTS: Record<string, string[]> = {
   chandanreddy: ['praveenkumar'],
+  praveenkumar: ['chandanreddy'],
 };
 
 // Generic core of the fuel-specific viewer filter below - same rules (super
