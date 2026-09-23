@@ -34,6 +34,8 @@ import {
 import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
 import { authFetch } from '../authFetch';
+import { getPeriodDateRange } from '../utils/periodRange';
+import PcDieselExpensePanel from './fuel/PcDieselExpensePanel';
 import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
 import { PETTY_CASH_USERS } from '../utils/pettyCashUsers';
 import { fuelEnteredByLabel } from '../utils/fuelEnteredBy';
@@ -75,15 +77,6 @@ const REQUESTED_BY_NAMES = [
 const sumExtraFuelExpression = (raw: string): number =>
   raw.split('+').map(s => parseFloat(s.trim())).filter(n => !isNaN(n)).reduce((sum, n) => sum + n, 0);
 
-// Resolves the [start, end] date-string window (inclusive) for a "Day /
-// Monthly Till Date / Year Till Date" period relative to a reference date -
-// shared by the on-screen ledger's view-scope tabs and the "Download Fuel
-// Report" panel below (independent controls, same underlying math).
-const getPeriodDateRange = (period: 'day' | 'month' | 'year', refDate: string): { start: string; end: string } => {
-  if (period === 'day') return { start: refDate, end: refDate };
-  if (period === 'month') return { start: `${refDate.slice(0, 7)}-01`, end: refDate };
-  return { start: `${refDate.slice(0, 4)}-01-01`, end: refDate };
-};
 
 // Which bunks are available at each location, so selecting one filters/
 // auto-fills the other. Bunks shared across multiple locations (HPCL) are
@@ -360,6 +353,8 @@ export default function FuelManagement({
   // from Jan 1 of viewDate's year.
   const [viewPeriod, setViewPeriod] = useState<'all' | 'day' | 'month' | 'year'>('all');
   const [viewDate, setViewDate] = useState(new Date().toISOString().slice(0, 10));
+  // PC Diesel Expense view (2026-09-23) - see PcDieselExpensePanel.
+  const [showPcDieselExpense, setShowPcDieselExpense] = useState(false);
 
   // Sidebar / editing state
   const [showSidebar, setShowSidebar] = useState(false);
@@ -2330,7 +2325,25 @@ export default function FuelManagement({
                 </select>
               </>
             )}
+
+            {/* PC Diesel Expense (2026-09-23 direct request) - read-only
+                live view of Petty Cash "Diesel Expenses" entries, for
+                cross-checking against fuel entries. */}
+            <button
+              type="button"
+              onClick={() => setShowPcDieselExpense(true)}
+              className="ml-2 flex items-center gap-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-700 rounded-lg px-2.5 py-1.5 text-xs font-bold cursor-pointer"
+            >
+              <Fuel className="w-3.5 h-3.5" /> PC Diesel Expense
+            </button>
           </div>
+          {showPcDieselExpense && (
+            <PcDieselExpensePanel
+              username={user.username}
+              canToggleDone={!isViewOnlyUser && !isRqIdOnlyUser}
+              onClose={() => setShowPcDieselExpense(false)}
+            />
+          )}
 
           {/* Ledger view scope - All (default) / Day / Month Till Date /
               Year Till Date, independent of the Download Fuel Report panel

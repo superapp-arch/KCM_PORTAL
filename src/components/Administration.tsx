@@ -639,37 +639,37 @@ export default function Administration({
     // name and his default landing tab (see getInitialTab above); everyone
     // else still sees it as "Super Admin Terminal".
     { id: 'admin-overview', label: user.email === 'vinod@kcmlogistics.in' ? 'Dashboard' : 'Super Admin Terminal', icon: ShieldAlert, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: user.department === 'super_admin' || user.email === 'vinod@kcmlogistics.in', badge: unreadCount },
-    // Super Admin / Principal only - hasAccess() already grants every tab to
-    // department === 'super_admin' unconditionally, and no other branch
-    // matches 'reports', so this is never reachable by any other role. This
-    // now surfaces Payroll/salary data, so keep it that way.
-    { id: 'reports', label: 'Reports & Analytics', icon: BarChart3, iconColor: 'text-violet-400', active: 'bg-gradient-to-r from-violet-500/20 to-purple-500/20 text-violet-300 border-l-4 border-violet-500', visible: hasAccess('reports') },
+    { id: 'fleet', label: 'Fleet & Vehicles', icon: FileSpreadsheet, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fleet') },
+    { id: 'gps', label: 'GPS / Live Tracking', icon: Satellite, iconColor: 'text-cyan-400', active: 'bg-gradient-to-r from-cyan-500/20 to-sky-500/20 text-cyan-300 border-l-4 border-cyan-500', visible: hasAccess('gps') },
+    { id: 'fuel', label: 'Fuel Management', icon: Fuel, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fuel') },
+    { id: 'mileage', label: 'Mileage Report', icon: Gauge, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('mileage') },
+    { id: 'payments', label: 'Diesel Payments', icon: CreditCard, iconColor: 'text-emerald-400', active: 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-300 border-l-4 border-emerald-500', visible: hasAccess('payments') },
+    { id: 'hr', label: 'HR & Payroll', icon: Contact, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('hr') },
+    { id: 'drivers', label: 'Driver Details', icon: Truck, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('drivers') },
+    { id: 'pettycash', label: 'Petty cash', icon: Landmark, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('pettycash') },
+    { id: 'vendors', label: 'Vendor Management', icon: Building2, iconColor: 'text-indigo-400', active: 'bg-gradient-to-r from-indigo-500/20 to-sky-500/20 text-indigo-300 border-l-4 border-indigo-500', visible: hasAccess('vendors') },
+    { id: 'loans', label: 'Loan Management', icon: HandCoins, iconColor: 'text-emerald-400', active: PINK_ACTIVE, visible: hasAccess('loans') },
+    { id: 'warehouse', label: 'Warehouse Details', icon: Warehouse, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('warehouse') },
+    { id: 'billing', label: 'Customer Billings', icon: FileText, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('billing') },
+    { id: 'maintenance', label: 'Fleet Maintenance', icon: Settings, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('maintenance') },
+    { id: 'accounts', label: 'Accounts and Finance', icon: DollarSign, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('accounts') },
     // Vehicle Financial Performance (2026-09-18) - Super Admin / Principal
     // only, same reasoning as Reports & Analytics above (surfaces
     // cross-module financial figures, standalone module per direct
     // instruction, not yet wired into Reports & Analytics or Accounts &
     // Finance).
     { id: 'vehicle-pnl', label: 'Vehicle Financial Performance', icon: TrendingUp, iconColor: 'text-emerald-400', active: 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-300 border-l-4 border-emerald-500', visible: hasAccess('vehicle-pnl') },
+    // Super Admin / Principal only - hasAccess() already grants every tab to
+    // department === 'super_admin' unconditionally, and no other branch
+    // matches 'reports', so this is never reachable by any other role. This
+    // now surfaces Payroll/salary data, so keep it that way.
+    { id: 'reports', label: 'Reports & Analytics', icon: BarChart3, iconColor: 'text-violet-400', active: 'bg-gradient-to-r from-violet-500/20 to-purple-500/20 text-violet-300 border-l-4 border-violet-500', visible: hasAccess('reports') },
     // Super Admin / Principal only, same reasoning as Reports & Analytics
     // above - hasAccess('audit') has no dedicated branch, so it only ever
     // resolves true via the department === 'super_admin' check at the top
     // of hasAccess(). Server-side, /api/audit-logs independently re-checks
     // this on every request (see server.ts's requireAuditAccess).
-    { id: 'audit', label: 'Audit Trail', icon: History, iconColor: 'text-rose-400', active: 'bg-gradient-to-r from-rose-500/20 to-pink-500/20 text-rose-300 border-l-4 border-rose-500', visible: hasAccess('audit') },
-    { id: 'fleet', label: 'Fleet & Vehicles', icon: FileSpreadsheet, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fleet') },
-    { id: 'gps', label: 'GPS / Live Tracking', icon: Satellite, iconColor: 'text-cyan-400', active: 'bg-gradient-to-r from-cyan-500/20 to-sky-500/20 text-cyan-300 border-l-4 border-cyan-500', visible: hasAccess('gps') },
-    { id: 'fuel', label: 'Fuel Management', icon: Fuel, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('fuel') },
-    { id: 'mileage', label: 'Mileage Report', icon: Gauge, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('mileage') },
-    { id: 'payments', label: 'Diesel Payments', icon: CreditCard, iconColor: 'text-emerald-400', active: 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-300 border-l-4 border-emerald-500', visible: hasAccess('payments') },
-    { id: 'vendors', label: 'Vendor Management', icon: Building2, iconColor: 'text-indigo-400', active: 'bg-gradient-to-r from-indigo-500/20 to-sky-500/20 text-indigo-300 border-l-4 border-indigo-500', visible: hasAccess('vendors') },
-    { id: 'hr', label: 'HR & Payroll', icon: Contact, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('hr') },
-    { id: 'drivers', label: 'Driver Details', icon: Truck, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('drivers') },
-    { id: 'loans', label: 'Loan Management', icon: HandCoins, iconColor: 'text-emerald-400', active: PINK_ACTIVE, visible: hasAccess('loans') },
-    { id: 'billing', label: 'Customer Billings', icon: FileText, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('billing') },
-    { id: 'pettycash', label: 'Petty cash', icon: Landmark, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('pettycash') },
-    { id: 'maintenance', label: 'Fleet Maintenance', icon: Settings, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('maintenance') },
-    { id: 'accounts', label: 'Accounts and Finance', icon: DollarSign, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('accounts') },
-    { id: 'warehouse', label: 'Warehouse Details', icon: Warehouse, iconColor: 'text-pink-400', active: PINK_ACTIVE, visible: hasAccess('warehouse') }
+    { id: 'audit', label: 'Audit Trail', icon: History, iconColor: 'text-rose-400', active: 'bg-gradient-to-r from-rose-500/20 to-pink-500/20 text-rose-300 border-l-4 border-rose-500', visible: hasAccess('audit') }
   ];
 
   return (

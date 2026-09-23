@@ -3163,6 +3163,34 @@ async function startServer() {
       res.json(filterFuelLogsForViewer(await getFuelLogs(), sessionUser));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
+  // PC Diesel Expense (2026-09-23 direct request) - read-only, live view of
+  // Petty Cash's "DIESEL EXPENSES" entries for Fuel Management staff to
+  // cross-check against fuel entries. Gated by requireFuelAccess above (the
+  // /api/fuel prefix). Read straight from the Petty Cash table on every call
+  // (never copied), and projected down to just the fields this view shows -
+  // no amounts received/balance/remarks/documents leave Petty Cash this way.
+  // Nothing here writes to Petty Cash.
+  app.get('/api/fuel/pc-diesel-expenses', async (req, res) => {
+    try {
+      const rows = (await getPettyCashVouchers())
+        .filter(v => String(v.category || '').trim().toUpperCase() === 'DIESEL EXPENSES')
+        .map(v => ({
+          id: v.id,
+          date: v.date,
+          entryNo: v.entryNo,
+          location: v.location,
+          cashPaid: v.cashPaid,
+          vehicleNumber: v.vehicleNumber,
+          vendorVehicleNumber: v.vendorVehicleNumber,
+          receiver: v.receiver,
+          // Same legacy fallback PettyCash.tsx's handleStartEdit uses - a
+          // KCM-vehicle entry saved before driverId existed kept it in vendorId.
+          driverId: v.driverId ?? (v.vendorVehicleNumber ? '' : v.vendorId),
+          enteredBy: v.enteredBy
+        }));
+      res.json(sortEntriesByDate(rows));
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
   // Database-backed Indent No preview for the Add Entry form - computed
   // fresh from every saved fuel log each call (see
   // nextBunkFuelIndentNumber/nextCardFuelIndentNumber), not a client-side
