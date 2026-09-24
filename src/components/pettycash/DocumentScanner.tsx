@@ -63,6 +63,11 @@ interface ScanData {
   // drives the always-visible status line, so a failed/unconfident detection
   // is never silent. See scanPipeline.ts's AutoCropStatus.
   autoCropStatus: 'pending' | AutoCropStatus;
+  // Paper-group detection (2026-09-24): separate papers kept in the crop, and
+  // whether one merged region looked like overlapping papers / an irregular
+  // shape - only drives a non-blocking informational badge.
+  documentCount: number;
+  irregularGroup: boolean;
 }
 
 interface Props {
@@ -214,6 +219,8 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
           partiallyOutOfFrame: result.partiallyOutOfFrame,
           detecting: false,
           autoCropStatus: result.status,
+          documentCount: result.documentCount,
+          irregularGroup: result.irregularGroup,
           // Auto-apply the crop only if a confident one was found AND the
           // employee hasn't already explicitly picked Original/Processed
           // themselves while detection was still running.
@@ -275,7 +282,9 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
         detecting: true,
         detectingMessage: 'Detecting document edges...',
         userChoseVersion: false,
-        autoCropStatus: 'pending'
+        autoCropStatus: 'pending',
+        documentCount: 0,
+        irregularGroup: false
       });
       setPhase('preview');
       runBackgroundDetection(token, originalCanvas, workingCanvas);
@@ -397,7 +406,11 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
         selectedVersion: 'processed',
         userChoseVersion: true,
         partiallyOutOfFrame: false,
-        detecting: false
+        detecting: false,
+        // The employee's own crop - the auto-detection's "everything is kept"
+        // grouping badge no longer describes it.
+        documentCount: 0,
+        irregularGroup: false
       });
       setPhase('preview');
     } catch (err) {
@@ -480,7 +493,9 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
           </button>
         </div>
 
-        <div className="p-6 overflow-y-auto flex-1 space-y-4">
+        {/* min-h-0 lets this flex child actually shrink and scroll inside the
+            capped modal height instead of pushing the action area/footer out. */}
+        <div className="p-6 overflow-y-auto flex-1 min-h-0 space-y-4">
           {phase === 'idle' && (
             <div className="space-y-4">
               <p className="text-slate-500 text-center">
@@ -587,7 +602,7 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
                   <img
                     src={activeCanvas.toDataURL('image/jpeg', 0.85)}
                     alt="Invoice preview"
-                    className="max-h-80 rounded-lg shadow-sm border border-slate-200 object-contain"
+                    className="max-h-[min(20rem,38vh)] rounded-lg shadow-sm border border-slate-200 object-contain"
                   />
                 )}
               </div>
@@ -642,6 +657,19 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
                   </button>
                 </div>
               ) : null}
+
+              {/* Several papers kept in one crop (2026-09-24) - informational
+                  only, never blocks Adjust Crop or Save. */}
+              {!scanData.detecting && scanData.processedCanvas && scanData.selectedVersion === 'processed' && (scanData.documentCount >= 2 || scanData.irregularGroup) && (
+                <div className="flex justify-center">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-extrabold uppercase border bg-sky-50 text-sky-800 border-sky-200">
+                    <FileImage className="w-3 h-3" />
+                    {scanData.documentCount >= 2
+                      ? `${scanData.documentCount} documents detected - all kept in the crop`
+                      : 'Multiple papers / irregular shape detected - everything is kept in the crop'}
+                  </span>
+                </div>
+              )}
 
               {scanData.partiallyOutOfFrame && scanData.selectedVersion === 'processed' && (
                 <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-center">
@@ -720,24 +748,33 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
                 </button>
               </div>
 
-              {phase === 'success' ? (
-                <div className="flex flex-col items-center gap-2 py-2">
-                  <CheckCircle2 className="w-8 h-8 text-emerald-500" />
-                  <p className="text-emerald-700 font-bold">Invoice saved successfully.</p>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleSave}
-                  disabled={phase === 'saving'}
-                  className="w-full py-3 rounded-lg text-sm font-extrabold uppercase bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white cursor-pointer transition-colors flex items-center justify-center gap-2"
-                >
-                  {phase === 'saving' ? (<><Loader2 className="w-4 h-4 animate-spin" /> Saving...</>) : 'Save'}
-                </button>
-              )}
             </div>
           )}
         </div>
+
+        {/* Primary action area (2026-09-24 layout fix) - pinned OUTSIDE the
+            scrolling content above, so SAVE (and the saved confirmation) is
+            always fully visible and clickable however tall the preview,
+            badges and warnings get; only the content area scrolls. */}
+        {(phase === 'preview' || phase === 'saving' || phase === 'success') && scanData && (
+          <div className="px-6 py-3 border-t border-slate-100 bg-white shrink-0">
+            {phase === 'success' ? (
+              <div className="flex flex-col items-center gap-2 py-2">
+                <CheckCircle2 className="w-8 h-8 text-emerald-500" />
+                <p className="text-emerald-700 font-bold">Invoice saved successfully.</p>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={phase === 'saving'}
+                className="w-full py-3 rounded-lg text-sm font-extrabold uppercase bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white cursor-pointer transition-colors flex items-center justify-center gap-2"
+              >
+                {phase === 'saving' ? (<><Loader2 className="w-4 h-4 animate-spin" /> Saving...</>) : 'Save'}
+              </button>
+            )}
+          </div>
+        )}
 
         {phase !== 'success' && (
           <div className="bg-slate-50 border-t border-slate-100 p-3 flex justify-end shrink-0">

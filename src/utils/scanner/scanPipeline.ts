@@ -46,6 +46,11 @@ export interface DetectionOutcome {
   processedCanvas: HTMLCanvasElement | null; // full-res, perspective-corrected + enhanced; null unless status === 'applied'
   quality: QualityCheckResult | null;
   partiallyOutOfFrame: boolean;
+  // 2026-09-24 paper-group detection: how many separate papers the crop
+  // keeps, and whether one merged region looked like overlapping papers /
+  // an irregular shape - drives a non-blocking badge in DocumentScanner.
+  documentCount: number;
+  irregularGroup: boolean;
 }
 
 // Stage 1 - fast, no OpenCV. Just decodes the file into the two canvases
@@ -81,7 +86,7 @@ export async function detectAndProcess(
 ): Promise<DetectionOutcome> {
   const unavailable: DetectionOutcome = {
     status: 'unavailable', quad: null, quadFullRes: null, confidence: 'low',
-    processedCanvas: null, quality: null, partiallyOutOfFrame: false
+    processedCanvas: null, quality: null, partiallyOutOfFrame: false, documentCount: 0, irregularGroup: false
   };
 
   let cv: any;
@@ -122,12 +127,16 @@ export async function detectAndProcess(
 
     const quad = detection.quad;
     const quadFullRes = quad.map(p => ({ x: p.x * scaleUp, y: p.y * scaleUp })) as Quad;
-    const partiallyOutOfFrame = quadTouchesImageBorder(quad, workingCanvas.width, workingCanvas.height);
+    // Paper-group detection knows whether paper pixels genuinely reach the
+    // photo edge; otherwise fall back to the quad-corner check.
+    const partiallyOutOfFrame = detection.touchesPhotoEdge ?? quadTouchesImageBorder(quad, workingCanvas.width, workingCanvas.height);
+    const documentCount = detection.documentCount ?? 1;
+    const irregularGroup = detection.irregularGroup ?? false;
 
     // Outcome B: the detector found something, but not confidently - don't
     // auto-apply it; the employee places the corners (seeded with this quad).
     if (detection.confidence === 'low') {
-      return { status: 'manual-needed', quad, quadFullRes, confidence: 'low', processedCanvas: null, quality: null, partiallyOutOfFrame };
+      return { status: 'manual-needed', quad, quadFullRes, confidence: 'low', processedCanvas: null, quality: null, partiallyOutOfFrame, documentCount, irregularGroup };
     }
 
     // Outcome A: medium/high confidence - perspective-correct automatically.
@@ -138,7 +147,7 @@ export async function detectAndProcess(
     console.debug(`[SCANNER] perspective correction completed in ${Math.round(performance.now() - t1)}ms; output ${result.processedCanvas.width}x${result.processedCanvas.height}`);
     return {
       status: 'applied', quad, quadFullRes, confidence: detection.confidence,
-      processedCanvas: result.processedCanvas, quality: result.quality, partiallyOutOfFrame
+      processedCanvas: result.processedCanvas, quality: result.quality, partiallyOutOfFrame, documentCount, irregularGroup
     };
   } catch (err) {
     // A CV step threw after the engine loaded - same user-facing outcome

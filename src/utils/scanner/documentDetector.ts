@@ -29,6 +29,7 @@
 // tracked in `owned` and deleted in the `finally` block, regardless of
 // which return path is taken.
 import { Point, Quad, orderCorners, isConvexQuad, isValidDocumentQuad, polygonArea, maxAngleDeviation } from './geometry';
+import { detectPaperGroup, quadContainsHull, enclosingRectQuad } from './paperGroupDetector';
 
 export type DetectionConfidence = 'high' | 'medium' | 'low';
 
@@ -36,11 +37,29 @@ export interface DetectionResult {
   quad: Quad | null; // pixel coordinates in the working (possibly downscaled) image passed in
   confidence: DetectionConfidence;
   score: number; // raw candidate score, mainly for debugging/telemetry - not shown to the employee
+  // Set only by the paper-group detector (paperGroupDetector.ts):
+  documentCount?: number;      // separate paper regions kept in the crop
+  irregularGroup?: boolean;    // one merged region that isn't a single clean sheet (overlapping papers, a hand over it, ...)
+  touchesPhotoEdge?: boolean;  // paper pixels genuinely reach the photo edge (drives "partially outside the photo")
 }
 
 interface Candidate { quad: Quad; score: number; coverage: number; angleDev: number; isFallback: boolean; }
 
 export function detectDocument(cv: any, srcMat: any): DetectionResult {
+  // 2026-09-24: find the paper by colour first - handles textured seats/
+  // fabric, paper running off the photo, and several receipts in one photo
+  // (all kept in one crop). Returns null when paper and background don't
+  // separate clearly, and the contour detection below runs unchanged.
+  // Isolated: a failure in this newer step must never disable the proven
+  // contour detection below (it would otherwise surface as "automatic crop
+  // unavailable" for the whole photo).
+  try {
+    const paperGroup = detectPaperGroup(cv, srcMat);
+    if (paperGroup) return paperGroup;
+  } catch (err) {
+    console.error('[SCANNER] paper group detection failed - using edge detection', err);
+  }
+
   const owned: any[] = [];
   const track = <T,>(m: T): T => { owned.push(m); return m; };
 
@@ -378,10 +397,28 @@ function expandToPaperRegion(cv: any, m: PaperModel, inner: Quad): Quad | null {
       }
     }
     if (!bestQuad) return null;
-    const ok = isValidDocumentQuad(bestQuad, m.w, m.h) &&
-      bestArea / (m.w * m.h) <= MAX_OUTER_COVERAGE &&
-      bestArea >= polygonArea(inner) * 1.1;
-    return ok ? bestQuad : null;
+    // The fit must be a genuine expansion beyond the printed box; if the
+    // paper region never really reached past the box (e.g. the paper above
+    // a thick printed frame is a different shade and wasn't counted), this
+    // is not a trustworthy outer edge - manual crop, never a crop that could
+    // cut off handwriting outside the frame.
+    if (bestArea < polygonArea(inner) * 1.1) return null;
+    // 2026-09-24: the grown quad must also keep the WHOLE paper region, not
+    // just the printed box - a real photo (finger on a torn corner) had the
+    // max-area fit slice a label off the paper's corner. If it doesn't, use
+    // the rotated rectangle enclosing the entire region instead (this only
+    // ever WIDENS an already-genuine expansion - see the check above).
+    let result: Quad | null = bestQuad;
+    if (!quadContainsHull(cv, bestQuad, hull, Math.max(m.w, m.h) * 0.01)) {
+      result = enclosingRectQuad(cv, hull, m.w, m.h);
+      if (!result) return null;
+    }
+    const area = polygonArea(result);
+    const ok = isValidDocumentQuad(result, m.w, m.h) &&
+      area / (m.w * m.h) <= MAX_OUTER_COVERAGE &&
+      area >= polygonArea(inner) * 1.1 &&
+      quadEncloses(result, inner);
+    return ok ? result : null;
   } finally {
     for (const x of owned) {
       try { x.delete(); } catch { /* already freed */ }
