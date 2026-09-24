@@ -30,6 +30,7 @@ import {
 import { latestOdometerFor, computeKmStatus, computeAlignmentStatus, nextAlignmentDueKm, projectDueDate, daysUntil } from './src/utils/maintenanceDates.ts';
 import { PETTY_CASH_USERS } from './src/utils/pettyCashUsers.ts';
 import { driverAllLocations, isDriverActiveAtLocation, attendanceBelongsToLocation } from './src/utils/driverLocations.ts';
+import { resolveTripDriverIds, DriverTripMileage } from './src/utils/driverMileage.ts';
 import { parseFlexibleDate, formatDateDDMMYYYY } from './src/utils/dateFormat.ts';
 import {
   User,
@@ -78,6 +79,8 @@ import {
   ServiceStationInspection,
   VehicleIncident,
   AuditAction,
+  UserProfile,
+  EmployeeProfileView,
   BunkPaymentPeriod,
   BunkPayment,
   DieselBunkAccount,
@@ -246,7 +249,10 @@ import {
   deleteBusinessLoan,
   createAuditLog,
   getAuditLogs,
-  getAuditLogFilterOptions
+  getAuditLogFilterOptions,
+  getUserProfile,
+  getUserProfiles,
+  saveUserProfile
 } from './src/db/service.ts';
 
 // parseFlexibleDate/formatDateDDMMYYYY (DD.MM.YYYY / DD-MM-YYYY / YYYY-MM-DD
@@ -2608,6 +2614,196 @@ async function startServer() {
       return res.json({ success: true, message: 'Password has been reset successfully. You can now login.' });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ===== EMPLOYEE PROFILE (2026-09-24) =====
+  // Every login user's own profile. Whose profile is read/edited is ALWAYS
+  // the authenticated session's own username - never an id/username from
+  // the request. Only the personal fields below are editable here; role,
+  // department, username, email, password and account status stay on the
+  // users table, which no profile route ever writes. A login user linked to
+  // an HR Employee Master record keeps mobile/date of birth there (single
+  // source of truth - the Birthday Reminder reads it), so edits to those two
+  // are written back to that record rather than copied.
+  // Management of OTHER users' profiles is limited to Super Admins and the
+  // HR admin - the same people with full HR & Payroll access.
+  const canManageEmployeeProfiles = (u?: { department?: string; email?: string } | null): boolean =>
+    !!u && (u.department === 'super_admin' || u.email === 'bhagya@kcmlogistics.in');
+  const PROFILE_PHOTO_PATH = /^uploads\/profile-photos\/\d+-\d+\.(jpg|png)$/;
+  const PROFILE_SELF_FIELDS = ['address', 'mobile', 'dateOfBirth', 'profilePhoto'] as const;
+  type ProfileAccount = { username: string; name: string; email?: string | null; department: string; departmentLabel: string };
+
+  const linkedStaffEmployee = (account: ProfileAccount, profile: UserProfile | null, staff: StaffEmployee[]): { employee: StaffEmployee | null; link: 'manual' | 'email' | null } => {
+    if (profile?.staffEmployeeId) {
+      const employee = staff.find(e => e.id === profile.staffEmployeeId) || null;
+      return { employee, link: employee ? 'manual' : null };
+    }
+    const email = (account.email || '').trim().toLowerCase();
+    if (!email) return { employee: null, link: null };
+    const matches = staff.filter(e => (e.email || '').trim().toLowerCase() === email);
+    return matches.length === 1 ? { employee: matches[0], link: 'email' } : { employee: null, link: null };
+  };
+
+  const buildProfileView = (account: ProfileAccount, profile: UserProfile | null, staff: StaffEmployee[], canManage: boolean): EmployeeProfileView => {
+    const { employee, link } = linkedStaffEmployee(account, profile, staff);
+    return {
+      account: {
+        username: account.username, name: account.name, email: account.email || undefined,
+        department: account.department as EmployeeProfileView['account']['department'], departmentLabel: account.departmentLabel
+      },
+      personal: {
+        profilePhoto: profile?.profilePhoto,
+        address: profile?.address,
+        mobile: employee ? employee.contactNumber : profile?.mobile,
+        dateOfBirth: employee ? employee.dateOfBirth : profile?.dateOfBirth,
+        source: employee ? 'hr' : 'profile'
+      },
+      employee: employee ? {
+        id: employee.id, name: employee.name, designation: employee.designation, dateOfJoining: employee.dateOfJoining,
+        location: employee.location, orgUnit: employee.orgUnit, employmentType: employee.employmentType, status: employee.status
+      } : null,
+      employeeLink: link,
+      canManageProfiles: canManage
+    };
+  };
+
+  // Fresh account row from the users table (never the password column).
+  const findProfileAccount = async (username: string): Promise<ProfileAccount | null> => {
+    const row = (await getUsers()).find(u => u.username === username);
+    return row ? { username: row.username, name: row.name, email: row.email, department: row.department, departmentLabel: row.departmentLabel } : null;
+  };
+
+  // Whitelist + validation for a profile update. Any other field in the
+  // body (role, department, username, status, ...) is rejected outright.
+  const parseProfilePatch = (body: unknown, allowStaffLink: boolean): { patch: Record<string, string>; error?: string } => {
+    const input = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+    const allowed: readonly string[] = allowStaffLink ? [...PROFILE_SELF_FIELDS, 'staffEmployeeId'] : PROFILE_SELF_FIELDS;
+    const forbidden = Object.keys(input).filter(k => !allowed.includes(k));
+    if (forbidden.length > 0) return { patch: {}, error: `These fields cannot be changed from a profile: ${forbidden.join(', ')}.` };
+    const patch: Record<string, string> = {};
+    for (const key of allowed) {
+      if (input[key] === undefined) continue;
+      if (input[key] !== null && typeof input[key] !== 'string') return { patch: {}, error: `${key} must be text.` };
+      patch[key] = ((input[key] as string | null) || '').trim();
+    }
+    if (patch.address !== undefined && patch.address.length > 300) return { patch: {}, error: 'Address must be 300 characters or fewer.' };
+    if (patch.mobile && !/^\d{10}$/.test(patch.mobile)) return { patch: {}, error: 'Mobile Number must be exactly 10 digits.' };
+    if (patch.dateOfBirth) {
+      // Round-tripped through UTC on purpose - a local-time Date shifts the
+      // day in IST and would reject every valid date.
+      const [y, m, d] = patch.dateOfBirth.split('-').map(Number);
+      const utc = new Date(Date.UTC(y, (m || 0) - 1, d || 0));
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(patch.dateOfBirth) || isNaN(utc.getTime()) || utc.toISOString().slice(0, 10) !== patch.dateOfBirth
+        || patch.dateOfBirth < '1900-01-01' || patch.dateOfBirth > istDateKey()) {
+        return { patch: {}, error: 'Date of Birth must be a valid past date.' };
+      }
+    }
+    if (patch.profilePhoto && (!PROFILE_PHOTO_PATH.test(patch.profilePhoto) || !fs.existsSync(path.join(process.cwd(), patch.profilePhoto)))) {
+      return { patch: {}, error: 'Profile photo must be a JPG/PNG uploaded through the profile photo upload.' };
+    }
+    return { patch };
+  };
+
+  // Applies a validated patch to `username`'s profile (and, for mobile/date
+  // of birth, to their linked HR record) and records it in the Audit Trail.
+  const applyProfilePatch = async (account: ProfileAccount, patch: Record<string, string>, actor: NonNullable<Awaited<ReturnType<typeof getSessionUser>>>, req: express.Request) => {
+    const [existing, staff] = await Promise.all([getUserProfile(account.username), getStaffEmployees()]);
+    const before = existing ? { ...existing } : null;
+    const profile: UserProfile = { ...(existing || { username: account.username }), username: account.username };
+    if (patch.staffEmployeeId !== undefined) {
+      if (patch.staffEmployeeId && !staff.some(e => e.id === patch.staffEmployeeId)) throw Object.assign(new Error('That HR Employee ID does not exist.'), { status: 400 });
+      profile.staffEmployeeId = patch.staffEmployeeId || undefined;
+    }
+    if (patch.address !== undefined) profile.address = patch.address || undefined;
+    if (patch.profilePhoto !== undefined) profile.profilePhoto = patch.profilePhoto || undefined;
+    const { employee } = linkedStaffEmployee(account, profile, staff);
+    let hrBefore: StaffEmployee | null = null;
+    if (employee && (patch.mobile !== undefined || patch.dateOfBirth !== undefined)) {
+      const updated: StaffEmployee = {
+        ...employee,
+        ...(patch.mobile !== undefined ? { contactNumber: patch.mobile || undefined } : {}),
+        ...(patch.dateOfBirth !== undefined ? { dateOfBirth: patch.dateOfBirth || undefined } : {})
+      };
+      if (updated.contactNumber !== employee.contactNumber || updated.dateOfBirth !== employee.dateOfBirth) {
+        hrBefore = employee;
+        await saveStaffEmployee(updated);
+      }
+    } else if (!employee) {
+      if (patch.mobile !== undefined) profile.mobile = patch.mobile || undefined;
+      if (patch.dateOfBirth !== undefined) profile.dateOfBirth = patch.dateOfBirth || undefined;
+    }
+    profile.updatedBy = actor.username;
+    const saved = await saveUserProfile(profile);
+    await createAuditLog({
+      user: actor, action: 'UPDATE', module: 'Employee Profile', entityType: 'UserProfile', entityId: account.username,
+      description: actor.username === account.username
+        ? `Updated own profile (${Object.keys(patch).join(', ')})`
+        : `Updated profile of "${account.username}" (${Object.keys(patch).join(', ')})`,
+      oldData: { profile: before, ...(hrBefore ? { hrEmployee: { id: hrBefore.id, contactNumber: hrBefore.contactNumber, dateOfBirth: hrBefore.dateOfBirth } } : {}) },
+      newData: { profile: saved, ...(employee && hrBefore ? { hrEmployee: { id: employee.id, contactNumber: patch.mobile ?? employee.contactNumber, dateOfBirth: patch.dateOfBirth ?? employee.dateOfBirth } } : {}) },
+      ipAddress: req.ip || '127.0.0.1', userAgent: req.headers['user-agent']
+    });
+    return buildProfileView(account, saved, await getStaffEmployees(), canManageEmployeeProfiles(actor));
+  };
+
+  app.get('/api/profile', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser) return res.status(401).json({ error: 'Authentication required.' });
+      const account = await findProfileAccount(sessionUser.username);
+      if (!account) return res.status(404).json({ error: 'Account not found.' });
+      const [profile, staff] = await Promise.all([getUserProfile(account.username), getStaffEmployees()]);
+      res.json(buildProfileView(account, profile, staff, canManageEmployeeProfiles(sessionUser)));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/profile', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser) return res.status(401).json({ error: 'Authentication required.' });
+      const account = await findProfileAccount(sessionUser.username);
+      if (!account) return res.status(404).json({ error: 'Account not found.' });
+      const { patch, error } = parseProfilePatch(req.body, false);
+      if (error) return res.status(400).json({ error });
+      res.json(await applyProfilePatch(account, patch, sessionUser, req));
+    } catch (err: any) {
+      res.status(err.status || 500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/employee-profiles', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser) return res.status(401).json({ error: 'Authentication required.' });
+      if (!canManageEmployeeProfiles(sessionUser)) return res.status(403).json({ error: 'Only Super Admin / HR can manage employee profiles.' });
+      const [users, profiles, staff] = await Promise.all([getUsers(), getUserProfiles(), getStaffEmployees()]);
+      const views = users
+        .map(u => buildProfileView(
+          { username: u.username, name: u.name, email: u.email, department: u.department, departmentLabel: u.departmentLabel },
+          profiles.find(p => p.username === u.username) || null, staff, true
+        ))
+        .sort((a, b) => a.account.name.localeCompare(b.account.name));
+      res.json({ profiles: views, staffEmployees: staff.map(e => ({ id: e.id, name: e.name, email: e.email })) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/employee-profiles/:username', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      if (!sessionUser) return res.status(401).json({ error: 'Authentication required.' });
+      if (!canManageEmployeeProfiles(sessionUser)) return res.status(403).json({ error: 'Only Super Admin / HR can manage employee profiles.' });
+      const account = await findProfileAccount(req.params.username);
+      if (!account) return res.status(404).json({ error: 'Account not found.' });
+      const { patch, error } = parseProfilePatch(req.body, true);
+      if (error) return res.status(400).json({ error });
+      res.json(await applyProfilePatch(account, patch, sessionUser, req));
+    } catch (err: any) {
+      res.status(err.status || 500).json({ error: err.message });
     }
   });
 
@@ -5240,6 +5436,35 @@ async function startServer() {
   // resolved, so it's deliberately withheld from scoped viewers rather than
   // guessed at; a full-access ('ALL') viewer still gets everything
   // unconditionally below.
+  app.use('/api/drivers/trip-mileage', requireDriverAccess);
+  // Driver Salary export's "Actual Mileage" column (2026-09-24) - a narrow,
+  // read-only slice of Trip Details (date, vehicle, achieved + fixed KM/L,
+  // and which registered driver(s) the trip belongs to) rather than the
+  // full /api/mileage ledger, so a Driver Details user without Fuel
+  // Management access still gets these figures without broader Fuel
+  // visibility - same approach as /api/drivers/petty-cash-advances above.
+  // Driver attribution is resolved here against the FULL driver list (see
+  // resolveTripDriverIds - exactly-one name match only), then scoped to the
+  // drivers this viewer may see, the same way /api/drivers/attendance is.
+  app.get('/api/drivers/trip-mileage', async (req, res) => {
+    try {
+      const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));
+      const allowed = getAllowedDriverViewLocations(sessionUser);
+      const [reports, drivers] = await Promise.all([getMileageReports(), getDriverEmployees()]);
+      const visibleIds = new Set(
+        (allowed === 'ALL' ? drivers : drivers.filter(d => driverAllLocations(d).some(loc => allowed.includes(loc)))).map(d => d.id)
+      );
+      const rows: DriverTripMileage[] = reports.flatMap(r => {
+        const driverIds = resolveTripDriverIds(r, drivers).filter(id => visibleIds.has(id));
+        if (driverIds.length === 0) return [];
+        return [{ date: r.date, vehicleNo: r.vehicleNo, driverIds, mileage: Number(r.mileage) || 0, actualMileage: Number(r.actualMileage) || 0 }];
+      });
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/drivers/attendance', async (req, res) => {
     try {
       const sessionUser = await getSessionUser(extractBearerToken(req.headers.authorization));

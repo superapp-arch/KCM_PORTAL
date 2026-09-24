@@ -7,7 +7,8 @@ import DriverSalarySlipModal from './DriverSalarySlipModal';
 import DocumentAttachment from '../DocumentAttachment';
 import { authFetch } from '../../authFetch';
 import { compareTrailingNumber } from '../../utils/sort';
-import { payableAmountLiveCurrentMonth, vehiclesLabel, salarySections, exportDriverSalary } from '../../utils/driverSalaryExport';
+import { payableAmountLiveCurrentMonth, vehiclesLabel, exportDriverSalary, salaryMonthLabel, DriverSalaryExportContext } from '../../utils/driverSalaryExport';
+import { DriverTripMileage } from '../../utils/driverMileage';
 import DownloadMenu from './DownloadMenu';
 import { SaveConfirmationModal, DeleteConfirmationModal } from '../ConfirmationModal';
 import { DriverSalaryAdvanceVoucherSlim, computeDriverPettyCashAdvance, driverPettyCashAdvanceTooltip } from '../../utils/driverPettyCashAdvance';
@@ -99,6 +100,23 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
   useEffect(() => {
     authFetch('/api/drivers/attendance').then(r => r.json()).then(setAttendance).catch(() => {});
   }, []);
+
+  // Downloads (2026-09-24): one consolidated sheet for a chosen salary
+  // month (defaults to the current month - the same month the Payable
+  // Amount column shows), with live attendance and Trip Details mileage.
+  // Attendance/trips are re-fetched at download time so the file is never
+  // built from data loaded earlier in the session.
+  const [exportMonth, setExportMonth] = useState(thisMonth);
+  const [isExporting, setIsExporting] = useState(false);
+  const loadExportContext = async (): Promise<DriverSalaryExportContext> => {
+    const [attRes, tripRes] = await Promise.all([authFetch('/api/drivers/attendance'), authFetch('/api/drivers/trip-mileage')]);
+    if (!attRes.ok) throw new Error('Could not load Driver Attendance.');
+    if (!tripRes.ok) throw new Error('Could not load Trip Details mileage.');
+    const freshAttendance: DriverAttendance[] = await attRes.json();
+    const trips: DriverTripMileage[] = await tripRes.json();
+    setAttendance(freshAttendance);
+    return { month: exportMonth, attendance: freshAttendance, pettyCashVouchers: driverPettyCashAdvanceVouchers, trips };
+  };
 
   const triggerNotif = (message: string, type: 'success' | 'error') => {
     setNotif({ message, type });
@@ -226,36 +244,31 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
     setSaveConfirmation({ identifier: `${driver.name} (${driver.id})`, key: Date.now() });
   };
 
-  // Single-driver download - same shared section builder + export function
-  // as "Download All" and per-location below (a one-driver, one-group
-  // section), so this row-level button offers the same Excel/PDF choice with
-  // guaranteed content parity instead of its own Excel-only shortcut.
-  // salarySections still groups by {location, drivers: DriverEmployee[]} -
-  // Driver Salary's own figures (Gross Salary, Payable Amount, etc.) are a
-  // whole-driver concept, never fragmented per location (unlike Driver
-  // Attendance's own exports) - only the grouping/display is location-aware,
-  // so a multi-location driver's row is simply repeated, unchanged, under
-  // each of their location sections.
-  const toDriverGroups = (groups: { location: DriverLocationCategory; rows: LocationDriverRow[] }[]) =>
-    groups.map(g => ({ location: g.location, drivers: g.rows.map(r => r.driver) }));
-
-  const handleDownloadAllExcel = () => {
-    if (flatFiltered.length === 0) { triggerNotif('No driver records to download.', 'error'); return; }
-    exportDriverSalary('KCM_All_Drivers', salarySections(toDriverGroups(groupedDrivers), attendance), 'excel', 'All Locations');
+  // Driver Salary is a whole-driver figure (never fragmented per location,
+  // unlike Driver Attendance's own exports), so both downloads produce ONE
+  // sheet/table: Download All = every driver currently listed (on-screen
+  // filters/search applied), in on-screen order; a location's Download =
+  // that location's drivers. A multi-location driver appears once.
+  const runExport = async (filenameBase: string, driverList: DriverEmployee[], format: 'excel' | 'pdf', scopeLabel: string) => {
+    if (driverList.length === 0) { triggerNotif('No driver records to download.', 'error'); return; }
+    setIsExporting(true);
+    try {
+      const ctx = await loadExportContext();
+      await exportDriverSalary(`${filenameBase}_${ctx.month}`, driverList, ctx, format, scopeLabel);
+    } catch (err) {
+      triggerNotif(err instanceof Error ? err.message : 'Download failed.', 'error');
+    } finally {
+      setIsExporting(false);
+    }
   };
 
-  const handleDownloadAllPdf = () => {
-    if (flatFiltered.length === 0) { triggerNotif('No driver records to download.', 'error'); return; }
-    exportDriverSalary('KCM_All_Drivers', salarySections(toDriverGroups(groupedDrivers), attendance), 'pdf', 'All Locations');
-  };
+  const handleDownloadAll = (format: 'excel' | 'pdf') =>
+    runExport('KCM_All_Drivers', flatFiltered.map(r => r.driver), format, 'All Locations');
 
   // One location's drivers only - the Download control on that group's
   // header row.
-  const handleDownloadLocationExcel = (location: DriverLocationCategory, rows: LocationDriverRow[]) =>
-    exportDriverSalary(`KCM_Driver_Salary_${safeFileToken(location)}`, salarySections([{ location, drivers: rows.map(r => r.driver) }], attendance), 'excel', location);
-
-  const handleDownloadLocationPdf = (location: DriverLocationCategory, rows: LocationDriverRow[]) =>
-    exportDriverSalary(`KCM_Driver_Salary_${safeFileToken(location)}`, salarySections([{ location, drivers: rows.map(r => r.driver) }], attendance), 'pdf', location);
+  const handleDownloadLocation = (location: DriverLocationCategory, rows: LocationDriverRow[], format: 'excel' | 'pdf') =>
+    runExport(`KCM_Driver_Salary_${safeFileToken(location)}`, rows.map(r => r.driver), format, location);
 
   // Inline document upload from the expand panel - persists immediately
   // (same "no separate Save button" convention DocumentAttachment's callers
@@ -280,9 +293,13 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
           <p className="text-xs text-slate-500 font-mono mt-1">Master driver record, salary and bank details</p>
         </div>
         <div className="flex items-center gap-2">
-          <DownloadMenu label="Download All" options={[
-            { key: 'excel', label: 'Excel (.xlsx)', icon: 'excel', onClick: handleDownloadAllExcel },
-            { key: 'pdf', label: 'PDF', icon: 'pdf', onClick: handleDownloadAllPdf },
+          <label className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-slate-500" title="Salary month used by Download All and each location's Download">
+            Salary Month
+            <input type="month" value={exportMonth} max={thisMonth} onChange={e => e.target.value && setExportMonth(e.target.value)} autoComplete="off" className="border border-slate-300 rounded-md px-2 py-1 text-[11px] font-mono text-slate-700 normal-case" />
+          </label>
+          <DownloadMenu label={isExporting ? 'Preparing...' : 'Download All'} options={[
+            { key: 'excel', label: `Excel (.xlsx) - ${salaryMonthLabel(exportMonth)}`, icon: 'excel', onClick: () => handleDownloadAll('excel') },
+            { key: 'pdf', label: `PDF - ${salaryMonthLabel(exportMonth)}`, icon: 'pdf', onClick: () => handleDownloadAll('pdf') },
           ]} />
           {canAddAnywhere && (
             <button onClick={() => setModalDriver(null)} className="bg-gradient-to-r from-pink-600 to-purple-700 hover:shadow-md text-white font-bold px-4 py-2 rounded-lg uppercase text-[11px] flex items-center gap-1.5 cursor-pointer transition-all">
@@ -368,8 +385,8 @@ export default function DriverSalarySheet({ performedBy, drivers, vehicles, writ
                             </span>
                           </span>
                           <DownloadMenu variant="ghost" label="Download" options={[
-                            { key: 'excel', label: 'Excel (.xlsx)', icon: 'excel', onClick: () => handleDownloadLocationExcel(group.location, group.rows) },
-                            { key: 'pdf', label: 'PDF', icon: 'pdf', onClick: () => handleDownloadLocationPdf(group.location, group.rows) },
+                            { key: 'excel', label: `Excel (.xlsx) - ${salaryMonthLabel(exportMonth)}`, icon: 'excel', onClick: () => handleDownloadLocation(group.location, group.rows, 'excel') },
+                            { key: 'pdf', label: `PDF - ${salaryMonthLabel(exportMonth)}`, icon: 'pdf', onClick: () => handleDownloadLocation(group.location, group.rows, 'pdf') },
                           ]} />
                         </div>
                       </td>

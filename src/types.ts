@@ -1569,4 +1569,51 @@ export interface AuditLog {
   userAgent?: string;
 }
 
+// Employee Profile (2026-09-24) - every login user's own profile. Stored in
+// the user_profiles table (see db/schema.ts's userProfiles), keyed by the
+// login username. Security/access fields (role, department, username,
+// password, status) are never part of it - those stay on the users table,
+// administrator-controlled.
+export interface UserProfile {
+  username: string;
+  profilePhoto?: string; // uploads/profile-photos/<file>.jpg|png, via the shared /api/upload
+  address?: string;
+  // Only used when this login user has NO linked HR Employee Master record -
+  // otherwise the linked StaffEmployee's contactNumber/dateOfBirth are the
+  // source of truth and edits are written there (see server.ts /api/profile).
+  mobile?: string;
+  dateOfBirth?: string; // YYYY-MM-DD
+  // Explicit link to an HR Employee Master record (StaffEmployee.id), set by
+  // an administrator. Absent = linked automatically when exactly one HR
+  // employee has this login's email.
+  staffEmployeeId?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
 
+// What GET /api/profile returns - the login account (read-only), the
+// merged personal details, and the linked HR employee's work details.
+export interface EmployeeProfileView {
+  account: { username: string; name: string; email?: string; department: DepartmentType; departmentLabel: string };
+  personal: {
+    profilePhoto?: string;
+    address?: string;
+    mobile?: string;
+    dateOfBirth?: string;
+    // Where mobile/date of birth live - 'hr' when an HR Employee Master
+    // record is linked (edits update that record), else 'profile'.
+    source: 'hr' | 'profile';
+  };
+  employee: {
+    id: string;
+    name: string;
+    designation?: string;
+    dateOfJoining?: string;
+    location?: string;
+    orgUnit?: StaffOrgUnit;
+    employmentType?: 'On-Roll' | 'Contract';
+    status?: 'Active' | 'Inactive';
+  } | null;
+  employeeLink: 'manual' | 'email' | null;
+  canManageProfiles: boolean; // may open Employee Profile management for other users
+}

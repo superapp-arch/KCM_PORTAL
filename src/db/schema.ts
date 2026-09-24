@@ -449,4 +449,14 @@ export const auditLogs = pgTable('audit_logs', {
   actionIdx: index('audit_logs_action_idx').on(table.action),
 }));
 
-
+// Employee Profile (2026-09-24) - one row per LOGIN user (keyed by
+// users.username), holding only the personal details the users table itself
+// has no column for: profile photo, address, and - for a login user with no
+// HR Employee Master record - their own mobile/date of birth. A login user
+// who IS in the HR Employee Master (staffEmployees) keeps mobile/date of
+// birth/designation there as the single source of truth; this row never
+// duplicates them. See UserProfile in types.ts.
+export const userProfiles = pgTable('user_profiles', {
+  username: text('username').primaryKey(),
+  data: text('data').notNull(), // JSON string representing the full UserProfile object
+});

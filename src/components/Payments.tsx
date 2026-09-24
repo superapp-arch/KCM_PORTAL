@@ -67,8 +67,16 @@ interface BunkRow {
   threshold: number;
   purchases: { date: string; amount: number; fuelLog: FuelLog }[];
   payments: DieselBunkPayment[];
-  totalPurchases: number;
-  totalPayments: number;
+  // Fuel Management Card Entries (bunkOrCard 'Card') filled at this bunk +
+  // location. A card swipe is fuel bought here AND paid for on the spot, so
+  // its amount counts once on each side (in totalPurchases and in
+  // totalPayments) and never moves the balance - see cardPayments below.
+  cardEntries: FuelLog[];
+  cardPayments: number; // consolidated "Card Payments" total of cardEntries
+  bunkPurchases: number; // Bunk-paid fuel only (the pre-card total)
+  totalPurchases: number; // bunkPurchases + cardPayments
+  manualPayments: number; // Diesel Payments logged here (cash/card/netbanking)
+  totalPayments: number; // manualPayments + cardPayments
   balance: number; // openingBalance - totalPurchases + totalPayments
   lastPaymentDate?: string;
   status: StatusLevel;
@@ -150,6 +158,24 @@ export default function Payments({
     return Array.from(map.values()).sort((a, b) => a.bunkName.localeCompare(b.bunkName) || a.location.localeCompare(b.location));
   }, [fuelLogs]);
 
+  // Fuel Management -> Card Entries, grouped by the same (Bunk Name,
+  // Location) identity as Bunk-paid purchases - exact match, same as the
+  // purchase filter below. Read live from fuelLogs, so editing/deleting a
+  // Card Entry updates Card Payments immediately; each entry lands in at
+  // most one group, so it can never be counted twice.
+  const { cardLogsByBunk, cardLogsWithoutBunk } = useMemo(() => {
+    const byBunk = new Map<string, FuelLog[]>();
+    const withoutBunk: FuelLog[] = [];
+    fuelLogs.forEach(l => {
+      if (l.bunkOrCard !== 'Card') return;
+      if (!l.bunkName || !l.location) { withoutBunk.push(l); return; }
+      const key = bunkKey(l.bunkName, l.location);
+      const list = byBunk.get(key);
+      if (list) list.push(l); else byBunk.set(key, [l]);
+    });
+    return { cardLogsByBunk: byBunk, cardLogsWithoutBunk: withoutBunk };
+  }, [fuelLogs]);
+
   const bunkRows: BunkRow[] = useMemo(() => {
     const keys = new Map<string, { bunkName: string; location: string }>();
     fuelBunkOptions.forEach(b => keys.set(bunkKey(b.bunkName, b.location), b));
@@ -166,15 +192,38 @@ export default function Payments({
         .filter(l => l.bunkName === bunkName && l.location === location && isBunkPaid(l))
         .map(l => ({ date: l.date, amount: l.amount || 0, fuelLog: l }));
       const payments = dieselBunkPayments.filter(p => p.bunkId === (account?.id || key));
-      const totalPurchases = purchases.reduce((s, p) => s + p.amount, 0);
-      const totalPayments = payments.reduce((s, p) => s + (p.amount || 0), 0);
+      const cardEntries = cardLogsByBunk.get(key) || [];
+      const cardPayments = parseFloat(cardEntries.reduce((s, l) => s + (l.amount || 0), 0).toFixed(2));
+      const bunkPurchases = purchases.reduce((s, p) => s + p.amount, 0);
+      const manualPayments = payments.reduce((s, p) => s + (p.amount || 0), 0);
+      const totalPurchases = parseFloat((bunkPurchases + cardPayments).toFixed(2));
+      const totalPayments = parseFloat((manualPayments + cardPayments).toFixed(2));
       const balance = parseFloat((openingBalance - totalPurchases + totalPayments).toFixed(2));
       const lastPaymentDate = payments.length > 0 ? payments.reduce((max, p) => p.date > max ? p.date : max, payments[0].date) : undefined;
       const owed = Math.max(0, -balance);
       const status: StatusLevel = balance >= 0 ? 'Clear' : owed >= threshold ? 'High' : 'Pending';
-      return { key, bunkName, location, account, openingBalance, threshold, purchases, payments, totalPurchases, totalPayments, balance, lastPaymentDate, status };
+      return { key, bunkName, location, account, openingBalance, threshold, purchases, payments, cardEntries, cardPayments, bunkPurchases, totalPurchases, manualPayments, totalPayments, balance, lastPaymentDate, status };
     });
-  }, [fuelBunkOptions, dieselBunkAccounts, fuelLogs, dieselBunkPayments]);
+  }, [fuelBunkOptions, dieselBunkAccounts, fuelLogs, dieselBunkPayments, cardLogsByBunk]);
+
+  // Card Entries that can't be shown under any bunk here, reported instead
+  // of guessed: no Bunk Name/Location on the entry at all, or a bunk this
+  // module doesn't track (Card never makes a bunk appear on its own - see
+  // isBunkPaid above).
+  const unassignedCard = useMemo(() => {
+    const tracked = new Set(bunkRows.map(r => r.key));
+    let noBunkCount = 0, noBunkTotal = 0, untrackedCount = 0, untrackedTotal = 0;
+    cardLogsByBunk.forEach((logs, key) => {
+      if (tracked.has(key)) return;
+      untrackedCount += logs.length;
+      untrackedTotal += logs.reduce((s, l) => s + (l.amount || 0), 0);
+    });
+    cardLogsWithoutBunk.forEach(l => { noBunkCount += 1; noBunkTotal += l.amount || 0; });
+    return {
+      noBunkCount, noBunkTotal: parseFloat(noBunkTotal.toFixed(2)),
+      untrackedCount, untrackedTotal: parseFloat(untrackedTotal.toFixed(2))
+    };
+  }, [bunkRows, cardLogsByBunk, cardLogsWithoutBunk]);
 
   const sortedRows = useMemo(() => [...bunkRows].sort((a, b) =>
     sortMode === 'balance' ? (a.balance - b.balance || a.bunkName.localeCompare(b.bunkName)) : (a.bunkName.localeCompare(b.bunkName) || a.location.localeCompare(b.location))
@@ -330,7 +379,9 @@ export default function Payments({
 
   // ------------------------------------------------------------------
   // Bunk History (full passbook) - opening balance row, then every
-  // purchase/payment in date order with a running balance.
+  // purchase/payment in date order with a running balance. Card Entries are
+  // left out on purpose: each one is a purchase and a payment of the same
+  // amount, so it nets to zero and every running balance stays exact.
   // ------------------------------------------------------------------
   type PassbookRow = {
     key: string;
@@ -409,6 +460,44 @@ export default function Payments({
               </button>
             </div>
           </div>
+
+          {/* Balance breakdown - Card Payments is ONE consolidated figure
+              (every Fuel Management Card Entry at this bunk + location),
+              never one row per card transaction. Card fuel is counted in
+              Fuel Purchases too, so Closing Balance is unchanged by it. */}
+          {(() => {
+            const sumMode = (modes: DieselBunkPayment['mode'][]) => historyRow.payments.filter(p => modes.includes(p.mode)).reduce((s, p) => s + (p.amount || 0), 0);
+            const lines: { label: string; hint?: string; amount: number; sign: '' | '-' | '+'; strong?: boolean }[] = [
+              { label: 'Opening Balance', amount: historyRow.openingBalance, sign: '' },
+              { label: 'Fuel Purchases', hint: historyRow.cardPayments > 0 ? 'incl. card-paid fuel' : undefined, amount: historyRow.totalPurchases, sign: '-' },
+              { label: 'Cash Payments', amount: sumMode(['cash']), sign: '+' },
+              { label: 'Card Payments', hint: `${historyRow.cardEntries.length} Fuel Management card ${historyRow.cardEntries.length === 1 ? 'entry' : 'entries'}`, amount: historyRow.cardPayments, sign: '+' },
+              { label: 'Other Payments', hint: 'Card / Netbanking logged here', amount: sumMode(['card', 'netbanking']), sign: '+' }
+            ];
+            return (
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 text-xs">
+                  {lines.map(l => (
+                    <div key={l.label}>
+                      <p className="text-[9px] text-slate-400 uppercase font-bold flex items-center gap-1">
+                        {l.label === 'Card Payments' && <CreditCard className="w-3 h-3 text-blue-600" />}{l.label}
+                      </p>
+                      <p className={`text-base font-black font-mono ${l.sign === '-' ? 'text-rose-600' : l.sign === '+' ? 'text-emerald-700' : 'text-slate-900'}`}>
+                        {l.sign === '-' && l.amount > 0 ? '-' : l.amount < 0 ? '-' : ''}₹{Math.abs(l.amount).toLocaleString('en-IN')}
+                      </p>
+                      {l.hint && <p className="text-[9px] text-slate-400 font-mono">{l.hint}</p>}
+                    </div>
+                  ))}
+                  <div>
+                    <p className="text-[9px] text-slate-400 uppercase font-bold">Closing Balance</p>
+                    <p className={`text-base font-black font-mono ${historyRow.balance < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                      {historyRow.balance < 0 ? '-' : ''}₹{Math.abs(historyRow.balance).toLocaleString('en-IN')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* KCM Supply / KCM Insta diesel purchase split (2026-09-23 direct
               request) - summary only. Built from this bunk's own
@@ -585,10 +674,24 @@ export default function Payments({
                       <h3 className={`text-lg font-black mt-1 whitespace-nowrap ${row.balance < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
                         {row.balance < 0 ? '-' : ''}₹{Math.abs(row.balance).toLocaleString('en-IN')}
                       </h3>
+                      {row.cardPayments > 0 && (
+                        <p className="text-[10px] text-blue-700 font-bold mt-1 flex items-center gap-1 whitespace-nowrap">
+                          <CreditCard className="w-3 h-3" /> Card Payments ₹{row.cardPayments.toLocaleString('en-IN')}
+                        </p>
+                      )}
                     </button>
                   );
                 })}
               </div>
+            )}
+            {(unassignedCard.noBunkCount > 0 || unassignedCard.untrackedCount > 0) && (
+              <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3 font-mono">
+                Card Entries not shown under any bunk:
+                {unassignedCard.noBunkCount > 0 && <> {unassignedCard.noBunkCount} with no Bunk Name/Location (₹{unassignedCard.noBunkTotal.toLocaleString('en-IN')})</>}
+                {unassignedCard.noBunkCount > 0 && unassignedCard.untrackedCount > 0 && ' ·'}
+                {unassignedCard.untrackedCount > 0 && <> {unassignedCard.untrackedCount} at bunks with no Bunk-paid fuel or bunk account here (₹{unassignedCard.untrackedTotal.toLocaleString('en-IN')})</>}
+                . See Fuel Management → Card Entries.
+              </p>
             )}
           </div>
 
@@ -610,6 +713,7 @@ export default function Payments({
                     <th className="px-3 py-2.5">Bunk Name</th>
                     <th className="px-3 py-2.5">Location</th>
                     <th className="px-3 py-2.5 text-right">Total Fuel Amount</th>
+                    <th className="px-3 py-2.5 text-right">Card Payments</th>
                     <th className="px-3 py-2.5 text-right">Total Payments Made</th>
                     <th className="px-3 py-2.5 text-right">Current Balance</th>
                     <th className="px-3 py-2.5">Last Payment Date</th>
@@ -621,12 +725,13 @@ export default function Payments({
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                   {sortedRows.length === 0 ? (
-                    <tr><td colSpan={10} className="text-center py-12 text-slate-400 font-mono">NO BUNKS TRACKED YET.</td></tr>
+                    <tr><td colSpan={11} className="text-center py-12 text-slate-400 font-mono">NO BUNKS TRACKED YET.</td></tr>
                   ) : sortedRows.map(row => (
                     <tr key={row.key} className="hover:bg-slate-50/60 transition-colors">
                       <td className="px-3 py-2.5 font-bold text-slate-900 whitespace-nowrap">{row.bunkName}</td>
                       <td className="px-3 py-2.5 text-slate-600 whitespace-nowrap">{row.location}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-slate-600 whitespace-nowrap">₹{row.totalPurchases.toLocaleString('en-IN')}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-blue-700 whitespace-nowrap">{row.cardPayments > 0 ? `₹${row.cardPayments.toLocaleString('en-IN')}` : <span className="text-slate-300">-</span>}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-slate-600 whitespace-nowrap">₹{row.totalPayments.toLocaleString('en-IN')}</td>
                       <td className={`px-3 py-2.5 text-right font-mono font-black whitespace-nowrap ${row.balance < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
                         {row.balance < 0 ? '-' : ''}₹{Math.abs(row.balance).toLocaleString('en-IN')}

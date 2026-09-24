@@ -54,7 +54,8 @@ import {
   serviceStationSpareParts,
   serviceStationInspections,
   vehicleIncidents,
-  auditLogs
+  auditLogs,
+  userProfiles
 } from './schema.ts';
 import { eq, ne, and, or, ilike, gte, lte, asc, desc, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
@@ -65,6 +66,7 @@ import { normalizeLocationName } from '../utils/pettyCashLocations.ts';
 import { fleetVehicleByNumber, kcmTypeFromOwnership } from '../utils/fuelEntryType.ts';
 import {
   User,
+  UserProfile,
   Vehicle,
   FuelLog,
   BillingInvoice,
@@ -1963,6 +1965,58 @@ export async function deleteStaffEmployee(id: string) {
   } catch (error) {
     console.error("Database action failed in deleteStaffEmployee:", error);
     throw new Error("Failed to delete staff employee.", { cause: error });
+  }
+}
+
+// --- EMPLOYEE PROFILE OPERATIONS (user_profiles) ---
+// Postgres "relation does not exist" - the user_profiles migration hasn't
+// been applied yet on this database. Reads then behave as "no profile saved
+// yet" so login, the sidebar and every other screen keep working exactly as
+// before; only saving a profile reports the missing table.
+const isMissingTableError = (error: unknown): boolean => {
+  const e = error as { code?: string; cause?: { code?: string } };
+  return e?.code === '42P01' || e?.cause?.code === '42P01';
+};
+
+export async function getUserProfile(username: string): Promise<UserProfile | null> {
+  try {
+    const rows = await db.select().from(userProfiles).where(eq(userProfiles.username, username));
+    return rows.length > 0 ? { ...JSON.parse(rows[0].data), username } : null;
+  } catch (error) {
+    if (isMissingTableError(error)) return null;
+    console.error("Database query failed in getUserProfile:", error);
+    throw new Error("Failed to retrieve user profile.", { cause: error });
+  }
+}
+
+export async function getUserProfiles(): Promise<UserProfile[]> {
+  try {
+    const rows = await db.select().from(userProfiles);
+    return rows.map(r => ({ ...JSON.parse(r.data), username: r.username }));
+  } catch (error) {
+    if (isMissingTableError(error)) return [];
+    console.error("Database query failed in getUserProfiles:", error);
+    throw new Error("Failed to retrieve user profiles.", { cause: error });
+  }
+}
+
+export async function saveUserProfile(profile: UserProfile): Promise<UserProfile> {
+  try {
+    const complete: UserProfile = { ...profile, updatedAt: istTimestamp() };
+    const dataString = JSON.stringify(complete);
+    const existing = await db.select().from(userProfiles).where(eq(userProfiles.username, profile.username));
+    if (existing.length > 0) {
+      await db.update(userProfiles).set({ data: dataString }).where(eq(userProfiles.username, profile.username));
+    } else {
+      await db.insert(userProfiles).values({ username: profile.username, data: dataString });
+    }
+    return complete;
+  } catch (error) {
+    if (isMissingTableError(error)) {
+      throw new Error("Employee Profile storage is not set up on this database yet (the user_profiles migration has not been applied).", { cause: error });
+    }
+    console.error("Database action failed in saveUserProfile:", error);
+    throw new Error("Failed to save user profile.", { cause: error });
   }
 }
 

@@ -50,7 +50,7 @@ function otsuThreshold(hist: number[], total: number): number {
   return t;
 }
 
-interface Region { contour: any; area: number; sides: number; L: number; a: number; b: number; }
+interface Region { contour: any; area: number; sides: number; rectFill: number; L: number; a: number; b: number; }
 
 // True when every hull point lies inside the quad (or within `tolerance` px
 // outside it) - i.e. cropping to the quad cuts no paper away.
@@ -143,7 +143,9 @@ export function detectPaperGroup(cv: any, srcMat: any): DetectionResult | null {
       single.push_back(contour);
       cv.drawContours(regionMask, single, 0, new cv.Scalar(255), -1);
       const mean = cv.mean(lab, regionMask);
-      regions.push({ contour, area, sides, L: mean[0], a: mean[1] - 128, b: mean[2] - 128 });
+      const rect = cv.minAreaRect(contour);
+      const rectFill = area / Math.max(1, rect.size.width * rect.size.height);
+      regions.push({ contour, area, sides, rectFill, L: mean[0], a: mean[1] - 128, b: mean[2] - 128 });
     }
     regions.sort((x, y) => y.area - x.area);
 
@@ -151,6 +153,15 @@ export function detectPaperGroup(cv: any, srcMat: any): DetectionResult | null {
     // paper indistinguishable from the background) - not something to crop to.
     if (regions.length === 0 || regions[0].sides === 4) {
       console.debug('[SCANNER] paper group: paper region not separable from the background - using edge detection');
+      return null;
+    }
+    // Same for a light, low-colour SURFACE whose 4th side is hidden (by a
+    // hand, a bumper...): it reaches 3 photo edges and its outline is ragged,
+    // whereas a sheet that big still fills a clean rectangle. Seen on a real
+    // toll receipt held over grey concrete: the floor (with the receipt merged
+    // into it) was taken as "paper" and the crop became the whole photo.
+    if (regions[0].sides === 3 && regions[0].rectFill < CLEAN_RECT_FILL) {
+      console.debug('[SCANNER] paper group: light background surface, not a sheet - using edge detection');
       return null;
     }
 

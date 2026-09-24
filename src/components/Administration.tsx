@@ -56,13 +56,15 @@ import Payments from './Payments';
 import VendorManagement from './VendorManagement';
 import DriverDetails from './DriverDetails';
 import LoanManagement from './LoanManagement';
+import EmployeeProfileModal, { ProfileAvatar } from './EmployeeProfile';
+import { authFetch } from '../authFetch';
 import kcmLogo from '../assets/images/logo.png';
 import Watermark from './Watermark';
 import companyTruck from '../assets/images/kcm_vehicle_cutout.png';
 import {
   LogOut, ShieldAlert, FileSpreadsheet, Fuel, FileText, Landmark,
   Settings, DollarSign, Contact, Bell, Mail, RefreshCw, CheckCircle, Clock,
-  KeyRound, Cpu, Terminal, Copy, Check, Eye, EyeOff, Warehouse, Gauge, X,
+  KeyRound, UserCircle2, Cpu, Terminal, Copy, Check, Eye, EyeOff, Warehouse, Gauge, X,
   Truck, Building2, HandCoins, Menu, BarChart3, History, CreditCard, AlertTriangle, TrendingUp, Satellite
 } from 'lucide-react';
 
@@ -428,6 +430,19 @@ export default function Administration({
 
   // Password editing state
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  // Employee Profile (2026-09-24) - the sidebar user card opens it; the
+  // saved photo replaces the initials avatar. A failed load just leaves the
+  // initials in place.
+  const [showProfile, setShowProfile] = useState(false);
+  const [profilePhoto, setProfilePhoto] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    authFetch('/api/profile')
+      .then(r => r.ok ? r.json() : null)
+      .then(view => { if (!cancelled && view) setProfilePhoto(view.personal?.profilePhoto); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [user.username]);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
@@ -1558,15 +1573,19 @@ export default function Administration({
         <div className={`border-t border-purple-500/20 bg-purple-950/50 shrink-0 ${sidebarExpanded ? 'p-4' : 'p-2 flex flex-col items-center gap-2'}`}>
           {sidebarExpanded ? (
             <>
-              <div className="flex items-center gap-3 px-2 mb-3">
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-pink-500 to-purple-600 border border-pink-400/40 flex items-center justify-center text-xs text-white font-black shrink-0 shadow-sm">
-                  {user.name.substring(0, 2).toUpperCase()}
-                </div>
+              <button
+                type="button"
+                onClick={() => setShowProfile(true)}
+                title="View / edit my profile"
+                className="w-full flex items-center gap-3 px-2 py-1 mb-3 rounded-xl text-left hover:bg-white/5 transition-all cursor-pointer"
+              >
+                <ProfileAvatar name={user.name} photo={profilePhoto} />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-bold text-white truncate">{user.name}</p>
                   <p className="text-[9.5px] text-pink-300 capitalize truncate font-semibold">{user.departmentLabel || user.department.replace('_', ' ')}</p>
                 </div>
-              </div>
+                <UserCircle2 className="w-3.5 h-3.5 text-pink-300 shrink-0" />
+              </button>
 
               <div className="grid grid-cols-2 gap-2">
                 <button
@@ -1592,9 +1611,9 @@ export default function Administration({
             </>
           ) : (
             <>
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-pink-500 to-purple-600 border border-pink-400/40 flex items-center justify-center text-xs text-white font-black shrink-0 shadow-sm" title={user.name}>
-                {user.name.substring(0, 2).toUpperCase()}
-              </div>
+              <button type="button" onClick={() => setShowProfile(true)} title={`${user.name} - My Profile`} className="cursor-pointer rounded-xl">
+                <ProfileAvatar name={user.name} photo={profilePhoto} />
+              </button>
               <button
                 onClick={() => {
                   setIsChangingPassword(true);
@@ -1619,6 +1638,9 @@ export default function Administration({
         </div>
       </aside>
     </div>
+    {showProfile && (
+      <EmployeeProfileModal onClose={() => setShowProfile(false)} onProfileChange={view => setProfilePhoto(view.personal.profilePhoto)} />
+    )}
     </>
   );
 }

@@ -1,12 +1,16 @@
 // Shared Driver Salary export logic (Driver Details & Attendance: Format-
-// Consistent PDF/Excel Downloads Everywhere) - Download All, per-location,
-// per-driver (DriverSalarySheet.tsx) and the Salary Breakup tab
-// (DriverFormModal.tsx) all build their export data through this one module,
-// so Excel and PDF are guaranteed to show the same figures everywhere
-// instead of each download button keeping its own copy in sync by hand.
+// Consistent PDF/Excel Downloads Everywhere) - Driver Salary's Download All
+// and per-location downloads (DriverSalarySheet.tsx) build their export
+// data through this one module (see exportDriverSalary at the bottom), so
+// Excel and PDF are guaranteed to show the same figures instead of each
+// download button keeping its own copy in sync by hand.
+import ExcelJS from 'exceljs';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { DriverEmployee, DriverAttendance } from '../types';
-import { exportReportToExcel, exportReportToPdf, ReportTableSection } from './reportExport';
 import { DriverSalaryAdvanceVoucherSlim, computeDriverPettyCashAdvance } from './driverPettyCashAdvance';
+import { driverAllLocations } from './driverLocations';
+import { DriverTripMileage, driverVehicleMileage, formatDriverVehicleMileage } from './driverMileage';
 
 const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -84,13 +88,17 @@ export const payableAmount = (driver: DriverEmployee): number => {
 // Present + Paid Leave = Working Days, AbsentLOP = LOP days - the exact same
 // rule the server's own computeDriverMonthlyAttendanceSummary and Driver
 // Attendance's own summarizeMonthRows use, so this always agrees with what
-// Driver Attendance itself shows for that month.
-function liveMonthAttendance(driverId: string, month: string, attendance: DriverAttendance[]): { totalDays: number; workingDays: number; lopDays: number } {
+// Driver Attendance itself shows for that month. absentDays = Absent (No
+// Info) + Absent - LOP, the server's own totalAbsent (the "Absent" figure on
+// Driver Attendance's monthly summary).
+function liveMonthAttendance(driverId: string, month: string, attendance: DriverAttendance[]): { totalDays: number; workingDays: number; lopDays: number; absentDays: number } {
   const rows = attendance.filter(a => a.driverId === driverId && a.date.startsWith(month));
+  const lopDays = rows.filter(r => r.status === 'AbsentLOP').length;
   return {
     totalDays: daysInSalaryMonth(month),
     workingDays: rows.filter(r => r.status === 'Present' || r.status === 'PaidLeave').length,
-    lopDays: rows.filter(r => r.status === 'AbsentLOP').length
+    lopDays,
+    absentDays: rows.filter(r => r.status === 'AbsentNoInfo').length + lopDays
   };
 }
 
@@ -141,15 +149,25 @@ export function payableAmountLive(driver: DriverEmployee, attendance: DriverAtte
 export function payableAmountLiveCurrentMonth(
   driver: DriverEmployee, attendance: DriverAttendance[], pettyCashVouchers: DriverSalaryAdvanceVoucherSlim[], currentMonth: string
 ): number {
-  const { totalDays, workingDays, lopDays } = liveMonthAttendance(driver.id, currentMonth, attendance);
-  const pettyCashAdvance = computeDriverPettyCashAdvance(pettyCashVouchers, driver.id, currentMonth).total;
-  const { payableAmount: amount } = computeDriverEarnings({
+  return liveDriverMonthSalary(driver, attendance, pettyCashVouchers, currentMonth).earnings.payableAmount;
+}
+
+// Everything the Driver Salary list/export needs for one driver + month,
+// all live: attendance counts, Petty Cash/Advance, and the single
+// computeDriverEarnings breakdown built from them - so the exported Payable
+// Amount always equals the on-screen Payable Amount for the same month.
+export function liveDriverMonthSalary(
+  driver: DriverEmployee, attendance: DriverAttendance[], pettyCashVouchers: DriverSalaryAdvanceVoucherSlim[], month: string
+) {
+  const days = liveMonthAttendance(driver.id, month, attendance);
+  const pettyCashAdvance = computeDriverPettyCashAdvance(pettyCashVouchers, driver.id, month).total;
+  const earnings = computeDriverEarnings({
     grossSalary: driver.grossSalary || 0, otherAdditions: driver.otherAdditions || 0,
     pettyCashAdvance, loanDeduction: driver.loanDeduction || 0,
     recoveryAmount: driver.recoveryAmount || 0, driverWelfare: driver.driverWelfare || 0, bata: driver.bata || 0,
-    totalDays, workingDays, lopDays
+    totalDays: days.totalDays, workingDays: days.workingDays, lopDays: days.lopDays
   });
-  return amount;
+  return { ...days, pettyCashAdvance, earnings };
 }
 
 // A driver can cover more than one vehicle (DriverEmployee.vehicleNos) -
@@ -196,19 +214,132 @@ export const SALARY_COLUMNS = [
 export const driverSalaryRows = (list: DriverEmployee[], attendance?: DriverAttendance[]): (string | number)[][] =>
   list.map((driver, i) => Object.values(toDriverSalaryRow(driver, i, attendance)));
 
-// One section per location group - Excel gets one sheet per section, PDF
-// gets one table per section, so "Download All", the per-location download
-// and the per-driver/Salary Breakup download (a single-driver, single-group
-// section) all share this exact same section builder.
-export const salarySections = (groups: { location: string; drivers: DriverEmployee[] }[], attendance?: DriverAttendance[]): ReportTableSection[] =>
-  groups.map(g => ({ heading: g.location, columns: SALARY_COLUMNS, rows: driverSalaryRows(g.drivers, attendance) }));
+// ---------------------------------------------------------------------------
+// Driver Salary downloads (Download All / one location) - 2026-09-24 rework.
+// ONE consolidated sheet (Excel) / ONE table (PDF) per download, never split
+// by location, for one salary month. Every figure is live for that month:
+// attendance from Driver Attendance's own records, Petty Cash/Advance from
+// the Driver Salary Adv vouchers, Payable Amount/LOP Amount from
+// computeDriverEarnings, Actual Mileage from Trip Details. Salary is a
+// whole-driver figure here (as on the Driver Salary screen), so a driver
+// assigned to several locations appears once, with every location listed.
+// (toDriverSalaryRow/SALARY_COLUMNS above stay as they were - Reports &
+// Analytics still uses them.)
+// ---------------------------------------------------------------------------
+export const DRIVER_SALARY_EXPORT_COLUMNS = [
+  'Sl.No', 'Month', 'Driver Name', 'Driver ID', 'Driver No', 'Vehicle No', 'A/C No', 'IFSC Code', 'Reporting',
+  'No. of Days', 'No. of Working Days', 'No. of Days Absent', 'Gross Salary', 'Payable Amount', 'Location',
+  'LOP Amount', 'Petty Cash/Advance', 'Loan Deduction', 'Recovery Amount', 'Driver Welfare', 'BATA', 'Other Additions',
+  'Actual Mileage', 'Remarks'
+];
 
-// The one shared export function every Driver Salary download entry point
-// calls - Excel and PDF both render from the exact same `sections` data, so
-// content parity between formats is structural rather than something to
-// keep in sync by hand (see the "Format-Consistent PDF/Excel Downloads
-// Everywhere" requirement).
-export function exportDriverSalary(filenameBase: string, sections: ReportTableSection[], format: 'excel' | 'pdf', subtitle: string): void {
-  if (format === 'excel') exportReportToExcel(filenameBase, sections);
-  else exportReportToPdf(filenameBase, 'Driver Salary', subtitle, sections);
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+export function salaryMonthLabel(month: string): string {
+  const [y, m] = month.split('-').map(Number);
+  return m >= 1 && m <= 12 ? `${MONTH_NAMES[m - 1]} ${y}` : month;
+}
+
+export interface DriverSalaryExportContext {
+  month: string; // YYYY-MM - the salary month being exported
+  attendance: DriverAttendance[];
+  pettyCashVouchers: DriverSalaryAdvanceVoucherSlim[];
+  trips: DriverTripMileage[];
+}
+
+// A driver listed more than once (one entry per location on screen) is
+// exported once, at their first position.
+export function driverSalaryExportRows(drivers: DriverEmployee[], ctx: DriverSalaryExportContext): (string | number)[][] {
+  const seen = new Set<string>();
+  const unique = drivers.filter(d => {
+    if (seen.has(d.id)) return false;
+    seen.add(d.id);
+    return true;
+  });
+  const month = salaryMonthLabel(ctx.month);
+  return unique.map((driver, i) => {
+    const live = liveDriverMonthSalary(driver, ctx.attendance, ctx.pettyCashVouchers, ctx.month);
+    const mileage = formatDriverVehicleMileage(driverVehicleMileage(driver.id, ctx.month, ctx.trips));
+    return [
+      i + 1, month, driver.name, driver.id, driver.driverNo || '', vehiclesLabel(driver),
+      driver.accountNumber || '', driver.ifscCode || '', driver.reporting || '',
+      live.totalDays, live.workingDays, live.absentDays,
+      driver.grossSalary || '', live.earnings.payableAmount, driverAllLocations(driver).join(', '),
+      live.earnings.lopDeduction || '', live.pettyCashAdvance || '', driver.loanDeduction || '', driver.recoveryAmount || '',
+      driver.driverWelfare || '', driver.bata || '', driver.otherAdditions || '',
+      mileage, driver.remark || ''
+    ];
+  });
+}
+
+const HEADER_FILL = 'FF312E81'; // same indigo header as Driver Attendance's Excel export
+const MILEAGE_COL = DRIVER_SALARY_EXPORT_COLUMNS.indexOf('Actual Mileage');
+const REMARKS_COL = DRIVER_SALARY_EXPORT_COLUMNS.indexOf('Remarks');
+
+// One worksheet: header row + one row per driver (ExcelJS, the same library
+// and header styling as Driver Attendance's export). Actual Mileage/Remarks
+// wrap so a multi-vehicle driver's lines stay readable inside one cell.
+export async function buildDriverSalaryWorkbook(rows: (string | number)[][]): Promise<ExcelJS.Workbook> {
+  const wb = new ExcelJS.Workbook();
+  const sheet = wb.addWorksheet('Driver Salary');
+  sheet.addRow(DRIVER_SALARY_EXPORT_COLUMNS);
+  sheet.getRow(1).eachCell(cell => {
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_FILL } };
+    cell.alignment = { vertical: 'middle', wrapText: true };
+  });
+  sheet.views = [{ state: 'frozen', ySplit: 1 }];
+  if (rows.length === 0) sheet.addRow(['No driver records']);
+  rows.forEach(r => {
+    const row = sheet.addRow(r);
+    row.alignment = { vertical: 'top' };
+    row.getCell(MILEAGE_COL + 1).alignment = { vertical: 'top', wrapText: true };
+    row.getCell(REMARKS_COL + 1).alignment = { vertical: 'top', wrapText: true };
+  });
+  DRIVER_SALARY_EXPORT_COLUMNS.forEach((label, i) => {
+    sheet.getColumn(i + 1).width = label === 'Sl.No' ? 7 : label === 'Driver Name' ? 22 : label === 'Actual Mileage' ? 26 : label === 'Remarks' ? 30 : 14;
+  });
+  return wb;
+}
+
+// One landscape table - same columns/rows as the Excel sheet.
+export function buildDriverSalaryPdf(subtitle: string, rows: (string | number)[][]): jsPDF {
+  const doc = new jsPDF({ orientation: 'landscape' });
+  doc.setFontSize(14);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Driver Salary', 8, 12);
+  doc.setFontSize(9);
+  doc.setTextColor(100, 116, 139);
+  doc.text(subtitle, 8, 18);
+  autoTable(doc, {
+    startY: 22,
+    head: [DRIVER_SALARY_EXPORT_COLUMNS],
+    body: rows.length
+      ? rows.map(r => r.map(v => typeof v === 'number' ? v.toLocaleString('en-IN') : v))
+      : [DRIVER_SALARY_EXPORT_COLUMNS.map((_, i) => i === 0 ? 'No driver records' : '')],
+    styles: { fontSize: 5.5, cellPadding: 1, overflow: 'linebreak', valign: 'top' },
+    headStyles: { fillColor: [49, 46, 129], fontSize: 5.5 },
+    columnStyles: { [MILEAGE_COL]: { cellWidth: 24 }, [REMARKS_COL]: { cellWidth: 22 } },
+    showHead: 'everyPage',
+    margin: { left: 6, right: 6 }
+  });
+  return doc;
+}
+
+// The one export function both Driver Salary download entry points (Download
+// All and a location's own Download) call - Excel and PDF render the exact
+// same rows, so content parity between formats is structural.
+export async function exportDriverSalary(
+  filenameBase: string, drivers: DriverEmployee[], ctx: DriverSalaryExportContext, format: 'excel' | 'pdf', scopeLabel: string
+): Promise<void> {
+  const rows = driverSalaryExportRows(drivers, ctx);
+  if (format === 'pdf') {
+    buildDriverSalaryPdf(`${scopeLabel} - ${salaryMonthLabel(ctx.month)}`, rows).save(`${filenameBase}.pdf`);
+    return;
+  }
+  const buffer = await (await buildDriverSalaryWorkbook(rows)).xlsx.writeBuffer();
+  const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = `${filenameBase}.xlsx`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
