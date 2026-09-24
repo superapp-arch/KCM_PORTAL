@@ -145,6 +145,11 @@ export interface FuelLog {
   amount: number; // auto = ltrs * rate, editable override
   client: string;
   type: FuelEntryType;
+  // Set only on an entry whose Type was converted from the pre-split 'KCM'
+  // to its vehicle's Fleet & Vehicles ownership by the server's one-time
+  // backfill (backfillLegacyKcmFuelTypes) - records the original value so
+  // that conversion stays auditable/reversible. Absent everywhere else.
+  typeBackfilledFrom?: 'KCM';
   vendorName?: string; // from Vendor Master, searchable
   vendorCode?: string; // auto-filled from matched vendor
   remarks?: string;

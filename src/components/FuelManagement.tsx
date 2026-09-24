@@ -35,6 +35,7 @@ import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
 import { authFetch } from '../authFetch';
 import { getPeriodDateRange } from '../utils/periodRange';
+import { fleetVehicleByNumber, kcmTypeFromOwnership } from '../utils/fuelEntryType';
 import PcDieselExpensePanel from './fuel/PcDieselExpensePanel';
 import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationModal';
 import { PETTY_CASH_USERS } from '../utils/pettyCashUsers';
@@ -834,10 +835,8 @@ export default function FuelManagement({
     typeAutoFillVehicleRef.current = trimmed;
     if (typeManuallySetRef.current) return;
     if (matchedVendorByVehicle) { setEntryType('Vendor'); return; }
-    const fleetVehicle = vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === trimmed);
-    if (!fleetVehicle) { setEntryType('Vendor'); return; }
-    const ownership = String(fleetVehicle['Ownership'] || fleetVehicle.ownership || '').toUpperCase();
-    setEntryType(ownership.includes('INSTA') ? 'KCM Insta' : 'KCM Supply');
+    const fleetVehicle = fleetVehicleByNumber(vehicles, trimmed);
+    setEntryType(fleetVehicle ? kcmTypeFromOwnership(fleetVehicle) : 'Vendor');
   }, [vehicleNumber, vehicles, matchedVendorByVehicle]);
 
   // Vendor Name = "One Time Vendor" auto-sets Vendor Code to "Vendor" - same
@@ -851,17 +850,14 @@ export default function FuelManagement({
   // falls back to the full list if the location isn't mapped (or none picked).
   const bunkOptionsForLocation = location && LOCATION_BUNK_MAP[location] ? LOCATION_BUNK_MAP[location] : BUNK_NAMES;
 
-  // Location -> Bunk: auto-fill when the location maps to exactly one bunk.
-  // HPCL (shared across locations) doesn't count against that - a location
-  // with one bunk of its own plus HPCL (e.g. Vijayawada: Tejashri + HPCL)
-  // still auto-fills its own bunk, exactly as it did before HPCL was added.
+  // Location -> Bunk: auto-fill only when the location maps to exactly one
+  // bunk. A location with more than one (e.g. Vijayawada: Tejashri + HPCL,
+  // Hyderabad) leaves Bunk Name for the user to pick from the dropdown
+  // (2026-09-24 direct request - never pre-pick one of several).
   useEffect(() => {
     if (skipLocationAutoFillRef.current) { skipLocationAutoFillRef.current = false; return; }
     const bunks = location ? LOCATION_BUNK_MAP[location] : undefined;
-    if (!bunks) return;
-    const ownBunks = bunks.filter(b => b !== 'HPCL');
-    if (bunks.length === 1) setBunkName(bunks[0]);
-    else if (ownBunks.length === 1) setBunkName(ownBunks[0]);
+    if (bunks && bunks.length === 1) setBunkName(bunks[0]);
   }, [location]);
 
   // Bunk -> Location: auto-fill only when that bunk belongs to exactly one

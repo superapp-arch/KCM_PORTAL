@@ -62,6 +62,7 @@ import { hashPassword, isHashed } from '../auth/password.ts';
 import { istTimestamp } from '../auth/time.ts';
 import { redactSensitive } from './auditRedact.ts';
 import { normalizeLocationName } from '../utils/pettyCashLocations.ts';
+import { fleetVehicleByNumber, kcmTypeFromOwnership } from '../utils/fuelEntryType.ts';
 import {
   User,
   Vehicle,
@@ -645,6 +646,31 @@ export async function saveFuelLog(log: FuelLog) {
     console.error("Database action failed in saveFuelLog:", error);
     throw new Error("Failed to save fuel log.", { cause: error });
   }
+}
+
+// One-time backfill (2026-09-24 direct request): fuel entries saved before
+// Type was split into KCM Supply / KCM Insta still say plain 'KCM', so
+// Diesel Payments can't attribute their amounts to an owning company. Each
+// such entry whose vehicle is in Fleet & Vehicles gets that vehicle's
+// current Ownership (same rule as the Add Entry form - see
+// utils/fuelEntryType.ts), with typeBackfilledFrom: 'KCM' recorded on the
+// row. Only exact 'KCM' rows are touched; Vendor / already-split rows and
+// 'KCM' rows whose vehicle isn't in the fleet are left as they are.
+// Idempotent - a no-op once no convertible 'KCM' rows remain. Updates rows
+// directly (not via saveFuelLog, which re-reads the whole table per save).
+export async function backfillLegacyKcmFuelTypes(): Promise<{ updated: number; unresolved: number }> {
+  const [vehicleList, logs] = await Promise.all([getVehicles(), getFuelLogs()]);
+  let updated = 0;
+  let unresolved = 0;
+  for (const log of logs) {
+    if (log.type !== 'KCM') continue;
+    const vehicle = fleetVehicleByNumber(vehicleList, log.vehicleNumber);
+    if (!vehicle) { unresolved++; continue; }
+    const next: FuelLog = { ...log, type: kcmTypeFromOwnership(vehicle), typeBackfilledFrom: 'KCM' };
+    await db.update(fuelLogs).set({ data: JSON.stringify(next) }).where(eq(fuelLogs.id, log.id));
+    updated++;
+  }
+  return { updated, unresolved };
 }
 
 export async function deleteFuelLog(id: string) {

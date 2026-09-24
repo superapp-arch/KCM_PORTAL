@@ -13,7 +13,8 @@
 // server or creates a new bulk-insert path, so server-side duplicate/
 // future-date protection is inherited automatically, never re-implemented.
 import * as XLSX from 'xlsx';
-import { FuelLog, Vehicle } from '../types';
+import { FuelLog, FuelEntryType, Vehicle } from '../types';
+import { fleetVehicleByNumber, kcmTypeFromOwnership } from './fuelEntryType';
 import { findDuplicateFuelIndentNumber } from './fuelIndentNumber';
 
 const normalizeHeader = (h: unknown): string => String(h || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -115,7 +116,7 @@ export interface ParsedFuelImportRow {
   rate: number;
   amount: number;
   client: string;
-  type: 'Vendor' | 'KCM';
+  type: FuelEntryType;
   vendorName: string;
   vendorCode: string;
   remarks: string;
@@ -253,10 +254,18 @@ async function parseFuelRows(
     // useEffect) exactly - always correct, no import-only exception.
     const amount = Math.round(ltrs * rate * 100) / 100;
     const typeRaw = String(mapped.type || '').trim();
-    // Same default rule the manual Add Entry form uses (FuelManagement.tsx)
-    // - 'KCM' unless the Client is specifically "One Time Vendor", still
-    // overridable via the file's own Type column.
-    const type: 'Vendor' | 'KCM' = typeRaw === 'Vendor' || typeRaw === 'KCM' ? typeRaw : (client === 'One Time Vendor' ? 'Vendor' : 'KCM');
+    // Default rule - 'KCM' unless the Client is specifically "One Time
+    // Vendor", still overridable via the file's own Type column.
+    // 2026-09-24: a KCM Type is then resolved to the vehicle's real owning
+    // company from Fleet & Vehicles Ownership (KCM Supply / KCM Insta), same
+    // as the Add Entry form, so Diesel Payments can split it by ownership;
+    // "KCM" stays only for a vehicle that isn't in Fleet & Vehicles.
+    const explicitType = (['Vendor', 'KCM', 'KCM Supply', 'KCM Insta'] as const).find(t => t.toLowerCase() === typeRaw.toLowerCase());
+    let type: FuelEntryType = explicitType ?? (client === 'One Time Vendor' ? 'Vendor' : 'KCM');
+    if (type === 'KCM') {
+      const fleetVehicle = fleetVehicleByNumber(vehicles, vehicleNumber);
+      if (fleetVehicle) type = kcmTypeFromOwnership(fleetVehicle);
+    }
 
     return {
       rowNumber: idx + 2, errors, warnings,

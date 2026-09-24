@@ -94,6 +94,7 @@ import {
   deleteVehicle,
   getFuelLogs,
   saveFuelLog,
+  backfillLegacyKcmFuelTypes,
   deleteFuelLog,
   getBillingInvoices,
   saveBillingInvoice,
@@ -1527,6 +1528,18 @@ async function startServer() {
   // own comment) - no-op once every report's enteredBy already matches its
   // linked fuel entry's.
   await repairMismatchedMileageReportAttribution();
+  // One-time backfill (2026-09-24): older fuel entries still typed plain
+  // 'KCM' get their vehicle's Fleet & Vehicles ownership (KCM Supply / KCM
+  // Insta) so Diesel Payments can split them - see backfillLegacyKcmFuelTypes.
+  // No-op once converted; never blocks startup if it fails.
+  try {
+    const { updated, unresolved } = await backfillLegacyKcmFuelTypes();
+    if (updated > 0 || unresolved > 0) {
+      console.log(`[fuel-type backfill] converted ${updated} older 'KCM' fuel entries to KCM Supply/Insta; ${unresolved} left as 'KCM' (vehicle not in Fleet & Vehicles)`);
+    }
+  } catch (err) {
+    console.error('[fuel-type backfill] failed - older entries left unchanged:', err);
+  }
   // One-time sweep to close any Petty Cash Entry No gaps that already
   // existed before renumberPettyCashSequence started running on every
   // delete - no-op once the sequence is already gap-free.
