@@ -13,26 +13,37 @@
 //      crop, the employee can opt into it; if it's slow, fails, or times
 //      out (see cvLoader.ts's LOAD_TIMEOUT_MS), the employee was never
 //      blocked on it in the first place.
-import { loadOpenCV } from './cvLoader';
+import { loadOpenCV, getLoadedOpenCV } from './cvLoader';
 import { loadImageFile, drawToCanvas, canvasToMat, matToCanvas } from './imageIo';
 import { detectDocument, DetectionConfidence } from './documentDetector';
-import { warpToQuad } from './perspective';
+import { warpToQuad, warpCanvasToQuadJs } from './perspective';
 import { enhanceMat } from './enhance';
 import { assessQuality, QualityCheckResult } from './qualityCheck';
 import { Quad, quadTouchesImageBorder } from './geometry';
 
-const WORKING_MAX_DIM = 1000;
+// Detection runs on a copy whose longest side is at most this - never on the
+// raw full-resolution phone photo; corners are scaled back up afterwards and
+// the final crop is warped from the full-resolution original.
+export const WORKING_MAX_DIM = 1000;
 
 export interface PhotoCanvases {
   originalCanvas: HTMLCanvasElement; // full resolution, untouched - always available as the "Use Original"/fast-upload fallback
   workingCanvas: HTMLCanvasElement; // downscaled copy detection runs on
 }
 
+// 2026-09-23: the three outcomes of automatic detection -
+//   'applied'       - a medium/high-confidence crop was produced (processedCanvas set)
+//   'manual-needed' - the detector ran but found nothing confident enough; the
+//                     employee should place the corners (quad, if any, seeds the editor)
+//   'unavailable'   - the engine failed to load/initialize, or a CV step threw
+export type AutoCropStatus = 'applied' | 'manual-needed' | 'unavailable';
+
 export interface DetectionOutcome {
+  status: AutoCropStatus;
   quad: Quad | null; // in workingCanvas coordinates
   quadFullRes: Quad | null; // the same quad, scaled to originalCanvas coordinates
   confidence: DetectionConfidence;
-  processedCanvas: HTMLCanvasElement | null; // full-res, perspective-corrected + enhanced; null if nothing confident enough to auto-process
+  processedCanvas: HTMLCanvasElement | null; // full-res, perspective-corrected + enhanced; null unless status === 'applied'
   quality: QualityCheckResult | null;
   partiallyOutOfFrame: boolean;
 }
@@ -40,10 +51,21 @@ export interface DetectionOutcome {
 // Stage 1 - fast, no OpenCV. Just decodes the file into the two canvases
 // the rest of the scanner (and a plain "upload as-is" save) needs.
 export async function loadPhotoCanvases(file: File): Promise<PhotoCanvases> {
+  console.debug('[SCANNER] process started', file.name, file.type, `${(file.size / 1024).toFixed(0)}KB`);
   const img = await loadImageFile(file);
+  console.debug('[SCANNER] image loaded; image dimensions:', img.naturalWidth, 'x', img.naturalHeight);
   const originalCanvas = drawToCanvas(img);
   const workingCanvas = drawToCanvas(img, WORKING_MAX_DIM);
+  console.debug('[SCANNER] canvas created; working copy:', workingCanvas.width, 'x', workingCanvas.height);
   return { originalCanvas, workingCanvas };
+}
+
+// Every corner must be a finite point inside the image - anything else is
+// treated as "no detection" rather than handed to the warp.
+function isUsableQuad(q: Quad | null, w: number, h: number): q is Quad {
+  return !!q && q.length === 4 && q.every(p =>
+    Number.isFinite(p.x) && Number.isFinite(p.y) && p.x >= -1 && p.y >= -1 && p.x <= w + 1 && p.y <= h + 1
+  );
 }
 
 // Stage 2 - the OpenCV-dependent part, called separately (and, in
@@ -57,68 +79,96 @@ export async function detectAndProcess(
   workingCanvas: HTMLCanvasElement,
   onProgress?: (message: string) => void
 ): Promise<DetectionOutcome> {
-  let quad: Quad | null = null;
-  let quadFullRes: Quad | null = null;
-  let confidence: DetectionConfidence = 'low';
-  let partiallyOutOfFrame = false;
-  let processedCanvas: HTMLCanvasElement | null = null;
-  let quality: QualityCheckResult | null = null;
+  const unavailable: DetectionOutcome = {
+    status: 'unavailable', quad: null, quadFullRes: null, confidence: 'low',
+    processedCanvas: null, quality: null, partiallyOutOfFrame: false
+  };
+
+  let cv: any;
+  try {
+    // Only shown while the engine is genuinely still loading - once it's
+    // ready (cached for the rest of the page session), this is skipped.
+    if (!getLoadedOpenCV()) onProgress?.('Loading scanner engine (first time only)...');
+    cv = await loadOpenCV();
+  } catch (err) {
+    // Outcome C: engine failed to load/initialize. The original photo
+    // (already visible/saveable via stage 1) is unaffected, and Manual Crop
+    // works without OpenCV (see applyCrop below).
+    console.error('[SCANNER] engine unavailable - automatic crop disabled for this photo', err);
+    return unavailable;
+  }
 
   try {
-    // 2026-09-10: this message now specifically calls out the one-time
-    // engine download, not the (much faster) detection step that follows
-    // it - loadOpenCV() below can legitimately take up to 45s the first
-    // time a browser hits this feature (cvLoader.ts caches the ~13MB
-    // engine for a year after that), and an employee staring at a generic
-    // "Detecting document edges..." for 20-30 seconds on their very first
-    // scan of the day has no way to tell that apart from an actual hang.
-    onProgress?.('Loading scanner engine (first time only)...');
-    const cv = await loadOpenCV();
     const scaleUp = originalCanvas.width / workingCanvas.width;
-
     onProgress?.('Detecting document edges...');
     const workingMat = canvasToMat(cv, workingCanvas);
+    console.debug('[SCANNER] imageData created:', workingMat.cols, 'x', workingMat.rows, 'channels', workingMat.channels());
     let detection;
+    const t0 = performance.now();
+    console.debug('[SCANNER] corner detection started');
     try {
       detection = detectDocument(cv, workingMat);
     } finally {
       workingMat.delete();
     }
-    quad = detection.quad;
-    confidence = detection.confidence;
+    console.debug(
+      `[SCANNER] corner detection completed in ${Math.round(performance.now() - t0)}ms; confidence=${detection.confidence} score=${detection.score.toFixed(3)} corners:`,
+      detection.quad ? JSON.stringify(detection.quad.map(p => ({ x: Math.round(p.x), y: Math.round(p.y) }))) : 'none'
+    );
 
-    if (detection.quad) {
-      quadFullRes = detection.quad.map(p => ({ x: p.x * scaleUp, y: p.y * scaleUp })) as Quad;
-      partiallyOutOfFrame = quadTouchesImageBorder(detection.quad, workingCanvas.width, workingCanvas.height);
-
-      // 2026-09-10 direct request: ANY detected quad now gets auto-cropped
-      // and shown, not just medium/high confidence ones - tested against
-      // real invoice photos (small receipts on textured car-seat leather,
-      // rotated, off-centre), silently showing nothing whenever confidence
-      // dipped below 'medium' made the whole feature feel like it wasn't
-      // working at 100+ scans/day. The confidence badge (see
-      // DocumentScanner.tsx) still tells the employee how much to trust
-      // it, and Adjust Crop/Use Original are always one tap away - but the
-      // default is now "always attempt a crop", never "silently do
-      // nothing".
-      onProgress?.('Correcting perspective...');
-      const result = processWithQuad(cv, originalCanvas, quadFullRes);
-      processedCanvas = result.processedCanvas;
-      quality = result.quality;
+    if (!isUsableQuad(detection.quad, workingCanvas.width, workingCanvas.height)) {
+      return { ...unavailable, status: 'manual-needed' };
     }
-  } catch (cvError) {
-    // The OpenCV engine failed to load, timed out, or a CV step threw -
-    // degrade quietly. The original photo (already visible/saveable via
-    // stage 1) is completely unaffected.
-    console.error('Document detection unavailable, falling back to manual/original crop:', cvError);
-    quad = null;
-    quadFullRes = null;
-    confidence = 'low';
-    processedCanvas = null;
-    quality = null;
-  }
 
-  return { quad, quadFullRes, confidence, processedCanvas, quality, partiallyOutOfFrame };
+    const quad = detection.quad;
+    const quadFullRes = quad.map(p => ({ x: p.x * scaleUp, y: p.y * scaleUp })) as Quad;
+    const partiallyOutOfFrame = quadTouchesImageBorder(quad, workingCanvas.width, workingCanvas.height);
+
+    // Outcome B: the detector found something, but not confidently - don't
+    // auto-apply it; the employee places the corners (seeded with this quad).
+    if (detection.confidence === 'low') {
+      return { status: 'manual-needed', quad, quadFullRes, confidence: 'low', processedCanvas: null, quality: null, partiallyOutOfFrame };
+    }
+
+    // Outcome A: medium/high confidence - perspective-correct automatically.
+    onProgress?.('Correcting perspective...');
+    const t1 = performance.now();
+    console.debug('[SCANNER] perspective correction started');
+    const result = processWithQuad(cv, originalCanvas, quadFullRes);
+    console.debug(`[SCANNER] perspective correction completed in ${Math.round(performance.now() - t1)}ms; output ${result.processedCanvas.width}x${result.processedCanvas.height}`);
+    return {
+      status: 'applied', quad, quadFullRes, confidence: detection.confidence,
+      processedCanvas: result.processedCanvas, quality: result.quality, partiallyOutOfFrame
+    };
+  } catch (err) {
+    // A CV step threw after the engine loaded - same user-facing outcome
+    // as an unavailable engine (Manual Crop still works without OpenCV).
+    console.error('[SCANNER] automatic detection failed', err);
+    return unavailable;
+  }
+}
+
+// Crops the full-resolution original to `quadFullRes` - used by Manual
+// Crop's Apply Crop. Uses OpenCV (warp + enhancement + quality checks) when
+// the engine is ALREADY loaded; never waits for it to load. Without it (still
+// downloading, failed, or a CV step throws) falls back to the pure-JS warp,
+// so a manual crop always produces a correctly cropped image to save.
+export function applyCrop(
+  originalCanvas: HTMLCanvasElement,
+  quadFullRes: Quad
+): { processedCanvas: HTMLCanvasElement; quality: QualityCheckResult | null } {
+  const cv = getLoadedOpenCV();
+  if (cv) {
+    try {
+      return processWithQuad(cv, originalCanvas, quadFullRes);
+    } catch (err) {
+      console.error('[SCANNER] OpenCV crop failed - using the built-in perspective warp instead', err);
+    }
+  }
+  const t0 = performance.now();
+  const processedCanvas = warpCanvasToQuadJs(originalCanvas, quadFullRes);
+  console.debug(`[SCANNER] built-in perspective warp completed in ${Math.round(performance.now() - t0)}ms; output ${processedCanvas.width}x${processedCanvas.height}`);
+  return { processedCanvas, quality: null };
 }
 
 // Re-runs perspective correction + enhancement against a specific quad on

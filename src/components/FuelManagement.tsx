@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
-import { FuelLog, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage, Vendor, StaffEmployee, DriverVehicleLookup } from '../types';
+import { FuelLog, FuelEntryType, MileageReport, Vehicle, VehicleDocument, User, VehicleMileage, Vendor, StaffEmployee, DriverVehicleLookup } from '../types';
 import SortHeader from './SortHeader';
 import ColumnFilterHeader from './ColumnFilterHeader';
 import PaginationFooter, { paginateRows } from './PaginationFooter';
@@ -84,7 +84,7 @@ const sumExtraFuelExpression = (raw: string): number =>
 const LOCATION_BUNK_MAP: Record<string, string[]> = {
   Hoskote: ['Sri Venkateshwara'],
   Nelmangala: ['Kamala'],
-  Hyderabad: ['Sri Sai Baba', 'Isnapur'],
+  Hyderabad: ['Sri Sai Baba', 'Isnapur', 'HPCL'],
   Kandlakoya: ['Vayuputra'],
   Mysore: ['Simhadhri'],
   Vizag: ['Visalakshi'],
@@ -93,7 +93,8 @@ const LOCATION_BUNK_MAP: Record<string, string[]> = {
   Chennai: ['HPCL'],
   Goa: ['HPCL'],
   Belagaum: ['OM Petroleum', 'Atharv'],
-  Vijayawada: ['Tejashri'],
+  // HPCL added to Vijayawada/Hyderabad (2026-09-23 direct request).
+  Vijayawada: ['Tejashri', 'HPCL'],
   Manoharabad: ['Lakshmi']
 };
 
@@ -459,7 +460,12 @@ export default function FuelManagement({
   // already set them.
   const lastVendorAutoFillVehicleRef = useRef<string | null>(null);
   const [client, setClient] = useState('');
-  const [entryType, setEntryType] = useState<'Vendor' | 'KCM'>('KCM');
+  const [entryType, setEntryType] = useState<FuelEntryType>('KCM Supply');
+  // Type auto-fill from Fleet & Vehicles ownership (2026-09-23): the vehicle
+  // number Type was last resolved (or loaded) for, and whether the user has
+  // hand-picked Type for this entry - a manual pick is never overwritten.
+  const typeAutoFillVehicleRef = useRef<string | null>(null);
+  const typeManuallySetRef = useRef(false);
   const [vendorName, setVendorName] = useState('');
   const [vendorCode, setVendorCode] = useState('');
   const [remarks, setRemarks] = useState('');
@@ -813,6 +819,27 @@ export default function FuelManagement({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vehicleNumber, vehicles, matchedVendorByVehicle, logs]);
 
+  // Type <- Fleet & Vehicles ownership (2026-09-23 direct request). Read live
+  // from the `vehicles` list (Fleet & Vehicles' own data, never copied), so
+  // an ownership change there applies the next time that vehicle is picked.
+  // Same precedence as Vendor Name above: a vehicle registered to a vendor
+  // is 'Vendor'; otherwise a Fleet vehicle maps to its ownership (blank
+  // ownership reads as KCM SUPPLY, same default Fleet & Vehicles itself
+  // shows); anything else is 'Vendor'. Only a smart default - the dropdown
+  // stays editable, and once the user picks Type by hand it's left alone.
+  useEffect(() => {
+    const trimmed = vehicleNumber.trim().toUpperCase();
+    if (!trimmed) { typeAutoFillVehicleRef.current = null; return; }
+    if (typeAutoFillVehicleRef.current === trimmed) return;
+    typeAutoFillVehicleRef.current = trimmed;
+    if (typeManuallySetRef.current) return;
+    if (matchedVendorByVehicle) { setEntryType('Vendor'); return; }
+    const fleetVehicle = vehicles.find(v => (v.regNo || v['Reg. No.'] || '').trim().toUpperCase() === trimmed);
+    if (!fleetVehicle) { setEntryType('Vendor'); return; }
+    const ownership = String(fleetVehicle['Ownership'] || fleetVehicle.ownership || '').toUpperCase();
+    setEntryType(ownership.includes('INSTA') ? 'KCM Insta' : 'KCM Supply');
+  }, [vehicleNumber, vehicles, matchedVendorByVehicle]);
+
   // Vendor Name = "One Time Vendor" auto-sets Vendor Code to "Vendor" - same
   // one-directional auto-fill idea as Client=One Time Vendor -> Type=Vendor
   // above; Vendor Code stays freely editable the rest of the time.
@@ -825,10 +852,16 @@ export default function FuelManagement({
   const bunkOptionsForLocation = location && LOCATION_BUNK_MAP[location] ? LOCATION_BUNK_MAP[location] : BUNK_NAMES;
 
   // Location -> Bunk: auto-fill when the location maps to exactly one bunk.
+  // HPCL (shared across locations) doesn't count against that - a location
+  // with one bunk of its own plus HPCL (e.g. Vijayawada: Tejashri + HPCL)
+  // still auto-fills its own bunk, exactly as it did before HPCL was added.
   useEffect(() => {
     if (skipLocationAutoFillRef.current) { skipLocationAutoFillRef.current = false; return; }
     const bunks = location ? LOCATION_BUNK_MAP[location] : undefined;
-    if (bunks && bunks.length === 1) setBunkName(bunks[0]);
+    if (!bunks) return;
+    const ownBunks = bunks.filter(b => b !== 'HPCL');
+    if (bunks.length === 1) setBunkName(bunks[0]);
+    else if (ownBunks.length === 1) setBunkName(ownBunks[0]);
   }, [location]);
 
   // Bunk -> Location: auto-fill only when that bunk belongs to exactly one
@@ -1246,7 +1279,9 @@ export default function FuelManagement({
     setRate('');
     setAmount('');
     setClient('');
-    setEntryType('KCM');
+    setEntryType('KCM Supply');
+    typeAutoFillVehicleRef.current = null;
+    typeManuallySetRef.current = false;
     setVendorName('');
     setVendorCode('');
     setRemarks('');
@@ -1332,6 +1367,10 @@ export default function FuelManagement({
     setAmount(String(log.amount));
     setClient(log.client);
     setEntryType(log.type);
+    // Keep the saved Type on load - only a real vehicle number change while
+    // editing re-resolves it from Fleet & Vehicles.
+    typeAutoFillVehicleRef.current = (log.vehicleNumber || '').trim().toUpperCase() || null;
+    typeManuallySetRef.current = false;
     setVendorName(log.vendorName || '');
     setVendorCode(log.vendorCode || '');
     setRemarks(log.remarks || '');
@@ -3367,9 +3406,16 @@ export default function FuelManagement({
                     </div>
                     <div>
                       <label className="block font-semibold text-slate-600 mb-1">Type *</label>
-                      <select required value={entryType} onChange={(e) => setEntryType(e.target.value as 'Vendor' | 'KCM')} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800">
+                      {/* Auto-filled from the vehicle's Fleet & Vehicles
+                          ownership (see the Type effect above), freely
+                          editable. Plain "KCM" is only shown for an older
+                          entry that was saved with it, so opening that
+                          entry doesn't silently change its Type. */}
+                      <select required value={entryType} onChange={(e) => { typeManuallySetRef.current = true; setEntryType(e.target.value as FuelEntryType); }} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-slate-800">
+                        <option value="KCM Supply">KCM Supply</option>
+                        <option value="KCM Insta">KCM Insta</option>
                         <option value="Vendor">Vendor</option>
-                        <option value="KCM">KCM</option>
+                        {entryType === 'KCM' && <option value="KCM">KCM (older entry)</option>}
                       </select>
                     </div>
                   </div>

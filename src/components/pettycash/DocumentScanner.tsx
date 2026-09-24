@@ -5,9 +5,9 @@ import {
   X, RotateCw, Crop, FileImage, ArrowLeft
 } from 'lucide-react';
 import { VehicleDocument } from '../../types';
-import { loadPhotoCanvases, detectAndProcess, processWithQuad } from '../../utils/scanner/scanPipeline';
-import { loadOpenCV } from '../../utils/scanner/cvLoader';
-import { canvasToMat, matToCanvas, canvasToBlob, rotateCanvas90 } from '../../utils/scanner/imageIo';
+import { loadPhotoCanvases, detectAndProcess, applyCrop, AutoCropStatus, WORKING_MAX_DIM } from '../../utils/scanner/scanPipeline';
+import { getLoadedOpenCV } from '../../utils/scanner/cvLoader';
+import { canvasToMat, matToCanvas, canvasToBlob, rotateCanvas90, drawToCanvas } from '../../utils/scanner/imageIo';
 import { toGrayscaleRgba } from '../../utils/scanner/enhance';
 import { Quad, rotateQuadClockwise } from '../../utils/scanner/geometry';
 import { DetectionConfidence } from '../../utils/scanner/documentDetector';
@@ -59,6 +59,10 @@ interface ScanData {
   detecting: boolean; // background auto-detect still running - never blocks Save
   detectingMessage: string; // what's actually happening right now - distinguishes a one-time engine download from the (usually much faster) detection step itself
   userChoseVersion: boolean; // employee explicitly picked Original/Processed - stop auto-switching once true
+  // Outcome of automatic detection for THIS photo ('pending' while it runs) -
+  // drives the always-visible status line, so a failed/unconfident detection
+  // is never silent. See scanPipeline.ts's AutoCropStatus.
+  autoCropStatus: 'pending' | AutoCropStatus;
 }
 
 interface Props {
@@ -78,6 +82,12 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
   const [activeCanvas, setActiveCanvas] = useState<HTMLCanvasElement | null>(null);
   const savingRef = useRef(false); // hard guard against double-click/duplicate save independent of React state timing
   const scanTokenRef = useRef(0); // bumped on every new file select / Choose Another - stale background detections are discarded
+  // Latest phase/scanData for the background detection callback, which
+  // outlives the render it was started from.
+  const phaseRef = useRef<ScannerPhase>('idle');
+  phaseRef.current = phase;
+  const scanDataRef = useRef<ScanData | null>(null);
+  scanDataRef.current = scanData;
 
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -98,19 +108,37 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
       return;
     }
 
-    (async () => {
-      try {
-        const cv = await loadOpenCV();
+    // Never waits on the engine download - OpenCV if it's already loaded,
+    // otherwise a plain canvas luminance pass (same visual result).
+    try {
+      const cv = getLoadedOpenCV();
+      let canvas: HTMLCanvasElement;
+      if (cv) {
         const mat = canvasToMat(cv, base);
-        const gray = toGrayscaleRgba(cv, mat);
-        const canvas = matToCanvas(cv, gray);
-        mat.delete();
-        gray.delete();
-        if (!cancelled) setActiveCanvas(canvas);
-      } catch {
-        if (!cancelled) setActiveCanvas(base);
+        let gray: any;
+        try {
+          gray = toGrayscaleRgba(cv, mat);
+          canvas = matToCanvas(cv, gray);
+        } finally {
+          mat.delete();
+          gray?.delete();
+        }
+      } else {
+        canvas = drawToCanvas(base);
+        const ctx = canvas.getContext('2d')!;
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const d = img.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+          d[i] = d[i + 1] = d[i + 2] = l;
+        }
+        ctx.putImageData(img, 0, 0);
       }
-    })();
+      if (!cancelled) setActiveCanvas(canvas);
+    } catch (err) {
+      console.error('[SCANNER] grayscale preview failed', err);
+      if (!cancelled) setActiveCanvas(base);
+    }
 
     return () => { cancelled = true; };
   }, [scanData]);
@@ -154,8 +182,8 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
     const timeoutId = window.setTimeout(() => {
       if (settled || scanTokenRef.current !== token) return;
       settled = true;
-      console.warn('Document detection exceeded 100s - falling back to manual/original.');
-      setScanData((prev) => (prev ? { ...prev, detecting: false } : prev));
+      console.warn('[SCANNER] document detection exceeded 100s - falling back to manual crop.');
+      setScanData((prev) => (prev ? { ...prev, detecting: false, autoCropStatus: 'unavailable' } : prev));
     }, DETECTION_TIMEOUT_MS);
 
     // onProgress lets the spinner say what's actually happening - loading
@@ -173,6 +201,7 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
       settled = true;
       window.clearTimeout(timeoutId);
       if (scanTokenRef.current !== token) return; // a newer/different/rotated photo has since taken over
+      console.debug(`[SCANNER] ${result.status === 'applied' ? 'final preview ready' : `automatic crop outcome: ${result.status}`}`);
       setScanData((prev) => {
         if (!prev) return prev;
         return {
@@ -184,12 +213,20 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
           quality: result.quality,
           partiallyOutOfFrame: result.partiallyOutOfFrame,
           detecting: false,
+          autoCropStatus: result.status,
           // Auto-apply the crop only if a confident one was found AND the
           // employee hasn't already explicitly picked Original/Processed
           // themselves while detection was still running.
           selectedVersion: !prev.userChoseVersion && result.processedCanvas ? 'processed' : prev.selectedVersion
         };
       });
+      // Outcome B: detector ran but wasn't confident - take the employee
+      // straight to Manual Crop (seeded with whatever it found), unless
+      // they've already moved on (picked a version, opened the editor,
+      // started saving).
+      if (result.status === 'manual-needed' && phaseRef.current === 'preview' && !scanDataRef.current?.userChoseVersion) {
+        setPhase('adjusting');
+      }
     }).catch((err) => {
       // detectAndProcess itself already never rejects (it swallows CV
       // errors into confidence:'low'), but guard anyway - a background
@@ -199,7 +236,7 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
       settled = true;
       window.clearTimeout(timeoutId);
       if (scanTokenRef.current !== token) return;
-      setScanData((prev) => (prev ? { ...prev, detecting: false } : prev));
+      setScanData((prev) => (prev ? { ...prev, detecting: false, autoCropStatus: 'unavailable' } : prev));
     });
   };
 
@@ -237,7 +274,8 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
         grayscale: false,
         detecting: true,
         detectingMessage: 'Detecting document edges...',
-        userChoseVersion: false
+        userChoseVersion: false,
+        autoCropStatus: 'pending'
       });
       setPhase('preview');
       runBackgroundDetection(token, originalCanvas, workingCanvas);
@@ -296,6 +334,10 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
     // from quadFullRes - see the ManualCropEditor render below) would open
     // badly misaligned against the now-rotated photo.
     const rotatedOriginal = rotateCanvas90(scanData.originalCanvas, true);
+    // 2026-09-23: the working (detection) copy is rotated too - it used to
+    // stay in the pre-rotation orientation, so any later detection/scale-up
+    // would have mixed the two orientations' dimensions.
+    const rotatedWorking = drawToCanvas(rotatedOriginal, WORKING_MAX_DIM);
     const rotatedProcessed = scanData.processedCanvas ? rotateCanvas90(scanData.processedCanvas, true) : null;
     const rotatedQuad = scanData.quad
       ? rotateQuadClockwise(scanData.quad, scanData.workingCanvas.width, scanData.workingCanvas.height)
@@ -303,14 +345,23 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
     const rotatedQuadFullRes = scanData.quadFullRes
       ? rotateQuadClockwise(scanData.quadFullRes, scanData.originalCanvas.width, scanData.originalCanvas.height)
       : null;
+    // No crop yet (detection still running, unconfident, or unavailable) -
+    // re-run detection on the rotated photo so rotating never silently
+    // discards auto-crop. An existing crop is simply rotated with the photo.
+    const redetect = !rotatedProcessed;
+    const token = scanTokenRef.current;
     setScanData({
       ...scanData,
       originalCanvas: rotatedOriginal,
+      workingCanvas: rotatedWorking,
       processedCanvas: rotatedProcessed,
       quad: rotatedQuad,
       quadFullRes: rotatedQuadFullRes,
-      detecting: false
+      detecting: redetect,
+      detectingMessage: 'Detecting document edges...',
+      autoCropStatus: redetect ? 'pending' : scanData.autoCropStatus
     });
+    if (redetect) runBackgroundDetection(token, rotatedOriginal, rotatedWorking);
   };
 
   const handleUseOriginal = () => {
@@ -325,11 +376,19 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
 
   const handleApplyManualCrop = async (quad: Quad) => {
     if (!scanData) return;
+    // A manual crop wins - discard any still-running auto-detection so its
+    // late result can't overwrite this crop.
+    scanTokenRef.current++;
     setPhase('processing');
     setProgressMessage('Correcting perspective...');
     try {
-      const cv = await loadOpenCV();
-      const { processedCanvas, quality } = processWithQuad(cv, scanData.originalCanvas, quad);
+      // Let the spinner paint before the (synchronous) warp runs.
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+      // Never waits on the engine download - OpenCV if already loaded,
+      // otherwise the built-in JS perspective warp (see applyCrop).
+      const { processedCanvas, quality } = applyCrop(scanData.originalCanvas, quad);
+      if (!processedCanvas.width || !processedCanvas.height) throw new Error('The crop produced an empty image.');
+      console.debug('[SCANNER] final preview ready (manual crop)', processedCanvas.width, 'x', processedCanvas.height);
       setScanData({
         ...scanData,
         quadFullRes: quad,
@@ -337,7 +396,8 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
         quality,
         selectedVersion: 'processed',
         userChoseVersion: true,
-        partiallyOutOfFrame: false
+        partiallyOutOfFrame: false,
+        detecting: false
       });
       setPhase('preview');
     } catch (err) {
@@ -561,6 +621,25 @@ export default function DocumentScanner({ onClose, onSaved }: Props) {
                     {scanData.confidence === 'low' ? <AlertTriangle className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
                     {confidenceLabel[scanData.confidence].label}
                   </span>
+                </div>
+              ) : scanData.autoCropStatus === 'unavailable' || scanData.autoCropStatus === 'manual-needed' ? (
+                // Outcome B/C - never silent: say so, and offer Manual Crop
+                // right here (it works without the scanner engine).
+                <div className="flex items-center justify-center gap-2 flex-wrap text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  <span className="font-semibold">
+                    {scanData.autoCropStatus === 'unavailable'
+                      ? 'Automatic crop unavailable - adjust crop manually.'
+                      : 'Document edges could not be detected confidently - adjust crop manually.'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPhase('adjusting')}
+                    disabled={phase !== 'preview'}
+                    className="font-bold text-teal-700 hover:text-teal-800 hover:underline cursor-pointer disabled:opacity-40"
+                  >
+                    Adjust Crop
+                  </button>
                 </div>
               ) : null}
 

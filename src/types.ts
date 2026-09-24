@@ -112,6 +112,12 @@ export interface Vehicle {
   [key: string]: any;
 }
 
+// Fuel entry Type (2026-09-23): KCM-owned vehicles are split into their real
+// owning sub-company, auto-filled from Fleet & Vehicles' Ownership. 'KCM' is
+// the pre-split value - still valid on entries saved before this change (and
+// from the Excel importer), just no longer offered in the Add Entry form.
+export type FuelEntryType = 'KCM Supply' | 'KCM Insta' | 'Vendor' | 'KCM';
+
 export interface FuelLog {
   id: string;
   entryNumber: number; // auto-generated, sequential
@@ -138,7 +144,7 @@ export interface FuelLog {
   rate: number;
   amount: number; // auto = ltrs * rate, editable override
   client: string;
-  type: 'Vendor' | 'KCM';
+  type: FuelEntryType;
   vendorName?: string; // from Vendor Master, searchable
   vendorCode?: string; // auto-filled from matched vendor
   remarks?: string;

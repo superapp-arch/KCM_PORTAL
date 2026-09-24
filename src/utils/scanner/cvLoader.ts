@@ -48,43 +48,110 @@ const OPENCV_SCRIPT_SRC = '/vendor/opencv.js';
 // it - the two are complementary, not alternatives.
 const LOAD_TIMEOUT_MS = 90000;
 
+// 2026-09-23 root-cause fix for the permanent "Loading scanner engine (first
+// time only)..." state: the bundled opencv.js is OpenCV 5.0, an Emscripten
+// MODULARIZE build - its UMD wrapper does `root.cv = factory()`, and that
+// factory returns a PROMISE of the ready module, not the module itself
+// (verified in a real Chrome against public/vendor/opencv.js: `window.cv
+// instanceof Promise === true`, no `.Mat`, and the awaited value has `.Mat`
+// ~300ms later). The old code only knew the OpenCV 4.x contract - "cv
+// exists, wait for cv.onRuntimeInitialized" - and assigned that callback
+// onto the Promise object, where nothing ever calls it. So loadOpenCV()
+// never resolved on its own; every scan sat on the loading message until
+// the 90s timeout above, then silently fell back - and the next scan did it
+// all over again. Both contracts are handled below.
+//
+// Once the script itself has loaded, the WASM runtime normally initializes
+// in well under a second; this separate, shorter cap covers only that step
+// (a corrupt/unsupported WASM, a runtime that never signals ready), so a
+// genuinely broken engine surfaces as a clear failure quickly instead of
+// waiting out the full download allowance.
+const INIT_TIMEOUT_MS = 30000;
+
 let cvPromise: Promise<any> | null = null;
+let loadedCv: any = null;
+
+// The ready OpenCV module if it has already finished loading in this page
+// session, otherwise null - lets callers (Manual Crop, grayscale) use OpenCV
+// when it's there without ever blocking on a still-running download.
+export function getLoadedOpenCV(): any {
+  return loadedCv;
+}
 
 export function loadOpenCV(): Promise<any> {
+  if (loadedCv) return Promise.resolve(loadedCv);
   if (!cvPromise) {
+    const startedAt = performance.now();
+    console.debug('[SCANNER] initialization started');
+    let initTimer: number | undefined;
+
     const loadPromise = new Promise<any>((resolve, reject) => {
       const w = window as any;
+      console.debug('[SCANNER] initialization promise created');
 
-      // Already loaded and fully initialized from an earlier call in this
-      // session (shouldn't normally happen given the cvPromise cache above,
-      // but guards against e.g. some other script on the page also having
-      // loaded opencv.js globally).
+      const done = (cv: any) => {
+        window.clearTimeout(initTimer);
+        loadedCv = cv;
+        console.debug(`[SCANNER] initialization completed in ${Math.round(performance.now() - startedAt)}ms`);
+        resolve(cv);
+      };
+      const fail = (err: unknown) => {
+        window.clearTimeout(initTimer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      };
+
+      // Already loaded and fully initialized (e.g. some other script on the
+      // page loaded opencv.js globally).
       if (w.cv && w.cv.Mat) {
-        resolve(w.cv);
+        done(w.cv);
         return;
       }
 
-      const onScriptError = () => reject(new Error('Failed to load the document scanner engine. Check your connection and try again.'));
+      const onScriptError = () => fail(new Error('Failed to load the document scanner engine. Check your connection and try again.'));
 
-      // Wait for OpenCV's WASM runtime to finish initializing - immediately
-      // after the <script> tag's own load event, `cv` exists as a
-      // skeleton object but isn't ready to use yet (no .Mat etc.) until its
-      // WASM binary finishes instantiating, signalled via
-      // onRuntimeInitialized - the same official pattern OpenCV.js's own
-      // tutorials document for a plain script-tag include.
+      // Called once the <script> has executed - resolves via whichever
+      // readiness contract this opencv.js build actually uses.
       const waitForRuntime = () => {
         const cv = w.cv;
-        if (!cv) { reject(new Error('OpenCV failed to initialize.')); return; }
-        if (cv.Mat) { resolve(cv); return; }
-        cv.onRuntimeInitialized = () => resolve(cv);
+        console.debug('[SCANNER] engine script loaded; cv is', cv instanceof Promise ? 'a Promise (modularized build)' : typeof cv);
+        if (!cv) { fail(new Error('The document scanner engine loaded but did not initialize.')); return; }
+        if (cv.Mat) { done(cv); return; }
+
+        initTimer = window.setTimeout(
+          () => fail(new Error('The document scanner engine did not finish initializing.')),
+          INIT_TIMEOUT_MS
+        );
+
+        if (typeof cv.then === 'function') {
+          // OpenCV 4.10+/5.x modularized build: window.cv is a Promise of
+          // the ready module. Replace the global with the resolved module so
+          // any later lookup (incl. the `w.cv.Mat` check above) sees it.
+          cv.then(
+            (mod: any) => {
+              if (mod && mod.Mat) { w.cv = mod; done(mod); }
+              else fail(new Error('The document scanner engine initialized without its core API.'));
+            },
+            (err: unknown) => fail(err)
+          );
+          return;
+        }
+
+        // Legacy OpenCV 4.x build: `cv` is the not-yet-ready Module object.
+        const previous = cv.onRuntimeInitialized;
+        cv.onRuntimeInitialized = () => {
+          try { previous?.(); } catch { /* ignore a foreign callback's error */ }
+          done(cv);
+        };
       };
 
       const existing = document.querySelector<HTMLScriptElement>(`script[src="${OPENCV_SCRIPT_SRC}"]`);
       if (existing) {
-        // Another loadOpenCV() call (or a fast-clicking employee reopening
-        // the scanner) already added the tag - piggyback on it instead of
-        // injecting a duplicate <script>.
+        // An earlier attempt already added the tag - piggyback on it instead
+        // of injecting a duplicate <script>.
         if (w.cv) { waitForRuntime(); return; }
+        // Finished loading yet never defined cv - its load event won't fire
+        // again, so waiting on it would hang; fail now instead.
+        if (existing.dataset.loaded === '1') { waitForRuntime(); return; }
         existing.addEventListener('load', waitForRuntime, { once: true });
         existing.addEventListener('error', onScriptError, { once: true });
         return;
@@ -93,25 +160,40 @@ export function loadOpenCV(): Promise<any> {
       const script = document.createElement('script');
       script.src = OPENCV_SCRIPT_SRC;
       script.async = true;
-      script.onload = waitForRuntime;
-      script.onerror = onScriptError;
+      script.onload = () => {
+        script.dataset.loaded = '1';
+        waitForRuntime();
+      };
+      script.onerror = () => {
+        // Remove the failed tag so the next attempt injects a fresh one -
+        // left in place, a retry would wait on an error event that has
+        // already fired (verified: that retry hung until LOAD_TIMEOUT_MS).
+        script.remove();
+        onScriptError();
+      };
       document.head.appendChild(script);
     });
 
+    let loadTimer: number | undefined;
     const timeoutPromise = new Promise<any>((_, reject) => {
-      window.setTimeout(() => reject(new Error('The document scanner engine took too long to load. You can still use Manual Crop or save the original photo.')), LOAD_TIMEOUT_MS);
+      loadTimer = window.setTimeout(() => reject(new Error('The document scanner engine took too long to load. You can still use Manual Crop or save the original photo.')), LOAD_TIMEOUT_MS);
     });
 
-    cvPromise = Promise.race([loadPromise, timeoutPromise]).catch((err) => {
-      // Don't cache a failed/timed-out load - a transient network hiccup or
-      // a one-off slow load shouldn't permanently break the scanner for the
-      // rest of the session; the next call to loadOpenCV() retries from
-      // scratch (the <script> tag itself, if it does eventually finish
-      // loading after the timeout, is harmlessly picked up as "already
-      // loaded" by the w.cv.Mat check above on that retry).
-      cvPromise = null;
-      throw err;
-    });
+    cvPromise = Promise.race([loadPromise, timeoutPromise])
+      .then((cv) => {
+        window.clearTimeout(loadTimer);
+        return cv;
+      })
+      .catch((err) => {
+        window.clearTimeout(loadTimer);
+        console.error('[SCANNER] initialization failed', err);
+        // Don't cache a failed/timed-out load - a transient network hiccup
+        // shouldn't permanently break the scanner for the rest of the
+        // session; the next call retries (an already-loaded <script> is
+        // picked up via the `existing` branch above rather than re-added).
+        cvPromise = null;
+        throw err;
+      });
   }
   return cvPromise;
 }

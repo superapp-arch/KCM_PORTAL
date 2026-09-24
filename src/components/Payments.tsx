@@ -100,6 +100,9 @@ export default function Payments({
   // URL routing, so "View History" is just an internal view swap, same
   // convention Petty Cash's own "View in Market Trip" deep link uses.
   const [historyKey, setHistoryKey] = useState<string | null>(null);
+  // Bunk detail screen's ownership tab (2026-09-23) - see the summary block
+  // above the payment history table.
+  const [ownershipTab, setOwnershipTab] = useState<'KCM Supply' | 'KCM Insta'>('KCM Supply');
 
   const [sortMode, setSortMode] = useState<'balance' | 'name'>('balance');
 
@@ -406,6 +409,58 @@ export default function Payments({
               </button>
             </div>
           </div>
+
+          {/* KCM Supply / KCM Insta diesel purchase split (2026-09-23 direct
+              request) - summary only. Built from this bunk's own
+              historyRow.purchases, i.e. the same live Fuel Management
+              entries (this bunk + location, Bunk-paid) the balance above
+              already uses, grouped by each entry's Type - never a copied
+              dataset. Purchase totals only: payments aren't tagged by
+              ownership, so there's no per-ownership balance. */}
+          {(() => {
+            const byType = (t: string) => historyRow.purchases.filter(p => p.fuelLog.type === t);
+            const tabPurchases = byType(ownershipTab);
+            const tabTotal = tabPurchases.reduce((s, p) => s + p.amount, 0);
+            const vehicleCount = new Set(tabPurchases.map(p => (p.fuelLog.vehicleNumber || '').trim().toUpperCase()).filter(Boolean)).size;
+            const vendorTotal = byType('Vendor').reduce((s, p) => s + p.amount, 0);
+            const legacyTotal = byType('KCM').reduce((s, p) => s + p.amount, 0);
+            return (
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-3">
+                <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-bold w-fit">
+                  {(['KCM Supply', 'KCM Insta'] as const).map(tab => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setOwnershipTab(tab)}
+                      className={`px-3.5 py-1.5 rounded-md cursor-pointer transition-colors ${ownershipTab === tab ? 'bg-white shadow-xs text-emerald-700' : 'text-slate-500'}`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-end gap-6">
+                  <div>
+                    <p className="text-[9px] text-slate-400 uppercase font-bold">{ownershipTab} diesel purchases</p>
+                    <p className="text-lg font-black font-mono text-slate-900">₹{tabTotal.toLocaleString('en-IN')}</p>
+                  </div>
+                  <div>
+                    <p className="text-[9px] text-slate-400 uppercase font-bold">Fuel entries</p>
+                    <p className="text-lg font-black font-mono text-slate-700">{tabPurchases.length}</p>
+                  </div>
+                  <div>
+                    <p className="text-[9px] text-slate-400 uppercase font-bold">Vehicles</p>
+                    <p className="text-lg font-black font-mono text-slate-700">{vehicleCount}</p>
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-400 font-mono">
+                  Purchase totals by fuel entry Type (see Fuel Management for individual entries) - not a split of the balance, since payments aren't tagged by ownership.
+                  {(vendorTotal > 0 || legacyTotal > 0) && (
+                    <> Not in either tab: {vendorTotal > 0 && <>Vendor ₹{vendorTotal.toLocaleString('en-IN')}</>}{vendorTotal > 0 && legacyTotal > 0 && ' · '}{legacyTotal > 0 && <>older "KCM" entries (before the Supply/Insta split) ₹{legacyTotal.toLocaleString('en-IN')}</>}.</>
+                  )}
+                </p>
+              </div>
+            );
+          })()}
 
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="overflow-x-auto">

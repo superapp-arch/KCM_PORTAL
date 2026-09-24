@@ -124,27 +124,297 @@ export function detectDocument(cv: any, srcMat: any): DetectionResult {
     candidates.sort((a, b) => b.score - a.score);
     const best = candidates[0];
 
-    // 2026-09-10: loosened from the original 0.72/15/0.15 and 0.45/0.08
-    // floors - at 100+ invoices/day, silently doing nothing (confidence
-    // 'low' never auto-applies a crop) on a real but slightly-imperfect
-    // detection was worse than committing to a crop and showing a "medium
-    // confidence, please double-check" badge the employee can glance at and
-    // override with Adjust Crop if it's actually wrong.
-    let confidence: DetectionConfidence;
-    if (!best.isFallback && best.score >= 0.65 && best.angleDev <= 20 && best.coverage >= 0.12) {
-      confidence = 'high';
-    } else if (best.score >= 0.32 && best.coverage >= 0.05) {
-      confidence = 'medium';
-    } else {
-      confidence = 'low';
-    }
+    // 2026-09-24: inner printed box vs outer paper edge - see
+    // resolveInnerPrintedBox below. Unchanged when the best candidate is
+    // already the paper's own outer edge (background just outside it).
+    const resolved = resolveInnerPrintedBox(cv, srcMat, best, candidates);
+    if (resolved) return resolved;
 
-    return { quad: best.quad, confidence, score: best.score };
+    return { quad: best.quad, confidence: rateConfidence(best), score: best.score };
   } finally {
     for (const m of owned) {
       try { m.delete(); } catch { /* already freed */ }
     }
   }
+}
+
+// 2026-09-10: loosened from the original 0.72/15/0.15 and 0.45/0.08
+// floors - at 100+ invoices/day, silently doing nothing (confidence 'low'
+// never auto-applies a crop) on a real but slightly-imperfect detection was
+// worse than committing to a crop and showing a "medium confidence, please
+// double-check" badge the employee can glance at and override with Adjust
+// Crop if it's actually wrong. (Moved into a helper 2026-09-24, unchanged,
+// so an enclosing candidate is rated by exactly the same rules.)
+function rateConfidence(c: Candidate): DetectionConfidence {
+  if (!c.isFallback && c.score >= 0.65 && c.angleDev <= 20 && c.coverage >= 0.12) return 'high';
+  if (c.score >= 0.32 && c.coverage >= 0.05) return 'medium';
+  return 'low';
+}
+
+// ---------------------------------------------------------------------------
+// Inner printed box vs outer paper edge (2026-09-24 fix, verified against real
+// KCM receipts). Many receipts have a printed rectangle (a ruled box around
+// the form) INSIDE the paper, with handwriting - notably the vehicle number -
+// written on the paper ABOVE that box. When the paper itself runs off the
+// photo edge (or sits on a similar-toned surface), its own outline never
+// closes into a contour, so the printed box is the only clean quadrilateral
+// in the image - a perfect rectangle at a plausible size, so every scoring
+// term above maxes out and it wins at 'high' confidence, and the automatic
+// crop silently cuts off the handwriting outside it.
+//
+// The signal that separates the two: a real paper edge has BACKGROUND just
+// outside it; an inner printed box has more PAPER just outside it. So after
+// scoring, the colour of a thin ring just outside the winning quad is
+// compared with the paper colour sampled just inside it (Lab colour, dark
+// ink ignored). If that ring is mostly paper, the quad is an inner box and:
+//   1. an existing larger candidate that encloses it and has background
+//      (not paper) outside it - the real paper edge - is used instead; else
+//   2. the quad is grown to the outline of the connected paper-coloured
+//      region around it (background excluded by colour, clipped to the
+//      photo), capped at 'medium' since that paper partly leaves the frame; else
+//   3. the box is kept but rated 'low', so the employee is sent to Manual
+//      Crop (seeded with it) instead of silently losing content.
+// The whole-frame rectangle can never be chosen (MAX_OUTER_COVERAGE), so
+// this can't regress into "just take the biggest shape".
+// ---------------------------------------------------------------------------
+const PAPER_COLOR_DIST = 18;          // Lab distance (L weighted x0.5) under which a pixel matches the paper colour
+const INNER_BOX_RING_FRACTION = 0.5;  // share of the outside ring matching the paper colour => quad is an inner box
+const MAX_OUTER_COVERAGE = 0.97;      // an outer boundary may never be (essentially) the whole photo
+const MIN_RING_SAMPLES = 40;          // too few in-photo ring pixels (quad hugs the photo edge) => no evidence either way
+
+interface PaperModel { lab: Uint8Array; w: number; h: number; L: number; a: number; b: number; }
+
+function centroidOf(q: Point[]): Point {
+  return { x: q.reduce((s, p) => s + p.x, 0) / q.length, y: q.reduce((s, p) => s + p.y, 0) / q.length };
+}
+
+function scaleQuad(q: Quad, t: number): Quad {
+  const c = centroidOf(q);
+  return q.map(p => ({ x: c.x + (p.x - c.x) * t, y: c.y + (p.y - c.y) * t })) as Quad;
+}
+
+// Clamped bounding box of a quad on the stride-2 sampling grid - sampling
+// loops only visit this area, not the whole photo.
+function gridBounds(q: Quad, w: number, h: number): { x0: number; x1: number; y0: number; y1: number } {
+  const xs = q.map(p => p.x), ys = q.map(p => p.y);
+  const even = (v: number) => v - (v % 2);
+  return {
+    x0: even(Math.max(0, Math.floor(Math.min(...xs)))), x1: Math.min(w - 1, Math.ceil(Math.max(...xs))),
+    y0: even(Math.max(0, Math.floor(Math.min(...ys)))), y1: Math.min(h - 1, Math.ceil(Math.max(...ys)))
+  };
+}
+
+function pointInConvexQuad(q: Quad, x: number, y: number): boolean {
+  let sign = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = q[i], b = q[(i + 1) % 4];
+    const cross = (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
+    if (cross === 0) continue;
+    const s = cross > 0 ? 1 : -1;
+    if (sign === 0) sign = s; else if (s !== sign) return false;
+  }
+  return true;
+}
+
+// Paper colour = mean Lab of the brighter half of a thin band just inside the
+// quad (the brighter half drops printed/handwritten ink).
+function buildPaperModel(cv: any, srcMat: any, quad: Quad): PaperModel | null {
+  const rgb = new cv.Mat();
+  const lab = new cv.Mat();
+  try {
+    cv.cvtColor(srcMat, rgb, cv.COLOR_RGBA2RGB);
+    cv.cvtColor(rgb, lab, cv.COLOR_RGB2Lab);
+    const w = lab.cols, h = lab.rows;
+    const data = new Uint8Array(lab.data); // copied out - the Mats are freed below
+    const outer = scaleQuad(quad, 0.97), inner = scaleQuad(quad, 0.9);
+    const band: number[] = [];
+    const g = gridBounds(outer, w, h);
+    for (let y = g.y0; y <= g.y1; y += 2) {
+      for (let x = g.x0; x <= g.x1; x += 2) {
+        if (pointInConvexQuad(outer, x, y) && !pointInConvexQuad(inner, x, y)) band.push((y * w + x) * 3);
+      }
+    }
+    if (band.length < MIN_RING_SAMPLES) return null;
+    const Ls = band.map(i => data[i]).sort((p, q) => p - q);
+    const medianL = Ls[Math.floor(Ls.length / 2)];
+    const paper = band.filter(i => data[i] >= medianL);
+    const mean = (k: number) => paper.reduce((s, i) => s + data[i + k], 0) / paper.length;
+    return { lab: data, w, h, L: mean(0), a: mean(1), b: mean(2) };
+  } finally {
+    rgb.delete();
+    lab.delete();
+  }
+}
+
+function isPaperLike(m: PaperModel, idx: number): boolean {
+  const dL = (m.lab[idx] - m.L) * 0.5, da = m.lab[idx + 1] - m.a, db = m.lab[idx + 2] - m.b;
+  return dL * dL + da * da + db * db < PAPER_COLOR_DIST * PAPER_COLOR_DIST;
+}
+
+// Share of a thin ring just OUTSIDE the quad (1.5%-8% beyond its edges,
+// in-photo pixels only) that matches the paper colour; null if too little of
+// that ring lies inside the photo to judge.
+function outsideRingPaperFraction(m: PaperModel, quad: Quad): number | null {
+  const near = scaleQuad(quad, 1.015), far = scaleQuad(quad, 1.08);
+  let total = 0, paper = 0;
+  const g = gridBounds(far, m.w, m.h);
+  for (let y = g.y0; y <= g.y1; y += 2) {
+    for (let x = g.x0; x <= g.x1; x += 2) {
+      if (!pointInConvexQuad(far, x, y) || pointInConvexQuad(near, x, y)) continue;
+      total++;
+      if (isPaperLike(m, (y * m.w + x) * 3)) paper++;
+    }
+  }
+  return total >= MIN_RING_SAMPLES ? paper / total : null;
+}
+
+function quadEncloses(outer: Quad, inner: Quad): boolean {
+  const grown = scaleQuad(outer, 1.02);
+  return inner.every(p => pointInConvexQuad(grown, p.x, p.y));
+}
+
+// Grows an inner box to the outline of the connected paper-coloured region
+// around it, clipped to the photo; null if that region isn't a usable,
+// strictly-larger, not-whole-photo quadrilateral.
+function expandToPaperRegion(cv: any, m: PaperModel, inner: Quad): Quad | null {
+  const owned: any[] = [];
+  const track = <T,>(x: T): T => { owned.push(x); return x; };
+  try {
+    const mask = track(new cv.Mat(m.h, m.w, cv.CV_8UC1));
+    const md = mask.data as Uint8Array;
+    for (let i = 0, j = 0; i < md.length; i++, j += 3) md[i] = isPaperLike(m, j) ? 255 : 0;
+    // Close small gaps left by ink/noise so the paper reads as one region.
+    const closed = track(new cv.Mat());
+    const kernel = track(cv.Mat.ones(5, 5, cv.CV_8U));
+    cv.morphologyEx(mask, closed, cv.MORPH_CLOSE, kernel);
+    const labels = track(new cv.Mat());
+    cv.connectedComponents(closed, labels, 8, cv.CV_32S);
+    const lab32 = labels.data32S as Int32Array;
+
+    // The paper AROUND the box = the paper-coloured regions a ring outside
+    // the box actually lands on (not "the region containing the centre" - a
+    // thick printed border line is a closed non-paper loop that would
+    // otherwise trap that region inside the box). Wider than the
+    // classification ring (up to 15% out) so it reaches past a thick printed
+    // frame to the paper beyond it; background is excluded by colour either way.
+    const near = scaleQuad(inner, 1.015), far = scaleQuad(inner, 1.15);
+    const hits = new Map<number, number>();
+    let ringPaper = 0;
+    const g = gridBounds(far, m.w, m.h);
+    for (let y = g.y0; y <= g.y1; y += 2) {
+      for (let x = g.x0; x <= g.x1; x += 2) {
+        if (!pointInConvexQuad(far, x, y) || pointInConvexQuad(near, x, y)) continue;
+        const idx = y * m.w + x;
+        if (!closed.data[idx]) continue;
+        ringPaper++;
+        hits.set(lab32[idx], (hits.get(lab32[idx]) || 0) + 1);
+      }
+    }
+    // Keep a component the ring lands on substantially, or any LARGE paper
+    // component it touches at all (the paper sheet beyond a thick printed
+    // frame can be hit only sparsely) - never tiny specks.
+    const componentSize = new Map<number, number>();
+    for (let i = 0; i < lab32.length; i++) {
+      if (hits.has(lab32[i])) componentSize.set(lab32[i], (componentSize.get(lab32[i]) || 0) + 1);
+    }
+    const keep = new Set([...hits]
+      .filter(([label, n]) => label !== 0 && (n >= ringPaper * 0.1 || (n >= 20 && (componentSize.get(label) || 0) >= m.w * m.h * 0.05)))
+      .map(([label]) => label));
+    if (keep.size === 0) return null;
+
+    // Region = those paper components + the box itself.
+    const region = track(new cv.Mat(m.h, m.w, cv.CV_8UC1));
+    const rd = region.data as Uint8Array;
+    for (let i = 0; i < rd.length; i++) rd[i] = keep.has(lab32[i]) ? 255 : 0;
+    const bx0 = Math.max(0, Math.floor(Math.min(...inner.map(p => p.x)))), bx1 = Math.min(m.w - 1, Math.ceil(Math.max(...inner.map(p => p.x))));
+    const by0 = Math.max(0, Math.floor(Math.min(...inner.map(p => p.y)))), by1 = Math.min(m.h - 1, Math.ceil(Math.max(...inner.map(p => p.y))));
+    for (let y = by0; y <= by1; y++) {
+      for (let x = bx0; x <= bx1; x++) if (pointInConvexQuad(inner, x, y)) rd[y * m.w + x] = 255;
+    }
+
+    const contours = track(new cv.MatVector());
+    const hierarchy = track(new cv.Mat());
+    cv.findContours(region, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    let biggest: any = null;
+    let biggestArea = 0;
+    for (let i = 0; i < contours.size(); i++) {
+      const contour = track(contours.get(i));
+      const area = cv.contourArea(contour);
+      if (area > biggestArea) { biggest = contour; biggestArea = area; }
+    }
+    if (!biggest) return null;
+
+    // Convex outline of the region, simplified to at most 12 vertices, then
+    // the largest-area convex 4 of them (plus the box's own corners) that
+    // still enclose the whole box - a max-area fit keeps the real paper
+    // corners, where approxPolyDP can drop the wrong vertex and cut a corner
+    // off the box; the enclosing constraint guarantees nothing inside the
+    // detected box is ever cropped away.
+    const hull = track(new cv.Mat());
+    cv.convexHull(biggest, hull, false, true);
+    let pts = matToPoints(hull);
+    const perimeter = cv.arcLength(hull, true);
+    for (let eps = 0.005; pts.length > 12 && eps <= 0.05; eps += 0.005) {
+      const approx = track(new cv.Mat());
+      cv.approxPolyDP(hull, approx, eps * perimeter, true);
+      pts = matToPoints(approx);
+    }
+    if (pts.length < 4 || pts.length > 12) return null;
+    // The box's own corners are candidate vertices too, so simplifying the
+    // outline (or a shadowed paper corner) can never leave no enclosing quad.
+    pts = [...pts, ...inner];
+    const clamp = (p: Point): Point => ({ x: Math.min(m.w - 1, Math.max(0, p.x)), y: Math.min(m.h - 1, Math.max(0, p.y)) });
+    let bestQuad: Quad | null = null;
+    let bestArea = 0;
+    for (let a = 0; a < pts.length; a++) {
+      for (let b = a + 1; b < pts.length; b++) {
+        for (let c = b + 1; c < pts.length; c++) {
+          for (let d = c + 1; d < pts.length; d++) {
+            const q = orderCorners([pts[a], pts[b], pts[c], pts[d]].map(clamp));
+            const area = polygonArea(q);
+            if (area > bestArea && isConvexQuad(q) && quadEncloses(q, inner)) { bestArea = area; bestQuad = q; }
+          }
+        }
+      }
+    }
+    if (!bestQuad) return null;
+    const ok = isValidDocumentQuad(bestQuad, m.w, m.h) &&
+      bestArea / (m.w * m.h) <= MAX_OUTER_COVERAGE &&
+      bestArea >= polygonArea(inner) * 1.1;
+    return ok ? bestQuad : null;
+  } finally {
+    for (const x of owned) {
+      try { x.delete(); } catch { /* already freed */ }
+    }
+  }
+}
+
+function resolveInnerPrintedBox(cv: any, srcMat: any, best: Candidate, candidates: Candidate[]): DetectionResult | null {
+  const model = buildPaperModel(cv, srcMat, best.quad);
+  if (!model) return null;
+  const ring = outsideRingPaperFraction(model, best.quad);
+  if (ring === null || ring < INNER_BOX_RING_FRACTION) return null; // real paper edge - background outside it
+
+  const pct = `${Math.round(ring * 100)}%`;
+  // 1. A detected larger boundary that encloses the box and has background outside it.
+  const enclosing = candidates
+    .filter(c => c !== best && c.coverage <= MAX_OUTER_COVERAGE && quadEncloses(c.quad, best.quad))
+    .filter(c => { const f = outsideRingPaperFraction(model, c.quad); return f === null || f < INNER_BOX_RING_FRACTION; })
+    .sort((a, b) => b.score - a.score)[0];
+  if (enclosing) {
+    console.debug(`[SCANNER] inner printed box detected (paper continues outside it: ${pct}) - using the enclosing paper boundary`);
+    return { quad: enclosing.quad, confidence: rateConfidence(enclosing), score: enclosing.score };
+  }
+  // 2. Grow to the connected paper region (paper runs off the photo / never closed into a contour).
+  const expanded = expandToPaperRegion(cv, model, best.quad);
+  const base = rateConfidence(best);
+  if (expanded) {
+    console.debug(`[SCANNER] inner printed box detected (paper continues outside it: ${pct}) - expanded to the surrounding paper`);
+    return { quad: expanded, confidence: base === 'low' ? 'low' : 'medium', score: best.score };
+  }
+  // 3. Can't establish the real paper edge - never auto-crop content away.
+  console.debug(`[SCANNER] inner printed box detected (paper continues outside it: ${pct}) - outer edge not found, manual crop needed`);
+  return { quad: best.quad, confidence: 'low', score: best.score };
 }
 
 // 2026-09-10: real KCM receipts, sampled from actual photos, occupy
