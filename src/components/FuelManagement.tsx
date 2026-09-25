@@ -41,7 +41,8 @@ import { SaveConfirmationModal, DeleteConfirmationModal } from './ConfirmationMo
 import { PETTY_CASH_USERS } from '../utils/pettyCashUsers';
 import { fuelEnteredByLabel } from '../utils/fuelEnteredBy';
 import { normalizeLocationName } from '../utils/pettyCashLocations';
-import { ExtraFuelMode, EXTRA_FUEL_MODE_LABELS, resolveExtraFuelModes, extraFuelSlices, legacyExtraFuelPaymentMode } from '../utils/extraFuelModes';
+import { ExtraFuelMode, EXTRA_FUEL_MODE_LABELS, resolveExtraFuelModes, extraFuelSlices, legacyExtraFuelPaymentMode, extraFuelModeOptionLabel } from '../utils/extraFuelModes';
+import BunkCombobox, { BunkChoice, bunkChoiceLabel } from './fuel/BunkCombobox';
 import FuelBunkImportModal from './fuel/FuelBunkImportModal';
 import FuelCardImportModal from './fuel/FuelCardImportModal';
 
@@ -515,6 +516,13 @@ export default function FuelManagement({
   const [mExtraFuelBunkAmount, setMExtraFuelBunkAmount] = useState('');
   const [mExtraFuelCardAmount, setMExtraFuelCardAmount] = useState('');
   const [mPettyCashHolder, setMPettyCashHolder] = useState('');
+  // "Fuel by bunk" (2026-09-25): which bunk the Bunk-paid Extra Fuel came
+  // from - picked from the live bunk list (bunkOptions) or typed as a new
+  // bunk, used on this entry only (a shared bunk master is a separate,
+  // pending step). Same pure accounting tag as the mode.
+  const [mExtraFuelBunk, setMExtraFuelBunk] = useState<BunkChoice | null>(null);
+  const [mExtraFuelBunkIsNew, setMExtraFuelBunkIsNew] = useState(false);
+  const clearExtraFuelBunk = () => { setMExtraFuelBunk(null); setMExtraFuelBunkIsNew(false); };
 
   // Toggles one Extra Fuel payment mode on/off, moving amounts between the
   // single mExtraFuel field and the per-mode fields as the count of active
@@ -549,6 +557,7 @@ export default function FuelManagement({
         setMExtraFuelCardAmount('');
       }
       if (mode === 'petty_cash' && wasChecked) setMPettyCashHolder('');
+      if (mode === 'bunk' && wasChecked) clearExtraFuelBunk();
       return next;
     });
   };
@@ -1297,6 +1306,7 @@ export default function FuelManagement({
     setMExtraFuelBunkAmount('');
     setMExtraFuelCardAmount('');
     setMPettyCashHolder('');
+    clearExtraFuelBunk();
     setFuelPettyCashHolder('');
     setShowMileageManager(false);
     setMileageFormVehicleNo('');
@@ -1414,6 +1424,13 @@ export default function FuelManagement({
       }
       setMRatePerLitreNew(String(linkedReport.ratePerLitreNew || ''));
       setMPettyCashHolder(linkedReport.pettyCashHolderUsername || '');
+      if (linkedReport.extraFuelBunkName) {
+        const saved = { bunkName: linkedReport.extraFuelBunkName, location: linkedReport.extraFuelBunkLocation || '' };
+        setMExtraFuelBunk(saved);
+        setMExtraFuelBunkIsNew(!bunkOptions.some(o => o.bunkName === saved.bunkName && o.location === saved.location));
+      } else {
+        clearExtraFuelBunk();
+      }
     } else {
       setLinkedMileageReportId(null);
       setMOpeningKm('');
@@ -1427,6 +1444,7 @@ export default function FuelManagement({
       setMExtraFuelBunkAmount('');
       setMExtraFuelCardAmount('');
       setMPettyCashHolder('');
+      clearExtraFuelBunk();
     }
 
     // A foreign entry the viewer can actually edit Mileage on (Chandan on one
@@ -1552,6 +1570,19 @@ export default function FuelManagement({
       setEntrySection('mileage');
       return;
     }
+    // Fuel by bunk needs its bunk (and a location for a new one).
+    if (hasMileageData && mExtraFuelModes.includes('bunk') && totalExtraFuelAmount() > 0) {
+      if (!mExtraFuelBunk || !mExtraFuelBunk.bunkName.trim()) {
+        triggerNotif('Select the bunk for "Fuel by bunk" (Extra Fuel).', 'error');
+        setEntrySection('mileage');
+        return;
+      }
+      if (!mExtraFuelBunk.location.trim()) {
+        triggerNotif(`Choose the location for the new bunk "${mExtraFuelBunk.bunkName}".`, 'error');
+        setEntrySection('mileage');
+        return;
+      }
+    }
     let oKm = 0;
     let cKm = 0;
     if (hasMileageData) {
@@ -1657,6 +1688,8 @@ export default function FuelManagement({
           extraFuelBunkAmount: activeExtraFuelModes.length >= 2 && isBunkExtra ? bunkSlice : undefined,
           extraFuelPettyCashAmount: activeExtraFuelModes.length >= 2 && isPettyCashExtra ? pettyCashSlice : undefined,
           extraFuelCardAmount: activeExtraFuelModes.length >= 2 && isCardExtra ? cardSlice : undefined,
+          extraFuelBunkName: isBunkExtra && mExtraFuelBunk ? mExtraFuelBunk.bunkName.trim() : undefined,
+          extraFuelBunkLocation: isBunkExtra && mExtraFuelBunk ? normalizeLocationName(mExtraFuelBunk.location.trim()) : undefined,
           // 2026-09-08 bug fix: filling in Mileage on one of Praveen's own
           // fuel entries (editingIsForeign - see isForeignEntry above) used
           // to silently attribute the new Mileage Report to whoever's
@@ -2885,7 +2918,7 @@ export default function FuelManagement({
                         <label className="block font-semibold text-slate-600 mb-1">
                           Extra Fuel
                           {mExtraFuelModes.length >= 2 && mExtraFuelModes.includes('petty_cash') && <span className="text-indigo-600 font-bold"> (Petty Cash portion)</span>}
-                          {mExtraFuelModes.length === 1 && mExtraFuelModes[0] === 'bunk' && <span className="text-indigo-600 font-bold"> (Paid by Bunk)</span>}
+                          {mExtraFuelModes.length === 1 && mExtraFuelModes[0] === 'bunk' && <span className="text-indigo-600 font-bold"> (Fuel by bunk)</span>}
                           {mExtraFuelModes.length === 1 && mExtraFuelModes[0] === 'petty_cash' && <span className="text-indigo-600 font-bold"> (Paid by Petty Cash)</span>}
                           {mExtraFuelModes.length === 1 && mExtraFuelModes[0] === 'card' && <span className="text-indigo-600 font-bold"> (Paid by Card)</span>}
                         </label>
@@ -2920,8 +2953,9 @@ export default function FuelManagement({
                       </div>
                     </div>
 
-                    {/* "Paid by Bunk" / "Paid by Petty Cash" / "Paid by
-                        Card" (2026-09-21: generalized to any combination of
+                    {/* "Fuel by bunk" (was "Paid by Bunk", 2026-09-25 - it
+                        now also names the bunk) / "Paid by Petty Cash" /
+                        "Paid by Card" (2026-09-21: generalized to any combination of
                         the three, not just Petty Cash+Card - a trip can have
                         separate top-ups paid separate ways). Ticking a 2nd
                         or 3rd box reveals that mode's own amount field so
@@ -2945,13 +2979,32 @@ export default function FuelManagement({
                                 onChange={() => toggleExtraFuelMode(mode)}
                                 className="cursor-pointer"
                               />
-                              <span className="font-semibold text-indigo-800">Paid by {EXTRA_FUEL_MODE_LABELS[mode]}</span>
+                              <span className="font-semibold text-indigo-800">{extraFuelModeOptionLabel(mode)}</span>
                             </label>
                           ))}
                         </div>
                         <p className="text-[9px] text-slate-400 font-mono">
                           Two or three separate top-ups this trip, paid differently? Tick all that apply - an amount field appears below for each so every portion has its own value.
                         </p>
+                        {mExtraFuelModes.includes('bunk') && (
+                          <div>
+                            <label className="block font-semibold text-slate-600 mb-1" htmlFor="extra-fuel-bunk">
+                              Fuel by bunk - Bunk <span className="text-rose-500">*</span>
+                            </label>
+                            <BunkCombobox
+                              id="extra-fuel-bunk"
+                              options={bunkOptions}
+                              value={mExtraFuelBunk}
+                              isNew={mExtraFuelBunkIsNew}
+                              defaultLocation={normalizeLocationName(location.trim())}
+                              locations={usedLocations}
+                              onChange={(v, isNew) => { setMExtraFuelBunk(v); setMExtraFuelBunkIsNew(isNew); }}
+                            />
+                            {mExtraFuelBunk && mExtraFuelBunkIsNew && (
+                              <p className="mt-1.5 text-[10px] text-slate-500">"{bunkChoiceLabel(mExtraFuelBunk)}" is a new bunk - used on this entry only; it is not added to the bunk list.</p>
+                            )}
+                          </div>
+                        )}
                         {mExtraFuelModes.length >= 2 && mExtraFuelModes.includes('bunk') && (
                           <div>
                             <label className="block font-semibold text-slate-600 mb-1">
@@ -3022,7 +3075,7 @@ export default function FuelManagement({
                         )}
                         {mExtraFuelModes.length === 1 && mExtraFuelModes[0] === 'bunk' && (
                           <p className="text-[9px] text-indigo-500 font-mono mt-1">
-                            Extra Fuel: {sumExtraFuelExpression(mExtraFuel)} L - ₹{(sumExtraFuelExpression(mExtraFuel) * (parseFloat(mRatePerLitreNew) || 0)).toLocaleString('en-IN')} paid by Bunk - included in Total Ltrs/Total Amount below (display/tracking tag only).
+                            Extra Fuel: {sumExtraFuelExpression(mExtraFuel)} L - ₹{(sumExtraFuelExpression(mExtraFuel) * (parseFloat(mRatePerLitreNew) || 0)).toLocaleString('en-IN')} fuel by bunk{mExtraFuelBunk ? ` at ${bunkChoiceLabel(mExtraFuelBunk)}` : ''} - included in Total Ltrs/Total Amount below (display/tracking tag only).
                           </p>
                         )}
                       </div>

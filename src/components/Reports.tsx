@@ -17,6 +17,7 @@ import { ReportTableSection, exportReportToExcel, exportReportToPdf, buildExcelF
 import { computeMonthsCompleted, computeDueDate, resolveLoanStatus } from '../utils/loanDates';
 import { effectiveInvoiceAmount, effectiveInvoiceStatus } from '../utils/billingInvoiceCalc';
 import { payableAmount, payableAmountLive, driverSalaryRows, SALARY_COLUMNS } from '../utils/driverSalaryExport';
+import { fixedHoursLabel } from '../utils/warehouseRateEngine';
 
 interface ReportsProps {
   user: User;
@@ -665,7 +666,7 @@ function buildReport(
             ],
             rows: entriesInRange.map(e => [
               e.date, e.warehouseName, e.warehouseCity, e.vehicleNumber, e.vehicleType, e.vehicleCategory || '-',
-              e.deploymentType || '-', e.pod || '-', e.podCity || '-', e.fixedHours || 0, e.openingKm || 0, e.closingKm || 0, e.kmUtilised || 0,
+              e.deploymentType || '-', e.pod || '-', e.podCity || '-', fixedHoursLabel(e) === 'N/A' ? 'N/A' : (e.fixedHours || 0), e.openingKm || 0, e.closingKm || 0, e.kmUtilised || 0,
               e.baseRate || 0, e.fuelCost || 0, e.finalBaseRate || 0, e.additionalKmCost || 0, e.additionalHourCost || 0,
               e.tollCharges || 0, e.parkingCost || 0, e.hybridReeferCost || 0, e.grandTotal || 0, e.vendorRemarks || '-'
             ])

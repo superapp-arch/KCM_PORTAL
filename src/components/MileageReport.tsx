@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { MileageReport, Vehicle, User, VehicleMileage, StaffEmployee } from '../types';
 import { PETTY_CASH_USERS } from '../utils/pettyCashUsers';
-import { ExtraFuelMode, EXTRA_FUEL_MODE_LABELS, resolveExtraFuelModes, extraFuelSlices } from '../utils/extraFuelModes';
+import { ExtraFuelMode, EXTRA_FUEL_MODE_LABELS, resolveExtraFuelModes, extraFuelSlices, extraFuelModeOptionLabel, extraFuelBunkLabel } from '../utils/extraFuelModes';
 import { fuelEnteredByLabel } from '../utils/fuelEnteredBy';
 import {
   Gauge,
@@ -631,8 +631,9 @@ export default function MileageReportModule({
           const amount = slices[m] || 0;
           const suffix = m === 'petty_cash' && r.pettyCashHolderUsername
             ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})`
-            : '';
-          return modes.length >= 2 ? `${EXTRA_FUEL_MODE_LABELS[m]}: ${amount.toFixed(2)}L${suffix}` : `${EXTRA_FUEL_MODE_LABELS[m]}${suffix}`;
+            : m === 'bunk' && r.extraFuelBunkName ? ` - ${extraFuelBunkLabel(r)}` : '';
+          const label = m === 'bunk' ? 'Fuel by bunk' : EXTRA_FUEL_MODE_LABELS[m];
+          return modes.length >= 2 ? `${label}: ${amount.toFixed(2)}L${suffix}` : `${label}${suffix}`;
         }).join(' + ');
       })(),
       'Rate per Ltr (new)': r.ratePerLitreNew || 0,
@@ -806,8 +807,9 @@ export default function MileageReportModule({
           };
           const badgeText: Record<ExtraFuelMode, string> = { bunk: 'BUNK', petty_cash: 'PC', card: 'CARD' };
           return modes.map(m => {
-            const portionNote = modes.length >= 2 ? `${EXTRA_FUEL_MODE_LABELS[m]} portion: ${(slices[m] || 0).toFixed(2)} L` : `Paid by ${EXTRA_FUEL_MODE_LABELS[m]}`;
-            const holderNote = m === 'petty_cash' && r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})` : '';
+            const portionNote = modes.length >= 2 ? `${m === 'bunk' ? 'Fuel by bunk' : EXTRA_FUEL_MODE_LABELS[m]} portion: ${(slices[m] || 0).toFixed(2)} L` : extraFuelModeOptionLabel(m);
+            const holderNote = m === 'petty_cash' && r.pettyCashHolderUsername ? ` (${PETTY_CASH_USERS.find(u => u.username === r.pettyCashHolderUsername)?.label || r.pettyCashHolderUsername})`
+              : m === 'bunk' && r.extraFuelBunkName ? ` - ${extraFuelBunkLabel(r)}` : '';
             return (
               <span
                 key={m}

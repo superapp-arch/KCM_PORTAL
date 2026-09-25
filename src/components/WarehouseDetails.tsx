@@ -26,11 +26,12 @@ import DocumentAttachment from './DocumentAttachment';
 import DateInput from './DateInput';
 import {
   FUEL_COST_PERCENT, KM_SLAB_SUGGESTIONS, formatINR, round2, daysInMonth, countSundaysInMonth,
-  computeAutoWorkingDays, resolveWorkingDays, computeWarehouseRates, computeShiftDurationHours, legacyTimeTo12Hour
+  computeAutoWorkingDays, resolveWorkingDays, computeShiftDurationHours, legacyTimeTo12Hour
 } from '../utils/warehouseRates';
+import { calculateWarehouseEntry, fixedHoursApplies, fixedHoursLabel } from '../utils/warehouseRateEngine';
 import { lookupScheduledRate, rateGroupForWarehouseName } from '../utils/warehouseRateMatrix';
 import {
-  lookup24hrDedicatedRate, lookupReeferWalkesRate, lookupAdHocRouteRate,
+  lookup24hrDedicatedRate, lookupReeferWalkesRate,
   adHocFromCities, adHocToCities
 } from '../utils/warehouseRateMatrix24hr';
 import { WAREHOUSE_LOCATIONS, WAREHOUSE_CITIES, cityForWarehouseName } from '../utils/warehouseLocations';
@@ -205,6 +206,13 @@ export default function WarehouseDetails({
   const [editVendorRemarks, setEditVendorRemarks] = useState('');
   const [editAdHocFromCity, setEditAdHocFromCity] = useState('');
   const [editAdHocToCity, setEditAdHocToCity] = useState('');
+  // Historical-record protection (2026-09-25): an existing entry keeps the
+  // figures it was saved with unless the user actually changes an input the
+  // calculation depends on. Set only by real user edits inside the Edit
+  // form (see its onChangeCapture/onClickCapture) - never by the modal's own
+  // auto-fill effects (rate lookups, Add KM/Add Hour, 24Hr times), which run
+  // on open and would otherwise silently re-price an old entry.
+  const [editCalcTouched, setEditCalcTouched] = useState(false);
 
   // Auto-calculated fields for new entry form
   // Odometer Utilised is whole-number-only - round-half-up (Math.round), not
@@ -213,7 +221,10 @@ export default function WarehouseDetails({
   const workingDaysAuto = computeAutoWorkingDays(workingMonth, deductSundays, holidaysCount);
   const workingDays = resolveWorkingDays(workingDaysAuto, workingDaysOverride);
   const kmSlabNumber = parseFloat(kmSlab) || 0;
-  const isAdHoc24 = fixedHours === 24 && deploymentType === 'ad-hoc';
+  // Fixed Hrs applies to Regular only (2026-09-25) - Ad-hoc is always the
+  // route table, Hybrid the agreed Scheduled Rate; see warehouseRateEngine.ts.
+  const isAdHoc = deploymentType === 'ad-hoc';
+  const addFixedHoursApplies = fixedHoursApplies(deploymentType);
   // 2026-09-11 direct request: KM Slab through Add Hour (KM Slab, Opening/
   // Closing KM, In/Closure Time, Add KM, Add Hour, Variable Cost Per KM,
   // Rate Per Extra KM/Hour) don't apply to Ad-hoc or Hybrid deployments at
@@ -232,7 +243,7 @@ export default function WarehouseDetails({
   // Vehicle Type/Category ("Hybrid Vehicle" <- Vehicle Category = Hybrid).
   // No match (missing selection, or a genuinely unconfigured combination)
   // means Base Rate is 0, not a leftover formula-based number.
-  const matchedAdHocRate = isAdHoc24 ? lookupAdHocRouteRate(adHocFromCity, adHocToCity, vehicleType, vehicleCategory) : null;
+
   // KM Slab through Add Hour are zeroed out here (not just hidden from the
   // UI) whenever hideKmTimeBlock is true - switching Deployment Type away
   // from Regular doesn't reset their underlying state (so re-selecting
@@ -241,20 +252,17 @@ export default function WarehouseDetails({
   // feed the Base Rate/Extra KM/Extra Hour Amount/Grand Total for a
   // deployment type that's explicitly "not tracked against a monthly KM
   // Slab/shift-time budget the way Regular ones are."
-  const rates = computeWarehouseRates({
-    fixedHours, scheduledRate, workingDays,
-    kmSlab: hideKmTimeBlock ? 0 : kmSlabNumber,
-    variableCostPerKm: hideKmTimeBlock ? 0 : variableCostPerKm,
-    kmUtilised: hideKmTimeBlock ? 0 : kmUtilised,
-    addKm: hideKmTimeBlock ? 0 : extraKm,
-    ratePerExtraKm: hideKmTimeBlock ? 0 : ratePerExtraKm,
-    addHour: hideKmTimeBlock ? 0 : addHour,
-    ratePerExtraHour: hideKmTimeBlock ? 0 : ratePerExtraHour,
-    tollCharges, parkingCost, hybridReeferCost,
-    flatBaseRateOverride: isAdHoc24 ? (matchedAdHocRate ?? 0) : null
-  });
-  const { baseRate, fuelCost, extraKmAmount: additionalKmCost, extraHourAmount: additionalHourCost, grandTotal } = rates;
-  const finalBaseRate = Math.max(0, baseRate + fuelCost);
+  // One shared engine for the form, the Edit modal and the Excel import
+  // (warehouseRateEngine.ts) - it also zeroes every KM/shift input for
+  // Ad-hoc/Hybrid, so a hidden stale value can't reach a total.
+  const calc = calculateWarehouseEntry({
+    deploymentType, fixedHours, warehouseName, vehicleType, vehicleCategory,
+    kmSlab: kmSlabNumber, kmUtilised, addKm: extraKm, addHour, ratePerExtraKm, ratePerExtraHour,
+    scheduledRate, variableCostPerKm, workingDays, tollCharges, parkingCost, hybridReeferCost,
+    adHocFromCity, adHocToCity
+  }, warehouseRateOverrides);
+  const matchedAdHocRate = calc.adHocRouteRate;
+  const { baseRate, fuelCost, extraKmAmount: additionalKmCost, extraHourAmount: additionalHourCost, grandTotal, finalBaseRate } = calc;
 
   // 12Hr Dedicated fixed Scheduled Rate lookup (see utils/warehouseRateMatrix.ts)
   // - the Warehouse Group is no longer a separate field the user picks; it's
@@ -265,7 +273,7 @@ export default function WarehouseDetails({
   // match changes, so switching Warehouse Name/Vehicle Type/KM Slab always
   // reflects the right rate.
   const warehouseGroup = rateGroupForWarehouseName(warehouseName) || '';
-  const matchedScheduledRate = fixedHours === 12 ? lookupScheduledRate(warehouseGroup, vehicleType, kmSlabNumber, warehouseRateOverrides) : null;
+  const matchedScheduledRate = addFixedHoursApplies && fixedHours === 12 ? lookupScheduledRate(warehouseGroup, vehicleType, kmSlabNumber, warehouseRateOverrides) : null;
   // 24Hr Dedicated (Regular, Dry vehicles, BLR only for now) and 24Hr Reefer
   // & Walkes (Regular, by Location + Vehicle) - same auto-fill pattern as
   // the 12Hr lookup above, see utils/warehouseRateMatrix24hr.ts. Neither
@@ -330,28 +338,27 @@ export default function WarehouseDetails({
   const editWorkingDaysAuto = computeAutoWorkingDays(editWorkingMonth, editDeductSundays, editHolidaysCount);
   const editWorkingDays = resolveWorkingDays(editWorkingDaysAuto, editWorkingDaysOverride);
   const editKmSlabNumber = parseFloat(editKmSlab) || 0;
-  const editIsAdHoc24 = editFixedHours === 24 && editDeploymentType === 'ad-hoc';
+  const editIsAdHoc = editDeploymentType === 'ad-hoc';
+  const editFixedHoursApplies = fixedHoursApplies(editDeploymentType);
   // See hideKmTimeBlock's own comment above (Add form) - same rule, mirrored.
   const editHideKmTimeBlock = editDeploymentType === 'ad-hoc' || editDeploymentType === 'hybrid';
-  const editMatchedAdHocRate = editIsAdHoc24 ? lookupAdHocRouteRate(editAdHocFromCity, editAdHocToCity, editVehicleType, editVehicleCategory) : null;
+
   // See the Add form's own rates call above - same "zero out, don't just
   // hide" rule so a stale KM Slab/Add KM/Add Hour left over from before
   // switching Deployment Type can't silently keep feeding the Grand Total.
-  const editRates = computeWarehouseRates({
-    fixedHours: editFixedHours, scheduledRate: editScheduledRate, workingDays: editWorkingDays,
-    kmSlab: editHideKmTimeBlock ? 0 : editKmSlabNumber,
-    variableCostPerKm: editHideKmTimeBlock ? 0 : editVariableCostPerKm,
-    kmUtilised: editHideKmTimeBlock ? 0 : editKmUtilised,
-    addKm: editHideKmTimeBlock ? 0 : editExtraKm,
-    ratePerExtraKm: editHideKmTimeBlock ? 0 : editRatePerExtraKm,
-    addHour: editHideKmTimeBlock ? 0 : editAddHour,
-    ratePerExtraHour: editHideKmTimeBlock ? 0 : editRatePerExtraHour,
+  const editCalc = calculateWarehouseEntry({
+    deploymentType: editDeploymentType, fixedHours: editFixedHours, warehouseName: editWarehouseName,
+    vehicleType: editVehicleType, vehicleCategory: editVehicleCategory,
+    kmSlab: editKmSlabNumber, kmUtilised: editKmUtilised, addKm: editExtraKm, addHour: editAddHour,
+    ratePerExtraKm: editRatePerExtraKm, ratePerExtraHour: editRatePerExtraHour,
+    scheduledRate: editScheduledRate, variableCostPerKm: editVariableCostPerKm, workingDays: editWorkingDays,
     tollCharges: editTollCharges, parkingCost: editParkingCost, hybridReeferCost: editHybridReeferCost,
-    flatBaseRateOverride: editIsAdHoc24 ? (editMatchedAdHocRate ?? 0) : null
-  });
-  const { baseRate: editBaseRate, fuelCost: editFuelCost, extraKmAmount: editAdditionalKmCost, extraHourAmount: editAdditionalHourCost, grandTotal: editGrandTotal } = editRates;
+    adHocFromCity: editAdHocFromCity, adHocToCity: editAdHocToCity
+  }, warehouseRateOverrides);
+  const editMatchedAdHocRate = editCalc.adHocRouteRate;
+  const { baseRate: editBaseRate, fuelCost: editFuelCost, extraKmAmount: editAdditionalKmCost, extraHourAmount: editAdditionalHourCost, grandTotal: editGrandTotal } = editCalc;
   const editWarehouseGroup = rateGroupForWarehouseName(editWarehouseName) || '';
-  const editMatchedScheduledRate = editFixedHours === 12 ? lookupScheduledRate(editWarehouseGroup, editVehicleType, editKmSlabNumber, warehouseRateOverrides) : null;
+  const editMatchedScheduledRate = editFixedHoursApplies && editFixedHours === 12 ? lookupScheduledRate(editWarehouseGroup, editVehicleType, editKmSlabNumber, warehouseRateOverrides) : null;
   const editIsRegular24 = editFixedHours === 24 && editDeploymentType === 'regular';
   const editMatched24hrDedicatedRate = editIsRegular24 ? lookup24hrDedicatedRate(editWarehouseName, editVehicleType, editVehicleCategory, warehouseRateOverrides) : null;
   const editMatchedReeferWalkesRate = (editIsRegular24 && !editMatched24hrDedicatedRate) ? lookupReeferWalkesRate(editWarehouseName, editVehicleType, editVehicleCategory, warehouseRateOverrides) : null;
@@ -378,6 +385,13 @@ export default function WarehouseDetails({
   }, [editFixedHours, editKmUtilised, editKmSlabNumber, editWorkingDays]);
 
   const editFinalBaseRate = Math.max(0, editBaseRate + editFuelCost);
+  // What the Edit modal shows = what Save will store: an untouched existing
+  // entry keeps its saved figures (see editCalcTouched).
+  const editShown = !editCalcTouched && selectedEntry ? {
+    editBaseRate: selectedEntry.baseRate || 0, editFuelCost: selectedEntry.fuelCost || 0,
+    editAdditionalKmCost: selectedEntry.additionalKmCost || 0, editAdditionalHourCost: selectedEntry.additionalHourCost || 0,
+    editFinalBaseRate: selectedEntry.finalBaseRate || 0, editGrandTotal: selectedEntry.grandTotal || 0
+  } : { editBaseRate, editFuelCost, editAdditionalKmCost, editAdditionalHourCost, editFinalBaseRate, editGrandTotal };
 
   // 24Hr dedicated vehicles don't have a shift start/end - In Time/Closure
   // Time are forced to "0" and locked read-only while Fixed Hrs is 24; going
@@ -404,6 +418,21 @@ export default function WarehouseDetails({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editFixedHours]);
+
+  // Switching INTO Ad-hoc/Hybrid clears Fixed Hrs and every KM/shift value
+  // (they don't apply there and must not linger into a later save); back to
+  // Regular restores the 12 hrs default. 2026-09-25.
+  const changeDeploymentType = (value: string, isEdit: boolean) => {
+    const set = isEdit
+      ? { dep: setEditDeploymentType, fh: setEditFixedHours, slab: setEditKmSlab, km: setEditExtraKm, hr: setEditAddHour, vc: setEditVariableCostPerKm, rkm: setEditRatePerExtraKm, rhr: setEditRatePerExtraHour }
+      : { dep: setDeploymentType, fh: setFixedHours, slab: setKmSlab, km: setExtraKm, hr: setAddHour, vc: setVariableCostPerKm, rkm: setRatePerExtraKm, rhr: setRatePerExtraHour };
+    set.dep(value);
+    if (!fixedHoursApplies(value)) {
+      set.fh(0); set.slab(''); set.km(0); set.hr(0); set.vc(0); set.rkm(0); set.rhr(0);
+    } else if (!(isEdit ? editFixedHours : fixedHours)) {
+      set.fh(12);
+    }
+  };
 
   // Trigger temporary toast notification
   const triggerNotif = (msg: string) => {
@@ -509,18 +538,18 @@ export default function WarehouseDetails({
         deploymentType,
         pod: pod.trim(),
         podCity: podCity.trim(),
-        fixedHours,
-        kmSlab: kmSlab.trim(),
+        fixedHours: calc.fixedHours,
+        kmSlab: addFixedHoursApplies ? kmSlab.trim() : '',
         openingKm,
         closingKm,
         inTime,
         inTimePeriod: fixedHours === 24 ? undefined : inTimePeriod,
         closureTime,
         closureTimePeriod: fixedHours === 24 ? undefined : closureTimePeriod,
-        kmUtilised,
+        kmUtilised: calc.kmUtilised,
         hoursDaysAsPerContract,
         overtimeVehicle: overtimeVehicle.trim(),
-        extraKm: Number(extraKm),
+        extraKm: addFixedHoursApplies ? Number(extraKm) : 0,
         baseRate,
         fuelCost,
         finalBaseRate,
@@ -534,7 +563,7 @@ export default function WarehouseDetails({
         documents: newEntryDocs,
         // Rate-calculation inputs - saved alongside the results above so
         // this record still reconciles even after config changes later.
-        scheduledRate,
+        scheduledRate: calc.scheduledRate,
         warehouseGroup: warehouseGroup || undefined,
         workingMonth,
         workingDaysAuto,
@@ -542,12 +571,12 @@ export default function WarehouseDetails({
         holidaysCount,
         workingDaysOverride: workingDaysOverride ?? undefined,
         workingDays,
-        ratePerExtraKm,
-        addHour: Number(addHour),
-        ratePerExtraHour,
-        variableCostPerKm,
-        adHocFromCity: isAdHoc24 ? (adHocFromCity || undefined) : undefined,
-        adHocToCity: isAdHoc24 ? (adHocToCity || undefined) : undefined
+        ratePerExtraKm: addFixedHoursApplies ? ratePerExtraKm : 0,
+        addHour: addFixedHoursApplies ? Number(addHour) : 0,
+        ratePerExtraHour: addFixedHoursApplies ? ratePerExtraHour : 0,
+        variableCostPerKm: calc.variableCostPerKm,
+        adHocFromCity: isAdHoc ? (adHocFromCity || undefined) : undefined,
+        adHocToCity: isAdHoc ? (adHocToCity || undefined) : undefined
       });
 
       // Reset
@@ -667,6 +696,7 @@ export default function WarehouseDetails({
     setEditVendorRemarks(entry.vendorRemarks || '');
     setEditAdHocFromCity(entry.adHocFromCity || '');
     setEditAdHocToCity(entry.adHocToCity || '');
+    setEditCalcTouched(false);
   };
 
   // Save Edits
@@ -691,18 +721,18 @@ export default function WarehouseDetails({
         deploymentType: editDeploymentType,
         pod: editPod.trim(),
         podCity: editPodCity.trim(),
-        fixedHours: editFixedHours,
-        kmSlab: editKmSlab.trim(),
+        fixedHours: editCalc.fixedHours,
+        kmSlab: editFixedHoursApplies ? editKmSlab.trim() : '',
         openingKm: Number(editOpeningKm),
         closingKm: Number(editClosingKm),
         inTime: editInTime,
         inTimePeriod: editFixedHours === 24 ? undefined : editInTimePeriod,
         closureTime: editClosureTime,
         closureTimePeriod: editFixedHours === 24 ? undefined : editClosureTimePeriod,
-        kmUtilised: editKmUtilised,
+        kmUtilised: editCalc.kmUtilised,
         hoursDaysAsPerContract: Number(editHoursDaysAsPerContract),
         overtimeVehicle: editOvertimeVehicle.trim(),
-        extraKm: Number(editExtraKm),
+        extraKm: editFixedHoursApplies ? Number(editExtraKm) : 0,
         baseRate: editBaseRate,
         fuelCost: editFuelCost,
         finalBaseRate: editFinalBaseRate,
@@ -713,7 +743,7 @@ export default function WarehouseDetails({
         hybridReeferCost: Number(editHybridReeferCost),
         grandTotal: editGrandTotal,
         vendorRemarks: editVendorRemarks.trim(),
-        scheduledRate: editScheduledRate,
+        scheduledRate: editCalc.scheduledRate,
         warehouseGroup: editWarehouseGroup || undefined,
         workingMonth: editWorkingMonth,
         workingDaysAuto: editWorkingDaysAuto,
@@ -721,13 +751,25 @@ export default function WarehouseDetails({
         holidaysCount: editHolidaysCount,
         workingDaysOverride: editWorkingDaysOverride ?? undefined,
         workingDays: editWorkingDays,
-        ratePerExtraKm: editRatePerExtraKm,
-        addHour: Number(editAddHour),
-        ratePerExtraHour: editRatePerExtraHour,
-        variableCostPerKm: editVariableCostPerKm,
-        adHocFromCity: editIsAdHoc24 ? (editAdHocFromCity || undefined) : undefined,
-        adHocToCity: editIsAdHoc24 ? (editAdHocToCity || undefined) : undefined
+        ratePerExtraKm: editFixedHoursApplies ? editRatePerExtraKm : 0,
+        addHour: editFixedHoursApplies ? Number(editAddHour) : 0,
+        ratePerExtraHour: editFixedHoursApplies ? editRatePerExtraHour : 0,
+        variableCostPerKm: editCalc.variableCostPerKm,
+        adHocFromCity: editIsAdHoc ? (editAdHocFromCity || undefined) : undefined,
+        adHocToCity: editIsAdHoc ? (editAdHocToCity || undefined) : undefined
       };
+      if (!editCalcTouched) {
+        // Nothing the calculation depends on was changed - keep the saved
+        // figures (and the inputs that produced them) exactly as they are.
+        const keep: (keyof WarehouseEntry)[] = [
+          'deploymentType', 'fixedHours', 'kmSlab', 'openingKm', 'closingKm', 'inTime', 'inTimePeriod', 'closureTime', 'closureTimePeriod',
+          'kmUtilised', 'extraKm', 'addHour', 'baseRate', 'fuelCost', 'finalBaseRate', 'additionalKmCost', 'additionalHourCost',
+          'tollCharges', 'parkingCost', 'hybridReeferCost', 'grandTotal', 'scheduledRate', 'warehouseGroup', 'workingMonth',
+          'workingDaysAuto', 'deductSundays', 'holidaysCount', 'workingDaysOverride', 'workingDays', 'ratePerExtraKm',
+          'ratePerExtraHour', 'variableCostPerKm', 'adHocFromCity', 'adHocToCity', 'vehicleType', 'vehicleCategory', 'warehouseName'
+        ];
+        keep.forEach(k => { (updatedData as Record<string, unknown>)[k] = selectedEntry[k]; });
+      }
 
       await onUpdateEntry(selectedEntry.id, updatedData);
       
@@ -851,7 +893,7 @@ export default function WarehouseDetails({
       'To City (Ad-hoc)': e.adHocToCity || '',
       'POD Name': e.pod,
       'POD City': e.podCity,
-      'Fixed Hours': e.fixedHours,
+      'Fixed Hours': fixedHoursLabel(e) === 'N/A' ? 'N/A' : (e.fixedHours || 12),
       'KM Slab': e.kmSlab,
       'Opening KM': e.openingKm,
       'Closing KM': e.closingKm,
@@ -912,7 +954,8 @@ export default function WarehouseDetails({
   // return here doesn't violate the Rules of Hooks). Super Admins can edit or
   // add rates here (see components/warehouse/RatesSummary.tsx) - the 12Hr
   // Scheduled/Extra, 24Hr Dedicated and 24Hr Reefer & Walkes tables are
-  // editable; Ad-hoc Route and Local Adhoc remain read-only for now.
+  // editable, and so is the 24Hr Ad-hoc Route table (add/edit routes,
+  // 2026-09-25); Local Adhoc remains read-only for now.
   if (moduleTab === 'rates') {
     return (
       <div className="space-y-6" id="warehouse-details-root">
@@ -1153,7 +1196,7 @@ export default function WarehouseDetails({
                 <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Deployment</label>
                 <select
                   value={deploymentType}
-                  onChange={(e) => setDeploymentType(e.target.value)}
+                  onChange={(e) => changeDeploymentType(e.target.value, false)}
                   className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
                 >
                   <option value="regular">Regular</option>
@@ -1187,14 +1230,19 @@ export default function WarehouseDetails({
             <div className={`grid gap-2 ${hideKmTimeBlock ? 'grid-cols-1' : 'grid-cols-2'}`}>
               <div>
                 <label className="block text-[10px] font-bold text-purple-700 mb-1 uppercase tracking-wide">Fixed Hrs</label>
-                <select
-                  value={fixedHours}
-                  onChange={(e) => setFixedHours(Number(e.target.value))}
-                  className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
-                >
-                  <option value={12}>12 hrs</option>
-                  <option value={24}>24 hrs</option>
-                </select>
+                {addFixedHoursApplies ? (
+                  <select
+                    value={fixedHours}
+                    onChange={(e) => setFixedHours(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-purple-100 rounded-lg p-1.5 text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
+                  >
+                    <option value={12}>12 hrs</option>
+                    <option value={24}>24 hrs</option>
+                  </select>
+                ) : (
+                  <input type="text" readOnly value={`N/A - ${isAdHoc ? 'Ad-hoc uses the route rate' : 'Hybrid uses the agreed rate'}`} title="Fixed Hrs doesn't apply to Ad-hoc/Hybrid deployments"
+                    className="w-full bg-slate-100 border border-purple-100 rounded-lg p-1.5 text-xs text-slate-500 cursor-not-allowed" />
+                )}
               </div>
               {/* Ad-hoc/Hybrid are trip-based, not tracked against a monthly
                   KM Slab budget the way Regular is (Ad-hoc 24Hr instead uses
@@ -1338,7 +1386,7 @@ export default function WarehouseDetails({
             <div className="p-2.5 bg-purple-50/40 rounded-xl border border-purple-100/50 space-y-2">
               <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wide">Rate Configuration</span>
 
-              {isAdHoc24 ? (
+              {isAdHoc ? (
                 <>
                   {/* Ad-hoc 24Hr is trip-based, not formula-based - Base Rate
                       is a direct flat lookup from the round-trip route table
@@ -1353,7 +1401,7 @@ export default function WarehouseDetails({
                       <select value={adHocFromCity} onChange={(e) => { setAdHocFromCity(e.target.value); setAdHocToCity(''); }}
                         className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800">
                         <option value="">Select</option>
-                        {adHocFromCities().map(c => <option key={c} value={c}>{c}</option>)}
+                        {adHocFromCities(warehouseRateOverrides).map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
                     <div>
@@ -1361,7 +1409,7 @@ export default function WarehouseDetails({
                       <select value={adHocToCity} onChange={(e) => setAdHocToCity(e.target.value)} disabled={!adHocFromCity}
                         className="w-full bg-white border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-800 disabled:bg-slate-100 disabled:cursor-not-allowed">
                         <option value="">Select</option>
-                        {adHocToCities(adHocFromCity).map(c => <option key={c} value={c}>{c}</option>)}
+                        {adHocToCities(adHocFromCity, warehouseRateOverrides).map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
                   </div>
@@ -1370,8 +1418,8 @@ export default function WarehouseDetails({
                     <input type="text" readOnly value={matchedAdHocRate != null ? formatINR(matchedAdHocRate) : ''}
                       placeholder="Select From/To City and Vehicle"
                       className="w-full bg-slate-100 border border-purple-100 rounded-lg p-1.5 text-xs font-bold text-slate-700 cursor-not-allowed" />
-                    {adHocFromCity && adHocToCity && matchedAdHocRate == null && (
-                      <p className="text-[9px] text-rose-500 font-mono mt-0.5">No rate configured for this route/vehicle combination. Contact admin.</p>
+                    {adHocFromCity && adHocToCity && calc.missingRate && (
+                      <p className="text-[9px] text-rose-500 font-mono mt-0.5">{calc.missingRate.message} Contact admin.</p>
                     )}
                   </div>
                   <div className="grid grid-cols-2 gap-2">
@@ -1487,7 +1535,7 @@ export default function WarehouseDetails({
             <div className="p-3 bg-purple-950 text-slate-100 rounded-2xl border border-pink-500/20 shadow-sm space-y-1.5 font-mono">
               <div className="grid grid-cols-2 gap-2 text-[10px]">
                 <div>
-                  <span className="text-purple-300 block">Base Rate ({fixedHours} Hrs)</span>
+                  <span className="text-purple-300 block">Base Rate ({addFixedHoursApplies ? `${fixedHours} Hrs` : isAdHoc ? 'Ad-hoc route' : 'Hybrid'})</span>
                   <span className="font-extrabold text-white text-xs">{formatINR(baseRate)}</span>
                 </div>
                 <div>
@@ -1799,9 +1847,9 @@ export default function WarehouseDetails({
                         </td>
                         <td className="py-3.5 px-3 text-center">
                           <span className={`inline-block px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
-                            e.fixedHours === 24 ? 'bg-indigo-100 text-indigo-700' : 'bg-cyan-100 text-cyan-700'
+                            e.fixedHours === 24 ? 'bg-indigo-100 text-indigo-700' : fixedHoursLabel(e) === 'N/A' ? 'bg-slate-100 text-slate-500' : 'bg-cyan-100 text-cyan-700'
                           }`}>
-                            {e.fixedHours || 12} Hrs
+                            {fixedHoursLabel(e)}
                           </span>
                         </td>
                         <td className="py-3.5 px-3 font-mono">
@@ -1899,7 +1947,17 @@ export default function WarehouseDetails({
               </div>
             </div>
 
-            <form onSubmit={handleSaveEdit} className="space-y-4 text-xs text-slate-700">
+            <form
+              onSubmit={handleSaveEdit}
+              onChangeCapture={(e) => {
+                const el = e.target as unknown as HTMLInputElement;
+                // Date, documents and the fields marked data-no-recalc never change a figure.
+                if (el.closest('[data-no-recalc]') || el.name === 'edit-date' || el.type === 'file') return;
+                setEditCalcTouched(true);
+              }}
+              onClickCapture={(e) => { if ((e.target as HTMLElement).closest('[data-recalc]')) setEditCalcTouched(true); }}
+              className="space-y-4 text-xs text-slate-700"
+            >
               
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 
@@ -1908,6 +1966,7 @@ export default function WarehouseDetails({
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Date *</label>
                   <DateInput
                     required
+                    name="edit-date"
                     value={editDate}
                     onChange={(e) => setEditDate(e.target.value)}
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:ring-1 focus:ring-pink-500 focus:outline-none"
@@ -1936,6 +1995,7 @@ export default function WarehouseDetails({
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Warehouse City</label>
                   <input
                     type="text"
+                    data-no-recalc
                     value={editWarehouseCity}
                     onChange={(e) => setEditWarehouseCity(e.target.value)}
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:ring-1 focus:ring-pink-500 focus:outline-none"
@@ -2003,7 +2063,7 @@ export default function WarehouseDetails({
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Deployment Type</label>
                   <select
                     value={editDeploymentType}
-                    onChange={(e) => setEditDeploymentType(e.target.value)}
+                    onChange={(e) => changeDeploymentType(e.target.value, true)}
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-pink-500"
                   >
                     <option value="regular">Regular</option>
@@ -2013,14 +2073,19 @@ export default function WarehouseDetails({
                 </div>
                 <div>
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Fixed Hours</label>
-                  <select
-                    value={editFixedHours}
-                    onChange={(e) => setEditFixedHours(Number(e.target.value))}
-                    className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-pink-500"
-                  >
-                    <option value={12}>12 hrs</option>
-                    <option value={24}>24 hrs</option>
-                  </select>
+                  {editFixedHoursApplies ? (
+                    <select
+                      value={editFixedHours}
+                      onChange={(e) => setEditFixedHours(Number(e.target.value))}
+                      className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-pink-500"
+                    >
+                      <option value={12}>12 hrs</option>
+                      <option value={24}>24 hrs</option>
+                    </select>
+                  ) : (
+                    <input type="text" readOnly value="N/A (Ad-hoc / Hybrid)" title="Fixed Hrs doesn't apply to Ad-hoc/Hybrid deployments"
+                      className="w-full bg-slate-100 border border-purple-100 rounded-lg p-2 text-slate-500 cursor-not-allowed" />
+                  )}
                 </div>
 
               </div>
@@ -2032,6 +2097,7 @@ export default function WarehouseDetails({
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">POD Name</label>
                   <input
                     type="text"
+                    data-no-recalc
                     value={editPod}
                     onChange={(e) => setEditPod(e.target.value)}
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:ring-1 focus:ring-pink-500 focus:outline-none"
@@ -2041,6 +2107,7 @@ export default function WarehouseDetails({
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">POD City</label>
                   <input
                     type="text"
+                    data-no-recalc
                     value={editPodCity}
                     onChange={(e) => setEditPodCity(e.target.value)}
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2 focus:ring-1 focus:ring-pink-500 focus:outline-none"
@@ -2123,7 +2190,7 @@ export default function WarehouseDetails({
                         className={`w-full border border-purple-100 rounded-lg p-1.5 font-mono ${editFixedHours === 24 ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`}
                       />
                       {editFixedHours !== 24 && (
-                        <button type="button" onClick={() => setEditInTimePeriod(p => p === 'AM' ? 'PM' : 'AM')}
+                        <button type="button" data-recalc onClick={() => setEditInTimePeriod(p => p === 'AM' ? 'PM' : 'AM')}
                           title="Toggle AM/PM"
                           className="shrink-0 px-1.5 rounded-lg border border-purple-100 bg-white text-[9px] font-black text-purple-700 hover:bg-purple-50 cursor-pointer">
                           {editInTimePeriod}
@@ -2143,7 +2210,7 @@ export default function WarehouseDetails({
                         className={`w-full border border-purple-100 rounded-lg p-1.5 font-mono ${editFixedHours === 24 ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`}
                       />
                       {editFixedHours !== 24 && (
-                        <button type="button" onClick={() => setEditClosureTimePeriod(p => p === 'AM' ? 'PM' : 'AM')}
+                        <button type="button" data-recalc onClick={() => setEditClosureTimePeriod(p => p === 'AM' ? 'PM' : 'AM')}
                           title="Toggle AM/PM"
                           className="shrink-0 px-1.5 rounded-lg border border-purple-100 bg-white text-[9px] font-black text-purple-700 hover:bg-purple-50 cursor-pointer">
                           {editClosureTimePeriod}
@@ -2189,6 +2256,7 @@ export default function WarehouseDetails({
                   <label className="block text-[10px] font-black text-purple-800 uppercase tracking-wide mb-1">Vendor Remarks</label>
                   <input
                     type="text"
+                    data-no-recalc
                     value={editVendorRemarks}
                     onChange={(e) => setEditVendorRemarks(e.target.value)}
                     className="w-full bg-slate-50 border border-purple-100 rounded-lg p-2"
@@ -2204,7 +2272,7 @@ export default function WarehouseDetails({
               <div className="p-3 bg-purple-50/40 rounded-xl border border-purple-100/50 space-y-2 text-xs">
                 <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wide">Rate Configuration</span>
 
-                {editIsAdHoc24 ? (
+                {editIsAdHoc ? (
                   <>
                     {/* Ad-hoc 24Hr - flat route-table lookup, same as Add
                         Entry (see utils/warehouseRateMatrix24hr.ts). */}
@@ -2214,7 +2282,7 @@ export default function WarehouseDetails({
                         <select value={editAdHocFromCity} onChange={(e) => { setEditAdHocFromCity(e.target.value); setEditAdHocToCity(''); }}
                           className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800">
                           <option value="">Select</option>
-                          {adHocFromCities().map(c => <option key={c} value={c}>{c}</option>)}
+                          {adHocFromCities(warehouseRateOverrides).map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
                       </div>
                       <div>
@@ -2222,7 +2290,7 @@ export default function WarehouseDetails({
                         <select value={editAdHocToCity} onChange={(e) => setEditAdHocToCity(e.target.value)} disabled={!editAdHocFromCity}
                           className="w-full bg-white border border-purple-100 rounded-lg p-1.5 font-bold text-slate-800 disabled:bg-slate-100 disabled:cursor-not-allowed">
                           <option value="">Select</option>
-                          {adHocToCities(editAdHocFromCity).map(c => <option key={c} value={c}>{c}</option>)}
+                          {adHocToCities(editAdHocFromCity, warehouseRateOverrides).map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
                       </div>
                     </div>
@@ -2231,8 +2299,8 @@ export default function WarehouseDetails({
                       <input type="text" readOnly value={editMatchedAdHocRate != null ? formatINR(editMatchedAdHocRate) : ''}
                         placeholder="Select From/To City and Vehicle"
                         className="w-full bg-slate-100 border border-purple-100 rounded-lg p-1.5 font-bold text-slate-700 cursor-not-allowed" />
-                      {editAdHocFromCity && editAdHocToCity && editMatchedAdHocRate == null && (
-                        <p className="text-[9px] text-rose-500 font-mono mt-0.5">No rate configured for this route/vehicle combination. Contact admin.</p>
+                      {editAdHocFromCity && editAdHocToCity && editCalc.missingRate && (
+                        <p className="text-[9px] text-rose-500 font-mono mt-0.5">{editCalc.missingRate.message} Contact admin.</p>
                       )}
                     </div>
                     <div className="grid grid-cols-2 gap-2">
@@ -2300,7 +2368,7 @@ export default function WarehouseDetails({
                       <div className="flex items-center justify-between">
                         <span className="text-[9px] font-bold text-purple-700 uppercase tracking-wide">Working Days</span>
                         {editWorkingDaysOverride != null && (
-                          <button type="button" onClick={() => setEditWorkingDaysOverride(null)} className="text-[9px] text-pink-600 hover:text-pink-800 underline cursor-pointer">Reset to auto</button>
+                          <button type="button" data-recalc onClick={() => setEditWorkingDaysOverride(null)} className="text-[9px] text-pink-600 hover:text-pink-800 underline cursor-pointer">Reset to auto</button>
                         )}
                       </div>
                       <div className="grid grid-cols-2 gap-2">
@@ -2327,20 +2395,20 @@ export default function WarehouseDetails({
 
                 <div className="md:col-span-8 grid grid-cols-2 sm:grid-cols-4 gap-3.5 text-[9.5px]">
                   <div>
-                    <span className="text-purple-300 block mb-1">Base Rate ({editFixedHours} Hrs)</span>
-                    <div className="bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px]">{formatINR(editBaseRate)}</div>
+                    <span className="text-purple-300 block mb-1">Base Rate ({editFixedHoursApplies ? `${editFixedHours} Hrs` : editIsAdHoc ? 'Ad-hoc route' : 'Hybrid'})</span>
+                    <div className="bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px]">{formatINR(editShown.editBaseRate)}</div>
                   </div>
                   <div>
                     <span className="text-purple-300 block mb-1">Fuel Cost ({FUEL_COST_PERCENT}%)</span>
-                    <div className="bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px]">{formatINR(editFuelCost)}</div>
+                    <div className="bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px]">{formatINR(editShown.editFuelCost)}</div>
                   </div>
                   <div>
                     <span className="text-purple-300 block mb-1">Extra KM Amount</span>
-                    <div className="bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px]">{formatINR(editAdditionalKmCost)}</div>
+                    <div className="bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px]">{formatINR(editShown.editAdditionalKmCost)}</div>
                   </div>
                   <div>
                     <span className="text-purple-300 block mb-1">Extra Hour Amount</span>
-                    <div className="bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px]">{formatINR(editAdditionalHourCost)}</div>
+                    <div className="bg-white/10 text-white rounded p-1.5 font-extrabold text-center text-[10.5px]">{formatINR(editShown.editAdditionalHourCost)}</div>
                   </div>
 
                   <div>
@@ -2373,14 +2441,14 @@ export default function WarehouseDetails({
                   <div>
                     <span className="text-purple-300 block mb-1">Final Base (₹)</span>
                     <div className="bg-white/5 text-pink-300 rounded p-1.5 text-center font-bold font-mono text-[11px] border border-white/5">
-                      {formatINR(editFinalBaseRate)}
+                      {formatINR(editShown.editFinalBaseRate)}
                     </div>
                   </div>
                 </div>
 
                 <div className="md:col-span-4 bg-white/5 border border-white/5 p-3 rounded-xl flex flex-col justify-center items-center text-center">
                   <span className="text-pink-300 font-extrabold uppercase tracking-widest text-[10px] mb-1">Re-calculated Grand Total</span>
-                  <span className="font-black text-emerald-400 text-lg">{formatINR(editGrandTotal)}</span>
+                  <span className="font-black text-emerald-400 text-lg">{formatINR(editShown.editGrandTotal)}</span>
                   <span className="text-[9px] text-slate-300 mt-1 leading-normal">Base Rate + Fuel Cost + Extra KM + Extra Hour + toll/parking/hybrid-reefer logs.</span>
                 </div>
 
@@ -2426,6 +2494,8 @@ export default function WarehouseDetails({
           entries={entries}
           vehicles={vehicles}
           warehouseRateOverrides={warehouseRateOverrides}
+          isSuperAdmin={user.department === 'super_admin'}
+          onSaveRateOverride={onSaveWarehouseRateOverride}
           onAddEntry={onAddEntry}
           onUpdateEntry={onUpdateEntry}
           onClose={() => setShowImportModal(false)}

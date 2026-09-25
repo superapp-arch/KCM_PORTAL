@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
-import { BadgeInfo, Pencil, Save, X, RotateCcw } from 'lucide-react';
+import { BadgeInfo, Pencil, Save, X, RotateCcw, Plus } from 'lucide-react';
 import {
   RATE_TABLES, RATE_MATRIX_KM_SLABS, RATE_MATRIX_VEHICLE_TYPES, RateTableKey, RateMatrixVehicleType,
   lookupExtraRates, hasExtraRatesConfigured, findRateOverride, buildRateOverrideId
 } from '../../utils/warehouseRateMatrix';
 import {
-  DEDICATED_24HR_TABLES, REEFER_WALKES_TABLE, ADHOC_ROUTES, ADHOC_VEHICLE_COLUMNS,
+  DEDICATED_24HR_TABLES, REEFER_WALKES_TABLE, ADHOC_VEHICLE_COLUMNS, effectiveAdHocRoutes, EffectiveAdHocRoute,
+  adHocRouteOverrideDims, adHocTripOf,
   ADHOC_DAILY_TABLES, REEFER_WALKES_KEYS, REEFER_WALKES_LOCATIONS, ReeferWalkesKey, ReeferWalkesLocation
 } from '../../utils/warehouseRateMatrix24hr';
 import { formatINR } from '../../utils/warehouseRates';
 import { WarehouseRateOverride } from '../../types';
+import AdHocRouteRateEditor from './AdHocRouteRateEditor';
 
 // "See every current rate at a glance" screen - the actual pain point being
 // fixed is that none of the rate cards driving Log Warehouse Deployment's
@@ -29,8 +31,9 @@ import { WarehouseRateOverride } from '../../types';
 // hardcoded default. Super Admins also see every vehicle type/location combo
 // (not just the ones already configured) so a brand new one can be added -
 // everyone else still only sees rows that actually have a rate, exactly as
-// before. Ad-hoc Route and Local Adhoc (sections 4 & 5) are NOT part of this
-// pass - still fully read-only - see the PendingNote on each.
+// before. The 24Hr Ad-hoc Route table (section 4) can also be edited and new
+// routes added (2026-09-25, AdHocRouteRateEditor); Local Adhoc (section 5)
+// is still read-only.
 
 const GROUP_DISPLAY_LABELS: Record<RateTableKey, string> = {
   blr: 'BLR - ECOM, IM1, IM2, IM3, IM4 & DHL',
@@ -82,6 +85,20 @@ export default function RatesSummary({ overrides, isSuperAdmin, onSaveOverride, 
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // 24Hr Ad-hoc route add/edit dialog (2026-09-25) - see AdHocRouteRateEditor.
+  const [routeEditor, setRouteEditor] = useState<{ mode: 'add' } | { mode: 'edit'; route: EffectiveAdHocRoute } | null>(null);
+  const resetRoute = async (route: EffectiveAdHocRoute) => {
+    const verb = route.added ? 'Remove the route' : 'Reset the rates of';
+    if (!confirm(`${verb} ${route.from} → ${route.to} (${adHocTripOf(route)})? Entries already saved are not changed.`)) return;
+    setBusy(true); setErr(null);
+    try {
+      await onDeleteOverride(buildRateOverrideId('adHocRoute24hr', adHocRouteOverrideDims(route.from, route.to, adHocTripOf(route))));
+    } catch (e: any) {
+      setErr(e?.message || 'Failed to reset route.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const startEdit = (key: string, initial: Record<string, string>) => {
     setEditKey(key);
@@ -492,9 +509,18 @@ export default function RatesSummary({ overrides, isSuperAdmin, onSaveOverride, 
         </div>
       </section>
 
-      {/* 4. Ad-hoc - Route table (read-only) */}
+      {/* 4. Ad-hoc - Route table - Super Admin can add a route or edit a
+          route's rates (2026-09-25); stored as 'adHocRoute24hr' overrides. */}
       <section>
-        <SectionHeading title="24Hr Ad-hoc - Route Rates" subtitle="Flat round-trip rate by From City → To City → Vehicle" />
+        <div className="flex items-end justify-between gap-2">
+          <SectionHeading title="24Hr Ad-hoc - Route Rates" subtitle="Flat round-trip rate by From City → To City → Vehicle" />
+          {isSuperAdmin && (
+            <button type="button" onClick={() => setRouteEditor({ mode: 'add' })}
+              className="mb-2 flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-purple-700 hover:bg-purple-800 text-white text-[10px] font-bold cursor-pointer">
+              <Plus className="w-3 h-3" /> Add Route
+            </button>
+          )}
+        </div>
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
@@ -504,12 +530,17 @@ export default function RatesSummary({ overrides, isSuperAdmin, onSaveOverride, 
                   <th className="px-3 py-2">To</th>
                   {ADHOC_VEHICLE_COLUMNS.map(col => <th key={col} className="px-3 py-2 text-right whitespace-nowrap">{col}</th>)}
                   <th className="px-3 py-2 whitespace-nowrap">Remarks</th>
+                  {isSuperAdmin && <th className="px-3 py-2 text-center">Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {ADHOC_ROUTES.map(route => (
+                {effectiveAdHocRoutes(overrides).map(route => (
                   <tr key={`${route.from}-${route.to}-${route.remarks || 'Round Trip'}`} className="hover:bg-slate-50">
-                    <td className="px-3 py-2 font-semibold text-slate-700 whitespace-nowrap">{route.from}</td>
+                    <td className="px-3 py-2 font-semibold text-slate-700 whitespace-nowrap">
+                      {route.from}
+                      {route.added && <span className="ml-1.5 px-1 py-0.5 rounded text-[8px] font-black uppercase bg-emerald-50 text-emerald-700 border border-emerald-200">Added</span>}
+                      {route.edited && <span className="ml-1.5 px-1 py-0.5 rounded text-[8px] font-black uppercase bg-amber-50 text-amber-700 border border-amber-200">Edited</span>}
+                    </td>
                     <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{route.to}</td>
                     {ADHOC_VEHICLE_COLUMNS.map(col => (
                       <td key={col} className="px-3 py-2 text-right font-mono text-slate-700">
@@ -517,13 +548,24 @@ export default function RatesSummary({ overrides, isSuperAdmin, onSaveOverride, 
                       </td>
                     ))}
                     <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{route.remarks || 'Round Trip'}</td>
+                    {isSuperAdmin && (
+                      <td className="px-3 py-2 text-center whitespace-nowrap">
+                        <button type="button" onClick={() => setRouteEditor({ mode: 'edit', route })} disabled={busy} title="Edit this route's rates"
+                          className="p-1 text-slate-400 hover:text-purple-700 hover:bg-slate-100 rounded cursor-pointer"><Pencil className="w-3.5 h-3.5" /></button>
+                        {(route.added || route.edited) && (
+                          <button type="button" onClick={() => resetRoute(route)} disabled={busy} title={route.added ? 'Remove this added route' : 'Reset to the original rates'}
+                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded cursor-pointer"><RotateCcw className="w-3.5 h-3.5" /></button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
           <div className="px-3 pb-2">
-            <PendingNote text="— means no rate configured for that route/vehicle combination. Editing this table isn't supported yet - only the sections above are." />
+            <PendingNote text={isSuperAdmin ? '— means no rate configured for that route/vehicle combination. Add Route / Edit apply to new calculations only - saved entries keep their Base Rate.' : '— means no rate configured for that route/vehicle combination.'} />
+            {err && <p className="text-[10px] text-rose-600 font-semibold mt-1">{err}</p>}
           </div>
         </div>
       </section>
@@ -575,6 +617,18 @@ export default function RatesSummary({ overrides, isSuperAdmin, onSaveOverride, 
           <PendingNote text="Not yet wired into the Add/Edit Entry form - Ad-hoc there still only offers the Route table above. Editing this table isn't supported yet either." />
         </div>
       </section>
+      {routeEditor && (
+        <AdHocRouteRateEditor
+          mode={routeEditor.mode}
+          initialFrom={routeEditor.mode === 'edit' ? routeEditor.route.from : ''}
+          initialTo={routeEditor.mode === 'edit' ? routeEditor.route.to : ''}
+          initialTrip={routeEditor.mode === 'edit' ? adHocTripOf(routeEditor.route) : 'Round Trip'}
+          initialRates={routeEditor.mode === 'edit' ? routeEditor.route.rates : undefined}
+          overrides={overrides}
+          onSave={onSaveOverride}
+          onClose={() => setRouteEditor(null)}
+        />
+      )}
     </div>
   );
 }

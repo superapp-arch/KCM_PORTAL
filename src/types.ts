@@ -1088,6 +1088,16 @@ export interface WarehouseEntry {
   // for every other Deployment Type/Fixed Hrs combination.
   adHocFromCity?: string;
   adHocToCity?: string;
+  // Set only on an entry created/overwritten by the Excel import
+  // (2026-09-25): what the employee's sheet said for each calculated figure
+  // vs what KCM calculated (the saved values above ARE KCM's), so the
+  // original Excel evidence and every difference survive the import.
+  importAudit?: {
+    importedAt: string;
+    fileRow: number;
+    rateSource: string;
+    values: { field: string; label: string; excel: number | null; kcm: number; difference: number | null }[];
+  };
 }
 
 // Warehouse Details > Rates - editable overrides on top of the fixed
@@ -1100,7 +1110,10 @@ export interface WarehouseEntry {
 // default when no override exists for that exact combination, so this is
 // purely additive: nothing here changes anything until someone actually
 // edits or adds a rate through the Rates tab.
-export type WarehouseRateOverrideKind = 'scheduled12hr' | 'extra12hr' | 'dedicated24hr' | 'reeferWalkes24hr';
+// adHocRoute24hr (2026-09-25): edits an existing 24Hr Ad-hoc route's rates
+// or adds a brand-new route - dims { from, to, trip }, value = one rate per
+// Ad-hoc vehicle column (see ADHOC_VEHICLE_COLUMNS).
+export type WarehouseRateOverrideKind = 'scheduled12hr' | 'extra12hr' | 'dedicated24hr' | 'reeferWalkes24hr' | 'adHocRoute24hr';
 
 export interface WarehouseRateOverride {
   id: string; // deterministic composite key, e.g. "scheduled12hr:ecomHyd:207:2000" - doubles as the upsert key
@@ -1199,6 +1212,14 @@ export interface MileageReport {
   extraFuelBunkAmount?: number;
   extraFuelPettyCashAmount?: number;
   extraFuelCardAmount?: number;
+  // "Fuel by bunk" (2026-09-25): WHICH bunk the Bunk-paid Extra Fuel portion
+  // was filled at, picked from Fuel Management's bunk list (or typed as a
+  // new bunk). Set only while 'bunk' is one of extraFuelModes - same pure
+  // accounting tag as the mode itself, never a calculation input.
+  // A bunk typed in as new here is used on this entry only - it does not
+  // join the bunk list (a shared bunk master is a separate, pending step).
+  extraFuelBunkName?: string;
+  extraFuelBunkLocation?: string;
   // Legacy - a linked-voucher mechanism that used to exist here was removed;
   // never populated by new saves. Kept only so old rows that already have a
   // value don't lose it.

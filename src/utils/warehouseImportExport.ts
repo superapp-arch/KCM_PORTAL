@@ -9,9 +9,10 @@
 import * as XLSX from 'xlsx';
 import { WarehouseEntry, Vehicle, WarehouseRateOverride } from '../types';
 import { WAREHOUSE_LOCATIONS } from './warehouseLocations';
-import { computeWarehouseRates, computeAutoWorkingDays, resolveWorkingDays, round2 } from './warehouseRates';
-import { rateGroupForWarehouseName, lookupScheduledRate } from './warehouseRateMatrix';
-import { lookup24hrDedicatedRate, lookupReeferWalkesRate, lookupAdHocRouteRate } from './warehouseRateMatrix24hr';
+import { computeAutoWorkingDays, resolveWorkingDays, round2 } from './warehouseRates';
+import { rateGroupForWarehouseName, normalizeRateMatrixVehicleType } from './warehouseRateMatrix';
+import { calculateWarehouseEntry, normalizeDeploymentType } from './warehouseRateEngine';
+import { VEHICLE_CATEGORIES } from './vehicleCycleDefaults';
 
 // --- Column matching (promoted from WarehouseDetails.tsx unchanged, plus
 // the rate-calc-input aliases needed so computeWarehouseRates() can run on
@@ -68,7 +69,8 @@ const WAREHOUSE_IMPORT_ALIASES: Record<string, keyof WarehouseEntry> = {
   tollcharges: 'tollCharges', tolls: 'tollCharges',
   parkingcost: 'parkingCost', parking: 'parkingCost',
   hybridreefercost: 'hybridReeferCost', hybridreefer: 'hybridReeferCost',
-  grandtotal: 'grandTotal',
+  grandtotal: 'grandTotal', amount: 'grandTotal', totalamount: 'grandTotal',
+  kmutilised: 'kmUtilised', kmutilized: 'kmUtilised',
   vendorremarks: 'vendorRemarks', remarks: 'vendorRemarks',
   scheduledrate: 'scheduledRate',
   warehousegroup: 'warehouseGroup',
@@ -103,12 +105,19 @@ function normalizeImportDate(raw: string | number): string {
   return '';
 }
 
+// Calculated/rate columns (2026-09-25) - the employee's OWN Excel figures,
+// read only to compare against KCM's calculation in the import review; KCM's
+// figures are what get saved. Leave blank to skip the comparison.
+const CALCULATED_HEADERS = ['KM Utilised', 'Base Rate', 'Fuel Cost', 'Final Base Rate', 'Additional KM Cost', 'Additional Hour Cost', 'Grand Total'];
+const FLAT_CALCULATED_HEADERS = ['Base Rate', 'Fuel Cost', 'Final Base Rate', 'Grand Total']; // Ad-hoc/Hybrid - no KM/hour add-ons
+const CALCULATED_NOTE = ' The Base Rate / Fuel Cost / Final Base Rate / Additional KM & Hour Cost / Grand Total columns are YOUR sheet\'s figures: KCM recalculates each one with the official rates, shows Excel vs KCM vs the difference in the import review, and saves KCM\'s figures (your values are kept on the record for audit).';
+
 const TEMPLATE_HEADERS = [
   'Date', 'Warehouse Name', 'Warehouse City', 'Vehicle Number', 'Vehicle Type', 'Vehicle Category',
   'Deployment Type', 'From City (Ad-hoc)', 'To City (Ad-hoc)', 'POD Name', 'POD City', 'Fixed Hours',
   'KM Slab', 'Opening KM', 'Closing KM', 'In Time', 'Closure Time', 'Contract Period (Days/Hrs)',
   'Extra KM', 'Working Days', 'Variable Cost Per KM', 'Rate Per Extra KM', 'Add Hour', 'Rate Per Extra Hour',
-  'Toll Charges', 'Parking Cost', 'Hybrid Reefer Cost', 'Scheduled Rate', 'Vendor Remarks'
+  'Toll Charges', 'Parking Cost', 'Hybrid Reefer Cost', 'Scheduled Rate', ...CALCULATED_HEADERS, 'Vendor Remarks'
 ];
 
 export function downloadWarehouseImportTemplate(): void {
@@ -119,7 +128,8 @@ export function downloadWarehouseImportTemplate(): void {
     'Closing KM': 10120, 'In Time': '', 'Closure Time': '', 'Contract Period (Days/Hrs)': 1, 'Extra KM': 0,
     'Working Days': 30, 'Variable Cost Per KM': 0, 'Rate Per Extra KM': 0, 'Add Hour': 0, 'Rate Per Extra Hour': 0,
     'Toll Charges': 0, 'Parking Cost': 0, 'Hybrid Reefer Cost': 0, 'Scheduled Rate': 15000,
-    'Vendor Remarks': 'Sample row - delete before importing. Only Date/Warehouse Name/Vehicle Number are always required (Closing KM too, unless Deployment Type is Ad-hoc/Hybrid - those don\'t track KM at all, leave that whole block blank as in a real Ad-hoc export). KM Utilised, Base Rate, Fuel Cost, Final Base Rate, Additional KM/Hour Cost and Grand Total auto-resolve through the same rate-lookup tables the Add/Edit Entry form itself uses (Warehouse + Vehicle Type + KM Slab/Deployment Type) - Scheduled Rate/Variable Cost Per KM below are only a fallback for when no configured rate matches.'
+    'KM Utilised': 120, 'Base Rate': '', 'Fuel Cost': '', 'Final Base Rate': '', 'Additional KM Cost': '', 'Additional Hour Cost': '', 'Grand Total': '',
+    'Vendor Remarks': 'Sample row - delete before importing. Only Date/Warehouse Name/Vehicle Number are always required (Closing KM too, for Regular). Fixed Hours, KM Slab, Opening/Closing KM, Extra KM and Add Hour apply to REGULAR deployments only - Ad-hoc (route rate) and Hybrid (agreed Scheduled Rate) ignore them. Rates resolve through the same rate tables as the Add/Edit Entry form; Scheduled Rate/Variable Cost Per KM are only used when no configured rate matches (and for Hybrid).' + CALCULATED_NOTE
   };
   const ws = XLSX.utils.json_to_sheet([sample], { header: TEMPLATE_HEADERS });
   ws['!cols'] = TEMPLATE_HEADERS.map(h => ({ wch: Math.max(14, h.length + 2) }));
@@ -163,14 +173,14 @@ export function downloadWarehouse12HrTemplate(): void {
   writeSingleSheetTemplate({
     filename: 'KCM_Warehouse_Import_12Hr_Dedicated.xlsx',
     sheetName: '12Hr Dedicated',
-    headers: ['Deployment Type', 'Fixed Hours', 'KM Slab', ...COMMON_HEADERS, 'Opening KM', 'Closing KM', 'Extra KM', 'Rate Per Extra KM', 'Add Hour', 'Rate Per Extra Hour', 'Working Days'],
+    headers: ['Deployment Type', 'Fixed Hours', 'KM Slab', ...COMMON_HEADERS, 'Opening KM', 'Closing KM', 'Extra KM', 'Rate Per Extra KM', 'Add Hour', 'Rate Per Extra Hour', 'Working Days', ...CALCULATED_HEADERS],
     sample: {
       'Deployment Type': 'regular', 'Fixed Hours': 12, 'KM Slab': 2000,
       'Date': '2026-09-01', 'Warehouse Name': 'BLR IM1', 'Warehouse City': 'Bangalore', 'Vehicle Number': 'KA01AB1234',
       'Vehicle Type': '14 FT', 'Vehicle Category': 'Dry', 'POD Name': '', 'POD City': '', 'Toll Charges': 0, 'Parking Cost': 0,
       'Opening KM': 10000, 'Closing KM': 10120, 'Extra KM': 0, 'Rate Per Extra KM': 0, 'Add Hour': 0, 'Rate Per Extra Hour': 0,
       'Working Days': '',
-      'Vendor Remarks': '12Hr DEDICATED - Deployment Type must be "regular", Fixed Hours must be 12. KM Slab MUST be exactly 2000, 2500, or 3000 - this is what selects the Scheduled Rate from the Warehouse Group + Vehicle Type table (Vehicle Category is NOT part of this lookup, any value is fine). Vehicle Type must be one of: Tata Ace, 207 (or Bolero), 407, 14 FT, 17 FT, 20 FT. Working Days: leave blank to auto-use the calendar month\'s day count, or type a number to override it. Base Rate = Scheduled Rate / Working Days (KM Utilised is tracked but does NOT affect Base Rate for 12Hr). Extra KM/Rate Per Extra KM and Add Hour/Rate Per Extra Hour are optional add-ons on top.'
+      'Vendor Remarks': '12Hr DEDICATED - Deployment Type must be "regular", Fixed Hours must be 12. KM Slab MUST be exactly 2000, 2500, or 3000 - this is what selects the Scheduled Rate from the Warehouse Group + Vehicle Type table (Vehicle Category is NOT part of this lookup, any value is fine). Vehicle Type must be one of: Tata Ace, 207 (or Bolero), 407, 14 FT, 17 FT, 20 FT. Working Days: leave blank to auto-use the calendar month\'s day count, or type a number to override it. Base Rate = Scheduled Rate / Working Days (KM Utilised is tracked but does NOT affect Base Rate for 12Hr). Extra KM/Rate Per Extra KM and Add Hour/Rate Per Extra Hour are optional add-ons on top.' + CALCULATED_NOTE
     }
   });
 }
@@ -179,14 +189,14 @@ export function downloadWarehouse24HrDedicatedTemplate(): void {
   writeSingleSheetTemplate({
     filename: 'KCM_Warehouse_Import_24Hr_Dedicated_Dry.xlsx',
     sheetName: '24Hr Dedicated Dry',
-    headers: ['Deployment Type', 'Fixed Hours', ...COMMON_HEADERS, 'Opening KM', 'Closing KM', 'Extra KM', 'Rate Per Extra KM', 'Add Hour', 'Rate Per Extra Hour', 'Working Days'],
+    headers: ['Deployment Type', 'Fixed Hours', ...COMMON_HEADERS, 'Opening KM', 'Closing KM', 'Extra KM', 'Rate Per Extra KM', 'Add Hour', 'Rate Per Extra Hour', 'Working Days', ...CALCULATED_HEADERS],
     sample: {
       'Deployment Type': 'regular', 'Fixed Hours': 24,
       'Date': '2026-09-01', 'Warehouse Name': 'BLR IM1', 'Warehouse City': 'Bangalore', 'Vehicle Number': 'KA01AB1234',
       'Vehicle Type': '14 FT', 'Vehicle Category': 'Dry', 'POD Name': '', 'POD City': '', 'Toll Charges': 0, 'Parking Cost': 0,
       'Opening KM': 10000, 'Closing KM': 10180, 'Extra KM': 0, 'Rate Per Extra KM': 0, 'Add Hour': 0, 'Rate Per Extra Hour': 0,
       'Working Days': '',
-      'Vendor Remarks': '24Hr DEDICATED (DRY) - Deployment Type must be "regular", Fixed Hours must be 24. Vehicle Category MUST be "Dry" (or blank) - "Reefer"/"Walkes" here route to the DIFFERENT Reefer & Walkes table instead (use that template for those). Warehouse Name must belong to a configured group (any BLR entity, Vizag, or HYD IM4); Vehicle Type one of 207/407/14 FT/17 FT/20 FT (Tata Ace not configured for 24Hr Dedicated). No KM Slab here - Base Rate = (Fixed / Working Days) + (KM Utilised x Variable), where KM Utilised = Closing KM - Opening KM, so those two ARE required and DO affect the total (unlike 12Hr).'
+      'Vendor Remarks': '24Hr DEDICATED (DRY) - Deployment Type must be "regular", Fixed Hours must be 24. Vehicle Category MUST be "Dry" (or blank) - "Reefer"/"Walkes" here route to the DIFFERENT Reefer & Walkes table instead (use that template for those). Warehouse Name must belong to a configured group (any BLR entity, Vizag, or HYD IM4); Vehicle Type one of 207/407/14 FT/17 FT/20 FT (Tata Ace not configured for 24Hr Dedicated). No KM Slab here - Base Rate = (Fixed / Working Days) + (KM Utilised x Variable), where KM Utilised = Closing KM - Opening KM, so those two ARE required and DO affect the total (unlike 12Hr).' + CALCULATED_NOTE
     }
   });
 }
@@ -195,14 +205,14 @@ export function downloadWarehouse24HrReeferWalkesTemplate(): void {
   writeSingleSheetTemplate({
     filename: 'KCM_Warehouse_Import_24Hr_Reefer_Walkes.xlsx',
     sheetName: '24Hr Reefer-Walkes',
-    headers: ['Deployment Type', 'Fixed Hours', ...COMMON_HEADERS, 'Opening KM', 'Closing KM', 'Extra KM', 'Rate Per Extra KM', 'Add Hour', 'Rate Per Extra Hour', 'Hybrid Reefer Cost', 'Working Days'],
+    headers: ['Deployment Type', 'Fixed Hours', ...COMMON_HEADERS, 'Opening KM', 'Closing KM', 'Extra KM', 'Rate Per Extra KM', 'Add Hour', 'Rate Per Extra Hour', 'Hybrid Reefer Cost', 'Working Days', ...CALCULATED_HEADERS],
     sample: {
       'Deployment Type': 'regular', 'Fixed Hours': 24,
       'Date': '2026-09-01', 'Warehouse Name': 'BLR IM1', 'Warehouse City': 'Bangalore', 'Vehicle Number': 'KA01AB1234',
       'Vehicle Type': '14 FT', 'Vehicle Category': 'Reefer', 'POD Name': '', 'POD City': '', 'Toll Charges': 0, 'Parking Cost': 0,
       'Opening KM': 10000, 'Closing KM': 10180, 'Extra KM': 0, 'Rate Per Extra KM': 0, 'Add Hour': 0, 'Rate Per Extra Hour': 0,
       'Hybrid Reefer Cost': 0, 'Working Days': '',
-      'Vendor Remarks': '24Hr REEFER & WALKES - Deployment Type "regular", Fixed Hours 24. Vehicle Category MUST be exactly "Reefer" or "Walkes" (spelled exactly like that) - this is REQUIRED, not optional, and is exactly what tells this apart from the plain Dry Dedicated table. Vehicle Type: "14 FT" for Reefer or Walkes; "207" (or V70) for Walkes only - no 207 Reefer rate exists. Warehouse City must resolve to BLR/Chennai/HYD/Vizag/Goa (Goa only has a Walkes rate, no Reefer). Base Rate = (FC / Working Days) + (KM Utilised x VC), same shape as Dry Dedicated but its own FC/VC figures. "Hybrid Reefer Cost" is an optional extra amount added on top of the whole Grand Total, not part of the FC/VC formula itself.'
+      'Vendor Remarks': '24Hr REEFER & WALKES - Deployment Type "regular", Fixed Hours 24. Vehicle Category MUST be exactly "Reefer" or "Walkes" (spelled exactly like that) - this is REQUIRED, not optional, and is exactly what tells this apart from the plain Dry Dedicated table. Vehicle Type: "14 FT" for Reefer or Walkes; "207" (or V70) for Walkes only - no 207 Reefer rate exists. Warehouse City must resolve to BLR/Chennai/HYD/Vizag/Goa (Goa only has a Walkes rate, no Reefer). Base Rate = (FC / Working Days) + (KM Utilised x VC), same shape as Dry Dedicated but its own FC/VC figures. "Hybrid Reefer Cost" is an optional extra amount added on top of the whole Grand Total, not part of the FC/VC formula itself.' + CALCULATED_NOTE
     }
   });
 }
@@ -211,12 +221,12 @@ export function downloadWarehouse24HrAdHocTemplate(): void {
   writeSingleSheetTemplate({
     filename: 'KCM_Warehouse_Import_24Hr_AdHoc_Route.xlsx',
     sheetName: '24Hr Ad-hoc Route',
-    headers: ['Deployment Type', 'Fixed Hours', 'From City (Ad-hoc)', 'To City (Ad-hoc)', ...COMMON_HEADERS],
+    headers: ['Deployment Type', 'From City (Ad-hoc)', 'To City (Ad-hoc)', ...COMMON_HEADERS, ...FLAT_CALCULATED_HEADERS],
     sample: {
-      'Deployment Type': 'ad-hoc', 'Fixed Hours': 24, 'From City (Ad-hoc)': 'Bangalore', 'To City (Ad-hoc)': 'Mysore',
+      'Deployment Type': 'ad-hoc', 'From City (Ad-hoc)': 'Bangalore', 'To City (Ad-hoc)': 'Mysore',
       'Date': '2026-09-01', 'Warehouse Name': 'BLR IM1', 'Warehouse City': 'Bangalore', 'Vehicle Number': 'KA01AB1234',
       'Vehicle Type': '407', 'Vehicle Category': 'Dry', 'POD Name': '', 'POD City': '', 'Toll Charges': 0, 'Parking Cost': 0,
-      'Vendor Remarks': '24Hr AD-HOC ROUTE - Deployment Type MUST be "ad-hoc", Fixed Hours 24. This is a FLAT round-trip rate looked up directly by From City (Ad-hoc) + To City (Ad-hoc) + Vehicle Type - NOT a formula, so Opening/Closing KM, KM Slab, and Working Days are all irrelevant here and left out of this template entirely (leave them blank if using the combined generic template instead). From/To City must exactly match a configured route (see the Rates tab for the full route list) or nothing will auto-resolve. For a Hybrid-category vehicle, set Vehicle Category to "Hybrid" instead of a Vehicle Type match - that selects the route\'s own separate "Hybrid Vehicle" rate column.'
+      'Vendor Remarks': '24Hr AD-HOC ROUTE - Deployment Type MUST be "ad-hoc" (Fixed Hours does not apply - no column for it). This is a FLAT round-trip rate looked up directly by From City (Ad-hoc) + To City (Ad-hoc) + Vehicle Type - NOT a formula, so Opening/Closing KM, KM Slab, and Working Days are all irrelevant here and left out of this template entirely (leave them blank if using the combined generic template instead). From/To City must exactly match a configured route (see the Rates tab for the full route list) or nothing will auto-resolve. For a Hybrid-category vehicle, set Vehicle Category to "Hybrid" instead of a Vehicle Type match - that selects the route\'s own separate "Hybrid Vehicle" rate column. A route not in the Rates tab is flagged "New route - rate not configured" in the import review (Super Admin can add it there with "Add Rate").' + CALCULATED_NOTE
     }
   });
 }
@@ -225,21 +235,75 @@ export function downloadWarehouseHybridTemplate(): void {
   writeSingleSheetTemplate({
     filename: 'KCM_Warehouse_Import_Hybrid_Manual.xlsx',
     sheetName: 'Hybrid (Manual)',
-    headers: ['Deployment Type', 'Fixed Hours', ...COMMON_HEADERS, 'Scheduled Rate', 'Hybrid Reefer Cost'],
+    headers: ['Deployment Type', ...COMMON_HEADERS, 'Scheduled Rate', 'Hybrid Reefer Cost', ...FLAT_CALCULATED_HEADERS],
     sample: {
-      'Deployment Type': 'hybrid', 'Fixed Hours': 12,
+      'Deployment Type': 'hybrid',
       'Date': '2026-09-01', 'Warehouse Name': 'BLR IM1', 'Warehouse City': 'Bangalore', 'Vehicle Number': 'KA01AB1234',
       'Vehicle Type': '14 FT', 'Vehicle Category': 'Hybrid', 'POD Name': '', 'POD City': '', 'Toll Charges': 0, 'Parking Cost': 0,
       'Scheduled Rate': 20000, 'Hybrid Reefer Cost': 0,
-      'Vendor Remarks': 'HYBRID DEPLOYMENT - Deployment Type "hybrid" has NO rate table/auto-lookup at all (unlike every other type above) - Scheduled Rate here is used directly as the Base Rate (divided by Working Days, defaulting to the calendar month), and Fuel Cost/Grand Total compute from that. Opening/Closing KM are not tracked for Hybrid (same as Ad-hoc). If you don\'t know the right Base Rate/Grand Total for this trip, check with whoever set the rate before importing - there is nothing here to auto-verify it against.'
+      'Vendor Remarks': 'HYBRID DEPLOYMENT - Fixed Hours does not apply (no column for it). Deployment Type "hybrid" has NO rate table/auto-lookup at all (unlike every other type above) - Scheduled Rate here is used directly as the Base Rate (divided by Working Days, defaulting to the calendar month), and Fuel Cost/Grand Total compute from that. Opening/Closing KM are not tracked for Hybrid (same as Ad-hoc). If you don\'t know the right Base Rate/Grand Total for this trip, check with whoever set the rate before importing - there is nothing here to auto-verify it against.' + CALCULATED_NOTE
     }
   });
 }
+
+// ---------------------------------------------------------------------------
+// Import review (2026-09-25): the file is read EXACTLY as entered, validated,
+// run through the same KCM rate engine the Add/Edit form uses
+// (calculateWarehouseEntry), and every calculated figure the file carries is
+// compared with KCM's value - nothing is silently overwritten. The saved
+// record always holds KCM's official figures; what the file said is kept on
+// the record itself (WarehouseEntry.importAudit) and in the Audit Trail.
+// ---------------------------------------------------------------------------
+
+export type WarehouseImportFlag = 'calcDifference' | 'newRoute' | 'missingRate' | 'vehicleTypeMismatch' | 'categoryMismatch';
+
+export const WAREHOUSE_IMPORT_FLAG_LABELS: Record<WarehouseImportFlag, string> = {
+  calcDifference: 'Calculation Difference',
+  newRoute: 'New Route',
+  missingRate: 'Missing Rate',
+  vehicleTypeMismatch: 'Vehicle Type Mismatch',
+  categoryMismatch: 'Category Mismatch'
+};
+
+// Calculated columns compared file-vs-KCM, in display order.
+const COMPARED_FIELDS = [
+  { field: 'scheduledRate', label: 'Scheduled Rate' },
+  { field: 'kmUtilised', label: 'KM Utilised' },
+  { field: 'baseRate', label: 'Base Rate' },
+  { field: 'fuelCost', label: 'Fuel Cost' },
+  { field: 'finalBaseRate', label: 'Final Base Rate' },
+  { field: 'additionalKmCost', label: 'Additional KM Cost' },
+  { field: 'additionalHourCost', label: 'Additional Hour Cost' },
+  { field: 'grandTotal', label: 'Grand Total' }
+] as const;
+export type WarehouseComparedField = typeof COMPARED_FIELDS[number]['field'];
+
+export interface WarehouseImportComparison {
+  field: WarehouseComparedField;
+  label: string;
+  excel: number | null; // null = the file didn't have this column/value
+  kcm: number;
+  difference: number | null; // KCM - Excel (+ = KCM is higher), exact to the paisa
+  // 'not-calculated': KCM can't produce an official figure for this row yet
+  // (missing/new rate, or a Vehicle Type/Category mismatch) - no comparison
+  // is made against a guessed value.
+  status: 'match' | 'different' | 'not-in-file' | 'not-calculated';
+}
+
+// One file row as read - the review re-validates from this (e.g. after a
+// missing route rate is added) without re-reading the file.
+export type WarehouseImportRaw = Partial<Record<keyof WarehouseEntry, string | number>>;
 
 export interface ParsedWarehouseImportRow {
   rowNumber: number; // 1-based, matches the spreadsheet row (header is row 1)
   errors: string[];
   warnings: string[];
+  flags: WarehouseImportFlag[];
+  comparisons: WarehouseImportComparison[];
+  kcmCalculated: boolean; // false while a rate is missing or the vehicle doesn't match its configuration
+  rateSourceNote: string;
+  missingRoute: { from: string; to: string } | null; // for the "Add Rate" action
+  raw: WarehouseImportRaw;
   date: string;
   warehouseName: string;
   warehouseCity: string;
@@ -260,6 +324,15 @@ export interface ParsedWarehouseImportRow {
   hoursDaysAsPerContract: number;
   overtimeVehicle: string;
   extraKm: number;
+  addHour: number;
+  ratePerExtraKm: number;
+  ratePerExtraHour: number;
+  variableCostPerKm: number;
+  workingMonth: string;
+  workingDaysAuto: number;
+  workingDaysOverride?: number;
+  workingDays: number;
+  // KCM-calculated (official) figures - what gets saved
   kmUtilised: number;
   baseRate: number;
   fuelCost: number;
@@ -273,251 +346,290 @@ export interface ParsedWarehouseImportRow {
   vendorRemarks: string;
   scheduledRate?: number;
   warehouseGroup?: string;
-  // Duplicate handling (2026-09-10) - "already exists" is a warning, not a
-  // hard error: skipped by default (kept out of errors so it doesn't block
-  // OTHER clean rows, but flagged below via duplicateOf so the wizard's
-  // per-row action can move it from excluded to included).
+  // Duplicate handling (2026-09-10) - "already exists" blocks the row until
+  // "Overwrite" is ticked (see WarehouseImportModal's row action).
   duplicateOf: string | null; // existing WarehouseEntry.id, when matched
   willOverwrite: boolean;
 }
 
-const DUPLICATE_ERROR = 'This entry already exists for this Warehouse + Vehicle + Date - check "Overwrite" to replace it, or leave unchecked to skip it.';
+export const DUPLICATE_ERROR = 'This entry already exists for this Warehouse + Vehicle + Date - check "Overwrite" to replace it, or leave unchecked to skip it.';
 
-export async function parseWarehouseImportFile(
-  file: File,
-  existingEntries: WarehouseEntry[],
-  vehicles: Vehicle[],
-  warehouseRateOverrides: WarehouseRateOverride[]
-): Promise<{ headerValid: boolean; missingHeaders: string[]; rows: ParsedWarehouseImportRow[] }> {
+export interface WarehouseImportContext {
+  existingEntries: WarehouseEntry[];
+  vehicles: Vehicle[];
+  warehouseRateOverrides: WarehouseRateOverride[];
+}
+
+// Reads the file into raw rows - no validation or calculation yet.
+export async function readWarehouseImportFile(file: File): Promise<{ headerValid: boolean; missingHeaders: string[]; raws: { rowNumber: number; raw: WarehouseImportRaw }[] }> {
   const buf = await file.arrayBuffer();
   const workbook = XLSX.read(buf, { type: 'array', cellDates: false });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const headerRow: unknown[] = (XLSX.utils.sheet_to_json(sheet, { header: 1 })[0] as unknown[]) || [];
 
-  // 2026-09-11: Closing KM dropped from the column-level requirement - a
-  // file can be entirely Ad-hoc/Hybrid rows, which (see WarehouseDetails.tsx's
-  // hideKmTimeBlock) don't track Closing KM at all, so requiring that
-  // COLUMN to even exist would reject an otherwise-valid all-Ad-hoc file.
-  // It's still required PER ROW for Regular deployments, checked below.
+  // 2026-09-11: Closing KM isn't a required COLUMN - an all-Ad-hoc/Hybrid
+  // file has none; it's still required per Regular row (see below).
   const REQUIRED = ['date', 'warehousename', 'vehiclenumber'];
   const REQUIRED_LABELS: Record<string, string> = { date: 'Date', warehousename: 'Warehouse Name', vehiclenumber: 'Vehicle Number' };
   const presentNormalized = new Set(headerRow.map(h => normalizeHeader(h)));
   const missingRequired = REQUIRED.filter(k => !presentNormalized.has(k)).map(k => REQUIRED_LABELS[k]);
-  if (missingRequired.length > 0) {
-    return { headerValid: false, missingHeaders: missingRequired, rows: [] };
-  }
+  if (missingRequired.length > 0) return { headerValid: false, missingHeaders: missingRequired, raws: [] };
 
   const json: Record<string, string | number>[] = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false, dateNF: 'yyyy-mm-dd' });
+  return {
+    headerValid: true, missingHeaders: [],
+    raws: json.map((row, idx) => {
+      const raw: WarehouseImportRaw = {};
+      Object.entries(row).forEach(([header, value]) => {
+        const key = WAREHOUSE_IMPORT_ALIASES[normalizeHeader(header)];
+        if (key && value !== '' && raw[key] === undefined) raw[key] = value;
+      });
+      return { rowNumber: idx + 2, raw };
+    })
+  };
+}
 
+// "₹1,23,456.50" / "1,23,456.5" / "12000" -> number; blank/unparsable -> null.
+const parseMoney = (v: string | number | undefined): number | null => {
+  if (v === undefined || v === null || v === '') return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  const n = parseFloat(String(v).replace(/[₹,\s]/g, ''));
+  return Number.isFinite(n) ? n : null;
+};
+const num = (v: string | number | undefined): number => parseMoney(v) ?? 0;
+
+// Fleet stores e.g. "14ft" / "14 FT" / "Bolero" - compared through the same
+// rate-matrix normalisation the rate tables use, falling back to a plain
+// case/space-insensitive compare for types outside those tables (e.g. 32 FT).
+const sameVehicleType = (a: string, b: string): boolean => {
+  const na = normalizeRateMatrixVehicleType(a), nb = normalizeRateMatrixVehicleType(b);
+  if (na || nb) return na === nb;
+  return a.trim().toLowerCase().replace(/[\s.]/g, '') === b.trim().toLowerCase().replace(/[\s.]/g, '');
+};
+const normCategory = (c: string) => { const v = c.trim().toLowerCase(); return v === 'walkee' ? 'walkes' : v; };
+const KNOWN_CATEGORIES = new Set(VEHICLE_CATEGORIES.map(c => c.toLowerCase()));
+
+export function validateWarehouseImportRows(
+  raws: { rowNumber: number; raw: WarehouseImportRaw }[],
+  ctx: WarehouseImportContext,
+  previous?: ParsedWarehouseImportRow[]
+): ParsedWarehouseImportRow[] {
+  const { existingEntries, vehicles, warehouseRateOverrides } = ctx;
   const knownWarehouseNames = new Set([
     ...WAREHOUSE_LOCATIONS.map(w => w.name.trim().toLowerCase()),
     ...existingEntries.map(e => (e.warehouseName || '').trim().toLowerCase())
   ]);
-  const knownVehicleNos = new Set(vehicles.map(v => stripRegNo(v.regNo || v['Reg. No.'] || '')));
-
-  // For duplicate + deployment-conflict checks: every entry already saved,
-  // PLUS every row already parsed earlier in this same file (both checks
-  // must catch a conflict within the file itself, not only against
-  // already-saved data - e.g. two rows in one upload for the same vehicle
-  // on the same day at two different warehouses).
+  const fleetByNo = new Map(vehicles.map(v => [stripRegNo(v.regNo || v['Reg. No.'] || ''), v]));
+  // Duplicate/conflict checks also cover rows earlier in this same file.
   const seenThisFile: { warehouseName: string; vehicleNumber: string; date: string }[] = [];
 
-  const rows: ParsedWarehouseImportRow[] = json.map((row, idx) => {
+  return raws.map(({ rowNumber, raw: mapped }) => {
+    const prev = previous?.find(p => p.rowNumber === rowNumber);
     const errors: string[] = [];
     const warnings: string[] = [];
-    const mapped: Partial<Record<keyof WarehouseEntry, string | number>> = {};
-    Object.entries(row).forEach(([header, value]) => {
-      const key = WAREHOUSE_IMPORT_ALIASES[normalizeHeader(header)];
-      if (key && value !== '') mapped[key] = value;
-    });
+    const flags = new Set<WarehouseImportFlag>();
 
     const date = normalizeImportDate(mapped.date ?? '');
     const warehouseName = String(mapped.warehouseName || '').trim();
     const vehicleNumber = String(mapped.vehicleNumber || '').trim().toUpperCase();
-    const closingKm = Number(mapped.closingKm) || 0;
-    const openingKm = Number(mapped.openingKm) || 0;
-    const deploymentTypeVal = String(mapped.deploymentType || 'regular').trim().toLowerCase() || 'regular';
-    // Ad-hoc/Hybrid don't track KM at all (see WarehouseDetails.tsx's
-    // hideKmTimeBlock) - Closing KM is only required for Regular.
-    const hideKmTimeRow = deploymentTypeVal === 'ad-hoc' || deploymentTypeVal === 'hybrid';
+    const closingKm = num(mapped.closingKm);
+    const openingKm = num(mapped.openingKm);
+    const deploymentRaw = String(mapped.deploymentType || '').trim();
+    const deployment = normalizeDeploymentType(deploymentRaw);
+    const regular = deployment === 'regular';
 
     if (!date) errors.push('Date is missing or not a recognized date.');
     if (!warehouseName) errors.push('Warehouse Name is required.');
     if (!vehicleNumber) errors.push('Vehicle Number is required.');
-    if (!closingKm && !hideKmTimeRow) errors.push('Closing KM is required.');
+    if (!deployment) errors.push(`Deployment Type "${deploymentRaw}" is not recognised - use Regular, Ad-hoc or Hybrid.`);
+    if (regular && !closingKm) errors.push('Closing KM is required for a Regular deployment.');
+    if (regular && closingKm && closingKm < openingKm) errors.push(`Closing KM (${closingKm}) is less than Opening KM (${openingKm}).`);
 
-    // Known warehouse - a warning, not a hard error (free-text in the manual
-    // form too), so an office adding a genuinely new warehouse isn't blocked.
     if (warehouseName && !knownWarehouseNames.has(warehouseName.toLowerCase())) {
       warnings.push('Unrecognized warehouse name - not found in the warehouse master list or existing entries.');
     }
 
-    // 2026-09-11 direct request (reversed from the earlier hard-error
-    // version): a vehicle not in Fleet & Vehicles is very often a genuine
-    // vendor/third-party vehicle used for a warehouse trip, not a data
-    // error - these rows must still import. This is a warning only, never
-    // a hard error, and importing one never writes anything back to Fleet
-    // & Vehicles or any other module's vehicle list - this file only ever
-    // calls onAddEntry/onUpdateEntry for WarehouseEntry rows themselves,
-    // so an unrecognized vehicle number can never "sit" in Fleet &
-    // Vehicles, Vendor Management, or anywhere else just by importing it
-    // here.
-    if (vehicleNumber && !knownVehicleNos.has(stripRegNo(vehicleNumber))) {
+    // ---- Vehicle Type / Category vs Fleet & Vehicles and the rate config ----
+    let vehicleType = String(mapped.vehicleType || '').trim();
+    let vehicleCategory = String(mapped.vehicleCategory || '').trim();
+    const fleet = vehicleNumber ? fleetByNo.get(stripRegNo(vehicleNumber)) : undefined;
+    if (vehicleNumber && !fleet) {
+      // A vendor/third-party vehicle - still imports; nothing is written to Fleet.
       warnings.push('Vehicle Number not found in Fleet & Vehicles - imported as-is (likely a vendor/third-party vehicle). This does not add it to Fleet & Vehicles or any other module.');
     }
+    if (fleet) {
+      const fleetType = String(fleet.Type || fleet.type || '').trim();
+      const fleetCategory = String(fleet.Category || fleet.category || '').trim();
+      if (fleetType && vehicleType && !sameVehicleType(vehicleType, fleetType)) {
+        errors.push(`Vehicle Type mismatch - Excel: ${vehicleType}, KCM Fleet: ${fleetType}. Correct the file (no rate is calculated from a guessed type).`);
+        flags.add('vehicleTypeMismatch');
+      } else if (fleetType && !vehicleType) {
+        vehicleType = fleetType;
+        warnings.push(`Vehicle Type blank in the file - taken from Fleet & Vehicles (${fleetType}), same as the Add Entry form.`);
+      }
+      if (fleetCategory && vehicleCategory && normCategory(vehicleCategory) !== normCategory(fleetCategory)) {
+        errors.push(`Category mismatch - Excel: ${vehicleCategory}, KCM Fleet: ${fleetCategory}. Correct the file (no rate is calculated from a guessed category).`);
+        flags.add('categoryMismatch');
+      } else if (fleetCategory && !vehicleCategory) {
+        vehicleCategory = fleetCategory;
+        warnings.push(`Vehicle Category blank in the file - taken from Fleet & Vehicles (${fleetCategory}).`);
+      }
+    }
+    if (vehicleCategory && !KNOWN_CATEGORIES.has(normCategory(vehicleCategory))) {
+      errors.push(`Category/rate configuration mismatch - "${vehicleCategory}" is not a KCM vehicle category (${VEHICLE_CATEGORIES.join(', ')}).`);
+      flags.add('categoryMismatch');
+    }
 
-    // Deployment conflict - same vehicle, same date, a DIFFERENT warehouse
-    // already on record (either already-saved or elsewhere in this file).
-    // There is no separate "Vehicle Deployment" table in this codebase -
-    // a vehicle's own WarehouseEntry history IS its deployment record.
-    // Compared via stripRegNo/sameWarehouseName (not raw === ), same as the
-    // Fleet-vehicle check just above - a strict compare here would miss the
-    // exact "KA51AL3422" vs "KA 51 AL 3422" mismatch this file already
-    // fixed for that check, letting a real conflict/duplicate slip through
-    // as a fresh import instead.
+    // ---- Duplicates / deployment conflicts (unchanged rules) ----
     if (vehicleNumber && date) {
       const conflict = existingEntries.find(e => stripRegNo(e.vehicleNumber) === stripRegNo(vehicleNumber) && e.date === date && !sameWarehouseName(e.warehouseName, warehouseName))
         || seenThisFile.find(e => stripRegNo(e.vehicleNumber) === stripRegNo(vehicleNumber) && e.date === date && !sameWarehouseName(e.warehouseName, warehouseName));
       if (conflict) errors.push(`Vehicle already logged at a different warehouse (${conflict.warehouseName}) on this date.`);
     }
-
-    // Duplicate - same Warehouse + Vehicle + Date already on record.
     let duplicateOf: string | null = null;
+    const willOverwrite = !!prev?.willOverwrite;
     if (warehouseName && vehicleNumber && date) {
       const existing = existingEntries.find(e => sameWarehouseName(e.warehouseName, warehouseName) && stripRegNo(e.vehicleNumber) === stripRegNo(vehicleNumber) && e.date === date);
       if (existing) {
         duplicateOf = existing.id;
-        errors.push(DUPLICATE_ERROR);
+        if (!willOverwrite) errors.push(DUPLICATE_ERROR);
       } else if (seenThisFile.some(e => sameWarehouseName(e.warehouseName, warehouseName) && stripRegNo(e.vehicleNumber) === stripRegNo(vehicleNumber) && e.date === date)) {
         errors.push('Duplicated elsewhere in this file (same Warehouse + Vehicle + Date).');
       }
       seenThisFile.push({ warehouseName, vehicleNumber, date });
     }
 
-    const kmUtilised = Math.max(0, closingKm - openingKm); // always derived, never trusted raw - same as today
-
-    // 2026-09-11 direct request: "it will be of complete data so it should
-    // not sit like that only instead take necessary data and auto
-    // calculate the other rates data and grand total everything" - cost
-    // figures now resolve through the EXACT SAME rate-lookup chain the
-    // live Add/Edit Entry form uses (see WarehouseDetails.tsx's own
-    // matchedScheduledRate/matched24hrDedicatedRate/matchedReeferWalkesRate/
-    // matchedAdHocRate), not just a flag on whether the file happened to
-    // supply a Scheduled Rate directly. A file only needs the identifying/
-    // operational columns (Warehouse Name, Vehicle Type, KM Slab, Fixed
-    // Hours, Deployment Type, From/To City for Ad-hoc) for the correct
-    // rate to resolve automatically - Scheduled Rate/Variable Cost Per KM
-    // are only ever read from the file as a LAST resort, when no
-    // configured rate matches (same "Rate not configured, enter manually"
-    // situation the live form already has).
-    const fixedHoursVal = Number(mapped.fixedHours) || 12;
-    const vehicleTypeVal = String(mapped.vehicleType || '').trim();
-    const vehicleCategoryVal = String(mapped.vehicleCategory || '').trim();
-    const kmSlabVal = parseFloat(String(mapped.kmSlab || '')) || 0;
-    const adHocFromCityVal = String(mapped.adHocFromCity || '').trim();
-    const adHocToCityVal = String(mapped.adHocToCity || '').trim();
-    const warehouseGroupVal = rateGroupForWarehouseName(warehouseName) || '';
-
-    let lookedUpScheduledRate: number | null = null;
-    let lookedUpVariableCostPerKm: number | null = null;
-    let lookedUpFlatBaseRate: number | null = null;
-    let rateSourceNote: string | null = null;
-
-    if (fixedHoursVal === 24 && deploymentTypeVal === 'ad-hoc') {
-      lookedUpFlatBaseRate = lookupAdHocRouteRate(adHocFromCityVal, adHocToCityVal, vehicleTypeVal, vehicleCategoryVal);
-      if (lookedUpFlatBaseRate != null) rateSourceNote = `Auto-resolved from the Ad-hoc route table (${adHocFromCityVal} -> ${adHocToCityVal}).`;
-    } else if (fixedHoursVal === 24 && deploymentTypeVal === 'regular') {
-      const dedicated = lookup24hrDedicatedRate(warehouseName, vehicleTypeVal, vehicleCategoryVal, warehouseRateOverrides);
-      if (dedicated) {
-        lookedUpScheduledRate = dedicated.fixed;
-        lookedUpVariableCostPerKm = dedicated.variable;
-        rateSourceNote = `Auto-resolved from ${warehouseGroupVal || warehouseName}'s 24Hr Dedicated rate table.`;
-      } else {
-        const reeferWalkes = lookupReeferWalkesRate(warehouseName, vehicleTypeVal, vehicleCategoryVal, warehouseRateOverrides);
-        if (reeferWalkes) {
-          lookedUpScheduledRate = reeferWalkes.fc;
-          lookedUpVariableCostPerKm = reeferWalkes.vc;
-          rateSourceNote = 'Auto-resolved from the 24Hr Reefer & Walkes rate table.';
-        }
-      }
-    } else if (fixedHoursVal === 12) {
-      const dedicated12 = lookupScheduledRate(warehouseGroupVal, vehicleTypeVal, kmSlabVal, warehouseRateOverrides);
-      if (dedicated12 != null) {
-        lookedUpScheduledRate = dedicated12;
-        rateSourceNote = `Auto-resolved from ${warehouseGroupVal || warehouseName}'s 12Hr Dedicated rate table.`;
-      }
+    // ---- Fixed Hrs / KM applicability ----
+    const fileFixedHours = num(mapped.fixedHours);
+    if (deployment && !regular) {
+      const ignored = [
+        fileFixedHours ? 'Fixed Hours' : '', mapped.kmSlab ? 'KM Slab' : '', num(mapped.extraKm) ? 'Extra KM' : '',
+        num(mapped.addHour) ? 'Add Hour' : '', num(mapped.variableCostPerKm) ? 'Variable Cost Per KM' : '',
+        num(mapped.ratePerExtraKm) ? 'Rate Per Extra KM' : '', num(mapped.ratePerExtraHour) ? 'Rate Per Extra Hour' : ''
+      ].filter(Boolean);
+      if (ignored.length) warnings.push(`${ignored.join(', ')} ignored - Fixed Hrs/KM values don't apply to ${deployment === 'ad-hoc' ? 'Ad-hoc' : 'Hybrid'} deployments.`);
+    }
+    if (regular && fileFixedHours && fileFixedHours !== 12 && fileFixedHours !== 24) {
+      errors.push(`Fixed Hours must be 12 or 24 for a Regular deployment (file: ${fileFixedHours}).`);
     }
 
-    const scheduledRateVal = lookedUpScheduledRate ?? (mapped.scheduledRate != null ? Number(mapped.scheduledRate) : undefined);
-    const variableCostPerKmVal = lookedUpVariableCostPerKm ?? (Number(mapped.variableCostPerKm) || 0);
-    const workingDaysOverrideVal = mapped.workingDays != null ? Number(mapped.workingDays) : (mapped.workingDaysOverride != null ? Number(mapped.workingDaysOverride) : null);
-    const workingDaysAutoVal = computeAutoWorkingDays(date ? date.slice(0, 7) : '', false, 0);
-    const workingDaysVal = resolveWorkingDays(workingDaysAutoVal, workingDaysOverrideVal);
+    // ---- KCM calculation (the same engine as the Add/Edit form) ----
+    const kmSlabText = String(mapped.kmSlab || '').trim();
+    const kmSlabNum = parseFloat(kmSlabText) || 0;
+    const workingMonth = date ? date.slice(0, 7) : '';
+    const workingDaysOverrideVal = parseMoney(mapped.workingDays ?? mapped.workingDaysOverride);
+    const workingDaysAuto = computeAutoWorkingDays(workingMonth, false, 0);
+    const workingDays = resolveWorkingDays(workingDaysAuto, workingDaysOverrideVal);
+    const kmUtilisedInput = Math.round(Math.max(0, closingKm - openingKm));
+    const fixedHoursInput = fileFixedHours === 24 ? 24 : 12;
+    // 12Hr Add KM - the same live auto-fill the Add Entry form applies
+    // (KM Utilised - KM Slab / Working Days) when the file leaves it blank.
+    const extraKmVal = parseMoney(mapped.extraKm) ?? (regular && fixedHoursInput === 12 && kmSlabNum > 0 ? Math.round(kmUtilisedInput - kmSlabNum / workingDays) : 0);
+    const calc = calculateWarehouseEntry({
+      deploymentType: deployment || 'regular', fixedHours: fixedHoursInput, warehouseName, vehicleType, vehicleCategory,
+      kmSlab: kmSlabNum, kmUtilised: kmUtilisedInput, addKm: extraKmVal, addHour: num(mapped.addHour),
+      ratePerExtraKm: num(mapped.ratePerExtraKm), ratePerExtraHour: num(mapped.ratePerExtraHour),
+      scheduledRate: num(mapped.scheduledRate), variableCostPerKm: num(mapped.variableCostPerKm), workingDays,
+      tollCharges: num(mapped.tollCharges), parkingCost: num(mapped.parkingCost), hybridReeferCost: num(mapped.hybridReeferCost),
+      adHocFromCity: String(mapped.adHocFromCity || '').trim(), adHocToCity: String(mapped.adHocToCity || '').trim()
+    }, warehouseRateOverrides);
 
-    const canRecompute = lookedUpFlatBaseRate != null || (scheduledRateVal != null && scheduledRateVal > 0);
+    let missingRoute: { from: string; to: string } | null = null;
+    if (calc.missingRate && deployment) {
+      const m = calc.missingRate;
+      if (m.code === 'NEW_ROUTE') {
+        flags.add('newRoute');
+        flags.add('missingRate');
+        missingRoute = { from: m.from!, to: m.to! };
+        errors.push(`⚠ Add rate for new route: ${m.from} → ${m.to} (not in the 24Hr Ad-hoc route rates).`);
+      } else if (m.code === 'ROUTE_VEHICLE_RATE') {
+        flags.add('missingRate');
+        missingRoute = { from: m.from!, to: m.to! };
+        errors.push(`⚠ Rate not configured - ${m.message}`);
+      } else if (m.code === 'UNKNOWN_VEHICLE_TYPE') {
+        flags.add('vehicleTypeMismatch');
+        errors.push(`⚠ Vehicle type/rate configuration mismatch - ${m.message}`);
+      } else {
+        flags.add('missingRate');
+        errors.push(`⚠ Rate not configured - ${m.message}`);
+      }
+    }
+    const rateSourceNote = calc.rateSourceNote;
+    if (calc.rateSource === 'manual' && regular) warnings.push(`${calc.rateSourceNote} It is not verified against a KCM rate table.`);
+    if (calc.rateSource === 'manual' && deployment === 'hybrid') warnings.push('Hybrid - no KCM rate table exists; Base Rate uses the file\'s agreed Scheduled Rate.');
 
-    let baseRate: number, fuelCost: number, finalBaseRate: number, additionalKmCost: number, additionalHourCost: number, grandTotal: number;
-    const tollChargesVal = Number(mapped.tollCharges) || 0;
-    const parkingCostVal = Number(mapped.parkingCost) || 0;
-    const hybridReeferCostVal = Number(mapped.hybridReeferCost) || 0;
-
-    if (canRecompute) {
-      const result = computeWarehouseRates({
-        fixedHours: fixedHoursVal,
-        scheduledRate: scheduledRateVal ?? 0,
-        workingDays: workingDaysVal,
-        kmSlab: 0,
-        variableCostPerKm: variableCostPerKmVal,
-        kmUtilised,
-        addKm: Number(mapped.extraKm) || 0,
-        ratePerExtraKm: Number(mapped.ratePerExtraKm) || 0,
-        addHour: Number(mapped.addHour) || 0,
-        ratePerExtraHour: Number(mapped.ratePerExtraHour) || 0,
-        tollCharges: tollChargesVal,
-        parkingCost: parkingCostVal,
-        hybridReeferCost: hybridReeferCostVal,
-        flatBaseRateOverride: lookedUpFlatBaseRate
+    // ---- Excel vs KCM comparison ----
+    const kcmValues: Record<WarehouseComparedField, number> = {
+      scheduledRate: calc.scheduledRate, kmUtilised: calc.kmUtilised, baseRate: calc.baseRate, fuelCost: calc.fuelCost,
+      finalBaseRate: calc.finalBaseRate, additionalKmCost: calc.extraKmAmount, additionalHourCost: calc.extraHourAmount,
+      grandTotal: calc.grandTotal
+    };
+    const kcmCalculated = !!deployment && !calc.missingRate && !flags.has('vehicleTypeMismatch') && !flags.has('categoryMismatch');
+    const comparisons: WarehouseImportComparison[] = COMPARED_FIELDS
+      // Scheduled Rate is only a CALCULATED value when a rate table supplied
+      // it; otherwise it's the file's own input, and comparing it to itself
+      // would say nothing.
+      .filter(f => f.field !== 'scheduledRate' || (calc.rateSource !== 'manual' && calc.rateSource !== 'none' && calc.rateSource !== 'adHocRoute'))
+      .filter(f => f.field !== 'kmUtilised' || regular)
+      .map(({ field, label }) => {
+        const excel = parseMoney(mapped[field]);
+        const kcm = kcmValues[field];
+        if (!kcmCalculated) return { field, label, excel, kcm, difference: null, status: 'not-calculated' as const };
+        if (excel == null) return { field, label, excel: null, kcm, difference: null, status: 'not-in-file' as const };
+        const difference = round2(kcm - excel);
+        return { field, label, excel, kcm, difference, status: difference === 0 ? 'match' as const : 'different' as const };
       });
-      baseRate = result.baseRate;
-      fuelCost = result.fuelCost;
-      additionalKmCost = result.extraKmAmount;
-      additionalHourCost = result.extraHourAmount;
-      finalBaseRate = round2(baseRate + fuelCost);
-      grandTotal = result.grandTotal;
-      if (rateSourceNote) warnings.push(rateSourceNote);
-      else warnings.push('Cost figures recalculated from this row\'s own Scheduled Rate/Working Days (no matching rate-table entry - same as "Rate not configured" on the live form).');
-    } else {
-      baseRate = Number(mapped.baseRate) || 0;
-      fuelCost = Number(mapped.fuelCost) || 0;
-      additionalKmCost = Number(mapped.additionalKmCost) || 0;
-      additionalHourCost = Number(mapped.additionalHourCost) || 0;
-      finalBaseRate = Number(mapped.finalBaseRate) || round2(baseRate + fuelCost);
-      grandTotal = Number(mapped.grandTotal) || round2(baseRate + fuelCost + additionalKmCost + additionalHourCost + tollChargesVal + parkingCostVal + hybridReeferCostVal);
-      warnings.push('Cost figures read from file - could not verify (no configured rate for this Warehouse/Vehicle Type/KM Slab/Deployment Type combination, and no Scheduled Rate supplied to fall back on).');
+    const diffs = comparisons.filter(c => c.status === 'different');
+    if (diffs.length > 0) {
+      flags.add('calcDifference');
+      warnings.push(`⚠ Calculation difference in ${diffs.map(d => d.label).join(', ')} - KCM's figures will be saved.`);
     }
 
     return {
-      rowNumber: idx + 2, errors, warnings,
+      rowNumber, errors, warnings, flags: Array.from(flags), comparisons, kcmCalculated, rateSourceNote, missingRoute, raw: mapped,
       date, warehouseName, warehouseCity: String(mapped.warehouseCity || '').trim(),
-      vehicleNumber, vehicleType: vehicleTypeVal, vehicleCategory: vehicleCategoryVal,
-      deploymentType: deploymentTypeVal,
-      adHocFromCity: adHocFromCityVal, adHocToCity: adHocToCityVal,
+      vehicleNumber, vehicleType, vehicleCategory,
+      deploymentType: deployment || deploymentRaw.toLowerCase(),
+      adHocFromCity: calc.deploymentType === 'ad-hoc' ? String(mapped.adHocFromCity || '').trim() : '',
+      adHocToCity: calc.deploymentType === 'ad-hoc' ? String(mapped.adHocToCity || '').trim() : '',
       pod: String(mapped.pod || '').trim(), podCity: String(mapped.podCity || '').trim(),
-      fixedHours: fixedHoursVal, kmSlab: String(mapped.kmSlab || '').trim(),
+      fixedHours: calc.fixedHours, kmSlab: regular ? kmSlabText : '',
       openingKm, closingKm, inTime: String(mapped.inTime || '').trim(), closureTime: String(mapped.closureTime || '').trim(),
-      hoursDaysAsPerContract: Number(mapped.hoursDaysAsPerContract) || 1, overtimeVehicle: String(mapped.overtimeVehicle || '').trim(),
-      extraKm: Number(mapped.extraKm) || 0, kmUtilised,
-      baseRate, fuelCost, finalBaseRate, additionalKmCost, additionalHourCost,
-      tollCharges: tollChargesVal, parkingCost: parkingCostVal, hybridReeferCost: hybridReeferCostVal, grandTotal,
+      hoursDaysAsPerContract: num(mapped.hoursDaysAsPerContract) || 1, overtimeVehicle: String(mapped.overtimeVehicle || '').trim(),
+      extraKm: regular ? extraKmVal : 0,
+      addHour: regular ? num(mapped.addHour) : 0,
+      ratePerExtraKm: regular ? num(mapped.ratePerExtraKm) : 0,
+      ratePerExtraHour: regular ? num(mapped.ratePerExtraHour) : 0,
+      variableCostPerKm: calc.variableCostPerKm,
+      workingMonth, workingDaysAuto, workingDaysOverride: workingDaysOverrideVal ?? undefined, workingDays,
+      kmUtilised: calc.kmUtilised,
+      baseRate: calc.baseRate, fuelCost: calc.fuelCost, finalBaseRate: calc.finalBaseRate,
+      additionalKmCost: calc.extraKmAmount, additionalHourCost: calc.extraHourAmount,
+      tollCharges: num(mapped.tollCharges), parkingCost: num(mapped.parkingCost), hybridReeferCost: num(mapped.hybridReeferCost),
+      grandTotal: calc.grandTotal,
       vendorRemarks: String(mapped.vendorRemarks || '').trim(),
-      scheduledRate: scheduledRateVal, warehouseGroup: mapped.warehouseGroup ? String(mapped.warehouseGroup).trim() : undefined,
-      duplicateOf, willOverwrite: false
+      scheduledRate: calc.scheduledRate || undefined,
+      warehouseGroup: rateGroupForWarehouseName(warehouseName) || (mapped.warehouseGroup ? String(mapped.warehouseGroup).trim() : undefined),
+      duplicateOf, willOverwrite
     };
   });
-
-  return { headerValid: true, missingHeaders: [], rows };
 }
 
+// Back-compatible one-shot entry point (read + validate).
+export async function parseWarehouseImportFile(
+  file: File,
+  existingEntries: WarehouseEntry[],
+  vehicles: Vehicle[],
+  warehouseRateOverrides: WarehouseRateOverride[]
+): Promise<{ headerValid: boolean; missingHeaders: string[]; rows: ParsedWarehouseImportRow[] }> {
+  const read = await readWarehouseImportFile(file);
+  if (!read.headerValid) return { headerValid: false, missingHeaders: read.missingHeaders, rows: [] };
+  return { headerValid: true, missingHeaders: [], rows: validateWarehouseImportRows(read.raws, { existingEntries, vehicles, warehouseRateOverrides }) };
+}
+
+// The saved record: every figure is KCM's; the file's own calculated values
+// (and the differences) ride along in importAudit so nothing the employee
+// entered is lost.
 export function buildWarehouseEntryFromImportRow(row: ParsedWarehouseImportRow, slNo: number): Omit<WarehouseEntry, 'id'> {
   return {
     slNo,
@@ -554,7 +666,21 @@ export function buildWarehouseEntryFromImportRow(row: ParsedWarehouseImportRow, 
     vendorRemarks: row.vendorRemarks,
     scheduledRate: row.scheduledRate,
     warehouseGroup: row.warehouseGroup,
-    documents: []
+    workingMonth: row.workingMonth || undefined,
+    workingDaysAuto: row.workingDaysAuto,
+    workingDaysOverride: row.workingDaysOverride,
+    workingDays: row.workingDays,
+    ratePerExtraKm: row.ratePerExtraKm,
+    addHour: row.addHour,
+    ratePerExtraHour: row.ratePerExtraHour,
+    variableCostPerKm: row.variableCostPerKm,
+    documents: [],
+    importAudit: {
+      importedAt: new Date().toISOString(),
+      fileRow: row.rowNumber,
+      rateSource: row.rateSourceNote,
+      values: row.comparisons.map(c => ({ field: c.field, label: c.label, excel: c.excel, kcm: c.kcm, difference: c.difference }))
+    }
   };
 }
 
@@ -563,7 +689,11 @@ export function exportWarehouseImportErrorRows(rows: ParsedWarehouseImportRow[])
   const data = errorRows.map(r => ({
     'Row': r.rowNumber, 'Date': r.date, 'Warehouse Name': r.warehouseName, 'Vehicle Number': r.vehicleNumber,
     'Vehicle Type': r.vehicleType, 'Vehicle Category': r.vehicleCategory, 'Deployment Type': r.deploymentType,
-    'Opening KM': r.openingKm, 'Closing KM': r.closingKm, 'Grand Total': r.grandTotal,
+    'From City (Ad-hoc)': r.adHocFromCity, 'To City (Ad-hoc)': r.adHocToCity,
+    'Opening KM': r.openingKm, 'Closing KM': r.closingKm,
+    'Excel Grand Total': r.comparisons.find(c => c.field === 'grandTotal')?.excel ?? '',
+    'KCM Grand Total': r.grandTotal,
+    'Issues': r.flags.map(f => WAREHOUSE_IMPORT_FLAG_LABELS[f]).join('; '),
     'Errors': r.errors.join('; '), 'Warnings': r.warnings.join('; ')
   }));
   const ws = XLSX.utils.json_to_sheet(data);

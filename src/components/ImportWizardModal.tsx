@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { X, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { X, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 
 // Generic bulk-import wizard shell (2026-09-10 direct request) - extracted
 // out of Customer Billing's own import modal (formerly a one-off
@@ -67,11 +67,22 @@ export interface ImportWizardModalProps<T extends ImportWizardRow> {
   itemNounPlural: string; // "invoices" / "entries" (kept separate from itemNounSingular rather than auto-pluralized - not every noun this shell serves is regular)
   onClose: () => void;
   onImported: () => void; // lets the parent refresh/toast after a successful batch
+  // --- Optional review extras (2026-09-25, Warehouse Details' Excel-vs-KCM
+  // review). All additive: a module that passes none of them renders
+  // exactly as before. ---
+  renderSummary?: (rows: T[]) => React.ReactNode; // shown above the preview table
+  rowFilters?: { key: string; label: string; test: (row: T) => boolean }[]; // filter chips (with counts) above the table
+  renderRowDetail?: (row: T) => React.ReactNode | null; // expandable per-row detail (a chevron appears when non-null)
+  // Re-run validation over the already-read rows whenever `key` changes
+  // (e.g. a missing rate was just added) - no need to re-upload the file.
+  revalidate?: { key: unknown; run: (rows: T[]) => T[] };
+  importButtonLabel?: (count: number) => string;
 }
 
 export default function ImportWizardModal<T extends ImportWizardRow>({
   title, infoText, scopeToggle, onDownloadTemplate, extraTemplateOptions, onParseFile, previewColumns, renderPreviewRow,
-  renderRowAction, onImportRow, onDownloadErrorRows, itemNounSingular, itemNounPlural, onClose, onImported
+  renderRowAction, onImportRow, onDownloadErrorRows, itemNounSingular, itemNounPlural, onClose, onImported,
+  renderSummary, rowFilters, renderRowDetail, revalidate, importButtonLabel
 }: ImportWizardModalProps<T>) {
   const [stage, setStage] = useState<Stage>('idle');
   const [fileError, setFileError] = useState('');
@@ -80,10 +91,30 @@ export default function ImportWizardModal<T extends ImportWizardRow>({
   const [result, setResult] = useState({ imported: 0, skipped: 0 });
   const [cancelRequested, setCancelRequested] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [activeFilter, setActiveFilter] = useState<string>('all');
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const toggleExpanded = (rowNumber: number) => setExpanded(prev => {
+    const next = new Set(prev);
+    if (next.has(rowNumber)) next.delete(rowNumber); else next.add(rowNumber);
+    return next;
+  });
+
+  // Revalidate in place when the caller's key changes (skips the first run -
+  // rows were just validated by onParseFile).
+  const revalidateRef = useRef(revalidate);
+  revalidateRef.current = revalidate;
+  const firstKeyRef = useRef(true);
+  useEffect(() => {
+    if (firstKeyRef.current) { firstKeyRef.current = false; return; }
+    if (!revalidateRef.current) return;
+    setRows(prev => (prev.length ? revalidateRef.current!.run(prev) : prev));
+  }, [revalidate?.key]);
 
   const validRows = rows.filter(r => r.errors.length === 0);
   const errorRows = rows.filter(r => r.errors.length > 0);
   const warningRows = rows.filter(r => r.errors.length === 0 && (r.warnings?.length || 0) > 0);
+  const filterDef = rowFilters?.find(f => f.key === activeFilter);
+  const shownRows = filterDef ? rows.filter(filterDef.test) : rows;
 
   const updateRow = (rowNumber: number, patch: Partial<T>) =>
     setRows(prev => prev.map(r => (r.rowNumber === rowNumber ? { ...r, ...patch } : r)));
@@ -103,6 +134,8 @@ export default function ImportWizardModal<T extends ImportWizardRow>({
         return;
       }
       setRows(result.rows);
+      setActiveFilter('all');
+      setExpanded(new Set());
       setStage('preview');
     } catch (err) {
       console.error(err);
@@ -216,25 +249,58 @@ export default function ImportWizardModal<T extends ImportWizardRow>({
 
           {stage === 'preview' && (
             <>
-              <div className="flex flex-wrap items-center gap-3">
+              {!renderSummary && <div className="flex flex-wrap items-center gap-3">
                 <span className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 font-bold">{validRows.length} valid row{validRows.length === 1 ? '' : 's'}</span>
                 {errorRows.length > 0 && <span className="px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 font-bold">{errorRows.length} row{errorRows.length === 1 ? '' : 's'} with errors</span>}
                 {warningRows.length > 0 && <span className="px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 font-bold">{warningRows.length} row{warningRows.length === 1 ? '' : 's'} with warnings</span>}
                 <span className="text-slate-400 font-mono">{rows.length} total row{rows.length === 1 ? '' : 's'} read</span>
-              </div>
+              </div>}
+              {renderSummary?.(rows)}
+              {rowFilters && (
+                <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Filter rows">
+                  {[{ key: 'all', label: 'All', test: () => true }, ...rowFilters].map(f => {
+                    const count = f.key === 'all' ? rows.length : rows.filter(f.test).length;
+                    const on = activeFilter === f.key;
+                    return (
+                      <button key={f.key} type="button" role="tab" aria-selected={on} onClick={() => setActiveFilter(f.key)}
+                        className={`px-2.5 py-1 rounded-full border text-[10px] font-bold cursor-pointer transition-colors ${on ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'} ${count === 0 && !on ? 'opacity-50' : ''}`}>
+                        {f.label} <span className={on ? 'text-slate-300' : 'text-slate-400'}>({count})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               <div className="border border-slate-200 rounded-xl overflow-hidden">
-                <div className="overflow-x-auto max-h-96">
+                <div className={`overflow-x-auto ${renderRowDetail ? 'max-h-[28rem]' : 'max-h-96'}`}>
                   <table className="w-full text-left text-[11px]">
                     <thead className="bg-[#0f172a] text-slate-200 uppercase text-[9px] sticky top-0">
                       <tr>
+                        {renderRowDetail && <th className="px-1 py-2 w-6"><span className="sr-only">Details</span></th>}
                         {previewColumns.map(c => <th key={c} className="px-2 py-2 whitespace-nowrap">{c}</th>)}
                         {renderRowAction && <th className="px-2 py-2">Action</th>}
                         <th className="px-2 py-2">Errors</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {rows.map(r => (
-                        <tr key={r.rowNumber} className={r.errors.length > 0 ? 'bg-rose-50 text-rose-800' : (r.warnings?.length ? 'bg-amber-50/60 text-slate-700' : 'text-slate-700')}>
+                      {shownRows.length === 0 && (
+                        <tr><td colSpan={previewColumns.length + 3} className="px-2 py-6 text-center text-slate-400">No rows match this filter.</td></tr>
+                      )}
+                      {shownRows.map(r => {
+                        const detail = renderRowDetail ? renderRowDetail(r) : null;
+                        const isOpen = expanded.has(r.rowNumber);
+                        return (
+                        <React.Fragment key={r.rowNumber}>
+                        <tr className={r.errors.length > 0 ? 'bg-rose-50 text-rose-800' : (r.warnings?.length ? 'bg-amber-50/60 text-slate-700' : 'text-slate-700')}>
+                          {renderRowDetail && (
+                            <td className="px-1 py-1.5 align-top">
+                              {detail && (
+                                <button type="button" onClick={() => toggleExpanded(r.rowNumber)} aria-expanded={isOpen} aria-label={`${isOpen ? 'Hide' : 'Show'} row ${r.rowNumber} details`}
+                                  className="p-0.5 rounded hover:bg-slate-200/60 cursor-pointer">
+                                  {isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                </button>
+                              )}
+                            </td>
+                          )}
                           {renderPreviewRow(r).map((cell, i) => (
                             <td key={i} className={`px-2 py-1.5 whitespace-nowrap ${typeof cell === 'number' ? 'text-right font-mono' : ''}`}>{cell}</td>
                           ))}
@@ -249,7 +315,14 @@ export default function ImportWizardModal<T extends ImportWizardRow>({
                               : <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />}
                           </td>
                         </tr>
-                      ))}
+                        {detail && isOpen && (
+                          <tr className="bg-slate-50/80">
+                            <td colSpan={previewColumns.length + (renderRowAction ? 3 : 2)} className="px-3 py-2">{detail}</td>
+                          </tr>
+                        )}
+                        </React.Fragment>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -296,7 +369,7 @@ export default function ImportWizardModal<T extends ImportWizardRow>({
               <button type="button" onClick={() => { setRows([]); setStage('idle'); }} className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl py-2.5 hover:bg-slate-100 uppercase text-[10px] cursor-pointer">Choose a Different File</button>
               <button type="button" onClick={handleImport} disabled={validRows.length === 0}
                 className="flex-1 bg-gradient-to-r from-blue-600 to-slate-800 text-white font-extrabold rounded-xl py-2.5 hover:shadow-md uppercase text-[10px] cursor-pointer disabled:opacity-50">
-                Import {validRows.length} Valid Row{validRows.length === 1 ? '' : 's'}
+                {importButtonLabel ? importButtonLabel(validRows.length) : `Import ${validRows.length} Valid Row${validRows.length === 1 ? '' : 's'}`}
               </button>
             </>
           )}

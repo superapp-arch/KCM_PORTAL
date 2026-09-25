@@ -31,6 +31,7 @@ import { latestOdometerFor, computeKmStatus, computeAlignmentStatus, nextAlignme
 import { PETTY_CASH_USERS } from './src/utils/pettyCashUsers.ts';
 import { driverAllLocations, isDriverActiveAtLocation, attendanceBelongsToLocation } from './src/utils/driverLocations.ts';
 import { resolveTripDriverIds, DriverTripMileage } from './src/utils/driverMileage.ts';
+import { fixedHoursApplies } from './src/utils/warehouseRateEngine.ts';
 import { parseFlexibleDate, formatDateDDMMYYYY } from './src/utils/dateFormat.ts';
 import {
   User,
@@ -4670,7 +4671,12 @@ async function startServer() {
       if (entry.openingKm != null) entry.openingKm = Math.round(entry.openingKm);
       if (entry.closingKm != null) entry.closingKm = Math.round(entry.closingKm);
       if (entry.extraKm != null) entry.extraKm = Math.round(entry.extraKm);
-      if (entry.openingKm != null && entry.closingKm != null) {
+      // KM Utilised is re-derived only where KM applies (Regular). Fixed
+      // Hrs/KM don't apply to Ad-hoc/Hybrid (2026-09-25, see
+      // src/utils/warehouseRateEngine.ts): a leftover Opening/Closing KM must
+      // not turn into a KM Utilised there, and a historical entry re-saved
+      // unchanged keeps exactly the value it was saved with.
+      if (entry.openingKm != null && entry.closingKm != null && (!entry.deploymentType || fixedHoursApplies(entry.deploymentType))) {
         entry.kmUtilised = Math.round(Math.max(0, entry.closingKm - entry.openingKm));
       }
       const existing = entry.id ? (await getWarehouseEntries()).find(e => e.id === entry.id) : undefined;

@@ -241,14 +241,60 @@ export const ADHOC_ROUTES: AdHocRouteRow[] = [
   { from: 'Vizag', to: 'Vijayawada + Eluru', remarks: 'One Way Trip', rates: { 'Bolero(207)': 0, '407': 0, '14 FT': 0, '17 FT': 0, '20 FT': 16300, 'Hybrid Vehicle': 0 } },
 ];
 
-export const adHocFromCities = (): string[] => Array.from(new Set(ADHOC_ROUTES.map(r => r.from)));
-export const adHocToCities = (from: string): string[] => ADHOC_ROUTES.filter(r => r.from === from).map(r => r.to);
+// Route rows as actually in force: the in-code table above with any Rates-tab
+// edits applied (an 'adHocRoute24hr' override on the same From/To/trip), plus
+// every route added from the Rates tab or the import review's "Add Rate"
+// (2026-09-25). Existing entries keep the Base Rate they were saved with -
+// this only changes what NEW calculations resolve to.
+export interface EffectiveAdHocRoute extends AdHocRouteRow {
+  edited?: boolean; // an override changed this built-in route's rates
+  added?: boolean; // route exists only as an override (added in the app)
+}
+
+const sameCity = (a: string, b: string) => (a || '').trim().replace(/\s+/g, ' ').toLowerCase() === (b || '').trim().replace(/\s+/g, ' ').toLowerCase();
+export const adHocTripOf = (route: { remarks?: string }): string => route.remarks || 'Round Trip';
+
+export function adHocRouteOverrideDims(from: string, to: string, trip: string): Record<string, string> {
+  return { from: from.trim().replace(/\s+/g, ' '), to: to.trim().replace(/\s+/g, ' '), trip };
+}
+
+export function effectiveAdHocRoutes(overrides?: WarehouseRateOverride[]): EffectiveAdHocRoute[] {
+  const routeOverrides = (overrides || []).filter(o => o.kind === 'adHocRoute24hr');
+  const rowRates = (o: WarehouseRateOverride) =>
+    Object.fromEntries(ADHOC_VEHICLE_COLUMNS.map(c => [c, Number(o.value[c]) || 0])) as Record<AdHocVehicleColumn, number>;
+  const used = new Set<WarehouseRateOverride>();
+  const rows: EffectiveAdHocRoute[] = ADHOC_ROUTES.map(route => {
+    const o = routeOverrides.find(ov => sameCity(ov.dims.from, route.from) && sameCity(ov.dims.to, route.to) && (ov.dims.trip || 'Round Trip') === adHocTripOf(route));
+    if (!o) return { ...route };
+    used.add(o);
+    return { ...route, rates: rowRates(o), edited: true };
+  });
+  routeOverrides.filter(o => !used.has(o)).forEach(o => {
+    rows.push({
+      from: o.dims.from, to: o.dims.to, rates: rowRates(o), added: true,
+      ...(o.dims.trip === 'One Way Trip' ? { remarks: 'One Way Trip' as const } : {})
+    });
+  });
+  return rows;
+}
+
+// First matching route in table order (Round Trip rows come first, same as
+// before), compared case/space-insensitively so "GOA" finds "Goa".
+export function findAdHocRoute(from: string, to: string, overrides?: WarehouseRateOverride[]): EffectiveAdHocRoute | null {
+  if (!from || !to) return null;
+  return effectiveAdHocRoutes(overrides).find(r => sameCity(r.from, from) && sameCity(r.to, to)) || null;
+}
+
+export const adHocFromCities = (overrides?: WarehouseRateOverride[]): string[] =>
+  Array.from(new Set(effectiveAdHocRoutes(overrides).map(r => r.from)));
+export const adHocToCities = (from: string, overrides?: WarehouseRateOverride[]): string[] =>
+  Array.from(new Set(effectiveAdHocRoutes(overrides).filter(r => sameCity(r.from, from)).map(r => r.to)));
 
 // Vehicle Category "Hybrid" -> the "Hybrid Vehicle" column, regardless of
 // Vehicle Type; every other category resolves by Vehicle Type as normal
 // (Bolero/207 -> 'Bolero(207)', everything else 1:1 with the 12Hr matrix's
 // own normalization).
-function adHocColumn(vehicleType: string, vehicleCategory: string): AdHocVehicleColumn | null {
+export function adHocColumn(vehicleType: string, vehicleCategory: string): AdHocVehicleColumn | null {
   if ((vehicleCategory || '').trim().toLowerCase() === 'hybrid') return 'Hybrid Vehicle';
   const normType = normalizeRateMatrixVehicleType(vehicleType);
   if (normType === '207') return 'Bolero(207)';
@@ -259,8 +305,8 @@ function adHocColumn(vehicleType: string, vehicleCategory: string): AdHocVehicle
 // A 0 in the rate card (e.g. Tumakuru's Hybrid Vehicle column) means "no
 // rate configured for this combination" - same as a missing entry, so it's
 // treated as null rather than a real ₹0 flat rate.
-export function lookupAdHocRouteRate(from: string, to: string, vehicleType: string, vehicleCategory: string): number | null {
-  const route = ADHOC_ROUTES.find(r => r.from === from && r.to === to);
+export function lookupAdHocRouteRate(from: string, to: string, vehicleType: string, vehicleCategory: string, overrides?: WarehouseRateOverride[]): number | null {
+  const route = findAdHocRoute(from, to, overrides);
   if (!route) return null;
   const column = adHocColumn(vehicleType, vehicleCategory);
   if (!column) return null;

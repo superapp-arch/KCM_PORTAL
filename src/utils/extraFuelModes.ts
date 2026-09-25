@@ -22,6 +22,16 @@ export const EXTRA_FUEL_MODE_LABELS: Record<ExtraFuelMode, string> = {
   card: 'Card'
 };
 
+// The payment option's own wording (2026-09-25: "Paid by Bunk" is now
+// "Fuel by bunk", since it names the bunk the fuel came from) - used for
+// the Mileage tab checkboxes and the "paid by" display text everywhere.
+export const extraFuelModeOptionLabel = (mode: ExtraFuelMode): string =>
+  mode === 'bunk' ? 'Fuel by bunk' : `Paid by ${EXTRA_FUEL_MODE_LABELS[mode]}`;
+
+// "HPCL (Goa)" for a record's Fuel-by-bunk portion, or '' when none is set.
+export const extraFuelBunkLabel = (record: { extraFuelBunkName?: string; extraFuelBunkLocation?: string }): string =>
+  record.extraFuelBunkName ? `${record.extraFuelBunkName}${record.extraFuelBunkLocation ? ` (${record.extraFuelBunkLocation})` : ''}` : '';
+
 interface ExtraFuelModeFields {
   extraFuelModes?: ExtraFuelMode[];
   extraFuelPaymentMode?: 'normal' | 'petty_cash' | 'card' | 'both';
